@@ -59,7 +59,7 @@ class SummarizerAgent(BaseAgent):
             # Ensure OLLAMA_HOST is picked up from env if set
             prompt = f"Please summarize the following project updates and status information into a concise daily briefing:\n\n{combined_text}"
 
-            response = ollama.chat(model='gemma:4b', messages=[
+            response = ollama.chat(model='gemma:2b', messages=[
                 {'role': 'user', 'content': prompt},
             ])
 

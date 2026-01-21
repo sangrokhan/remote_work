@@ -4,6 +4,14 @@
 
 This project uses `unittest` for testing.
 
+## Deployment
+
+To run the full system including the local LLM:
+
+```bash
+docker compose up -d
+```
+
 ### Prerequisites
 
 - Python 3.10+

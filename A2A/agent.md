@@ -14,6 +14,7 @@ When modifying the A2A system, you MUST perform the following testing procedures
   source venv/bin/activate
   python -m unittest discover tests
   ```
+- For integration tests involving the actual LLM, ensure the environment is running via `docker compose up -d`.
 
 ### 3. CI/CD Checks
 - If you add new agents or logic, add corresponding unit tests in `tests/`.

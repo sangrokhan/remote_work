@@ -6,7 +6,6 @@ services:
       - ollama_data:/root/.ollama
     ports:
       - "11434:11434"
-    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull gemma:4b && wait"]
 
   app:
     build: .
