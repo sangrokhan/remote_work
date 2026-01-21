@@ -28,10 +28,10 @@ if ! command -v ollama &> /dev/null; then
 fi
 
 # 5. Check if Model exists, if not pull it
-echo "Checking for Gemma 4B model..."
-if ! ollama list | grep -q "gemma:4b"; then
-    echo "Pulling gemma:4b model (this may take a while)..."
-    ollama pull gemma:4b
+echo "Checking for Gemma 2B model..."
+if ! ollama list | grep -q "gemma:2b"; then
+    echo "Pulling gemma:2b model (this may take a while)..."
+    ollama pull gemma:2b
 fi
 
 # 6. Run the application
