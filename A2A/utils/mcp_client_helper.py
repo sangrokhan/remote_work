@@ -14,7 +14,7 @@ class SimpleMCPClient:
     async def connect(self):
         # We assume python is in the path
         server_params = StdioServerParameters(
-            command="python",
+            command=sys.executable,
             args=[self.server_script_path],
             env=os.environ.copy() # Pass current env
         )
