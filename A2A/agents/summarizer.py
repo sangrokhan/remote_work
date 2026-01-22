@@ -1,6 +1,6 @@
 import asyncio
 import os
-import ollama
+
 from .base import BaseAgent, A2AMessage
 from utils.mcp_client_helper import SimpleMCPClient
 
@@ -53,25 +53,34 @@ class SummarizerAgent(BaseAgent):
             self.reply(original_message, "ERROR", {"error": str(e)})
             return
 
-        # 2. Summarize using Gemma via Ollama
+        # 2. Summarize using Gemma via Transformers
         try:
-            print(f"[{self.name}] Sending data to Gemma 4B for summarization...")
-            # Ensure OLLAMA_HOST is picked up from env if set
+            print(f"[{self.name}] Loading local model for summarization...")
+            model_path = os.environ.get("LOCAL_MODEL_PATH", "./models/gemma-2b-it")
+            
+            # Lazy import to avoid import errors if not installed yet or heavy load on init
+            from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+            
+            # TODO: Optimization - persist the model in memory (`self.model`) to avoid reloading.
+            # But for now, we load on demand as requested.
+            print(f"[{self.name}] Loading model from {model_path}...")
+            tokenizer = AutoTokenizer.from_pretrained(model_path)
+            model = AutoModelForCausalLM.from_pretrained(model_path)
+            
+            generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
+            
             prompt = f"Please summarize the following project updates and status information into a concise daily briefing:\n\n{combined_text}"
-
-            response = ollama.chat(model='gemma:2b', messages=[
-                {'role': 'user', 'content': prompt},
-            ])
-
-            summary = response['message']['content']
+            
+            # Generate
+            results = generator(prompt, max_length=500, do_sample=True, temperature=0.7)
+            summary = results[0]['generated_text']
+            # Basic cleanup if prompt is included
+            if summary.startswith(prompt):
+                summary = summary[len(prompt):].strip()
 
             # 3. Send back response
             self.reply(original_message, "RESPONSE", {"summary": summary})
-
-            # CRITICAL: Since this agent essentially owns the event loop (if started via asyncio.run),
-            # and the reply might trigger other async agents (like Emailer) that schedule tasks on this loop,
-            # we must wait a bit to allow those tasks to complete before this function returns and the loop closes.
-            # In a real distributed A2A system, this wouldn't be necessary as agents run independently.
+            
             print(f"[{self.name}] Waiting for downstream tasks to complete...")
             await asyncio.sleep(5)
 
