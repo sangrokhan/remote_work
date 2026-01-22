@@ -13,8 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the current directory contents into the container at /app
 COPY . .
 
-# Environment variable for Ollama Host
-ENV OLLAMA_HOST=http://ollama:11434
+# Download model during build to ensure standalone capability
+RUN python scripts/download_model.py
 
 # Run the application
 CMD ["python", "main.py"]

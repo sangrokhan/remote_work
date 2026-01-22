@@ -21,17 +21,13 @@ source venv/bin/activate
 echo "Installing dependencies..."
 pip install -r requirements.txt
 
-# 4. Check for Ollama
-if ! command -v ollama &> /dev/null; then
-    echo "Ollama could not be found. Please install Ollama first."
-    exit 1
-fi
-
-# 5. Check if Model exists, if not pull it
-echo "Checking for Gemma 2B model..."
-if ! ollama list | grep -q "gemma:2b"; then
-    echo "Pulling gemma:2b model (this may take a while)..."
-    ollama pull gemma:2b
+# 4. Check for Model
+MODEL_DIR="models/gemma-2b-it"
+if [ ! -d "$MODEL_DIR" ]; then
+    echo "Model not found in $MODEL_DIR. Downloading..."
+    python scripts/download_model.py
+else
+    echo "Model found in $MODEL_DIR."
 fi
 
 # 6. Run the application

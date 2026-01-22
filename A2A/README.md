@@ -36,6 +36,8 @@ docker compose up -d
 
 ### Running Tests
 
+### Running Tests
+
 To run all tests (Unit + Integration):
 
 ```bash
@@ -44,6 +46,5 @@ python -m unittest discover tests
 
 ### Test Structure
 
-- `tests/test_base.py`: Unit tests for `A2AMessage` and `BaseAgent`.
-- `tests/test_manager.py`: Unit tests for `ManagerAgent` logic.
-- `tests/test_workflow.py`: Integration test for the full workflow (requires MCP server).
+- `tests/test_workflow.py`: Integration test for the full A2A workflow (Summarizer -> Emailer).
+- `tests/integration/test_llm_serving.py`: Verifies model downloading and local LLM serving logic.

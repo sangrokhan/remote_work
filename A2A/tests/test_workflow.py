@@ -29,11 +29,10 @@ class TestA2AWorkflow(unittest.TestCase):
         # Optional: Clean up
         pass
 
-    @patch('ollama.chat')
     @patch('agents.executors.pipeline') 
     @patch('agents.executors.AutoTokenizer.from_pretrained')
     @patch('agents.executors.AutoModelForCausalLM.from_pretrained')
-    def test_workflow_execution(self, mock_model, mock_tokenizer, mock_pipeline, mock_ollama):
+    def test_workflow_execution(self, mock_model, mock_tokenizer, mock_pipeline):
         """
         Tests the full workflow using Executors
         """
