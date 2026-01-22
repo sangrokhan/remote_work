@@ -1,4 +1,9 @@
 mcp
 pandas
-ollama
+transformers
+torch
+accelerate
+huggingface_hub
 requests
+python-a2a
+uvicorn
