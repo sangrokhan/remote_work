@@ -3,5 +3,9 @@ services:
     build: .
     container_name: a2a_app
     volumes:
+      - .:/app
       - ./output:/app/output
+      - ./models:/app/models
+    env_file:
+      - .env
     restart: on-failure

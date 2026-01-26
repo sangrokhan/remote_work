@@ -25,6 +25,8 @@ def download_model(model_id, save_dir, endpoint=None, token=None):
         snapshot_download(
             repo_id=model_id,
             local_dir=save_dir,
+            local_dir_use_symlinks=False,  # Important for portability/offline use
+            token=token,
             endpoint=endpoint
         )
         print(f"Successfully downloaded {model_id} to {save_dir}")
@@ -37,8 +39,8 @@ def download_model(model_id, save_dir, endpoint=None, token=None):
 if __name__ == "__main__":
     load_dotenv()
     parser = argparse.ArgumentParser(description="Download a Hugging Face model for local usage.")
-    parser.add_argument("--model_id", type=str, default="google/gemma-2b-it", help="The model ID on Hugging Face.")
-    parser.add_argument("--save_dir", type=str, default="./models/gemma-2b-it", help="Local directory to save the model.")
+    parser.add_argument("--model_id", type=str, default="google/gemma-2-2b-it", help="The model ID on Hugging Face.")
+    parser.add_argument("--save_dir", type=str, default="./models/gemma-2-2b-it", help="Local directory to save the model.")
     parser.add_argument("--endpoint", type=str, help="Optional custom HF endpoint (e.g., internal mirror).")
     parser.add_argument("--token", type=str, help="Hugging Face token if required (or set HF_TOKEN env var).")
 

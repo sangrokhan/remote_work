@@ -13,8 +13,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the current directory contents into the container at /app
 COPY . .
 
-# Download model during build to ensure standalone capability
-RUN python scripts/download_model.py
+# Make entrypoint executable
+RUN chmod +x /app/entrypoint.sh
+
+# Set the entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Run the application
 CMD ["python", "main.py"]
