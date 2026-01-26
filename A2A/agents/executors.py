@@ -66,10 +66,15 @@ class SummarizerExecutor(BaseA2AServer):
         # 2. Summarize
         try:
             print("[Summarizer] Loading local model...")
-            model_path = os.environ.get("LOCAL_MODEL_PATH", "./models/gemma-2b-it")
+            model_path = os.environ.get("LOCAL_MODEL_PATH", "./models/gemma-2-2b-it")
+            print(f"[Summarizer] Using model path: {model_path}")
             
             tokenizer = AutoTokenizer.from_pretrained(model_path)
-            model = AutoModelForCausalLM.from_pretrained(model_path)
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                low_cpu_mem_usage=True,
+                torch_dtype="auto"
+            )
             generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
 
             prompt = f"Summarize:\n\n{combined_text}"
@@ -82,6 +87,8 @@ class SummarizerExecutor(BaseA2AServer):
             return create_text_message(summary, role=MessageRole.AGENT)
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return create_text_message(f"Error summarizng: {e}", role=MessageRole.SYSTEM)
 
 
