@@ -11,6 +11,10 @@ def download_model(model_id, save_dir, endpoint=None, token=None):
     if endpoint:
         print(f"Using custom endpoint: {endpoint}")
         os.environ["HF_ENDPOINT"] = endpoint
+    else:
+        endpoint = os.environ.get("HF_ENDPOINT")
+        if endpoint:
+            print(f"Using custom endpoint from env: {endpoint}")
     
     try:
         snapshot_download(
@@ -25,6 +29,7 @@ def download_model(model_id, save_dir, endpoint=None, token=None):
         raise
 
 if __name__ == "__main__":
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Download a Hugging Face model for local usage.")
     parser.add_argument("--model_id", type=str, default="google/gemma-2b-it", help="The model ID on Hugging Face.")
     parser.add_argument("--save_dir", type=str, default="./models/gemma-2b-it", help="Local directory to save the model.")
@@ -33,5 +38,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     
-    load_dotenv()
     download_model(args.model_id, args.save_dir, args.endpoint, args.token)
