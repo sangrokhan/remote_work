@@ -1,6 +1,7 @@
 import os
 import argparse
 from huggingface_hub import snapshot_download
+from dotenv import load_dotenv
 
 def download_model(model_id, save_dir, endpoint=None, token=None):
     """
@@ -32,4 +33,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     
+    load_dotenv()
     download_model(args.model_id, args.save_dir, args.endpoint, args.token)
