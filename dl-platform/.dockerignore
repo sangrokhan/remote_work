@@ -1,0 +1,23 @@
+# Python virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE and editor directories
+.vscode/
+.idea/
+
+# Git directory
+.git/
+
+# Training outputs and datasets
+training_outputs/
+data/
+trained_models/
+
+# OS-specific files
+.DS_Store

@@ -1,0 +1,35 @@
+# Core ML
+torch
+torchvision
+torchaudio
+
+# Web Framework
+fastapi
+uvicorn[standard]
+
+# Background Worker
+celery
+redis
+
+# Database
+sqlalchemy
+psycopg2-binary
+alembic
+asyncpg
+
+# Utilities
+python-dotenv
+pydantic-settings
+
+# SSH Connection
+paramiko
+tenacity
+
+# Testing
+pytest
+pytest-asyncio
+pytest-mock
+pytest-cov
+pytest-xdist
+httpx
+factory-boy
