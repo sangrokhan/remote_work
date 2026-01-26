@@ -16,16 +16,22 @@ def download_model(model_id, save_dir, endpoint=None, token=None):
         if endpoint:
             print(f"Using custom endpoint from env: {endpoint}")
     
+    # Check for token if model likely requires it
+    if not token and not os.environ.get("HF_TOKEN"):
+        print("WARNING: No HF_TOKEN provided. Download may fail for gated models (like Gemma, Llama).")
+        print("Please set HF_TOKEN in your .env file or pass --token argument.")
+
     try:
         snapshot_download(
             repo_id=model_id,
             local_dir=save_dir,
-            local_dir_use_symlinks=False,  # Important for portability/offline use
-            token=token
+            endpoint=endpoint
         )
         print(f"Successfully downloaded {model_id} to {save_dir}")
     except Exception as e:
-        print(f"Error downloading model: {e}")
+        print(f"\nCRITICAL ERROR: Failed to download model {model_id}")
+        print(f"Error details: {e}")
+        print("Please check your internet connection, endpoint configuration, and HF_TOKEN.")
         raise
 
 if __name__ == "__main__":
