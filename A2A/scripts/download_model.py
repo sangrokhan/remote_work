@@ -11,20 +11,31 @@ def download_model(model_id, save_dir, endpoint=None, token=None):
     if endpoint:
         print(f"Using custom endpoint: {endpoint}")
         os.environ["HF_ENDPOINT"] = endpoint
+    else:
+        endpoint = os.environ.get("HF_ENDPOINT")
+        if endpoint:
+            print(f"Using custom endpoint from env: {endpoint}")
     
+    # Check for token if model likely requires it
+    if not token and not os.environ.get("HF_TOKEN"):
+        print("WARNING: No HF_TOKEN provided. Download may fail for gated models (like Gemma, Llama).")
+        print("Please set HF_TOKEN in your .env file or pass --token argument.")
+
     try:
         snapshot_download(
             repo_id=model_id,
             local_dir=save_dir,
-            local_dir_use_symlinks=False,  # Important for portability/offline use
-            token=token
+            endpoint=endpoint
         )
         print(f"Successfully downloaded {model_id} to {save_dir}")
     except Exception as e:
-        print(f"Error downloading model: {e}")
+        print(f"\nCRITICAL ERROR: Failed to download model {model_id}")
+        print(f"Error details: {e}")
+        print("Please check your internet connection, endpoint configuration, and HF_TOKEN.")
         raise
 
 if __name__ == "__main__":
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Download a Hugging Face model for local usage.")
     parser.add_argument("--model_id", type=str, default="google/gemma-2b-it", help="The model ID on Hugging Face.")
     parser.add_argument("--save_dir", type=str, default="./models/gemma-2b-it", help="Local directory to save the model.")
@@ -33,5 +44,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     
-    load_dotenv()
     download_model(args.model_id, args.save_dir, args.endpoint, args.token)
