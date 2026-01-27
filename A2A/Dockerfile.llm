@@ -1,0 +1,25 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies if needed (e.g. for torch)
+# RUN apt-get update && apt-get install -y ...
+
+# Install python dependencies
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    pydantic \
+    transformers \
+    torch \
+    accelerate \
+    protobuf
+
+# Copy application code
+COPY llm_server.py .
+
+# Expose port
+EXPOSE 8000
+
+# Command to run the server
+CMD ["python", "llm_server.py"]

@@ -9,3 +9,4 @@ python-a2a
 uvicorn
 python-dotenv
 protobuf
+fastapi

@@ -1,11 +1,47 @@
 services:
+  # Agent Core Service
   app:
     build: .
-    container_name: a2a_app
+    container_name: a2a_agent_core
+    ports:
+      - "8080:8080"
     volumes:
       - .:/app
       - ./output:/app/output
-      - ./models:/app/models
+      - ./data:/app/data
+    environment:
+      - LLM_SERVICE_URL=http://llm_service:8000
     env_file:
       - .env
+    depends_on:
+      - llm_service
+    restart: on-failure
+
+  # LLM Service
+  llm_service:
+    build:
+      context: .
+      dockerfile: Dockerfile.llm
+    container_name: a2a_llm_service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+    environment:
+      - MODEL_PATH=/app/models/gemma-2-2b-it
+    restart: unless-stopped
+    # Note: Remove 'deploy' block if running on CPU-only mac (Docker Desktop handles it differently usually) or keep specific for environment.
+    # For Mac (OrbStack/Docker Desktop), usually no special config needed for CPU inference, but for GPU it's different.
+    # I'll comment out the deploy block for safety unless I know it's a GPU machine. 
+    # The user said "mac", so likely Apple Silicon. No nvidia.
+
+    # Frontend Service
+  frontend:
+    build:
+      context: ./frontend
+    container_name: a2a_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - app
     restart: on-failure
