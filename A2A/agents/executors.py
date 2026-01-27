@@ -65,31 +65,28 @@ class SummarizerExecutor(BaseA2AServer):
 
         # 2. Summarize
         try:
-            print("[Summarizer] Loading local model...")
-            model_path = os.environ.get("LOCAL_MODEL_PATH", "./models/gemma-2-2b-it")
-            print(f"[Summarizer] Using model path: {model_path}")
+            print("[Summarizer] Sending text to LLM service...")
+            llm_service_url = os.environ.get("LLM_SERVICE_URL", "http://llm_service:8000")
             
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                low_cpu_mem_usage=True,
-                torch_dtype="auto"
-            )
-            generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
-
+            import httpx
+            
             prompt = f"Summarize:\n\n{combined_text}"
-            results = generator(prompt, max_length=500, do_sample=True, temperature=0.7)
-            summary = results[0]['generated_text']
             
-            if summary.startswith(prompt):
-                summary = summary[len(prompt):].strip()
-
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(
+                    f"{llm_service_url}/generate",
+                    json={"prompt": prompt, "max_length": 500}
+                )
+                response.raise_for_status()
+                result = response.json()
+                summary = result.get("text", "")
+            
             return create_text_message(summary, role=MessageRole.AGENT)
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            return create_text_message(f"Error summarizng: {e}", role=MessageRole.SYSTEM)
+            return create_text_message(f"Error summarizing: {e}", role=MessageRole.SYSTEM)
 
 
 class EmailExecutor(BaseA2AServer):

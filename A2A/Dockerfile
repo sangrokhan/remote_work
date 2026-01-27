@@ -20,4 +20,5 @@ RUN chmod +x /app/entrypoint.sh
 ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Run the application
+EXPOSE 8080
 CMD ["python", "main.py"]
