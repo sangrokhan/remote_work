@@ -40,11 +40,10 @@ USER GOAL: {goal}
 DATA ANALYSIS REPORT:
 {report}
 
-Start by analyzing the report briefly. Then, select the best training strategy and hyperparameters.
-You MUST output a valid JSON object that matches the following schema exactly (no markdown, just JSON):
-
+You MUST output ONLY a valid JSON object. Do not include any pre-amble, explanation, or markdown formatting outside the JSON itself.
+The JSON must follow this schema:
 {{
-    "model_name": "string (e.g. gpt2, bert-base-uncased, distilgpt2)",
+    "model_name": "string (e.g. distilgpt2, gpt2)",
     "dataset_path": "string (path to the processed dataset, infer from context or use placeholder)",
     "strategy": "string (one of: full_training, fine_tuning, transfer, lora, adapter, layer_freezing, continual, curriculum)",
     "epochs": float,
@@ -80,14 +79,24 @@ Heuristics:
             # 3. Parse JSON from LLM output
             # Attempt to find JSON block if LLM adds text around it
             try:
+                # Remove markdown code blocks if present
+                clean_text = generated_text.strip()
+                if clean_text.startswith("```json"):
+                    clean_text = clean_text[7:]
+                if clean_text.startswith("```"):
+                    clean_text = clean_text[3:]
+                if clean_text.endswith("```"):
+                    clean_text = clean_text[:-3]
+                clean_text = clean_text.strip()
+
                 # Naive cleaning: find first { and last }
-                start_idx = generated_text.find("{")
-                end_idx = generated_text.rfind("}")
+                start_idx = clean_text.find("{")
+                end_idx = clean_text.rfind("}")
                 if start_idx != -1 and end_idx != -1:
-                    json_str = generated_text[start_idx:end_idx+1]
+                    json_str = clean_text[start_idx:end_idx+1]
                     plan_data = json.loads(json_str)
                 else:
-                    raise ValueError("No JSON found in response")
+                    plan_data = json.loads(clean_text)
             except Exception as e:
                 print(f"[TrainingPlanner] JSON Parsing failed. Raw output: {generated_text}")
                 # Fallback or error
