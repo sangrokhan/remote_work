@@ -139,7 +139,7 @@ class ParquetAnalyzerExecutor(BaseA2AServer):
 
     async def execute_task(self, message: Message) -> Message:
         import pandas as pd
-        import io
+        from utils.analysis_utils import analyze_distribution, analyze_correlation, detect_outliers, generate_llm_summary
 
         # Parse args
         content_obj = message.content
@@ -156,47 +156,26 @@ class ParquetAnalyzerExecutor(BaseA2AServer):
             await self.mcp_client.connect()
             for file in files_to_read:
                 print(f"[ParquetAnalyzer] Reading {file} via MCP...")
-                # We need to read the file as binary or ensure we can access it. 
-                # Since the current MCP 'read_file' tools might return text, 
-                # we technically need a way to read binary or load it directly if it's a local file path.
-                # Assuming the agent has access to the filesystem for now as a simplification,
-                # or we use a tool that supports binary. 
-                # However, typically MCP reads might be text-based.
-                # Let's check if we can read it directly from disk if we share the volume.
-                # If not, we might need a read_binary_file tool.
-                # For this implementation, I will assume we can access the file path directly 
-                # if the path is absolute or relative to the workspace.
                 
                 # Check if file exists locally (assuming shared FS for this agent)
                 if os.path.exists(file):
                     df = pd.read_parquet(file)
                     
-                    # Analyze
-                    analysis = []
-                    analysis.append(f"--- Analysis of {file} ---")
-                    analysis.append(f"Shape: {df.shape}")
-                    analysis.append(f"Columns: {', '.join(df.columns)}")
+                    # 1. Perform Analysis
+                    dist_results = analyze_distribution(df)
+                    corr_results = analyze_correlation(df)
+                    outlier_results = detect_outliers(df)
                     
-                    # Data Types
-                    analysis.append("Data Types:")
-                    for col, dtype in df.dtypes.items():
-                        analysis.append(f"  - {col}: {dtype}")
-                        
-                    # Missing Values
-                    missing = df.isnull().sum()
-                    if missing.any():
-                        analysis.append("Missing Values:")
-                        for col, count in missing[missing > 0].items():
-                            analysis.append(f"  - {col}: {count}")
-                    else:
-                        analysis.append("No missing values.")
-                        
-                    # Basic Stats (numeric)
-                    analysis.append("Basic Statistics (Numeric):")
-                    desc = df.describe().to_string()
-                    analysis.append(desc)
+                    full_results = {
+                        "distribution": dist_results,
+                        "correlation": corr_results,
+                        "outliers": outlier_results
+                    }
                     
-                    combined_analysis += "\n".join(analysis) + "\n\n"
+                    # 2. Generate Summary
+                    report = generate_llm_summary(full_results, filename=file)
+                    combined_analysis += report + "\n\n"
+
                 else:
                     combined_analysis += f"File not found or inaccessible: {file}\n"
 
