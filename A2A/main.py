@@ -13,7 +13,7 @@ from typing import Dict, Any
 if __name__ == "__main__":
     sys.path.append(os.path.dirname(__file__))
 
-from agents.executors import SummarizerExecutor, EmailExecutor
+from agents.executors import SummarizerExecutor, EmailExecutor, ParquetAnalyzerExecutor
 from agents.training_executor import TrainingExecutor
 from python_a2a.utils.conversion import create_text_message
 from python_a2a.models.message import MessageRole
@@ -34,6 +34,9 @@ tasks: Dict[str, Dict[str, Any]] = {}
 
 class CommandRequest(BaseModel):
     command: str
+
+class AnalyzeRequest(BaseModel):
+    files: list[str]
 
 async def process_daily_routine(task_id: str):
     print(f"[Agent Core] Starting daily routine (Task {task_id})...")
@@ -115,6 +118,27 @@ async def run_routine(background_tasks: BackgroundTasks):
     tasks[task_id] = {"status": "pending", "logs": []}
     background_tasks.add_task(process_daily_routine, task_id)
     return {"status": "started", "task_id": task_id, "message": "Daily routine started in background"}
+
+@app.post("/api/analyze-parquet")
+async def analyze_parquet(request: AnalyzeRequest):
+    # Path to the MCP server script
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    mcp_server_path = os.path.join(base_dir, "mcp", "server.py")
+    
+    analyzer = ParquetAnalyzerExecutor(mcp_server_path)
+    
+    payload = json.dumps({"files": request.files})
+    message = create_text_message(payload, role=MessageRole.USER)
+    
+    response = await analyzer.execute_task(message)
+    
+    result_text = ""
+    if hasattr(response.content, 'text'):
+        result_text = response.content.text
+    else:
+        result_text = str(response.content)
+        
+    return {"status": "success", "analysis": result_text}
 
 @app.get("/api/task/{task_id}")
 async def get_task_status(task_id: str):
