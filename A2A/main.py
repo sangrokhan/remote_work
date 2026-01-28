@@ -14,6 +14,7 @@ if __name__ == "__main__":
     sys.path.append(os.path.dirname(__file__))
 
 from agents.executors import SummarizerExecutor, EmailExecutor
+from agents.training_executor import TrainingExecutor
 from python_a2a.utils.conversion import create_text_message
 from python_a2a.models.message import MessageRole
 
@@ -50,6 +51,7 @@ async def process_daily_routine(task_id: str):
     # Initialize Executors
     summarizer = SummarizerExecutor(mcp_server_path)
     emailer = EmailExecutor(mcp_server_path)
+    trainer = TrainingExecutor(mcp_server_path)
     
     try:
         # --- Step 1: Request Summary ---
