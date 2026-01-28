@@ -20,8 +20,8 @@ if __name__ == "__main__":
 from agents.executors import SummarizerExecutor, EmailExecutor, ParquetAnalyzerExecutor
 from agents.training_executor import TrainingExecutor
 from agents.training_planning_agent import TrainingPlanningExecutor
-from python_a2a.utils.conversion import create_text_message
-from python_a2a.models.message import MessageRole
+from utils.a2a_bridge import create_text_message, run_agent_sync
+from a2a.types import Role
 
 app = FastAPI()
 
@@ -71,14 +71,14 @@ async def process_daily_routine(task_id: str):
         files = ["projects.csv", "updates.txt"]
         summarize_payload = json.dumps({"files": files})
         
-        input_msg = create_text_message(summarize_payload, role=MessageRole.USER)
+        input_msg = create_text_message(summarize_payload, role=Role.user)
         
-        response_msg = await summarizer.execute_task(input_msg)
+        response_msg = await run_agent_sync(summarizer, input_msg)
         summary_text = ""
-        if hasattr(response_msg.content, 'text'):
-            summary_text = response_msg.content.text
+        if response_msg.parts and response_msg.parts[0].root.text:
+            summary_text = response_msg.parts[0].root.text
         else:
-            summary_text = str(response_msg.content)
+            summary_text = "No response content"
         
         log(f"Received Summary: {summary_text[:50]}...")
 
@@ -99,15 +99,15 @@ async def process_daily_routine(task_id: str):
             }
         })
 
-        email_msg = create_text_message(email_payload, role=MessageRole.USER)
+        email_msg = create_text_message(email_payload, role=Role.user)
         
-        response_msg = await emailer.execute_task(email_msg)
+        response_msg = await run_agent_sync(emailer, email_msg)
         
         resp_text = ""
-        if hasattr(response_msg.content, 'text'):
-            resp_text = response_msg.content.text
+        if response_msg.parts and response_msg.parts[0].root.text:
+            resp_text = response_msg.parts[0].root.text
         else:
-            resp_text = str(response_msg.content)
+            resp_text = "No response content"
         
         log(f"Emailer Response: {resp_text}")
         
@@ -137,15 +137,16 @@ async def analyze_parquet(request: AnalyzeRequest):
     analyzer = ParquetAnalyzerExecutor(mcp_server_path)
     
     payload = json.dumps({"files": request.files})
-    message = create_text_message(payload, role=MessageRole.USER)
+    message = create_text_message(payload, role=Role.user)
     
-    response = await analyzer.execute_task(message)
+    response = await run_agent_sync(analyzer, message)
     
     result_text = ""
-    if hasattr(response.content, 'text'):
-        result_text = response.content.text
+    result_text = ""
+    if response.parts and response.parts[0].root.text:
+        result_text = response.parts[0].root.text
     else:
-        result_text = str(response.content)
+        result_text = "No response content"
         
     return {"status": "success", "analysis": result_text}
 
@@ -172,11 +173,12 @@ async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: Backg
             
             # --- Phase 1: Data Analysis ---
             log("State: ANALYZING_DATA")
+            log("State: ANALYZING_DATA")
             payload = json.dumps({"files": files})
-            msg = create_text_message(payload, role=MessageRole.USER)
+            msg = create_text_message(payload, role=Role.user)
             
-            resp = await analyzer.execute_task(msg)
-            analysis_text = resp.content.text if hasattr(resp.content, 'text') else str(resp.content)
+            resp = await run_agent_sync(analyzer, msg)
+            analysis_text = resp.parts[0].root.text if resp.parts and resp.parts[0].root.text else "No analysis"
             log(f"Analysis Complete. Report length: {len(analysis_text)}")
             
             # --- Phase 2: Training Planning ---
@@ -185,10 +187,10 @@ async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: Backg
                 "analysis_report": analysis_text,
                 "user_goal": goal
             })
-            plan_msg = create_text_message(plan_payload, role=MessageRole.USER)
+            plan_msg = create_text_message(plan_payload, role=Role.user)
             
-            resp = await planner.execute_task(plan_msg)
-            plan_json_str = resp.content.text if hasattr(resp.content, 'text') else str(resp.content)
+            resp = await run_agent_sync(planner, plan_msg)
+            plan_json_str = resp.parts[0].root.text if resp.parts and resp.parts[0].root.text else "{}"
             
             try:
                 plan_data = json.loads(plan_json_str)
@@ -204,13 +206,12 @@ async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: Backg
                  plan_data["dataset_path"] = files[0]
                  log(f"Injected dataset path: {files[0]}")
 
-            # --- Phase 3: Training Execution ---
             log("State: EXECUTING_TRAINING")
             train_payload = json.dumps(plan_data)
-            train_msg = create_text_message(train_payload, role=MessageRole.USER)
+            train_msg = create_text_message(train_payload, role=Role.user)
             
-            resp = await trainer.execute_task(train_msg)
-            result_text = resp.content.text if hasattr(resp.content, 'text') else str(resp.content)
+            resp = await run_agent_sync(trainer, train_msg)
+            result_text = resp.parts[0].root.text if resp.parts and resp.parts[0].root.text else "No result"
             
             log(f"Training Result: {result_text}")
             tasks[tid]["status"] = "completed"

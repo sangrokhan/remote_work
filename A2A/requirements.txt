@@ -5,10 +5,11 @@ torch
 accelerate
 huggingface_hub
 requests
-python-a2a
+a2a-sdk
 uvicorn
 python-dotenv
 protobuf
+pytest
 fastapi
 pyarrow
 peft

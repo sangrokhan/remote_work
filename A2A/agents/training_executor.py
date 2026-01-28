@@ -21,9 +21,11 @@ from peft import (
 )
 from datasets import Dataset
 
-from python_a2a.models.message import Message, MessageRole
-from python_a2a.utils.conversion import create_text_message
-from python_a2a.server.base import BaseA2AServer
+from a2a.server.agent_execution import AgentExecutor
+from a2a.server.agent_execution.context import RequestContext
+from a2a.server.events.event_queue import EventQueue
+from a2a.types import Message, Role
+from utils.a2a_bridge import create_text_message
 from utils.training_utils import load_data, preprocess_for_causal_lm
 from utils.logger import get_logger
 
@@ -210,21 +212,79 @@ class CurriculumStrategy(BaseStrategy):
 
 # --- Executor ---
 
-class TrainingExecutor(BaseA2AServer):
+class TrainingExecutor(AgentExecutor):
     def __init__(self, mcp_server_path: str = ""):
         # MCP not strictly used here yet, but keeping signature consistent
         pass
 
-    async def execute_task(self, message: Message) -> Message:
+    @staticmethod
+    def get_capabilities() -> Dict[str, Any]:
+        """Returns the capabilities and schema for this executor."""
+        return {
+            "strategies": [s.value for s in StrategyType],
+            "defaults": {
+                "epochs": 1.0,
+                "batch_size": 4,
+                "learning_rate": 2e-5,
+                "lora_r": 8,
+                "freeze_layers": 0
+            },
+            "argument_ranges": {
+                "epochs": "0.1 to 100.0",
+                "batch_size": "1 to 128 (depends on GPU mem)",
+                "learning_rate": "1e-6 to 1e-3",
+                "lora_r": "4, 8, 16, 32, 64",
+                "freeze_layers": "0 to n_layers"
+            },
+            "samples": [
+                {
+                    "strategy": "lora",
+                    "epochs": 3.0,
+                    "batch_size": 8,
+                    "learning_rate": 1e-4,
+                    "lora_r": 16,
+                    "dataset_path": "/path/to/data.parquet",
+                    "model_name": "distilgpt2"
+                },
+                {
+                    "strategy": "full_training",
+                    "epochs": 5.0,
+                    "batch_size": 2,
+                    "learning_rate": 5e-5,
+                    "dataset_path": "/path/to/data.parquet",
+                    "model_name": "bert-base-uncased"
+                }
+            ]
+        }
+
+    def cancel(self) -> None:
+        pass
+
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         try:
-            content_obj = message.content
-            args = {}
-            if hasattr(content_obj, 'text'):
-                try:
-                    args = json.loads(content_obj.text)
-                except: pass
+            message = context.message
+            content_parts = message.parts
+            content_text = content_parts[0].root.text if content_parts else ""
             
-            config = TrainingConfig(**args)
+            logger.info(f"[TrainingExecutor] Received task with content: {content_text}")
+            
+            args = {}
+            if content_text:
+                try:
+                    args = json.loads(content_text)
+                except: 
+                    # If not strictly JSON, try to handle or log warning
+                    logger.warning(f"[TrainingExecutor] Could not parse content as JSON: {content_text[:100]}...")
+                    pass
+            
+            logger.info(f"[TrainingExecutor] Parsed arguments: {json.dumps(args, indent=2)}")
+
+            try:
+                config = TrainingConfig(**args)
+            except Exception as e:
+                logger.error(f"[TrainingExecutor] Invalid configuration: {e}")
+                event_queue.enqueue_event(create_text_message(f"Invalid configuration: {str(e)}", role=Role.agent))
+                return
             
             strategy_map = {
                 StrategyType.FULL_TRAINING: StandardStrategy,
@@ -239,7 +299,9 @@ class TrainingExecutor(BaseA2AServer):
             
             strategy_cls = strategy_map.get(config.strategy)
             if not strategy_cls:
-                return create_text_message(f"Unknown strategy: {config.strategy}", role=MessageRole.SYSTEM)
+                logger.error(f"[TrainingExecutor] Unknown strategy requested: {config.strategy}")
+                event_queue.enqueue_event(create_text_message(f"Unknown strategy: {config.strategy}", role=Role.agent))
+                return
                 
             runner = strategy_cls(config)
             logger.info(f"[TrainingExecutor] Preparing model for {config.strategy}...")
@@ -248,14 +310,14 @@ class TrainingExecutor(BaseA2AServer):
             # For continual, dataset preparation happens in loop, but need initial one for API consistency
             dataset = runner.prepare_dataset(config.dataset_path) if config.strategy != StrategyType.CONTINUAL else None
             
-            logger.info(f"[TrainingExecutor] Starting training...")
+            logger.info(f"[TrainingExecutor] Model and Dataset prepared. Starting training loop...")
             result = await asyncio.to_thread(runner.train, model, dataset)
             
-            return create_text_message(result, role=MessageRole.AGENT)
+            logger.info(f"[TrainingExecutor] Training completed successfully: {result}")
+            event_queue.enqueue_event(create_text_message(result, role=Role.agent))
 
         except Exception as e:
-            logger.error(f"Training failed: {str(e)}", exc_info=True)
-            return create_text_message(f"Training failed: {str(e)}", role=MessageRole.SYSTEM)
+            logger.error(f"[TrainingExecutor] Training failed execution: {str(e)}", exc_info=True)
+            event_queue.enqueue_event(create_text_message(f"Training failed: {str(e)}", role=Role.agent))
 
-    def handle_message(self, message: Message) -> Message:
-        return asyncio.run(self.execute_task(message))
+
