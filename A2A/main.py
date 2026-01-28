@@ -15,6 +15,7 @@ if __name__ == "__main__":
 
 from agents.executors import SummarizerExecutor, EmailExecutor, ParquetAnalyzerExecutor
 from agents.training_executor import TrainingExecutor
+from agents.training_planning_agent import TrainingPlanningExecutor
 from python_a2a.utils.conversion import create_text_message
 from python_a2a.models.message import MessageRole
 
@@ -37,6 +38,10 @@ class CommandRequest(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     files: list[str]
+
+class AutoTrainRequest(BaseModel):
+    files: list[str]
+    goal: str = "Train an optimal model based on the data."
 
 async def process_daily_routine(task_id: str):
     print(f"[Agent Core] Starting daily routine (Task {task_id})...")
@@ -139,6 +144,88 @@ async def analyze_parquet(request: AnalyzeRequest):
         result_text = str(response.content)
         
     return {"status": "success", "analysis": result_text}
+
+@app.post("/api/auto-train-pipeline")
+async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: BackgroundTasks):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    mcp_server_path = os.path.join(base_dir, "mcp", "server.py")
+    
+    # 1. Initialize Agents
+    analyzer = ParquetAnalyzerExecutor(mcp_server_path)
+    planner = TrainingPlanningExecutor(mcp_server_path)
+    trainer = TrainingExecutor(mcp_server_path)
+    
+    task_id = str(uuid.uuid4())
+    tasks[task_id] = {"status": "starting", "logs": []}
+
+    async def run_pipeline(tid: str, files: list, goal: str):
+        def log(msg):
+            print(f"[Pipeline {tid}] {msg}")
+            tasks[tid]["logs"].append(msg)
+            
+        try:
+            tasks[tid]["status"] = "running"
+            
+            # --- Phase 1: Data Analysis ---
+            log("State: ANALYZING_DATA")
+            payload = json.dumps({"files": files})
+            msg = create_text_message(payload, role=MessageRole.USER)
+            
+            resp = await analyzer.execute_task(msg)
+            analysis_text = resp.content.text if hasattr(resp.content, 'text') else str(resp.content)
+            log(f"Analysis Complete. Report length: {len(analysis_text)}")
+            
+            # --- Phase 2: Training Planning ---
+            log("State: PLANNING_TRAINING")
+            plan_payload = json.dumps({
+                "analysis_report": analysis_text,
+                "user_goal": goal
+            })
+            plan_msg = create_text_message(plan_payload, role=MessageRole.USER)
+            
+            resp = await planner.execute_task(plan_msg)
+            plan_json_str = resp.content.text if hasattr(resp.content, 'text') else str(resp.content)
+            
+            try:
+                plan_data = json.loads(plan_json_str)
+                log(f"Plan Generated: Strategy={plan_data.get('strategy')}, Model={plan_data.get('model_name')}")
+            except:
+                log(f"Plan generation failed or invalid JSON: {plan_json_str}")
+                tasks[tid]["status"] = "failed"
+                return
+
+            # Validate/Inject Dataset Path if missing (Planner might not know absolute path)
+            # Assuming the first file in list is the primary dataset for training
+            if not plan_data.get("dataset_path") or "placeholder" in plan_data.get("dataset_path"):
+                 plan_data["dataset_path"] = files[0]
+                 log(f"Injected dataset path: {files[0]}")
+
+            # --- Phase 3: Training Execution ---
+            log("State: EXECUTING_TRAINING")
+            train_payload = json.dumps(plan_data)
+            train_msg = create_text_message(train_payload, role=MessageRole.USER)
+            
+            resp = await trainer.execute_task(train_msg)
+            result_text = resp.content.text if hasattr(resp.content, 'text') else str(resp.content)
+            
+            log(f"Training Result: {result_text}")
+            tasks[tid]["status"] = "completed"
+            tasks[tid]["result"] = result_text
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            log(f"Pipeline Error: {str(e)}")
+            tasks[tid]["status"] = "failed"
+            tasks[tid]["error"] = str(e)
+
+    background_tasks.add_task(run_pipeline, task_id, request.files, request.goal)
+    
+    return {
+        "status": "protocol_initiated",
+        "task_id": task_id,
+        "message": "AutoML Pipeline started. Check status at /api/task/{task_id}"
+    }
 
 @app.get("/api/task/{task_id}")
 async def get_task_status(task_id: str):
