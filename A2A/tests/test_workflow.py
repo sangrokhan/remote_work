@@ -22,8 +22,14 @@ class TestA2AWorkflow(unittest.TestCase):
 
         # Clean output dir
         if os.path.exists(self.output_dir):
-            shutil.rmtree(self.output_dir)
-        os.makedirs(self.output_dir)
+            try:
+                shutil.rmtree(self.output_dir)
+            except PermissionError:
+                print(f"Warning: Could not remove {self.output_dir} due to permission error. Ignoring.")
+                pass
+        
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
 
     def tearDown(self):
         # Optional: Clean up
@@ -32,7 +38,14 @@ class TestA2AWorkflow(unittest.TestCase):
     @patch('agents.executors.pipeline') 
     @patch('agents.executors.AutoTokenizer.from_pretrained')
     @patch('agents.executors.AutoModelForCausalLM.from_pretrained')
-    def test_workflow_execution(self, mock_model, mock_tokenizer, mock_pipeline):
+    @patch('httpx.AsyncClient')
+    def test_workflow_execution(self, mock_httpx, mock_model, mock_tokenizer, mock_pipeline):
+        # Mock HTTP Response for LLM Service
+        mock_client_instance = mock_httpx.return_value.__aenter__.return_value
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"text": "Unit Test Summary: Projects are going well."}
+        mock_client_instance.post.return_value = mock_response
         """
         Tests the full workflow using Executors
         """
