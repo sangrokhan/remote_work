@@ -9,6 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Any
 
+from utils.logger import get_logger
+
+logger = get_logger("A2A.Main")
+
 # Ensure local imports work
 if __name__ == "__main__":
     sys.path.append(os.path.dirname(__file__))
@@ -44,12 +48,12 @@ class AutoTrainRequest(BaseModel):
     goal: str = "Train an optimal model based on the data."
 
 async def process_daily_routine(task_id: str):
-    print(f"[Agent Core] Starting daily routine (Task {task_id})...")
+    logger.info(f"[Agent Core] Starting daily routine (Task {task_id})...")
     tasks[task_id]["status"] = "running"
     tasks[task_id]["logs"] = []
     
     def log(msg):
-        print(f"[Task {task_id}] {msg}")
+        logger.info(f"[Task {task_id}] {msg}")
         tasks[task_id]["logs"].append(msg)
 
     # Path to the MCP server script
@@ -111,11 +115,11 @@ async def process_daily_routine(task_id: str):
         tasks[task_id]["result"] = "Daily routine completed successfully."
         
     except Exception as e:
-        log(f"Error during routine: {str(e)}")
+        logger.error(f"Error during routine: {str(e)}", exc_info=True)
         tasks[task_id]["status"] = "failed"
         tasks[task_id]["error"] = str(e)
 
-    print(f"[Agent Core] Task {task_id} finished.")
+    logger.info(f"[Agent Core] Task {task_id} finished.")
 
 @app.post("/api/run-daily-routine")
 async def run_routine(background_tasks: BackgroundTasks):
@@ -160,7 +164,7 @@ async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: Backg
 
     async def run_pipeline(tid: str, files: list, goal: str):
         def log(msg):
-            print(f"[Pipeline {tid}] {msg}")
+            logger.info(f"[Pipeline {tid}] {msg}")
             tasks[tid]["logs"].append(msg)
             
         try:
@@ -213,8 +217,7 @@ async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: Backg
             tasks[tid]["result"] = result_text
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Pipeline Error: {str(e)}", exc_info=True)
             log(f"Pipeline Error: {str(e)}")
             tasks[tid]["status"] = "failed"
             tasks[tid]["error"] = str(e)

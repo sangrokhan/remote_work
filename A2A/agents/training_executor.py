@@ -25,6 +25,9 @@ from python_a2a.models.message import Message, MessageRole
 from python_a2a.utils.conversion import create_text_message
 from python_a2a.server.base import BaseA2AServer
 from utils.training_utils import load_data, preprocess_for_causal_lm
+from utils.logger import get_logger
+
+logger = get_logger("A2A.TrainingExecutor")
 
 # --- Configuration Models ---
 
@@ -169,7 +172,7 @@ class ContinualStrategy(BaseStrategy):
         report = []
         
         for i, task_path in enumerate(tasks):
-            print(f"--- Continual Learning: Task {i+1}/{len(tasks)}: {task_path} ---")
+            logger.info(f"--- Continual Learning: Task {i+1}/{len(tasks)}: {task_path} ---")
             
             # Update output dir for this task
             self.config.output_dir = f"{output_dir_base}/task_{i+1}"
@@ -239,20 +242,19 @@ class TrainingExecutor(BaseA2AServer):
                 return create_text_message(f"Unknown strategy: {config.strategy}", role=MessageRole.SYSTEM)
                 
             runner = strategy_cls(config)
-            print(f"[TrainingExecutor] Preparing model for {config.strategy}...")
+            logger.info(f"[TrainingExecutor] Preparing model for {config.strategy}...")
             model = runner.prepare_model()
             
             # For continual, dataset preparation happens in loop, but need initial one for API consistency
             dataset = runner.prepare_dataset(config.dataset_path) if config.strategy != StrategyType.CONTINUAL else None
             
-            print(f"[TrainingExecutor] Starting training...")
+            logger.info(f"[TrainingExecutor] Starting training...")
             result = runner.train(model, dataset)
             
             return create_text_message(result, role=MessageRole.AGENT)
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Training failed: {str(e)}", exc_info=True)
             return create_text_message(f"Training failed: {str(e)}", role=MessageRole.SYSTEM)
 
     def handle_message(self, message: Message) -> Message:
