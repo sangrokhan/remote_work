@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 
 function App() {
     const [command, setCommand] = useState('');
+    const [parquetPath, setParquetPath] = useState('');
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
     const logsEndRef = useRef(null);
@@ -94,6 +95,33 @@ function App() {
         }
     };
 
+    const analyzeParquet = async (e) => {
+        e.preventDefault();
+        if (!parquetPath) return;
+
+        setLoading(true);
+        addLog(`Requesting analysis for: ${parquetPath}`);
+        try {
+            const res = await fetch('http://localhost:8080/api/analyze-parquet', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ files: [parquetPath] }),
+            });
+            const data = await res.json();
+
+            if (data.status === 'success') {
+                addLog(`Analysis Result:\n${data.analysis}`);
+            } else {
+                addLog(`Analysis/Server Error: ${JSON.stringify(data)}`);
+            }
+        } catch (err) {
+            addLog(`Error: ${err.message}`);
+        } finally {
+            setLoading(false);
+            // setParquetPath(''); // keep path for convenience
+        }
+    };
+
     return (
         <div style={{ fontFamily: 'Inter, sans-serif', maxWidth: '800px', margin: '0 auto', padding: '2rem' }}>
             <header style={{ marginBottom: '2rem' }}>
@@ -144,6 +172,35 @@ function App() {
                             }}
                         >
                             Send
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div style={{ display: 'grid', gap: '1rem', marginBottom: '2rem' }}>
+                <div style={{ padding: '1.5rem', border: '1px solid #eee', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                    <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem' }}>Parquet Analysis</h2>
+                    <form onSubmit={analyzeParquet} style={{ display: 'flex', gap: '0.5rem' }}>
+                        <input
+                            type="text"
+                            value={parquetPath}
+                            onChange={(e) => setParquetPath(e.target.value)}
+                            placeholder="Enter absolute file path (e.g. /home/user/data.parquet)"
+                            style={{ flex: 1, padding: '0.8rem', borderRadius: '6px', border: '1px solid #ddd' }}
+                        />
+                        <button
+                            type="submit"
+                            disabled={loading}
+                            style={{
+                                padding: '0.8rem 1.5rem',
+                                background: '#8b5cf6',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '6px',
+                                cursor: loading ? 'not-allowed' : 'pointer'
+                            }}
+                        >
+                            Analyze
                         </button>
                     </form>
                 </div>
