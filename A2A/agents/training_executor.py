@@ -86,7 +86,7 @@ class BaseStrategy:
             learning_rate=self.config.learning_rate,
             logging_steps=10,
             save_steps=50,
-            evaluation_strategy="no",
+            eval_strategy="no",
             use_cpu=not torch.cuda.is_available()
         )
         
