@@ -67,7 +67,7 @@ Heuristics:
             llm_service_url = os.environ.get("LLM_SERVICE_URL", "http://llm_service:8000")
             print(f"[TrainingPlanner] Sending prompt to LLM service at {llm_service_url}...")
             
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(timeout=1200.0) as client:
                 response = await client.post(
                     f"{llm_service_url}/generate",
                     json={"prompt": prompt, "max_length": 1000, "temperature": 0.2} 

@@ -1,0 +1,48 @@
+services:
+  # LLM Service (Linux with NVIDIA GPU)
+  llm_service:
+    build:
+      context: .
+      dockerfile: Dockerfile.llm.linux
+    container_name: a2a_llm_service_linux
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+    environment:
+      - MODEL_PATH=/app/models/gemma-2-2b-it
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    restart: unless-stopped
+
+  # Core App (Connects to the Linux LLM service)
+  app:
+    build: .
+    container_name: a2a_agent_core
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+    environment:
+      - LLM_SERVICE_URL=http://llm_service:8000
+    env_file:
+      - .env
+    depends_on:
+      - llm_service
+    restart: on-failure
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+    container_name: a2a_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - app
+    restart: on-failure

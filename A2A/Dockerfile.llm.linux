@@ -1,0 +1,41 @@
+# Specialized Dockerfile for Linux with NVIDIA GPU
+FROM nvidia/cuda:12.1.0-base-ubuntu22.04
+
+# Set shell and non-interactive
+SHELL ["/bin/bash", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python and essential tools
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3-pip \
+    python3.11-venv \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set python3.11 as default
+RUN ln -s /usr/bin/python3.11 /usr/bin/python
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1
+
+# Install python dependencies
+# Note: On Linux, we might want to ensure torch is install with CUDA support
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    pydantic \
+    transformers \
+    torch \
+    accelerate \
+    protobuf
+
+# Copy application code
+COPY llm_server.py .
+
+# Expose port
+EXPOSE 8000
+
+# Command to run the server
+CMD ["python", "llm_server.py"]
