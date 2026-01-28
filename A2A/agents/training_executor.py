@@ -249,7 +249,7 @@ class TrainingExecutor(BaseA2AServer):
             dataset = runner.prepare_dataset(config.dataset_path) if config.strategy != StrategyType.CONTINUAL else None
             
             logger.info(f"[TrainingExecutor] Starting training...")
-            result = runner.train(model, dataset)
+            result = await asyncio.to_thread(runner.train, model, dataset)
             
             return create_text_message(result, role=MessageRole.AGENT)
 

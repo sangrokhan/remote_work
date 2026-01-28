@@ -24,13 +24,25 @@ async def load_model():
     try:
         model_path = os.environ.get("MODEL_PATH", "./models/gemma-2-2b-it")
         
-        # Check if local path exists, if not let transformers download it (or fail if no internet/auth)
+        # Check device availability
+        use_cuda = torch.cuda.is_available()
+        use_mps = torch.backends.mps.is_available()
+        
+        print(f"[LLM Service] Device Check - CUDA: {use_cuda}, MPS: {use_mps}")
+        
+        device = "cpu"
+        if use_cuda:
+            device = "cuda"
+        elif use_mps:
+            device = "mps"
+            
+        print(f"[LLM Service] Selected device: {device}")
+        
+        # Check if local path exists
         if os.path.exists(model_path):
             print(f"[LLM Service] Loading from local path: {model_path}")
         else:
              print(f"[LLM Service] Local path {model_path} not found. Attempting to download/load from Hub...")
-             # fallback to a default if env var points to nothing valid? 
-             # For now assume the user handles model placement or valid hub ID
         
         tokenizer = AutoTokenizer.from_pretrained(model_path)
         model = AutoModelForCausalLM.from_pretrained(
@@ -38,8 +50,13 @@ async def load_model():
             low_cpu_mem_usage=True,
             torch_dtype="auto"
         )
+        
+        if device != "cpu":
+            print(f"[LLM Service] Moving model to {device}...")
+            model.to(device)
+            
         generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        print("[LLM Service] Model loaded successfully.")
+        print(f"[LLM Service] Model loaded successfully on {model.device}.")
     except Exception as e:
         print(f"[LLM Service] Error loading model: {e}")
         # We might not want to crash immediately to allow debugging, but the service is useless without model
@@ -86,7 +103,14 @@ async def generate_text(request: GenerateRequest):
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "model_loaded": generator is not None}
+    device_info = "model not loaded"
+    if generator is not None:
+        device_info = str(model.device)
+    return {
+        "status": "ok", 
+        "model_loaded": generator is not None,
+        "device": device_info
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
