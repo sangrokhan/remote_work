@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 
 function App() {
     const [command, setCommand] = useState('');
-    const [parquetPath, setParquetPath] = useState('');
+    const [parquetPath, setParquetPath] = useState('data/mock_data.parquet');
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
     const logsEndRef = useRef(null);
