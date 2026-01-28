@@ -6,3 +6,4 @@ output/
 models/
 .env
 *.parquet
+logs/
