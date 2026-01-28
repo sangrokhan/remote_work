@@ -3,6 +3,8 @@ import React, { useState, useEffect, useRef } from 'react';
 function App() {
     const [command, setCommand] = useState('');
     const [parquetPath, setParquetPath] = useState('data/mock_data.parquet');
+    const [trainDataPath, setTrainDataPath] = useState('data/mock_data.parquet');
+    const [trainGoal, setTrainGoal] = useState('');
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
     const logsEndRef = useRef(null);
@@ -122,6 +124,36 @@ function App() {
         }
     };
 
+    const startAutoTrain = async (e) => {
+        e.preventDefault();
+        if (!trainDataPath) return;
+
+        setLoading(true);
+        addLog(`Starting AutoML Pipeline for: ${trainDataPath}`);
+        addLog(`Goal: ${trainGoal || "Default"}`);
+
+        try {
+            const res = await fetch('http://localhost:8080/api/auto-train-pipeline', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    files: [trainDataPath],
+                    goal: trainGoal
+                }),
+            });
+            const data = await res.json();
+            addLog(`Response: ${JSON.stringify(data)}`);
+
+            if (data.task_id) {
+                addLog(`Pipeline Task ID: ${data.task_id}. Polling...`);
+                pollTask(data.task_id);
+            }
+        } catch (err) {
+            addLog(`Pipeline Error: ${err.message}`);
+            setLoading(false);
+        }
+    };
+
     return (
         <div style={{ fontFamily: 'Inter, sans-serif', maxWidth: '800px', margin: '0 auto', padding: '2rem' }}>
             <header style={{ marginBottom: '2rem' }}>
@@ -206,6 +238,54 @@ function App() {
                 </div>
             </div>
 
+
+
+            <div style={{ display: 'grid', gap: '1rem', marginBottom: '2rem' }}>
+                <div style={{ padding: '1.5rem', border: '1px solid #eee', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                    <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem' }}>🚀 AutoML Pipeline</h2>
+                    <p style={{ fontSize: '0.9rem', color: '#666', marginBottom: '1rem' }}>
+                        Fully automated: Analysis → Planning → Training
+                    </p>
+                    <form onSubmit={startAutoTrain} style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>Dataset Path</label>
+                            <input
+                                type="text"
+                                value={trainDataPath}
+                                onChange={(e) => setTrainDataPath(e.target.value)}
+                                placeholder="/data/dataset.parquet"
+                                style={{ width: '100%', padding: '0.8rem', borderRadius: '6px', border: '1px solid #ddd' }}
+                            />
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>Training Goal</label>
+                            <input
+                                type="text"
+                                value={trainGoal}
+                                onChange={(e) => setTrainGoal(e.target.value)}
+                                placeholder="E.g., Train a high-accuracy classifier for this data"
+                                style={{ width: '100%', padding: '0.8rem', borderRadius: '6px', border: '1px solid #ddd' }}
+                            />
+                        </div>
+                        <button
+                            type="submit"
+                            disabled={loading}
+                            style={{
+                                padding: '0.8rem 1.5rem',
+                                background: '#f59e0b',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '6px',
+                                cursor: loading ? 'not-allowed' : 'pointer',
+                                fontWeight: 'bold'
+                            }}
+                        >
+                            {loading ? 'Processing...' : '⚡ Start Auto-Train Pipeline'}
+                        </button>
+                    </form>
+                </div>
+            </div>
+
             <div style={{ background: '#1e293b', color: '#f8fafc', padding: '1.5rem', borderRadius: '8px', height: '300px', overflowY: 'auto' }}>
                 <h3 style={{ fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '1rem', color: '#94a3b8' }}>Activity Log</h3>
                 {logs.length === 0 && <p style={{ color: '#64748b' }}>No activity yet.</p>}
@@ -214,7 +294,7 @@ function App() {
                 ))}
                 <div ref={logsEndRef} />
             </div>
-        </div>
+        </div >
     );
 }
 
