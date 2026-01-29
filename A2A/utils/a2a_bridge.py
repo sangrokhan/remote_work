@@ -15,7 +15,7 @@ class CaptureEventQueue(EventQueue):
         self.captured_message: Optional[Message] = None
         self._queue = []
 
-    def enqueue_event(self, event: Union[Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent]) -> None:
+    async def enqueue_event(self, event: Union[Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent]) -> None:
         if isinstance(event, Message):
             if not self.captured_message:
                 self.captured_message = event

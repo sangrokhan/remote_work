@@ -141,7 +141,7 @@ OUTPUT FORMAT:
                         final_json = json.dumps(final_plan, indent=2)
                         
                         logger.info(f"[TrainingPlanner] Successfully parsed and validated Plan: {final_json}")
-                        event_queue.enqueue_event(create_text_message(final_json, role=Role.agent))
+                        await event_queue.enqueue_event(create_text_message(final_json, role=Role.agent))
                         return
                     else:
                         validation_error = "Could not find a JSON object with required key 'strategy' or strategy is invalid."
@@ -161,7 +161,7 @@ OUTPUT FORMAT:
             # If loop finishes without return
             erro_msg = f"Failed to generate valid plan after {max_retries} attempts."
             logger.error(erro_msg)
-            event_queue.enqueue_event(create_text_message(erro_msg, role=Role.agent))
+            await event_queue.enqueue_event(create_text_message(erro_msg, role=Role.agent))
 
         except Exception as e:
             import traceback
