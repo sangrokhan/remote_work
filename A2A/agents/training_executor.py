@@ -238,6 +238,14 @@ class TrainingExecutor(AgentExecutor):
                 StrategyType.TRANSFER.value: {
                     "description": "Transfer Learning from a pre-trained model.",
                     "required_params": ["model_name", "dataset_path", "epochs", "batch_size", "learning_rate"]
+                },
+                StrategyType.CONTINUAL.value: {
+                    "description": "Continual Learning. Train on a sequence of tasks/datasets without forgetting.",
+                    "required_params": ["model_name", "dataset_path", "epochs", "batch_size", "learning_rate", "continual_tasks"]
+                },
+                StrategyType.CURRICULUM.value: {
+                    "description": "Curriculum Learning. Sort data by difficulty/length.",
+                    "required_params": ["model_name", "dataset_path", "epochs", "batch_size", "learning_rate"]
                 }
             },
             "defaults": {
@@ -276,7 +284,7 @@ class TrainingExecutor(AgentExecutor):
                 config = TrainingConfig(**args)
             except Exception as e:
                 logger.error(f"[TrainingExecutor] Invalid configuration: {e}")
-                event_queue.enqueue_event(create_text_message(f"Invalid configuration: {str(e)}", role=Role.agent))
+                await event_queue.enqueue_event(create_text_message(f"Invalid configuration: {str(e)}", role=Role.agent))
                 return
             
             strategy_map = {
@@ -293,7 +301,7 @@ class TrainingExecutor(AgentExecutor):
             strategy_cls = strategy_map.get(config.strategy)
             if not strategy_cls:
                 logger.error(f"[TrainingExecutor] Unknown strategy requested: {config.strategy}")
-                event_queue.enqueue_event(create_text_message(f"Unknown strategy: {config.strategy}", role=Role.agent))
+                await event_queue.enqueue_event(create_text_message(f"Unknown strategy: {config.strategy}", role=Role.agent))
                 return
                 
             runner = strategy_cls(config)
@@ -307,10 +315,10 @@ class TrainingExecutor(AgentExecutor):
             result = await asyncio.to_thread(runner.train, model, dataset)
             
             logger.info(f"[TrainingExecutor] Training completed successfully: {result}")
-            event_queue.enqueue_event(create_text_message(result, role=Role.agent))
+            await event_queue.enqueue_event(create_text_message(result, role=Role.agent))
 
         except Exception as e:
             logger.error(f"[TrainingExecutor] Training failed execution: {str(e)}", exc_info=True)
-            event_queue.enqueue_event(create_text_message(f"Training failed: {str(e)}", role=Role.agent))
+            await event_queue.enqueue_event(create_text_message(f"Training failed: {str(e)}", role=Role.agent))
 
 
