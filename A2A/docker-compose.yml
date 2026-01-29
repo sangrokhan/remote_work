@@ -12,6 +12,7 @@ services:
     environment:
       # Connect to Mac host native LLM server
       - LLM_SERVICE_URL=http://host.docker.internal:8000
+      - TZ=Asia/Seoul
     env_file:
       - .env
     extra_hosts:

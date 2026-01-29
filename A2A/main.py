@@ -202,9 +202,9 @@ async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: Backg
 
             # Validate/Inject Dataset Path if missing (Planner might not know absolute path)
             # Assuming the first file in list is the primary dataset for training
-            if not plan_data.get("dataset_path") or "placeholder" in plan_data.get("dataset_path"):
-                 plan_data["dataset_path"] = files[0]
-                 log(f"Injected dataset path: {files[0]}")
+            # Auto-correction: Always use the actual input file, as LLM often hallucinates paths
+            plan_data["dataset_path"] = files[0]
+            log(f"Injected dataset path: {files[0]}")
 
             log("State: EXECUTING_TRAINING")
             train_payload = json.dumps(plan_data)
