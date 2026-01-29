@@ -153,13 +153,7 @@ def generate_llm_summary(analysis_results: dict, filename: str) -> str:
         summary_md += "No strong correlations (> 0.8) detected.\n"
         
     # JSON Block
-    json_block = {
-        "recommend_training": recommend_training,
-        "reasons": reasons,
-        "summary": "Data shows significant deviation" if recommend_training else "Data looks within normal ranges",
-        "timestamp": pd.Timestamp.now().isoformat()
-    }
     
-    summary_md += "\n```json\n" + json.dumps(json_block, indent=2) + "\n```"
+    return summary_md
     
     return summary_md

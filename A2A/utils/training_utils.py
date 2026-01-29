@@ -36,6 +36,18 @@ def load_data(
     # If the user specified a text_column but it's not 'text', rename it
     if text_column in ds.column_names and text_column != "text":
         ds = ds.rename_column(text_column, "text")
+    elif "text" not in ds.column_names:
+        # Fallback: Create 'text' column from all other columns
+        def create_text_from_row(batch):
+            keys = list(batch.keys())
+            batch_size = len(batch[keys[0]])
+            texts = []
+            for i in range(batch_size):
+                parts = [f"{k}: {str(batch[k][i])}" for k in keys]
+                texts.append(" | ".join(parts))
+            return {"text": texts}
+        
+        ds = ds.map(create_text_from_row, batched=True)
     
     return ds
 

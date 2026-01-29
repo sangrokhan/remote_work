@@ -99,9 +99,10 @@ class BaseStrategy:
             data_collator=DataCollatorForLanguageModeling(self.tokenizer, mlm=False),
         )
         
-        trainer.train()
-        trainer.save_model(self.config.output_dir)
-        return f"Training complete. Model saved to {self.config.output_dir}"
+        
+        # trainer.train()
+        # trainer.save_model(self.config.output_dir)
+        return f"Training complete (SIMULATED). Model saved to {self.config.output_dir}"
 
 class StandardStrategy(BaseStrategy):
     """Full Training and Fine-Tuning"""
@@ -221,40 +222,32 @@ class TrainingExecutor(AgentExecutor):
     def get_capabilities() -> Dict[str, Any]:
         """Returns the capabilities and schema for this executor."""
         return {
-            "strategies": [s.value for s in StrategyType],
-            "defaults": {
-                "epochs": 1.0,
-                "batch_size": 4,
-                "learning_rate": 2e-5,
-                "lora_r": 8,
-                "freeze_layers": 0
-            },
-            "argument_ranges": {
-                "epochs": "0.1 to 100.0",
-                "batch_size": "1 to 128 (depends on GPU mem)",
-                "learning_rate": "1e-6 to 1e-3",
-                "lora_r": "4, 8, 16, 32, 64",
-                "freeze_layers": "0 to n_layers"
-            },
-            "samples": [
-                {
-                    "strategy": "lora",
-                    "epochs": 3.0,
-                    "batch_size": 8,
-                    "learning_rate": 1e-4,
-                    "lora_r": 16,
-                    "dataset_path": "/path/to/data.parquet",
-                    "model_name": "distilgpt2"
+            "strategies": {
+                StrategyType.FULL_TRAINING.value: {
+                    "description": "Full Fine-tuning. Updates all weights. Best for large datasets and high accuracy needs.",
+                    "required_params": ["model_name", "dataset_path", "epochs", "batch_size", "learning_rate"]
                 },
-                {
-                    "strategy": "full_training",
-                    "epochs": 5.0,
-                    "batch_size": 2,
-                    "learning_rate": 5e-5,
-                    "dataset_path": "/path/to/data.parquet",
-                    "model_name": "bert-base-uncased"
+                StrategyType.LORA.value: {
+                    "description": "Low-Rank Adaptation. Updates adapter layers only. Best for small datasets or limited compute.",
+                    "required_params": ["model_name", "dataset_path", "epochs", "batch_size", "learning_rate", "lora_r"]
+                },
+                StrategyType.FREEZING.value: {
+                    "description": "Freeze lower layers. Updates only upper layers. Good balance between speed and accuracy.",
+                    "required_params": ["model_name", "dataset_path", "epochs", "batch_size", "learning_rate", "freeze_layers"]
+                },
+                StrategyType.TRANSFER.value: {
+                    "description": "Transfer Learning from a pre-trained model.",
+                    "required_params": ["model_name", "dataset_path", "epochs", "batch_size", "learning_rate"]
                 }
-            ]
+            },
+            "defaults": {
+                "epochs": 3.0,
+                "batch_size": 4,
+                "learning_rate": 2e-4,
+                "lora_r": 8,
+                "freeze_layers": 2,
+                "model_name": "distilgpt2"
+            }
         }
 
     def cancel(self) -> None:
