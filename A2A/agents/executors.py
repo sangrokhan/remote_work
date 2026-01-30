@@ -64,7 +64,7 @@ class SummarizerExecutor(AgentExecutor):
                     combined_text += f"\n--- Failed to read {file} ---\n"
             await self.mcp_client.close()
         except Exception as e:
-            event_queue.enqueue_event(create_text_message(f"Error reading files: {e}", role=Role.agent))
+            await event_queue.enqueue_event(create_text_message(f"Error reading files: {e}", role=Role.agent))
             return
 
         # 2. Summarize
@@ -85,12 +85,12 @@ class SummarizerExecutor(AgentExecutor):
                 result = response.json()
                 summary = result.get("text", "")
             
-            event_queue.enqueue_event(create_text_message(summary, role=Role.agent))
+            await event_queue.enqueue_event(create_text_message(summary, role=Role.agent))
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            event_queue.enqueue_event(create_text_message(f"Error summarizing: {e}", role=Role.agent))
+            await event_queue.enqueue_event(create_text_message(f"Error summarizing: {e}", role=Role.agent))
 
 
 class EmailExecutor(AgentExecutor):
@@ -129,10 +129,10 @@ class EmailExecutor(AgentExecutor):
             await self.mcp_client.call_tool("write_email_file", {"filename": filename, "content": email_content})
             await self.mcp_client.close()
 
-            event_queue.enqueue_event(create_text_message(f"Email sent successfully. File: {filename}", role=Role.agent))
+            await event_queue.enqueue_event(create_text_message(f"Email sent successfully. File: {filename}", role=Role.agent))
 
         except Exception as e:
-            event_queue.enqueue_event(create_text_message(f"Error sending email: {e}", role=Role.agent))
+            await event_queue.enqueue_event(create_text_message(f"Error sending email: {e}", role=Role.agent))
 
 
 class ParquetAnalyzerExecutor(AgentExecutor):
@@ -146,7 +146,14 @@ class ParquetAnalyzerExecutor(AgentExecutor):
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         message = context.message
         import pandas as pd
-        from utils.analysis_utils import analyze_distribution, analyze_correlation, detect_outliers, generate_llm_summary
+        from utils.analysis_utils import (
+            analyze_distribution, 
+            analyze_correlation, 
+            detect_outliers, 
+            generate_llm_summary,
+            analyze_dataset_size,
+            analyze_text_metrics
+        )
 
         # Parse args
         content_parts = message.parts
@@ -174,10 +181,15 @@ class ParquetAnalyzerExecutor(AgentExecutor):
                     corr_results = analyze_correlation(df)
                     outlier_results = detect_outliers(df)
                     
+                    size_results = analyze_dataset_size(df)
+                    text_results = analyze_text_metrics(df)
+                    
                     full_results = {
                         "distribution": dist_results,
                         "correlation": corr_results,
-                        "outliers": outlier_results
+                        "outliers": outlier_results,
+                        "size_info": size_results,
+                        "text_info": text_results
                     }
                     
                     # 2. Generate Summary
@@ -190,12 +202,12 @@ class ParquetAnalyzerExecutor(AgentExecutor):
             await self.mcp_client.close()
             
             if not combined_analysis:
-                event_queue.enqueue_event(create_text_message("No analysis generated. Check file paths.", role=Role.agent))
+                await event_queue.enqueue_event(create_text_message("No analysis generated. Check file paths.", role=Role.agent))
                 return
             
-            event_queue.enqueue_event(create_text_message(combined_analysis, role=Role.agent))
+            await event_queue.enqueue_event(create_text_message(combined_analysis, role=Role.agent))
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            event_queue.enqueue_event(create_text_message(f"Error analyzing parquet: {e}", role=Role.agent))
+            await event_queue.enqueue_event(create_text_message(f"Error analyzing parquet: {e}", role=Role.agent))
