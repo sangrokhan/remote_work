@@ -4,13 +4,17 @@ function App() {
     const [command, setCommand] = useState('');
     const [parquetPath, setParquetPath] = useState('data/mock_data.parquet');
     const [trainDataPath, setTrainDataPath] = useState('data/mock_data.parquet');
+    const [useRandomData, setUseRandomData] = useState(false);
     const [trainGoal, setTrainGoal] = useState('');
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
     const logsEndRef = useRef(null);
+    const pollingIntervalRef = useRef(null);
 
-    const addLog = (msg) => {
-        setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+    const addLog = (msg, fromServer = false) => {
+        const timestamp = new Date().toLocaleTimeString();
+        const prefix = fromServer ? "SERVER" : "CLIENT";
+        setLogs((prev) => [...prev, `[${timestamp}] [${prefix}] ${msg}`]);
     };
 
     // Auto-scroll to bottom
@@ -19,30 +23,60 @@ function App() {
     }, [logs]);
 
     const pollTask = async (taskId) => {
-        const interval = setInterval(async () => {
+        // Clear any existing polling
+        if (pollingIntervalRef.current) {
+            clearTimeout(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+        }
+
+        // Use a local variable to track logs for THIS specific task poll
+        let lastLogIdx = 0;
+        let isPolling = true;
+
+        const poll = async () => {
+            if (!isPolling) return;
+
             try {
                 const res = await fetch(`http://localhost:8080/api/task/${taskId}`);
-                if (!res.ok) return;
+                if (!res.ok) {
+                    // Schedule next poll and return
+                    if (isPolling) {
+                        pollingIntervalRef.current = setTimeout(poll, 1000);
+                    }
+                    return;
+                }
                 const data = await res.json();
 
-                // If there are new logs in the task, we could show them, 
-                // but for now we just show status updates to avoid dupes or complexity
-                // simplified: just show status changes or completion
+                // Append new server logs using local index
+                if (data.logs && data.logs.length > lastLogIdx) {
+                    const newLogs = data.logs.slice(lastLogIdx);
+                    newLogs.forEach(log => addLog(log, true));
+                    lastLogIdx = data.logs.length;
+                }
 
                 if (data.status === 'completed' || data.status === 'failed') {
-                    clearInterval(interval);
+                    isPolling = false;
+                    pollingIntervalRef.current = null;
                     setLoading(false);
                     addLog(`Task ${taskId} finished. Status: ${data.status}`);
-                    if (data.result) addLog(`Result: ${data.result}`);
-                    if (data.error) addLog(`Error: ${data.error}`);
+                    if (data.status === 'failed' && data.error) addLog(`Error: ${data.error}`);
                 } else {
-                    // Optionally enable this to see heartbeat
-                    // addLog(`Task ${taskId} is ${data.status}...`);
+                    // Schedule next poll AFTER this one completes
+                    if (isPolling) {
+                        pollingIntervalRef.current = setTimeout(poll, 1000);
+                    }
                 }
             } catch (err) {
                 console.error("Polling error", err);
+                // Continue polling on error
+                if (isPolling) {
+                    pollingIntervalRef.current = setTimeout(poll, 1000);
+                }
             }
-        }, 2000);
+        };
+
+        // Start polling immediately
+        poll();
     };
 
     const runRoutine = async () => {
@@ -126,10 +160,14 @@ function App() {
 
     const startAutoTrain = async (e) => {
         e.preventDefault();
-        if (!trainDataPath) return;
+        if (!trainDataPath && !useRandomData) return;
 
         setLoading(true);
-        addLog(`Starting AutoML Pipeline for: ${trainDataPath}`);
+        if (useRandomData) {
+            addLog(`Starting AutoML Pipeline with RANDOM Synthetic Data...`);
+        } else {
+            addLog(`Starting AutoML Pipeline for: ${trainDataPath}`);
+        }
         addLog(`Goal: ${trainGoal || "Default"}`);
 
         try {
@@ -137,7 +175,8 @@ function App() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    files: [trainDataPath],
+                    files: useRandomData ? [] : [trainDataPath],
+                    use_random_data: useRandomData,
                     goal: trainGoal
                 }),
             });
@@ -248,13 +287,28 @@ function App() {
                     </p>
                     <form onSubmit={startAutoTrain} style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
                         <div>
-                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>Dataset Path</label>
+                            <div style={{ marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <input
+                                    type="checkbox"
+                                    id="useRandom"
+                                    checked={useRandomData}
+                                    onChange={(e) => setUseRandomData(e.target.checked)}
+                                />
+                                <label htmlFor="useRandom" style={{ fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer' }}>
+                                    Use Random Synthetic Data (Test Triggering)
+                                </label>
+                            </div>
+
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 600, opacity: useRandomData ? 0.5 : 1 }}>
+                                Dataset Path
+                            </label>
                             <input
                                 type="text"
                                 value={trainDataPath}
+                                disabled={useRandomData}
                                 onChange={(e) => setTrainDataPath(e.target.value)}
                                 placeholder="/data/dataset.parquet"
-                                style={{ width: '100%', padding: '0.8rem', borderRadius: '6px', border: '1px solid #ddd' }}
+                                style={{ width: '100%', padding: '0.8rem', borderRadius: '6px', border: '1px solid #ddd', opacity: useRandomData ? 0.5 : 1 }}
                             />
                         </div>
                         <div>
@@ -290,7 +344,7 @@ function App() {
                 <h3 style={{ fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '1rem', color: '#94a3b8' }}>Activity Log</h3>
                 {logs.length === 0 && <p style={{ color: '#64748b' }}>No activity yet.</p>}
                 {logs.map((log, i) => (
-                    <div key={i} style={{ marginBottom: '0.5rem', fontFamily: 'monospace' }}>{log}</div>
+                    <div key={i} style={{ marginBottom: '0.5rem', fontFamily: 'monospace', whiteSpace: 'pre-wrap', borderBottom: '1px solid #334155', paddingBottom: '0.2rem' }}>{log}</div>
                 ))}
                 <div ref={logsEndRef} />
             </div>

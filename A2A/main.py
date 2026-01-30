@@ -21,6 +21,7 @@ from agents.executors import SummarizerExecutor, EmailExecutor, ParquetAnalyzerE
 from agents.training_executor import TrainingExecutor
 from agents.training_planning_agent import TrainingPlanningExecutor
 from utils.a2a_bridge import create_text_message, run_agent_sync
+from utils.data_generator import generate_random_dataset
 from a2a.types import Role
 
 app = FastAPI()
@@ -44,8 +45,9 @@ class AnalyzeRequest(BaseModel):
     files: list[str]
 
 class AutoTrainRequest(BaseModel):
-    files: list[str]
+    files: list[str] = []
     goal: str = "Train an optimal model based on the data."
+    use_random_data: bool = False
 
 async def process_daily_routine(task_id: str):
     logger.info(f"[Agent Core] Starting daily routine (Task {task_id})...")
@@ -155,6 +157,19 @@ async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: Backg
     base_dir = os.path.dirname(os.path.abspath(__file__))
     mcp_server_path = os.path.join(base_dir, "mcp", "server.py")
     
+    # 0. Handle Random Data Generation
+    target_files = request.files
+    random_desc = ""
+    
+    if request.use_random_data:
+        generated_path, desc = generate_random_dataset()
+        target_files = [os.path.abspath(generated_path)]
+        random_desc = desc
+        logger.info(f"[AutoTrain] Generated random dataset: {generated_path} ({desc})")
+        
+    if not target_files:
+        raise HTTPException(status_code=400, detail="No files provided and use_random_data is False")
+    
     # 1. Initialize Agents
     analyzer = ParquetAnalyzerExecutor(mcp_server_path)
     planner = TrainingPlanningExecutor(mcp_server_path)
@@ -173,13 +188,13 @@ async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: Backg
             
             # --- Phase 1: Data Analysis ---
             log("State: ANALYZING_DATA")
-            log("State: ANALYZING_DATA")
             payload = json.dumps({"files": files})
             msg = create_text_message(payload, role=Role.user)
             
             resp = await run_agent_sync(analyzer, msg)
             analysis_text = resp.parts[0].root.text if resp.parts and resp.parts[0].root.text else "No analysis"
-            log(f"Analysis Complete. Report length: {len(analysis_text)}")
+            log(f"--- Analysis Report ---\n{analysis_text}")
+            log(f"Analysis Complete (Length: {len(analysis_text)})")
             
             # --- Phase 2: Training Planning ---
             log("State: PLANNING_TRAINING")
@@ -194,7 +209,8 @@ async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: Backg
             
             try:
                 plan_data = json.loads(plan_json_str)
-                log(f"Plan Generated: Strategy={plan_data.get('strategy')}, Model={plan_data.get('model_name')}")
+                log(f"--- Training Plan ---\n{json.dumps(plan_data, indent=2)}")
+                log(f"Plan Selection: Strategy={plan_data.get('strategy')}, Model={plan_data.get('model_name')}")
             except:
                 log(f"Plan generation failed or invalid JSON: {plan_json_str}")
                 tasks[tid]["status"] = "failed"
@@ -223,12 +239,12 @@ async def auto_train_pipeline(request: AutoTrainRequest, background_tasks: Backg
             tasks[tid]["status"] = "failed"
             tasks[tid]["error"] = str(e)
 
-    background_tasks.add_task(run_pipeline, task_id, request.files, request.goal)
+    background_tasks.add_task(run_pipeline, task_id, target_files, request.goal)
     
     return {
         "status": "protocol_initiated",
         "task_id": task_id,
-        "message": "AutoML Pipeline started. Check status at /api/task/{task_id}"
+        "message": f"AutoML Pipeline started. {random_desc} Check status at /api/task/{task_id}"
     }
 
 @app.get("/api/task/{task_id}")

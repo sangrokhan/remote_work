@@ -2,6 +2,44 @@ import pandas as pd
 import numpy as np
 import json
 
+def analyze_dataset_size(df: pd.DataFrame) -> dict:
+    """
+    Analyzes the size of the dataset.
+    """
+    count = len(df)
+    size_category = "Small"
+    if count > 10000:
+        size_category = "Large"
+    elif count > 1000:
+        size_category = "Medium"
+        
+    return {
+        "row_count": count,
+        "size_category": size_category
+    }
+
+def analyze_text_metrics(df: pd.DataFrame, text_column: str = "text") -> dict:
+    """
+    Analyzes text column metrics if present.
+    """
+    if text_column not in df.columns:
+        return {}
+        
+    # Check if column is actually text
+    if not pd.api.types.is_string_dtype(df[text_column]):
+         return {}
+         
+    lengths = df[text_column].fillna("").astype(str).apply(len)
+    
+    return {
+        "avg_length": float(lengths.mean()),
+        "max_length": int(lengths.max()),
+        "min_length": int(lengths.min()),
+        "length_std": float(lengths.std()),
+        "variance_ratio": float(lengths.std() / lengths.mean()) if lengths.mean() > 0 else 0
+    }
+
+
 def analyze_distribution(df: pd.DataFrame, columns: list = None) -> dict:
     """
     Analyzes the distribution of numeric columns: Skewness, Kurtosis, Normality check (simple).
@@ -152,8 +190,38 @@ def generate_llm_summary(analysis_results: dict, filename: str) -> str:
     else:
         summary_md += "No strong correlations (> 0.8) detected.\n"
         
-    # JSON Block
+
+    # 3. Size Analysis
+    size_info = analysis_results.get("size_info", {})
+    row_count = size_info.get("row_count", 0)
     
-    return summary_md
+    # 4. Text Analysis
+    text_info = analysis_results.get("text_info", {})
     
+    summary_md += "\n### 4. Strategic Recommendations\n"
+    
+    # --- Strategy Trigger Logic ---
+    
+    # 1. Dataset Size -> Transfer / LoRA / Full
+    if row_count < 1000:
+        summary_md += "- **Transfer Learning**: Dataset size is small (< 1k rows). Transfer Learning from a pre-trained model is highly recommended to avoid overfitting.\n"
+    elif 1000 <= row_count <= 10000:
+        summary_md += "- **LoRA**: Dataset size is moderate (1k-10k rows). Low-Rank Adaptation (LoRA) is recommended for parameter-efficient fine-tuning.\n"
+    else:
+        summary_md += "- **Full Training**: Dataset is large (> 10k rows). Full Fine-Tuning or Full Training is feasible for maximum performance.\n"
+        
+    # 2. Text Variance -> Curriculum
+    if text_info and text_info.get("variance_ratio", 0) > 0.5:
+        summary_md += f"- **Curriculum Learning**: Significant variance in input length detected (Std/Mean={text_info['variance_ratio']:.2f}). Curriculum Learning (sorting by difficulty/length) helps convergence.\n"
+        
+    # 3. Distribution Shift -> Continual
+    # Re-using distribution skew checks
+    high_skew_count = 0
+    for col, stats in distribution.items():
+        if isinstance(stats, dict) and abs(stats.get("skewness", 0)) > 2.0:
+            high_skew_count += 1
+            
+    if high_skew_count > 0:
+        summary_md += "- **Continual Learning**: Data exhibits extreme distribution shifts or distinct clusters (High Skewness). Continual Learning is advised to handle these variations sequentially.\n"
+
     return summary_md
