@@ -7,3 +7,4 @@ models/
 .env
 *.parquet
 logs/
+test_data_output/
