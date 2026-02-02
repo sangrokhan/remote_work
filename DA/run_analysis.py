@@ -95,6 +95,7 @@ def run_analysis_pipeline(
         return
 
     result_df = pd.DataFrame(results)
+    result_df = result_df.sort_values(by='Timestamp').reset_index(drop=True)
     
     plt.figure(figsize=(12, 6))
     plt.plot(result_df['Timestamp'], result_df['Score'], marker='o', linestyle='-')
@@ -115,7 +116,7 @@ if __name__ == "__main__":
     # Defaults
     DATA_DIR = "./data" # Replace with actual path
     START = "20240101"
-    END = "20240105"
+    END = "20240103"
     CELL_ID = "Cell_A"
     # Columns to be treated as a distribution (e.g., binned values)
     TARGET_COLS = ["Bin1", "Bin2", "Bin3", "Bin4", "Bin5"] 
