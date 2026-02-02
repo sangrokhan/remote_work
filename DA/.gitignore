@@ -2,9 +2,6 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
-output/
-models/
-.env
+test_data_output/
 *.parquet
-logs/
-
+*.png
