@@ -1,0 +1,32 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>RRC State Machine Visualization</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({ startOnLoad: true });
+    </script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .mermaid { width: 100%; max-width: 1000px; }
+        h1 { color: #333; }
+    </style>
+</head>
+<body>
+    <h1>3GPP NR RRC State Machine</h1>
+    <div class="mermaid">
+stateDiagram-v2
+    RRC_IDLE --> RRC_CONNECTED: 5.3.3.1
+    RRC_INACTIVE --> RRC_CONNECTED: 5.3.3.4
+    RRC_CONNECTED --> RRC_INACTIVE: 5.3.8.3
+    RRC_CONNECTED --> RRC_IDLE: 5.3.11
+    RRC_INACTIVE --> RRC_CONNECTED: 5.3.13.4
+    UNKNOWN --> RRC_CONNECTED: 5.8.9.8.1
+    RRC_IDLE --> RRC_IDLE: 6.3.4
+    RRC_IDLE --> RRC_IDLE: 7.1.1
+
+    </div>
+</body>
+</html>
