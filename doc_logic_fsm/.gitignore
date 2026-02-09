@@ -1,0 +1,7 @@
+venv/
+venv_test/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+validation/*.mmd
+fsm_core/*.json
