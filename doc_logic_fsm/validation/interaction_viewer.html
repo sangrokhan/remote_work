@@ -1,0 +1,23 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({ startOnLoad: true });</script>
+</head>
+<body>
+    <h1>Dynamic Interaction Sequence</h1>
+    <div class="mermaid">
+sequenceDiagram
+    participant RRC
+    participant MAC
+    participant PHY
+
+    Note over RRC: Connection Start
+    RRC->>MAC: Trigger Random Access
+    MAC->>PHY: transmit a preamble using the selected PRACH;
+    MAC->>RRC: Indicate reception of the Random Access Response
+
+    </div>
+</body>
+</html>

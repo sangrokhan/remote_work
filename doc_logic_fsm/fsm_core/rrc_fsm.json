@@ -4,23 +4,90 @@
   "graph": {},
   "nodes": [
     {
+      "id": "RRC_CONNECTED"
+    },
+    {
       "id": "RRC_IDLE"
     },
     {
-      "id": "RRC_CONNECTED"
+      "id": "RRC_INACTIVE"
+    },
+    {
+      "id": "OTHER/ANY"
     }
   ],
   "edges": [
     {
-      "trigger": "RRCSetup",
-      "actions": [
-        "STOP_T300",
-        "SEND_RRCSetupComplete"
-      ],
-      "label": "Trigger: RRCSetup\nActions: STOP_T300",
-      "source": "RRC_IDLE",
+      "context": "NOTE 2: How/when the N3C remote UE to indicate N3C relay UE to enter RRC_CONNECTED state is left to ",
+      "source": "OTHER/ANY",
       "target": "RRC_CONNECTED",
       "key": 0
+    },
+    {
+      "context": "2> enter RRC_CONNECTED",
+      "source": "OTHER/ANY",
+      "target": "RRC_CONNECTED",
+      "key": 1
+    },
+    {
+      "context": "1> enter RRC_CONNECTED",
+      "source": "OTHER/ANY",
+      "target": "RRC_CONNECTED",
+      "key": 2
+    },
+    {
+      "context": "3> enter RRC_INACTIVE, and perform either cell selection as specified in TS 38",
+      "source": "OTHER/ANY",
+      "target": "RRC_INACTIVE",
+      "key": 0
+    },
+    {
+      "context": "3> enter RRC_INACTIVE and perform cell selection as specified in TS 38",
+      "source": "OTHER/ANY",
+      "target": "RRC_INACTIVE",
+      "key": 1
+    },
+    {
+      "context": "3> enter RRC_IDLE, and perform either cell selection as specified in TS 38",
+      "source": "OTHER/ANY",
+      "target": "RRC_IDLE",
+      "key": 0
+    },
+    {
+      "context": "3> enter RRC_IDLE and perform cell selection as specified in TS 38",
+      "source": "OTHER/ANY",
+      "target": "RRC_IDLE",
+      "key": 1
+    },
+    {
+      "context": "If UE does not go to RRC_IDLE in this case, UE still considers the configuration resulting from the ",
+      "source": "OTHER/ANY",
+      "target": "RRC_IDLE",
+      "key": 2
+    },
+    {
+      "context": "| musim-LeaveWithoutResponseTimer  Indicates the timer for the UE to enter RRC_IDLE for MUSIM purpos",
+      "source": "OTHER/ANY",
+      "target": "RRC_IDLE",
+      "key": 3
+    },
+    {
+      "context": "| Go to RRC_IDLE |",
+      "source": "OTHER/ANY",
+      "target": "RRC_IDLE",
+      "key": 4
+    },
+    {
+      "context": "| If the T310 is kept in MCG: If AS security is not activated: go to RRC_IDLE else: initiate the MCG",
+      "source": "OTHER/ANY",
+      "target": "RRC_IDLE",
+      "key": 5
+    },
+    {
+      "context": "| Enter RRC_IDLE |",
+      "source": "OTHER/ANY",
+      "target": "RRC_IDLE",
+      "key": 6
     }
   ]
 }
