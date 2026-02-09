@@ -1,0 +1,9 @@
+spacy
+allennlp
+allennlp-models
+pandas
+numpy
+networkx
+PyPDF2
+beautifulsoup4
+pytest

@@ -1,0 +1,14 @@
+[
+  {
+    "from": "WAITING_FOR_SETUP",
+    "to": "RRC_CONNECTED",
+    "trigger": "RRCSetup",
+    "condition": "RRCSetup is received in response to an RRCSetupRequest",
+    "actions": [
+      "SEND_MSG(the )",
+      "STOP_TIMER(T320)",
+      "STOP_TIMER(T325)",
+      "PROC_END(PROC_END)"
+    ]
+  }
+]

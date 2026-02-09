@@ -1,0 +1,26 @@
+{
+  "directed": true,
+  "multigraph": true,
+  "graph": {},
+  "nodes": [
+    {
+      "id": "RRC_IDLE"
+    },
+    {
+      "id": "RRC_CONNECTED"
+    }
+  ],
+  "edges": [
+    {
+      "trigger": "RRCSetup",
+      "actions": [
+        "STOP_T300",
+        "SEND_RRCSetupComplete"
+      ],
+      "label": "Trigger: RRCSetup\nActions: STOP_T300",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 0
+    }
+  ]
+}

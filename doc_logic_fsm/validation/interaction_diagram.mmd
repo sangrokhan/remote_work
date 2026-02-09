@@ -1,0 +1,9 @@
+sequenceDiagram
+    participant RRC
+    participant MAC
+    participant PHY
+
+    Note over RRC: Connection Start
+    RRC->>MAC: Trigger Random Access
+    MAC->>PHY: transmit a preamble using the selected PRACH;
+    MAC->>RRC: Indicate reception of the Random Access Response
