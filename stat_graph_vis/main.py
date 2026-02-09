@@ -15,7 +15,7 @@ class StatGraphVis:
         if not os.path.exists(self.data_path):
             raise FileNotFoundError(f"Data file not found at {self.data_path}")
         
-        # Plotly Gapminder 데이터셋 로드
+        # 전공별 졸업생 데이터 로드
         self.df = pd.read_csv(self.data_path)
         return self.df
 
@@ -24,13 +24,22 @@ class StatGraphVis:
         if self.df is None:
             self.load_data()
         
-        # 수치형 컬럼 선택 (pop, lifeExp, gdpPercap)
-        # 연도별로 변할 수 있으므로, 최신 연도(2007) 기준 혹은 전체 평균으로 분석
-        latest_year = self.df[self.df['year'] == 2007]
-        numeric_df = latest_year[['pop', 'lifeExp', 'gdpPercap']]
+        # 분석에 의미 있는 수치형 컬럼 선택
+        # ShareWomen: 여성 비율, Unemployment_rate: 실업률, Median: 소득 중위값, 
+        # College_jobs: 전공 관련 직업, Non_college_jobs: 전공 무관 직업, Low_wage_jobs: 저임금 직업
+        cols = [
+            'ShareWomen', 'Unemployment_rate', 'Median', 
+            'College_jobs', 'Non_college_jobs', 'Low_wage_jobs'
+        ]
         
-        # 컬럼명 변경 (가독성)
-        numeric_df.columns = ['Population', 'Life Expectancy', 'GDP per Cap']
+        # 결측치 제거
+        numeric_df = self.df[cols].dropna()
+        
+        # 한글/영문 가독성을 위해 컬럼명 변경
+        numeric_df.columns = [
+            'Women %', 'Unemp Rate', 'Median Salary', 
+            'Major Jobs', 'Non-Major Jobs', 'Low-Wage Jobs'
+        ]
         
         self.corr_matrix = numeric_df.corr()
         return self.corr_matrix
@@ -46,40 +55,60 @@ class StatGraphVis:
         for i in range(len(nodes)):
             for j in range(i + 1, len(nodes)):
                 weight = self.corr_matrix.iloc[i, j]
+                # 상관계수의 절대값이 임계값을 넘는 경우만 에지로 연결
                 if abs(weight) >= threshold:
                     self.graph.add_edge(nodes[i], nodes[j], weight=weight)
         
         return self.graph
 
-    def visualize_graph(self, output_path='graph_output.png'):
+    def visualize_graph(self, output_path='major_correlation_network.png'):
         """그래프 시각화 및 로컬 저장"""
         if self.graph is None:
             self.build_graph()
             
-        plt.figure(figsize=(10, 8))
-        pos = nx.spring_layout(self.graph)
+        plt.figure(figsize=(12, 10))
+        # 노드가 적으므로 circular layout이 관계 파악에 용이할 수 있음
+        pos = nx.circular_layout(self.graph)
         
-        # Edge 굵기를 가중치(상관계수)에 비례하게 설정
+        # 에지 속성 설정
         edges = self.graph.edges(data=True)
-        weights = [abs(d['weight']) * 5 for u, v, d in edges]
+        if not edges:
+            print("No correlations found above threshold.")
+            return None
+            
+        weights = [abs(d['weight']) * 8 for u, v, d in edges]
+        # 양의 상관관계는 파란색, 음의 상관관계는 빨간색
         edge_colors = ['red' if d['weight'] < 0 else 'blue' for u, v, d in edges]
         
-        nx.draw_networkx_nodes(self.graph, pos, node_size=2000, node_color='lightblue')
-        nx.draw_networkx_edges(self.graph, pos, width=weights, edge_color=edge_colors)
-        nx.draw_networkx_labels(self.graph, pos, font_size=12, font_family='sans-serif')
+        # 노드 그리기
+        nx.draw_networkx_nodes(self.graph, pos, node_size=3000, node_color='lightgray', edgecolors='black')
         
-        plt.title("Statistical Indicators Correlation Network (Gapminder 2007)")
+        # 에지 그리기
+        nx.draw_networkx_edges(self.graph, pos, width=weights, edge_color=edge_colors, alpha=0.6)
+        
+        # 라벨 그리기
+        nx.draw_networkx_labels(self.graph, pos, font_size=10, font_weight='bold')
+        
+        # 범례 대신 텍스트 추가
+        plt.text(1.1, 1.1, "Blue: Positive Corr\nRed: Negative Corr\nThickness: Strength", 
+                 transform=plt.gca().transAxes, bbox=dict(facecolor='white', alpha=0.5))
+
+        plt.title("Correlation Network between College Major Outcomes", pad=20)
         plt.axis('off')
+        plt.tight_layout()
         plt.savefig(output_path)
         plt.close()
         return output_path
 
 if __name__ == "__main__":
-    # 간단한 실행 테스트
-    data_file = os.path.expanduser("~/repo/remote_work/stat_graph_vis/data/gapminder_combined.csv")
+    data_file = os.path.expanduser("~/repo/remote_work/stat_graph_vis/data/college_recent_grads.csv")
     vis = StatGraphVis(data_file)
-    vis.load_data()
-    vis.calculate_correlations()
-    vis.build_graph()
-    vis.visualize_graph('gapminder_network.png')
-    print("Graph visualization saved as gapminder_network.png")
+    try:
+        vis.load_data()
+        vis.calculate_correlations()
+        vis.build_graph(threshold=0.2) # 관계를 더 많이 보기 위해 임계값 하향
+        out = vis.visualize_graph('major_correlation_network.png')
+        if out:
+            print(f"Graph visualization saved as {out}")
+    except Exception as e:
+        print(f"Error: {e}")
