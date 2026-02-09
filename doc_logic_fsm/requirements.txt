@@ -1,9 +1,8 @@
-spacy
-allennlp
-allennlp-models
+spacy>=3.7.0
 pandas
 numpy
 networkx
 PyPDF2
 beautifulsoup4
 pytest
+mermaid-python

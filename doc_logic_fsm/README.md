@@ -2,6 +2,20 @@
 
 This module is designed to automatically extract protocol logic from natural language specifications (e.g., 3GPP TS) and synthesize them into Formal Behavioral Models (FSM/EFSM).
 
+## Installation & Setup
+1. **Python Version**: Recommended 3.10+ (Tested on 3.12).
+2. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   python -m spacy download en_core_web_sm
+   ```
+
+## Running the Pipeline
+You can run a full check of the extraction and visualization pipeline:
+```bash
+python tests/test_pipeline.py
+```
+
 ## Directory Structure
 - `docs/`: Raw specification documents (PDF, Text, HTML).
 - `preprocessing/`: Scripts for parsing and cleaning raw text into structured formats.
