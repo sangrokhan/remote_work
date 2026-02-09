@@ -127,7 +127,9 @@ class AutoFSMExtractor:
         print(f"[*] FSM Data saved to {path}")
 
 if __name__ == "__main__":
-    base_dir = os.path.join(os.path.dirname(__file__), "..")
+    # Use absolute base path based on file location for reliability
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.dirname(script_dir)
     md_path = os.path.join(base_dir, "docs", "md", "38331-j10.md")
     output_json = os.path.join(base_dir, "fsm_core", "rrc_fsm.json")
     

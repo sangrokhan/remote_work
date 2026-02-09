@@ -72,7 +72,9 @@ def visualize_fsm(json_path, output_path, lib_path):
     print(f"[*] FSM Visualization saved to {output_path}")
 
 if __name__ == "__main__":
-    base_dir = os.path.join(os.path.dirname(__file__), "..")
+    # Use absolute base path based on file location for reliability
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.dirname(script_dir)
     json_input = os.path.join(base_dir, "fsm_core", "rrc_fsm.json")
     html_output = os.path.join(base_dir, "validation", "fsm_viewer.html")
     
