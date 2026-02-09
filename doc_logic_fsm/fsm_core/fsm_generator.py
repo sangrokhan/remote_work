@@ -66,7 +66,8 @@ class AutoFSMExtractor:
         print("[*] Extracting transitions between states...")
         
         # Split content into sentences/bullets for finer analysis
-        lines = re.split(r"[\n\.;]", self.content)
+        # Use a more robust sentence splitting that doesn't break on 'RRC_IDLE.'
+        lines = re.split(r"\n|(?<=[a-z0-9])\.\s+", self.content)
         
         transition_verbs = ["transition", "enter", "move", "resume", "suspend", "leave", "go to"]
         
@@ -75,43 +76,40 @@ class AutoFSMExtractor:
             if not line: continue
             
             line_upper = line.upper()
-            found_states = [s for s in self.states if s in line_upper]
             
             # Case 1: "State A to State B transition" or "from State A to State B"
             for s1 in self.states:
+                if s1 not in line_upper: continue
                 for s2 in self.states:
                     if s1 == s2: continue
+                    if s2 not in line_upper: continue
+                    
                     # Pattern: "S1 to S2" or "from S1 to S2"
-                    if re.search(rf"{s1}.*?to.*?{s2}", line_upper):
+                    if re.search(rf"{s1}.*?\bTO\b.*?{s2}", line_upper):
                         self.transitions.append({
                             "from": s1,
                             "to": s2,
-                            "context": line[:100] + ("..." if len(line) > 100 else "")
+                            "context": line[:150] + ("..." if len(line) > 150 else "")
                         })
                     # Pattern: "S2 from S1" (e.g., transition to S2 from S1)
-                    elif re.search(rf"{s2}.*?from.*?{s1}", line_upper):
+                    elif re.search(rf"{s2}.*?\bFROM\b.*?{s1}", line_upper):
                         self.transitions.append({
                             "from": s1,
                             "to": s2,
-                            "context": line[:100] + ("..." if len(line) > 100 else "")
+                            "context": line[:150] + ("..." if len(line) > 150 else "")
                         })
 
             # Case 2: "transition to State B" (Inferring Source from proximity or procedure)
-            # For simplicity in this auto-extractor, if we find "enter State B" and only one state is mentioned,
-            # we look if the UE was "in State A" recently. 
-            # But let's stick to explicit line-based transitions first.
-            
+            found_states = [s for s in self.states if s in line_upper]
             if len(found_states) == 1:
                 target = found_states[0]
                 if any(verb.upper() in line_upper for verb in transition_verbs):
                     # Check if line indicates "transition TO"
                     if re.search(rf"(?:transition|enter|move|go)\s+(?:to\s+)?{target}", line, re.IGNORECASE):
-                        # Try to find a "from" state in the same line or context
-                        # If not found, we label it as 'ANY' or 'UNKNOWN' for now
                         self.transitions.append({
                             "from": "OTHER/ANY",
                             "to": target,
-                            "context": line[:100]
+                            "context": line[:150]
                         })
 
     def save_json(self, path):

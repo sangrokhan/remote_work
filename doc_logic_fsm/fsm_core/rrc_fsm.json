@@ -4,13 +4,13 @@
   "graph": {},
   "nodes": [
     {
-      "id": "RRC_CONNECTED"
-    },
-    {
       "id": "RRC_IDLE"
     },
     {
       "id": "RRC_INACTIVE"
+    },
+    {
+      "id": "RRC_CONNECTED"
     },
     {
       "id": "OTHER/ANY"
@@ -18,55 +18,439 @@
   ],
   "edges": [
     {
-      "context": "NOTE 2: How/when the N3C remote UE to indicate N3C relay UE to enter RRC_CONNECTED state is left to ",
+      "context": "The UE in RRC_IDLE and RRC_INACTIVE shall ensure having a valid version of (at least) the MIB, SIB1 through SIB4, SIB5 (if the UE supports E-UTRA), SI...",
+      "source": "RRC_IDLE",
+      "target": "RRC_INACTIVE",
+      "key": 0
+    },
+    {
+      "context": "The network initiates the RRC connection release procedure to transit a UE in RRC_CONNECTED to RRC_IDLE; or to transit a UE in RRC_CONNECTED to RRC_IN...",
+      "source": "RRC_IDLE",
+      "target": "RRC_INACTIVE",
+      "key": 1
+    },
+    {
+      "context": "This procedure is used by the L2 U2N Remote UE or L2 Intermediate U2N Relay UE in RRC_IDLE/RRC_INACTIVE to inform about the required SIB(s) /posSIB(s)...",
+      "source": "RRC_IDLE",
+      "target": "RRC_INACTIVE",
+      "key": 2
+    },
+    {
+      "context": "The value idle is indicated if the UE prefers to be released from RRC_CONNECTED and transition to RRC_IDLE. The value inactive is indicated if the UE ...",
+      "source": "RRC_IDLE",
+      "target": "RRC_INACTIVE",
+      "key": 3
+    },
+    {
+      "context": "| highSpeedMeasFlagFR2  If the field is present and UE supports ue-PowerClass-v1700 set to pc6, the UE shall apply enhanced intra-frequency RRM requir...",
+      "source": "RRC_IDLE",
+      "target": "RRC_INACTIVE",
+      "key": 4
+    },
+    {
+      "context": "use different RB identities for RB establishments, change the AS security key, or an RRC_CONNECTED to RRC_IDLE/RRC_INACTIVE and then to RRC_CONNECTED ...",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 0
+    },
+    {
+      "context": "For N3C relay UE in RRC_IDLE, an RRC connection establishment is initiated when a N3C remote UE indicates it to enter RRC_CONNECTED state",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 1
+    },
+    {
+      "context": "NOTE 3: The UE may discard an application layer measurement configuration and associated unsent reports after 48 hours in RRC_IDLE. The time duration ...",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 2
+    },
+    {
+      "context": "The network initiates the RRC connection release procedure to transit a UE in RRC_CONNECTED to RRC_IDLE; or to transit a UE in RRC_CONNECTED to RRC_IN...",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 3
+    },
+    {
+      "context": "The purpose of this procedure is to configure the UE to perform logging of measurement results while in RRC_IDLE and RRC_INACTIVE. The procedure appli...",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 4
+    },
+    {
+      "context": "1> Upon change of suitable cell, consisting of PCell in RRC_CONNECTED (for NR or E-UTRA cell) or serving cell in RRC_INACTIVE (for NR cell) or in RRC_...",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 5
+    },
+    {
+      "context": "This procedure is used by the L2 U2N Remote UE or L2 Intermediate U2N Relay UE in RRC_IDLE/RRC_INACTIVE to inform about the required SIB(s) /posSIB(s)...",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 6
+    },
+    {
+      "context": "For application layer measurements applicable to RRC_IDLE or RRC_INACTIVE, the UE transmits appLayerSessionStatus upon transfer to RRC_CONNECTED if tr...",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 7
+    },
+    {
+      "context": "The value idle is indicated if the UE prefers to be released from RRC_CONNECTED and transition to RRC_IDLE. The value inactive is indicated if the UE ...",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 8
+    },
+    {
+      "context": "| highSpeedMeasFlagFR2  If the field is present and UE supports ue-PowerClass-v1700 set to pc6, the UE shall apply enhanced intra-frequency RRM requir...",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 9
+    },
+    {
+      "context": "The IE AppLayerIdleInactiveConfig indicates parameters specific to application layer measurements applicable to RRC_IDLE and RRC_INACTIVE. The configu...",
+      "source": "RRC_IDLE",
+      "target": "RRC_CONNECTED",
+      "key": 10
+    },
+    {
+      "context": "The UE in RRC_IDLE and RRC_INACTIVE shall ensure having a valid version of (at least) the MIB, SIB1 through SIB4, SIB5 (if the UE supports E-UTRA), SI...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_IDLE",
+      "key": 0
+    },
+    {
+      "context": "In response to a request to resume the RRC connection or in response to a resume procedure initiated for SDT, the network may resume the suspended RRC...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_IDLE",
+      "key": 1
+    },
+    {
+      "context": "The network initiates the RRC connection release procedure to transit a UE in RRC_CONNECTED to RRC_IDLE; or to transit a UE in RRC_CONNECTED to RRC_IN...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_IDLE",
+      "key": 2
+    },
+    {
+      "context": "1> upon selecting a cell when entering RRC_IDLE or RRC-INACTIVE from RRC_CONNECTED or RRC_INACTIVE; or",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_IDLE",
+      "key": 3
+    },
+    {
+      "context": "1> upon selecting a cell when entering RRC_IDLE or RRC_INACTIVE from RRC_CONNECTED or RRC_INACTIVE; or",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_IDLE",
+      "key": 4
+    },
+    {
+      "context": "This procedure is used by the L2 U2N Remote UE or L2 Intermediate U2N Relay UE in RRC_IDLE/RRC_INACTIVE to inform about the required SIB(s) /posSIB(s)...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_IDLE",
+      "key": 5
+    },
+    {
+      "context": "The value idle is indicated if the UE prefers to be released from RRC_CONNECTED and transition to RRC_IDLE. The value inactive is indicated if the UE ...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_IDLE",
+      "key": 6
+    },
+    {
+      "context": "| highSpeedMeasFlagFR2  If the field is present and UE supports ue-PowerClass-v1700 set to pc6, the UE shall apply enhanced intra-frequency RRM requir...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_IDLE",
+      "key": 7
+    },
+    {
+      "context": "| T320 | Upon reception of t320 or upon cell (re)selection to NR from another RAT with validity time configured for dedicated priorities (in which cas...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_IDLE",
+      "key": 8
+    },
+    {
+      "context": "|  | RP-84 | RP-191381 | 1106 | 2 | F | Clarification of dedicated priority handling from RRC_INACTIVE to RRC_IDLE | 15.6.0 |",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_IDLE",
+      "key": 9
+    },
+    {
+      "context": "The resumption of a suspended RRC connection is initiated by upper layers when the UE needs to transit from RRC_INACTIVE state to RRC_CONNECTED state ...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 0
+    },
+    {
+      "context": "use different RB identities for RB establishments, change the AS security key, or an RRC_CONNECTED to RRC_IDLE/RRC_INACTIVE and then to RRC_CONNECTED ...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 1
+    },
+    {
+      "context": "The purpose of this procedure is to configure the UE to perform logging of measurement results while in RRC_IDLE and RRC_INACTIVE. The procedure appli...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 2
+    },
+    {
+      "context": "The purpose of this procedure is to transfer NAS dedicated information from NG-RAN to a UE in RRC_CONNECTED or to a UE in RRC_INACTIVE during SDT, or ...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 3
+    },
+    {
+      "context": "The purpose of this procedure is to transfer NAS dedicated information from the UE to the network in RRC_CONNECTED or in RRC_INACTIVE during SDT, or t...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 4
+    },
+    {
+      "context": "1> Upon change of suitable cell, consisting of PCell in RRC_CONNECTED (for NR or E-UTRA cell) or serving cell in RRC_INACTIVE (for NR cell) or in RRC_...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 5
+    },
+    {
+      "context": "This procedure is used by the L2 U2N Remote UE or L2 Intermediate U2N Relay UE in RRC_IDLE/RRC_INACTIVE to inform about the required SIB(s) /posSIB(s)...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 6
+    },
+    {
+      "context": "If configured to receive MBS multicast services in RRC_INACTIVE, a UE applies the multicast MCCH information acquisition procedure for PTM configurati...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 7
+    },
+    {
+      "context": "Upon transition from RRC_INACTIVE to RRC_CONNECTED, the UE releases the MRBs configured in RRCRelease or multicast MCCH and performs delta configurati...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 8
+    },
+    {
+      "context": "For application layer measurements applicable to RRC_IDLE or RRC_INACTIVE, the UE transmits appLayerSessionStatus upon transfer to RRC_CONNECTED if tr...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 9
+    },
+    {
+      "context": "The value idle is indicated if the UE prefers to be released from RRC_CONNECTED and transition to RRC_IDLE. The value inactive is indicated if the UE ...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 10
+    },
+    {
+      "context": "| highSpeedMeasFlagFR2  If the field is present and UE supports ue-PowerClass-v1700 set to pc6, the UE shall apply enhanced intra-frequency RRM requir...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 11
+    },
+    {
+      "context": "The IE AppLayerIdleInactiveConfig indicates parameters specific to application layer measurements applicable to RRC_IDLE and RRC_INACTIVE. The configu...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 12
+    },
+    {
+      "context": "| T320 | Upon reception of t320 or upon cell (re)selection to NR from another RAT with validity time configured for dedicated priorities (in which cas...",
+      "source": "RRC_INACTIVE",
+      "target": "RRC_CONNECTED",
+      "key": 13
+    },
+    {
+      "context": "In response to a request to resume the RRC connection or in response to a resume procedure initiated for SDT, the network may resume the suspended RRC...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_IDLE",
+      "key": 0
+    },
+    {
+      "context": "use different RB identities for RB establishments, change the AS security key, or an RRC_CONNECTED to RRC_IDLE/RRC_INACTIVE and then to RRC_CONNECTED ...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_IDLE",
+      "key": 1
+    },
+    {
+      "context": "The network initiates the RRC connection release procedure to transit a UE in RRC_CONNECTED to RRC_IDLE; or to transit a UE in RRC_CONNECTED to RRC_IN...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_IDLE",
+      "key": 2
+    },
+    {
+      "context": "2> if the cell which the UE selects when the UE transits from RRC_CONNECTED state to RRC_INACTIVE or RRC_IDLE state is part of the area indicated by q...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_IDLE",
+      "key": 3
+    },
+    {
+      "context": "2> if the cell which the UE selects when the UE transits from RRC_CONNECTED state to RRC_INACTIVE or RRC_IDLE state is not part of the area indicated ...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_IDLE",
+      "key": 4
+    },
+    {
+      "context": "1> upon selecting a cell when entering RRC_IDLE or RRC-INACTIVE from RRC_CONNECTED or RRC_INACTIVE; or",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_IDLE",
+      "key": 5
+    },
+    {
+      "context": "1> upon selecting a cell when entering RRC_IDLE or RRC_INACTIVE from RRC_CONNECTED or RRC_INACTIVE; or",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_IDLE",
+      "key": 6
+    },
+    {
+      "context": "1> Upon change of suitable cell, consisting of PCell in RRC_CONNECTED (for NR or E-UTRA cell) or serving cell in RRC_INACTIVE (for NR cell) or in RRC_...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_IDLE",
+      "key": 7
+    },
+    {
+      "context": "This procedure is used by the L2 U2N Remote UE or L2 Intermediate U2N Relay UE in RRC_IDLE/RRC_INACTIVE to inform about the required SIB(s) /posSIB(s)...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_IDLE",
+      "key": 8
+    },
+    {
+      "context": "The value idle is indicated if the UE prefers to be released from RRC_CONNECTED and transition to RRC_IDLE. The value inactive is indicated if the UE ...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_IDLE",
+      "key": 9
+    },
+    {
+      "context": "In response to a request to resume the RRC connection or in response to a resume procedure initiated for SDT, the network may resume the suspended RRC...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 0
+    },
+    {
+      "context": "use different RB identities for RB establishments, change the AS security key, or an RRC_CONNECTED to RRC_IDLE/RRC_INACTIVE and then to RRC_CONNECTED ...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 1
+    },
+    {
+      "context": "The network initiates the RRC connection release procedure to transit a UE in RRC_CONNECTED to RRC_IDLE; or to transit a UE in RRC_CONNECTED to RRC_IN...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 2
+    },
+    {
+      "context": "2> if the cell which the UE selects when the UE transits from RRC_CONNECTED state to RRC_INACTIVE or RRC_IDLE state is part of the area indicated by q...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 3
+    },
+    {
+      "context": "2> if the cell which the UE selects when the UE transits from RRC_CONNECTED state to RRC_INACTIVE or RRC_IDLE state is not part of the area indicated ...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 4
+    },
+    {
+      "context": "The purpose of this procedure is to transfer NAS dedicated information from NG-RAN to a UE in RRC_CONNECTED or to a UE in RRC_INACTIVE during SDT, or ...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 5
+    },
+    {
+      "context": "The purpose of this procedure is to transfer NAS dedicated information from the UE to the network in RRC_CONNECTED or in RRC_INACTIVE during SDT, or t...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 6
+    },
+    {
+      "context": "1> upon selecting a cell when entering RRC_IDLE or RRC_INACTIVE from RRC_CONNECTED or RRC_INACTIVE; or",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 7
+    },
+    {
+      "context": "1> Upon change of suitable cell, consisting of PCell in RRC_CONNECTED (for NR or E-UTRA cell) or serving cell in RRC_INACTIVE (for NR cell) or in RRC_...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 8
+    },
+    {
+      "context": "This procedure is used by the L2 U2N Remote UE or L2 Intermediate U2N Relay UE in RRC_IDLE/RRC_INACTIVE to inform about the required SIB(s) /posSIB(s)...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 9
+    },
+    {
+      "context": "If configured to receive MBS multicast services in RRC_INACTIVE, a UE applies the multicast MCCH information acquisition procedure for PTM configurati...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 10
+    },
+    {
+      "context": "Upon moving to a cell where the PDCP COUNT of a multicast MRB is not synchronized, an indication is sent to the lower layer to inform the PDCP COUNT n...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 11
+    },
+    {
+      "context": "Upon transition from RRC_INACTIVE to RRC_CONNECTED, the UE releases the MRBs configured in RRCRelease or multicast MCCH and performs delta configurati...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 12
+    },
+    {
+      "context": "The value idle is indicated if the UE prefers to be released from RRC_CONNECTED and transition to RRC_IDLE. The value inactive is indicated if the UE ...",
+      "source": "RRC_CONNECTED",
+      "target": "RRC_INACTIVE",
+      "key": 13
+    },
+    {
+      "context": "NOTE 2: How/when the N3C remote UE to indicate N3C relay UE to enter RRC_CONNECTED state is left to UE implementation, e.g",
       "source": "OTHER/ANY",
       "target": "RRC_CONNECTED",
       "key": 0
     },
     {
-      "context": "2> enter RRC_CONNECTED",
+      "context": "2> enter RRC_CONNECTED;",
       "source": "OTHER/ANY",
       "target": "RRC_CONNECTED",
       "key": 1
     },
     {
-      "context": "1> enter RRC_CONNECTED",
+      "context": "1> enter RRC_CONNECTED;",
       "source": "OTHER/ANY",
       "target": "RRC_CONNECTED",
       "key": 2
     },
     {
-      "context": "3> enter RRC_INACTIVE, and perform either cell selection as specified in TS 38",
+      "context": "3> enter RRC_INACTIVE, and perform either cell selection as specified in TS 38.304 [20], or relay selection as specified in clause 5.8.15.3, or both;",
       "source": "OTHER/ANY",
       "target": "RRC_INACTIVE",
       "key": 0
     },
     {
-      "context": "3> enter RRC_INACTIVE and perform cell selection as specified in TS 38",
+      "context": "3> enter RRC_INACTIVE and perform cell selection as specified in TS 38.304 [20];",
       "source": "OTHER/ANY",
       "target": "RRC_INACTIVE",
       "key": 1
     },
     {
-      "context": "3> enter RRC_IDLE, and perform either cell selection as specified in TS 38",
+      "context": "3> enter RRC_IDLE, and perform either cell selection as specified in TS 38.304 [20], or relay selection as specified in clause 5.8.15.3, or both;",
       "source": "OTHER/ANY",
       "target": "RRC_IDLE",
       "key": 0
     },
     {
-      "context": "3> enter RRC_IDLE and perform cell selection as specified in TS 38",
+      "context": "3> enter RRC_IDLE and perform cell selection as specified in TS 38.304 [20];",
       "source": "OTHER/ANY",
       "target": "RRC_IDLE",
       "key": 1
     },
     {
-      "context": "If UE does not go to RRC_IDLE in this case, UE still considers the configuration resulting from the ",
+      "context": "If UE does not go to RRC_IDLE in this case, UE still considers the configuration resulting from the RRCResume message as the current configuration as ",
       "source": "OTHER/ANY",
       "target": "RRC_IDLE",
       "key": 2
     },
     {
-      "context": "| musim-LeaveWithoutResponseTimer  Indicates the timer for the UE to enter RRC_IDLE for MUSIM purpos",
+      "context": "| musim-LeaveWithoutResponseTimer  Indicates the timer for the UE to enter RRC_IDLE for MUSIM purpose as defined in clause 5.3.8.6",
       "source": "OTHER/ANY",
       "target": "RRC_IDLE",
       "key": 3
@@ -78,13 +462,13 @@
       "key": 4
     },
     {
-      "context": "| If the T310 is kept in MCG: If AS security is not activated: go to RRC_IDLE else: initiate the MCG",
+      "context": "Upon SCG release, if the T310 is kept in SCG. | If the T310 is kept in MCG: If AS security is not activated: go to RRC_IDLE else: initiate the MCG fai",
       "source": "OTHER/ANY",
       "target": "RRC_IDLE",
       "key": 5
     },
     {
-      "context": "| Enter RRC_IDLE |",
+      "context": "| T311 | Upon initiating the RRC connection re-establishment procedure | Upon selection of a suitable NR cell, or upon selection of a suitable L2 U2N ",
       "source": "OTHER/ANY",
       "target": "RRC_IDLE",
       "key": 6
