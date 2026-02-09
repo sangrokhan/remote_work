@@ -26,8 +26,9 @@ def segment_3gpp_clauses(file_path):
     return clauses
 
 if __name__ == "__main__":
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    snippet_path = os.path.join(base_dir, "docs/TS38331_snippet.txt")
+    # Use relative path from script location
+    base_dir = os.path.join(os.path.dirname(__file__), "..")
+    snippet_path = os.path.join(base_dir, "docs", "TS38331_snippet.txt")
     if os.path.exists(snippet_path):
         result = segment_3gpp_clauses(snippet_path)
         print(json.dumps(result, indent=2))

@@ -34,26 +34,28 @@ class MultiLayerLogicExtractor:
         return results
 
 if __name__ == "__main__":
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Use relative path from script location
+    base_dir = os.path.join(os.path.dirname(__file__), "..")
     extractor = MultiLayerLogicExtractor()
     files = [
-        os.path.join(base_dir, "docs/TS38331_snippet.txt"),
-        os.path.join(base_dir, "docs/TS38321_snippet.txt")
+        os.path.join(base_dir, "docs", "TS38331_snippet.txt"),
+        os.path.join(base_dir, "docs", "TS38321_snippet.txt")
     ]
     
     all_logic = {}
     for f_path in files:
-        with open(f_path, 'r') as f:
-            lines = f.readlines()
-        
-        doc_name = os.path.basename(f_path)
-        all_logic[doc_name] = []
-        for l in lines:
-            extracted = extractor.extract(l)
-            if extracted:
-                all_logic[doc_name].append({"text": l.strip(), "logic": extracted})
+        if os.path.exists(f_path):
+            with open(f_path, 'r') as f:
+                lines = f.readlines()
+            
+            doc_name = os.path.basename(f_path)
+            all_logic[doc_name] = []
+            for l in lines:
+                extracted = extractor.extract(l)
+                if extracted:
+                    all_logic[doc_name].append({"text": l.strip(), "logic": extracted})
                 
-    output_path = os.path.join(base_dir, "fsm_core/multi_layer_logic.json")
+    output_path = os.path.join(base_dir, "fsm_core", "multi_layer_logic.json")
     with open(output_path, 'w') as f:
         json.dump(all_logic, f, indent=2)
     print(f"Multi-layer logic extracted to {output_path}")

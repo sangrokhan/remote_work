@@ -3,7 +3,8 @@ import os
 import subprocess
 
 def test_pipeline():
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Use relative path from script location
+    base_dir = os.path.join(os.path.dirname(__file__), "..")
     os.chdir(base_dir)
 
     # 1. Preprocessing (Segmentation)

@@ -57,7 +57,8 @@ if __name__ == "__main__":
     builder = FSMBuilder()
     builder.build_from_extracted_logic(extracted_logic)
     
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    output_path = os.path.join(base_dir, "fsm_core/rrc_fsm.json")
+    # Use relative path from script location
+    base_dir = os.path.join(os.path.dirname(__file__), "..")
+    output_path = os.path.join(base_dir, "fsm_core", "rrc_fsm.json")
     builder.save_graph_json(output_path)
     print(f"FSM logic saved to {output_path}")

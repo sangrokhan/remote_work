@@ -19,12 +19,13 @@ def generate_mermaid(fsm_json_path):
     return mermaid_str
 
 if __name__ == "__main__":
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    fsm_path = os.path.join(base_dir, "fsm_core/rrc_fsm.json")
+    # Use relative path from script location
+    base_dir = os.path.join(os.path.dirname(__file__), "..")
+    fsm_path = os.path.join(base_dir, "fsm_core", "rrc_fsm.json")
     if os.path.exists(fsm_path):
         m_str = generate_mermaid(fsm_path)
         print(m_str)
         
-        output_path = os.path.join(base_dir, "validation/fsm_diagram.mmd")
+        output_path = os.path.join(base_dir, "validation", "fsm_diagram.mmd")
         with open(output_path, "w") as f:
             f.write(m_str)

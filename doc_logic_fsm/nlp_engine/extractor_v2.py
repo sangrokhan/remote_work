@@ -59,16 +59,18 @@ class AdvancedLogicExtractor:
         return transitions
 
 if __name__ == "__main__":
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    input_path = os.path.join(base_dir, "docs/TS38331_snippet.txt")
+    # Use relative path from script location
+    base_dir = os.path.join(os.path.dirname(__file__), "..")
+    input_path = os.path.join(base_dir, "docs", "TS38331_snippet.txt")
     
-    with open(input_path, "r") as f:
-        lines = f.readlines()
-    
-    extractor = AdvancedLogicExtractor()
-    logic = extractor.extract_from_lines(lines)
-    
-    output_path = os.path.join(base_dir, "fsm_core/nr_rrc_logic.json")
-    with open(output_path, 'w') as f:
-        json.dump(logic, f, indent=2)
-    print(f"Advanced logic extracted to {output_path}")
+    if os.path.exists(input_path):
+        with open(input_path, "r") as f:
+            lines = f.readlines()
+        
+        extractor = AdvancedLogicExtractor()
+        logic = extractor.extract_from_lines(lines)
+        
+        output_path = os.path.join(base_dir, "fsm_core", "nr_rrc_logic.json")
+        with open(output_path, 'w') as f:
+            json.dump(logic, f, indent=2)
+        print(f"Advanced logic extracted to {output_path}")

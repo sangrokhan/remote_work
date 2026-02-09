@@ -22,11 +22,12 @@ def generate_interaction_mermaid(logic_json_path):
     return mermaid_str
 
 if __name__ == "__main__":
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    logic_path = os.path.join(base_dir, "fsm_core/multi_layer_logic.json")
+    # Use relative path from script location
+    base_dir = os.path.join(os.path.dirname(__file__), "..")
+    logic_path = os.path.join(base_dir, "fsm_core", "multi_layer_logic.json")
     if os.path.exists(logic_path):
         m_str = generate_interaction_mermaid(logic_path)
         print(m_str)
-        output_path = os.path.join(base_dir, "validation/interaction_diagram.mmd")
+        output_path = os.path.join(base_dir, "validation", "interaction_diagram.mmd")
         with open(output_path, "w") as f:
             f.write(m_str)
