@@ -3,5 +3,8 @@ venv_test/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-validation/*.mmd
-fsm_core/*.json
+
+# Keep generated files if they are needed for the viewer to work offline
+# But normally these are artifacts. 
+# For now, let's keep the JSON as it's the output of the extraction.
+!fsm_core/rrc_fsm.json
