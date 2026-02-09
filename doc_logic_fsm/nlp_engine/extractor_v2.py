@@ -1,5 +1,6 @@
 import re
 import json
+import os
 
 class AdvancedLogicExtractor:
     def __init__(self):
@@ -58,13 +59,16 @@ class AdvancedLogicExtractor:
         return transitions
 
 if __name__ == "__main__":
-    with open("/home/han/repo/remote_work/doc_logic_fsm/docs/TS38331_snippet.txt", "r") as f:
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    input_path = os.path.join(base_dir, "docs/TS38331_snippet.txt")
+    
+    with open(input_path, "r") as f:
         lines = f.readlines()
     
     extractor = AdvancedLogicExtractor()
     logic = extractor.extract_from_lines(lines)
     
-    output_path = "/home/han/repo/remote_work/doc_logic_fsm/fsm_core/nr_rrc_logic.json"
+    output_path = os.path.join(base_dir, "fsm_core/nr_rrc_logic.json")
     with open(output_path, 'w') as f:
         json.dump(logic, f, indent=2)
     print(f"Advanced logic extracted to {output_path}")

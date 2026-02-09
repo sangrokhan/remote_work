@@ -11,8 +11,6 @@ class FSMBuilder:
         self.graph.add_edge(from_state, to_state, trigger=trigger, actions=actions, label=label)
 
     def build_from_extracted_logic(self, logic_data, initial_state="RRC_IDLE"):
-        # For the RRCSetup scenario:
-        # We find a trigger and a state transition.
         current_trigger = None
         current_actions = []
         
@@ -28,9 +26,6 @@ class FSMBuilder:
                 target_state = logic["state_transitions"][0]
                 if current_trigger:
                     self.add_transition(initial_state, target_state, current_trigger, current_actions)
-                    # Reset for next possible transition (though usually one per snippet)
-                    # current_trigger = None
-                    # current_actions = []
         
         return self.graph
 
@@ -40,7 +35,6 @@ class FSMBuilder:
             json.dump(data, f, indent=2)
 
 if __name__ == "__main__":
-    # Mock data based on the previous extraction output
     extracted_logic = [
       {
         "text": "The UE shall perform the following actions upon reception of the RRCSetup:",
@@ -63,6 +57,7 @@ if __name__ == "__main__":
     builder = FSMBuilder()
     builder.build_from_extracted_logic(extracted_logic)
     
-    output_path = "/home/han/repo/remote_work/doc_logic_fsm/fsm_core/rrc_fsm.json"
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    output_path = os.path.join(base_dir, "fsm_core/rrc_fsm.json")
     builder.save_graph_json(output_path)
     print(f"FSM logic saved to {output_path}")

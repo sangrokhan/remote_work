@@ -1,5 +1,6 @@
 import re
 import json
+import os
 
 class MultiLayerLogicExtractor:
     def __init__(self):
@@ -33,10 +34,11 @@ class MultiLayerLogicExtractor:
         return results
 
 if __name__ == "__main__":
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     extractor = MultiLayerLogicExtractor()
     files = [
-        "/home/han/repo/remote_work/doc_logic_fsm/docs/TS38331_snippet.txt",
-        "/home/han/repo/remote_work/doc_logic_fsm/docs/TS38321_snippet.txt"
+        os.path.join(base_dir, "docs/TS38331_snippet.txt"),
+        os.path.join(base_dir, "docs/TS38321_snippet.txt")
     ]
     
     all_logic = {}
@@ -44,14 +46,14 @@ if __name__ == "__main__":
         with open(f_path, 'r') as f:
             lines = f.readlines()
         
-        doc_name = f_path.split('/')[-1]
+        doc_name = os.path.basename(f_path)
         all_logic[doc_name] = []
         for l in lines:
             extracted = extractor.extract(l)
             if extracted:
                 all_logic[doc_name].append({"text": l.strip(), "logic": extracted})
                 
-    output_path = "/home/han/repo/remote_work/doc_logic_fsm/fsm_core/multi_layer_logic.json"
+    output_path = os.path.join(base_dir, "fsm_core/multi_layer_logic.json")
     with open(output_path, 'w') as f:
         json.dump(all_logic, f, indent=2)
     print(f"Multi-layer logic extracted to {output_path}")

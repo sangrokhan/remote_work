@@ -3,6 +3,9 @@ import os
 import subprocess
 
 def test_pipeline():
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.chdir(base_dir)
+
     # 1. Preprocessing (Segmentation)
     print("Testing Preprocessing...")
     res_seg = subprocess.run(["python3", "preprocessing/segmenter.py"], capture_output=True, text=True)
