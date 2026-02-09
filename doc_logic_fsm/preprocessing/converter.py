@@ -20,8 +20,8 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python converter.py <input_docx> [output_dir]")
     else:
-        in_file = sys.argv[1]
-        out_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(in_file), "../md")
+        in_file = os.path.abspath(sys.argv[1])
+        out_dir = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else os.path.join(os.path.dirname(in_file), "../md")
         
         if not os.path.exists(out_dir):
             os.makedirs(out_dir)
