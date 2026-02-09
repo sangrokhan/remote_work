@@ -26,7 +26,8 @@ def generate_html_viewer(mermaid_path, html_path):
     </style>
 </head>
 <body>
-    <h1>3GPP NR RRC State Machine</h1>
+    <h1>Generalized Protocol State Machine Discovery</h1>
+    <p>This FSM was automatically discovered by analyzing the semantic structure and transition keywords in the specification document.</p>
     <div class="mermaid">
 {mermaid_code}
     </div>

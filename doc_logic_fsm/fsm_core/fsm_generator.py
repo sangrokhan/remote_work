@@ -1,100 +1,107 @@
 import re
 import json
 import os
+import spacy
+from collections import Counter
 
-class NR_RRC_FSM_Extractor:
+class GenericProtocolFSMExtractor:
     def __init__(self, md_path):
         self.md_path = md_path
         self.clauses = {}
         self.transitions = []
+        self.discovered_states = set()
         
-        # Keywords for FSM extraction
-        self.state_keywords = ["RRC_IDLE", "RRC_CONNECTED", "RRC_INACTIVE"]
-        self.transition_keywords = [
-            (r"enter (?P<to_state>RRC_\w+)", "STATE_ENTER"),
-            (r"upon reception of (the\s+)?\*(?P<msg>[\w-]+)\*", "MSG_RECEIVE"),
-            (r"transmission of (the\s+)?\*(?P<msg>[\w-]+)\*", "MSG_SEND"),
-            (r"stop timer (?P<timer>T\d+)", "TIMER_STOP"),
-            (r"start timer (?P<timer>T\d+)", "TIMER_START"),
-            (r"timer (?P<timer>T\d+) expires", "TIMER_EXPIRY")
-        ]
+        # Load NLP model
+        try:
+            self.nlp = spacy.load("en_core_web_sm")
+        except:
+            print("Downloading spacy model...")
+            import subprocess
+            subprocess.run(["python3", "-m", "spacy", "download", "en_core_web_sm"])
+            self.nlp = spacy.load("en_core_web_sm")
 
     def segment_by_header(self):
         with open(self.md_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Split by markdown headers (e.g., ### 5.3.3)
-        # 3GPP MD uses #### for clause titles
-        header_pattern = r"(^#{1,5}\s+\d+\.[\d\.]*\s+.*)"
+        # General pattern for standard document clauses (e.g., # 5.3.3)
+        header_pattern = r"(^#{1,5}\s+\d+[\d\.]*\s+.*)"
         parts = re.split(header_pattern, content, flags=re.MULTILINE)
         
-        print(f"DEBUG: Found {len(parts)} segments after regex split.")
-        
-        for i in range(1, len(parts), 2): # Split result has [prefix, header, body, header, body...]
+        for i in range(1, len(parts), 2):
             header = parts[i].strip()
             body = parts[i+1] if i+1 < len(parts) else ""
             self.clauses[header] = body
 
+    def discover_states(self):
+        """
+        문서 전체에서 'state' 단어와 함께 등장하는 고유 명사를 찾아 상태 후보로 등록합니다.
+        """
+        # Look at more text to find all potential states
+        all_text = " ".join(list(self.clauses.values())) 
+        
+        # Pattern: [Upper_Case_Name] state (e.g., RRC_CONNECTED state)
+        # 3GPP uses RRC_IDLE, RRC_CONNECTED etc.
+        state_candidates = re.findall(r"([A-Z][A-Z0-9_]{3,})\s+state", all_text)
+        
+        # Pattern: state [Upper_Case_Name]
+        state_candidates += re.findall(r"state\s+([A-Z][A-Z0-9_]{3,})", all_text)
+        
+        counts = Counter(state_candidates)
+        # Register candidates that appear multiple times or look like standard states
+        self.discovered_states = {s for s, count in counts.items() if count > 5}
+        print(f"Discovered potential states: {self.discovered_states}")
+
     def extract_logic(self):
+        self.discover_states()
+        
         for header, body in self.clauses.items():
-            # Search for transitions in the text using regex
-            # Mammoth conversion might leave some artifacts like RRC\_CONNECTED or RRC*CONNECTED*
-            # Use a robust regex to find 'enter RRC_XXX'
-            enter_matches = re.findall(r"enter\s+(?:the\s+)?\*?(RRC[\\_\s\-\*]*\w+)\*?", body, re.IGNORECASE)
+            body_clean = body.replace("\\_", "_")
+            header_clean = header.replace("\\_", "_")
             
-            if enter_matches:
-                from_state = "UNKNOWN"
-                context = header + " " + body[:2000]
+            # Find the context state for this clause (from where we start)
+            from_state = "UNKNOWN"
+            # Strategy: look for "UE in [STATE]" or states mentioned in the header
+            for s in self.discovered_states:
+                if s in header_clean or f"UE in {s}" in body_clean[:1000]:
+                    from_state = s
+                    break
+            
+            # Look for transition indicators: "enter [STATE]", "going to [STATE]"
+            for s in self.discovered_states:
+                # Dynamic regex for 'enter [STATE]' or 'going to [STATE]'
+                patterns = [
+                    rf"enter\s+(?:the\s+)?\*?(?:RRC_)?{s}\*?",
+                    rf"going\s+to\s+\*?(?:RRC_)?{s}\*?"
+                ]
                 
-                # Heuristic for source state
-                if "RRC_IDLE" in context or "RRC\\_IDLE" in context: from_state = "RRC_IDLE"
-                elif "RRC_CONNECTED" in context or "RRC\\_CONNECTED" in context: from_state = "RRC_CONNECTED"
-                elif "RRC_INACTIVE" in context or "RRC\\_INACTIVE" in context: from_state = "RRC_INACTIVE"
-                
-                # Fix specific common cases where 'UNKNOWN' is obviously something else
-                if from_state == "UNKNOWN":
-                    if "5.3.3" in header: from_state = "RRC_IDLE" # Connection Establishment starts from IDLE
-                    elif "5.3.13" in header: from_state = "RRC_INACTIVE" # Resume starts from INACTIVE
-                    elif "5.3.8" in header: from_state = "RRC_CONNECTED" # Release starts from CONNECTED
-                
-                for to_state_raw in enter_matches:
-                    to_state = to_state_raw.upper().replace("\\", "").replace("*", "").strip("_")
-                    if "CONNECTED" in to_state: to_state = "RRC_CONNECTED"
-                    elif "IDLE" in to_state: to_state = "RRC_IDLE"
-                    elif "INACTIVE" in to_state: to_state = "RRC_INACTIVE"
-                    else: continue # Skip non-RRC states for now
-                    
-                    trigger_match = re.search(r"(\d+(\.\d+)+)", header)
-                    trigger = trigger_match.group(1) if trigger_match else header[:20]
-                    
-                    # Manual Override for specific 3GPP clauses
-                    if "5.3.8.3" in trigger: from_state = "RRC_CONNECTED"
-                    if "5.3.11" in trigger: 
-                        from_state = "RRC_CONNECTED"
-                        to_state = "RRC_IDLE"
-                    if "5.3.3.1" in trigger: from_state = "RRC_IDLE"
-                    
-                    self.transitions.append({
-                        "from": from_state,
-                        "to": to_state,
-                        "trigger": trigger,
-                        "clause": header
-                    })
-        
-        # Add some manual standard transitions if the doc is too complex for simple regex
-        if not self.transitions:
-            self.transitions.append({"from": "RRC_IDLE", "to": "RRC_CONNECTED", "trigger": "Setup", "clause": "Manual"})
-            self.transitions.append({"from": "RRC_CONNECTED", "to": "RRC_IDLE", "trigger": "Release", "clause": "Manual"})
-            self.transitions.append({"from": "RRC_CONNECTED", "to": "RRC_INACTIVE", "trigger": "Suspend", "clause": "Manual"})
-            self.transitions.append({"from": "RRC_INACTIVE", "to": "RRC_CONNECTED", "trigger": "Resume", "clause": "Manual"})
-        
+                for pattern in patterns:
+                    match = re.search(pattern, body_clean, re.IGNORECASE)
+                    if match:
+                        # Attempt to refine from_state if still UNKNOWN by looking at previous mentions
+                        if from_state == "UNKNOWN":
+                            # Look for any state mentioned before the match
+                            pre_match_text = body_clean[:match.start()]
+                            for prev_s in self.discovered_states:
+                                if prev_s in pre_match_text and prev_s != s:
+                                    from_state = prev_s
+                        
+                        if from_state == s: continue # Avoid self-loops for now unless explicit
+                        
+                        trigger_match = re.search(r"(\d+(\.\d+)+)", header_clean)
+                        trigger = trigger_match.group(1) if trigger_match else header_clean[:20]
+                        
+                        self.transitions.append({
+                            "from": from_state,
+                            "to": s,
+                            "trigger": trigger
+                        })
+                        break
+
     def generate_mermaid(self):
         mermaid = "stateDiagram-v2\n"
         seen = set()
         for t in self.transitions:
-            # Skip self-transitions to UNKNOWN if they don't add value
-            if t['from'] == "UNKNOWN" and t['to'] == "UNKNOWN": continue
-            
             key = (t['from'], t['to'], t['trigger'])
             if key not in seen:
                 mermaid += f"    {t['from']} --> {t['to']}: {t['trigger']}\n"
@@ -106,19 +113,16 @@ if __name__ == "__main__":
     if not os.path.exists(md_file):
         print(f"Error: {md_file} not found.")
     else:
-        extractor = NR_RRC_FSM_Extractor(md_file)
+        extractor = GenericProtocolFSMExtractor(md_file)
         print("Segmenting document...")
         extractor.segment_by_header()
         print(f"Extracted {len(extractor.clauses)} clauses.")
-        print("Extracting state transitions...")
+        print("Extracting state transitions (Generalized)...")
         extractor.extract_logic()
         
         mermaid_code = extractor.generate_mermaid()
         
         output_dir = os.path.expanduser("~/repo/remote_work/doc_logic_fsm/fsm_core")
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-            
         with open(os.path.join(output_dir, "rrc_fsm.mermaid"), "w") as f:
             f.write(mermaid_code)
         
