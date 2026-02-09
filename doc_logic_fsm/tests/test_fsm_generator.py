@@ -1,28 +1,38 @@
 import unittest
 import os
-from fsm_core.fsm_generator import NR_RRC_FSM_Extractor
+import sys
+
+# Add project root to path to import local modules
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from fsm_core.fsm_generator import AutoFSMExtractor
 
 class TestFSMGenerator(unittest.TestCase):
     def setUp(self):
-        # Create a dummy markdown file for testing
-        self.test_md = "test_spec.md"
-        with open(self.test_md, "w") as f:
-            f.write("# 5.3.3.1 General\nUE in RRC_IDLE enters RRC_CONNECTED.\n")
-            f.write("# 5.3.8.3 Release\nUE in RRC_CONNECTED enters RRC_IDLE.\n")
+        # Create a dummy markdown file for testing using absolute path based on this file
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.test_md = os.path.join(self.base_dir, "test_spec.md")
+        with open(self.test_md, "w", encoding='utf-8') as f:
+            f.write("### 4.2.1 UE states and state transitions\n")
+            f.write("- RRC_IDLE\n")
+            f.write("- RRC_CONNECTED\n")
+            f.write("- RRC_INACTIVE\n")
+            f.write("### 5.3.3 RRC connection establishment\n")
+            f.write("The UE in RRC_IDLE transitions to RRC_CONNECTED.\n")
 
     def tearDown(self):
         if os.path.exists(self.test_md):
             os.remove(self.test_md)
 
     def test_extraction(self):
-        extractor = NR_RRC_FSM_Extractor(self.test_md)
-        extractor.segment_by_header()
-        extractor.extract_logic()
+        extractor = AutoFSMExtractor(self.test_md)
+        self.assertTrue(extractor.load_document())
+        extractor.discover_states()
+        extractor.extract_transitions()
         
-        self.assertTrue(len(extractor.transitions) >= 2)
-        states = [t['to'] for t in extractor.transitions]
-        self.assertIn("RRC_CONNECTED", states)
-        self.assertIn("RRC_IDLE", states)
+        self.assertIn("RRC_IDLE", extractor.states)
+        self.assertIn("RRC_CONNECTED", extractor.states)
+        self.assertTrue(any(t['from'] == "RRC_IDLE" and t['to'] == "RRC_CONNECTED" for t in extractor.transitions))
 
 if __name__ == "__main__":
     unittest.main()

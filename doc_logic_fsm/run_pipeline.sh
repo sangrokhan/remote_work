@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 
-REPO_DIR="$HOME/repo/remote_work/doc_logic_fsm"
+# Resolve the directory where the script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+REPO_DIR="$SCRIPT_DIR"
 VENV="$REPO_DIR/venv/bin/python3"
 
 mkdir -p "$REPO_DIR/docs/raw" "$REPO_DIR/docs/md"
