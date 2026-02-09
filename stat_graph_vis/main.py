@@ -101,13 +101,19 @@ class StatGraphVis:
         return output_path
 
 if __name__ == "__main__":
-    data_file = os.path.expanduser("~/repo/remote_work/stat_graph_vis/data/college_recent_grads.csv")
+    # 스크립트 위치 기준으로 데이터 경로 설정 (상대 경로)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    data_file = os.path.join(base_dir, "data", "college_recent_grads.csv")
+    
     vis = StatGraphVis(data_file)
     try:
         vis.load_data()
         vis.calculate_correlations()
         vis.build_graph(threshold=0.2) # 관계를 더 많이 보기 위해 임계값 하향
-        out = vis.visualize_graph('major_correlation_network.png')
+        
+        # 출력 경로도 상대 경로로 설정
+        output_file = os.path.join(base_dir, "major_correlation_network.png")
+        out = vis.visualize_graph(output_file)
         if out:
             print(f"Graph visualization saved as {out}")
     except Exception as e:
