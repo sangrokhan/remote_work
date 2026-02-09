@@ -1,132 +1,140 @@
 import re
 import json
 import os
-import spacy
-from collections import Counter
+import networkx as nx
 
-class AutonomousFSMDiscoverer:
-    """
-    표준 문서의 언어적 구조와 엔티티 간의 관계를 분석하여 
-    상태(Node)와 전이(Edge)를 스스로 발견하는 엔진입니다.
-    특정 키워드(state) 없이도 '상태'의 논리적 특성을 학습합니다.
-    """
+class AutoFSMExtractor:
     def __init__(self, md_path):
         self.md_path = md_path
-        self.clauses = {}
+        self.content = ""
+        self.states = set()
         self.transitions = []
-        self.nodes = set()
-        
-        try:
-            self.nlp = spacy.load("en_core_web_sm")
-        except:
-            import subprocess
-            subprocess.run(["python3", "-m", "spacy", "download", "en_core_web_sm"])
-            self.nlp = spacy.load("en_core_web_sm")
-
-    def load_and_segment(self):
-        with open(self.md_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # 3GPP Artifact cleanup
-        content = content.replace("\\_", "_").replace("*", "")
-        
-        header_pattern = r"(^#{1,5}\s+\d+[\d\.]*\s+.*)"
-        parts = re.split(header_pattern, content, flags=re.MULTILINE)
-        for i in range(1, len(parts), 2):
-            self.clauses[parts[i].strip()] = parts[i+1] if i+1 < len(parts) else ""
-
-    def discover_nodes(self):
-        """
-        '상태'의 본질적 역할(전이 동작의 목적지)을 분석하여 노드를 식별합니다.
-        """
-        print("[*] Discovering logical nodes through behavior analysis...")
-        verbs = ["enter", "transition", "move", "remain", "resume", "suspend", "release"]
-        candidates = Counter()
-        
-        # 제외 목록: 프로토콜 공통 용어 및 문법적 노이즈
-        blacklist = {
-            "3GPP", "TS", "NR", "UE", "EUTRA", "RAT", "AMF", "RAN", "SIB", "MAC", "PDCP", "RLC", "SRB", "DRB", "LTE", 
-            "CELL", "NETWORK", "PCELL", "THE", "ALL", "ANY", "EACH", "THIS", "THAT", "SHALL", "WILL", "PROCEDURE", 
-            "CASE", "INFORMATION", "VALUE", "VALUES", "MESSAGE", "MESSAGES", "CONTENTS", "CONFIGURATION", 
-            "CONDITION", "CONDITIONS", "TIMER", "TIMERS", "START", "STOP", "END", "EXIT", "ENTRY", "ENTRIES", 
-            "FOLLOWING", "BELOW", "ABOVE", "DUE", "WITH", "WITHOUT", "FROM", "INTO", "VIA", "OTHER", "ANOTHER"
+        self.blacklist = {
+            "3GPP", "TS", "UE", "NR", "RAN", "SIB", "MAC", "PDCP", "RLC", "SRB", "DRB", "LTE", "CELL", "NETWORK",
+            "PROCEDURE", "PROCEDURES", "MESSAGE", "MESSAGES", "VALUE", "VALUES", "IES", "FIELDS", "INFORMATION",
+            "CONTENTS", "CONFIGURATION", "CONDITION", "CONDITIONS", "START", "STOP", "RESULT", "ACCESS", "FAILURE",
+            "FREQUENCY", "BAND", "PCEL", "SCG", "MCG", "DATA", "SUCCESS", "TRIGGER", "TRIGGERED", "INDICATION", "FALLBACK"
         }
 
-        for body in self.clauses.values():
-            body_upper = body.upper()
-            for verb in verbs:
-                # 전이 동사와 결합된 대문자 단어군 추출
-                matches = re.findall(rf"{verb}s?\s+(?:to\s+)?(?:the\s+)?([A-Z0-9_]{{3,}})", body, re.IGNORECASE)
-                for m in matches:
-                    name = m.upper().strip("_")
-                    if name not in blacklist and len(name) > 2:
-                        candidates[name] += 1
-        
-        # RRC_CONNECTED, RRC_IDLE 등 3GPP 표준 상태 패턴 가중치
-        for body in self.clauses.values():
-            rrc_states = re.findall(r"RRC_[A-Z_]+", body)
-            for s in rrc_states:
-                candidates[s.upper().replace("RRC_", "")] += 2
+    def load_document(self):
+        if not os.path.exists(self.md_path):
+            print(f"[Error] File not found: {self.md_path}")
+            return False
+        with open(self.md_path, 'r', encoding='utf-8') as f:
+            # Clean up some common markdown artifacts that break regex
+            self.content = f.read().replace("\\_", "_").replace("*", "")
+        return True
 
-        # 상위 빈도 엔티티 확정
-        self.nodes = {name for name, count in candidates.most_common(15)}
-        print(f"[*] Identified potential states: {self.nodes}")
+    def discover_states(self):
+        """
+        Automatically discover RRC states by looking for common patterns:
+        1. Explicit state definitions (e.g., "**- RRC_IDLE**")
+        2. Words ending in _IDLE, _CONNECTED, _INACTIVE
+        3. Explicit state machine descriptions
+        """
+        print("[*] Automatically discovering states from content...")
+        
+        # Pattern 1: Definitions in Section 4.2.1
+        # We look for the start of section 4.2.1 and scan until the next major section
+        section_match = re.search(r"### 4.2.1 UE states and state transitions.*?###", self.content, re.DOTALL | re.IGNORECASE)
+        if section_match:
+            section_text = section_match.group(0)
+            # Find bullet points with capitalized names
+            found = re.findall(r"(?:^|\n)[-\s]+(RRC_[A-Z]+)", section_text)
+            self.states.update(found)
+
+        # Pattern 2: Global scan for RRC_ prefixed names
+        rrc_states = re.findall(r"(RRC_[A-Z_]+)", self.content)
+        self.states.update(rrc_states)
+
+        # Clean up: Remove noise and items in blacklist
+        self.states = {s.strip("_") for s in self.states if s not in self.blacklist and len(s) > 5}
+        
+        # Ensure we at least have the core 3 NR RRC states if they exist in text
+        core_states = ["RRC_IDLE", "RRC_CONNECTED", "RRC_INACTIVE"]
+        for cs in core_states:
+            if cs in self.content:
+                self.states.add(cs)
+
+        print(f"[*] Discovered States: {self.states}")
 
     def extract_transitions(self):
-        """식별된 노드 간의 실제 전이 명령을 본문에서 추출합니다."""
-        print("[*] Mapping transitions between discovered nodes...")
+        """
+        Find transitions by scanning for sentences that mention multiple states
+        or transition keywords near a state name.
+        """
+        print("[*] Extracting transitions between states...")
         
-        for header, body in self.clauses.items():
-            body_upper = body.upper()
+        # Split content into sentences/bullets for finer analysis
+        lines = re.split(r"[\n\.;]", self.content)
+        
+        transition_verbs = ["transition", "enter", "move", "resume", "suspend", "leave", "go to"]
+        
+        for line in lines:
+            line = line.strip()
+            if not line: continue
             
-            # From-Node 추론: 현재 절의 맥락 파악
-            from_node = "START_OR_GLOBAL"
-            for node in self.nodes:
-                if f"UE IN {node}" in body_upper or f"WHILE IN {node}" in body_upper:
-                    from_node = node
-                    break
+            line_upper = line.upper()
+            found_states = [s for s in self.states if s in line_upper]
             
-            # To-Node 추론: 전이 키워드 결합 분석
-            for target in self.nodes:
-                if target == from_node: continue
-                
-                # 'enter [State]' 또는 'transition to [State]'
-                if re.search(rf"(enter|transition|move|resume|suspend)\s+(?:to\s+)?(?:the\s+)?(?:RRC_)?{target}", body, re.IGNORECASE):
-                    trigger = re.search(r"(\d+(\.\d+)+)", header)
-                    trigger_text = trigger.group(1) if trigger else header[:15]
-                    
-                    self.transitions.append({
-                        "from": from_node,
-                        "to": target,
-                        "trigger": trigger_text
-                    })
+            # Case 1: "State A to State B transition" or "from State A to State B"
+            for s1 in self.states:
+                for s2 in self.states:
+                    if s1 == s2: continue
+                    # Pattern: "S1 to S2" or "from S1 to S2"
+                    if re.search(rf"{s1}.*?to.*?{s2}", line_upper):
+                        self.transitions.append({
+                            "from": s1,
+                            "to": s2,
+                            "context": line[:100] + ("..." if len(line) > 100 else "")
+                        })
+                    # Pattern: "S2 from S1" (e.g., transition to S2 from S1)
+                    elif re.search(rf"{s2}.*?from.*?{s1}", line_upper):
+                        self.transitions.append({
+                            "from": s1,
+                            "to": s2,
+                            "context": line[:100] + ("..." if len(line) > 100 else "")
+                        })
 
-    def generate_mermaid(self):
-        mermaid = "stateDiagram-v2\n"
-        seen = set()
+            # Case 2: "transition to State B" (Inferring Source from proximity or procedure)
+            # For simplicity in this auto-extractor, if we find "enter State B" and only one state is mentioned,
+            # we look if the UE was "in State A" recently. 
+            # But let's stick to explicit line-based transitions first.
+            
+            if len(found_states) == 1:
+                target = found_states[0]
+                if any(verb.upper() in line_upper for verb in transition_verbs):
+                    # Check if line indicates "transition TO"
+                    if re.search(rf"(?:transition|enter|move|go)\s+(?:to\s+)?{target}", line, re.IGNORECASE):
+                        # Try to find a "from" state in the same line or context
+                        # If not found, we label it as 'ANY' or 'UNKNOWN' for now
+                        self.transitions.append({
+                            "from": "OTHER/ANY",
+                            "to": target,
+                            "context": line[:100]
+                        })
+
+    def save_json(self, path):
+        # Create a directed graph to deduplicate and structure
+        G = nx.MultiDiGraph()
+        for state in self.states:
+            G.add_node(state)
+        
         for t in self.transitions:
-            edge = f"    {t['from']} --> {t['to']}: {t['trigger']}\n"
-            if edge not in seen:
-                mermaid += edge
-                seen.add(edge)
-        return mermaid
+            G.add_edge(t['from'], t['to'], context=t['context'])
+            
+        data = nx.node_link_data(G)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+        print(f"[*] FSM Data saved to {path}")
 
 if __name__ == "__main__":
-    md_file = os.path.expanduser("~/repo/remote_work/doc_logic_fsm/docs/md/38331-j10.md")
-    if not os.path.exists(md_file):
-        print(f"Error: Spec file not found.")
-    else:
-        engine = AutonomousFSMDiscoverer(md_file)
-        engine.load_and_segment()
-        engine.discover_nodes()
-        engine.extract_transitions()
-        
-        code = engine.generate_mermaid()
-        output_path = os.path.expanduser("~/repo/remote_work/doc_logic_fsm/fsm_core/rrc_fsm.mermaid")
-        with open(output_path, "w", encoding='utf-8') as f:
-            f.write(code)
-        
-        print("\nDiscovered Logic Flow:")
-        print("-" * 30)
-        print(code)
-        print("-" * 30)
+    base_dir = os.path.join(os.path.dirname(__file__), "..")
+    md_path = os.path.join(base_dir, "docs", "md", "38331-j10.md")
+    output_json = os.path.join(base_dir, "fsm_core", "rrc_fsm.json")
+    
+    extractor = AutoFSMExtractor(md_path)
+    if extractor.load_document():
+        extractor.discover_states()
+        extractor.extract_transitions()
+        extractor.save_json(output_json)
