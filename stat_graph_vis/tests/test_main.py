@@ -5,7 +5,9 @@ from main import StatGraphVis
 
 @pytest.fixture
 def vis_instance():
-    data_path = os.path.expanduser("~/repo/remote_work/stat_graph_vis/data/gapminder_combined.csv")
+    # 테스트 파일 위치 기준으로 데이터 경로 설정 (상대 경로)
+    test_dir = os.path.dirname(os.path.abspath(__file__))
+    data_path = os.path.join(test_dir, "..", "data", "college_recent_grads.csv")
     return StatGraphVis(data_path)
 
 def test_load_data(vis_instance):
