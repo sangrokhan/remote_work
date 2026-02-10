@@ -17,18 +17,22 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# LLM Configuration
-LLM_API_BASE = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
-LLM_API_KEY = os.getenv("LLM_API_KEY", "EMPTY")
-LLM_MODEL = os.getenv("LLM_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
-LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120.0"))
-
-# Discovery Configuration
-ONTOLOGY_DISCOVERY_PROMPT = os.getenv(
-    "ONTOLOGY_DISCOVERY_PROMPT",
-    "Extract ontology from text:\n{text}\nJSON Output:"
-)
-CONSOLIDATION_PROMPT = """
+class OntologyDiscovery:
+    def __init__(self):
+        # Load configurations from environment
+        self.api_base = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
+        self.api_key = os.getenv("LLM_API_KEY", "EMPTY")
+        self.model_name = os.getenv("LLM_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
+        self.timeout = float(os.getenv("LLM_TIMEOUT", "120.0"))
+        
+        self.chunk_size = int(os.getenv("ONTOLOGY_CHUNK_SIZE", "4000"))
+        self.chunk_overlap = int(os.getenv("ONTOLOGY_CHUNK_OVERLAP", "500"))
+        self.discovery_prompt = os.getenv(
+            "ONTOLOGY_DISCOVERY_PROMPT",
+            "Extract ontology from text:\n{text}\nJSON Output:"
+        ).replace("\\n", "\n")
+        
+        self.consolidation_prompt = """
 You are a Senior Ontology Engineer. I will provide you with a raw list of "Node Types" and "Relationship Types" extracted from a large 3GPP document. 
 Your job is to MERGE, CLEAN, and STANDARDIZE them into a single, high-quality Ontology.
 
@@ -50,25 +54,18 @@ Return STRICTLY a JSON object with:
   "relationship_types": [{{"source": "SourceLabel", "type": "REL_TYPE", "target": "TargetLabel"}}]
 }}
 """
-DEFAULT_ONTOLOGY_PATH = os.getenv("ONTOLOGY_PATH", "ontology.json")
-ONTOLOGY_CHUNK_SIZE = int(os.getenv("ONTOLOGY_CHUNK_SIZE", "4000"))
-ONTOLOGY_CHUNK_OVERLAP = int(os.getenv("ONTOLOGY_CHUNK_OVERLAP", "500"))
-
-class OntologyDiscovery:
-    def __init__(self):
+        # Initialize components
         self.llm = OpenAILike(
-            api_base=LLM_API_BASE,
-            api_key=LLM_API_KEY,
-            model=LLM_MODEL,
+            api_base=self.api_base,
+            api_key=self.api_key,
+            model=self.model_name,
             is_chat_model=True,
-            timeout=LLM_TIMEOUT
+            timeout=self.timeout
         )
-        self.chunker = SentenceSplitter(chunk_size=ONTOLOGY_CHUNK_SIZE, chunk_overlap=ONTOLOGY_CHUNK_OVERLAP)
+        self.chunker = SentenceSplitter(chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap)
 
     def _get_samples(self, text: str, file_path: str, sample_size: int = 3000, max_samples: int = 5) -> List[str]:
         """Extracts samples from text. If MD, uses headers; otherwise uses spatial sampling."""
-        
-        # Markdown-aware sampling
         if file_path.lower().endswith(('.md', '.markdown')):
             logger.info("Markdown detected. Sampling by headers...")
             sections = re.split(r'\n(?=#+ )', text)
@@ -79,7 +76,6 @@ class OntologyDiscovery:
                     return [valid_sections[i][:sample_size] for i in indices]
                 return [s[:sample_size] for s in valid_sections]
 
-        # Fallback to spatial sampling
         if len(text) <= sample_size * 2:
             return [text]
         
@@ -93,12 +89,7 @@ class OntologyDiscovery:
         return samples
 
     def discover(self, file_path: str, full_scan: bool = False) -> dict:
-        """Analyzes a document to discover its underlying ontology.
-        
-        Args:
-            file_path: Path to the document.
-            full_scan: If True, scans the entire document (Map-Reduce). If False, uses sampling.
-        """
+        """Analyzes a document to discover its underlying ontology."""
         logger.info(f"Analyzing {file_path} for ontology discovery...")
         
         try:
@@ -115,12 +106,10 @@ class OntologyDiscovery:
                 samples = self._get_samples(text, file_path)
 
             aggregated_ontology = {"node_types": [], "relationship_types": []}
-            prompt_template = ONTOLOGY_DISCOVERY_PROMPT.replace("\\n", "\n")
 
-            # MAP PHASE
             for i, sample in enumerate(samples):
                 logger.info(f"Processing chunk {i+1}/{len(samples)}...")
-                prompt = prompt_template.format(text=sample)
+                prompt = self.discovery_prompt.format(text=sample)
                 
                 try:
                     response = self.llm.complete(prompt)
@@ -130,12 +119,9 @@ class OntologyDiscovery:
                     if json_match:
                         sample_ontology = json.loads(json_match.group(1))
                         self._merge_ontologies(aggregated_ontology, sample_ontology)
-                    else:
-                        logger.warning(f"No JSON block found in chunk {i+1}")
                 except Exception as e:
                     logger.warning(f"Failed to process chunk {i+1}: {e}")
 
-            # REDUCE PHASE (Consolidation)
             if full_scan:
                 logger.info("Consolidating full scan results...")
                 return self._consolidate_ontology(aggregated_ontology)
@@ -147,17 +133,10 @@ class OntologyDiscovery:
             return {}
 
     def _consolidate_ontology(self, raw_ontology: dict) -> dict:
-        """Uses LLM to merge and clean the aggregated ontology."""
-        
-        # Flatten lists for the prompt
-        raw_nodes = [n.get('label') for n in raw_ontology.get('node_types', [])]
-        raw_rels = [f"{r.get('source')} -> {r.get('type')} -> {r.get('target')}" for r in raw_ontology.get('relationship_types', [])]
-        
-        # Limit the lists to avoid context overflow (if massive)
-        raw_nodes = list(set(raw_nodes))[:200] 
-        raw_rels = list(set(raw_rels))[:200]
+        raw_nodes = list(set([n.get('label') for n in raw_ontology.get('node_types', [])]))[:200]
+        raw_rels = list(set([f"{r.get('source')} -> {r.get('type')} -> {r.get('target')}" for r in raw_ontology.get('relationship_types', [])]))[:200]
 
-        prompt = CONSOLIDATION_PROMPT.format(
+        prompt = self.consolidation_prompt.format(
             nodes=json.dumps(raw_nodes, indent=2), 
             relationships=json.dumps(raw_rels, indent=2)
         )
@@ -165,28 +144,19 @@ class OntologyDiscovery:
         try:
             response = self.llm.complete(prompt)
             output_text = response.text.strip()
-            
             json_match = re.search(r"(\{.*\})", output_text, re.DOTALL)
             if json_match:
-                final_ontology = json.loads(json_match.group(1))
-                logger.info("Ontology successfully consolidated.")
-                return final_ontology
-            else:
-                logger.error("Failed to parse consolidated ontology JSON.")
-                return raw_ontology # Return raw as fallback
-
+                return json.loads(json_match.group(1))
         except Exception as e:
             logger.error(f"Consolidation failed: {e}")
-            return raw_ontology
+        return raw_ontology
 
     def _merge_ontologies(self, base: dict, new: dict):
-        """Merges new ontology findings into the base ontology."""
         existing_node_labels = {n['label'].lower(): n for n in base['node_types']}
         for node in new.get('node_types', []):
-            label_lower = node['label'].lower()
-            if label_lower not in existing_node_labels:
+            if node['label'].lower() not in existing_node_labels:
                 base['node_types'].append(node)
-                existing_node_labels[label_lower] = node
+                existing_node_labels[node['label'].lower()] = node
         
         existing_rel_keys = {(r['source'].lower(), r['type'].lower(), r['target'].lower()) for r in base['relationship_types']}
         for rel in new.get('relationship_types', []):
@@ -201,10 +171,11 @@ class OntologyDiscovery:
         logger.info(f"Ontology saved to {output_path}")
 
 def main():
+    default_ontology_path = os.getenv("ONTOLOGY_PATH", "ontology.json")
     parser = argparse.ArgumentParser(description="3GPP Ontology Discovery Tool")
     parser.add_argument("file", help="Path to the document to analyze")
-    parser.add_argument("-o", "--output", help="Path to save the generated ontology", default=DEFAULT_ONTOLOGY_PATH)
-    parser.add_argument("--full", action="store_true", help="Perform a full scan of the document (slower but more accurate)")
+    parser.add_argument("-o", "--output", help="Path to save the generated ontology", default=default_ontology_path)
+    parser.add_argument("--full", action="store_true", help="Perform a full scan of the document")
     
     args = parser.parse_args()
     
@@ -217,7 +188,7 @@ def main():
     
     if result and (result.get('node_types') or result.get('relationship_types')):
         discovery.save_ontology(result, args.output)
-        print(f"Successfully discovered {len(result.get('node_types', []))} nodes and {len(result.get('relationship_types', []))} relations.")
+        print(f"Successfully discovered {len(result.get('node_types', []))} nodes.")
     else:
         logger.error("Failed to discover a valid ontology.")
         sys.exit(1)
