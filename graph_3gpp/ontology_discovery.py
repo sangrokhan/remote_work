@@ -36,34 +36,9 @@ class OntologyDiscovery:
         self.chunk_size = int(os.getenv("ONTOLOGY_CHUNK_SIZE", "4000"))
         self.chunk_overlap = int(os.getenv("ONTOLOGY_CHUNK_OVERLAP", "500"))
         self.consolidation_interval = int(os.getenv("ONTOLOGY_CONSOLIDATION_INTERVAL", "10"))
-        self.discovery_prompt = os.getenv(
-            "ONTOLOGY_DISCOVERY_PROMPT",
-            "Extract ontology from text:\n{text}\nJSON Output:"
-        ).replace("\\n", "\n")
+        self.discovery_prompt = os.getenv("ONTOLOGY_DISCOVERY_PROMPT", "").replace("\\n", "\n")
+        self.consolidation_prompt = os.getenv("ONTOLOGY_CONSOLIDATION_PROMPT", "").replace("\\n", "\n")
         
-        self.consolidation_prompt = """
-You are a Senior Ontology Engineer. I will provide you with a raw list of "Node Types" and "Relationship Types" extracted from a large 3GPP document. 
-Your job is to MERGE, CLEAN, and STANDARDIZE them into a single, high-quality Ontology.
-
-Instructions:
-1. Merge synonyms (e.g., "UE", "User Equipment", "Terminal" -> "UserEquipment").
-2. Standardize relationship names (e.g., "sends_message", "transmitting" -> "SENDS").
-3. Remove generic or noisy types (e.g., "Device", "Thing").
-4. Keep domain-specific types critical for Root Cause Analysis (e.g., "Timer", "RRC_State", "ProtocolError").
-5. IMPORTANT: Ensure the output is VALID JSON. Escape any backslashes (use \\\\) and do not use single quotes.
-
-Raw Node Types:
-{nodes}
-
-Raw Relationship Types:
-{relationships}
-
-Return STRICTLY a JSON object with:
-{{
-  "node_types": [{{"label": "StandardLabel", "description": "Definition"}}],
-  "relationship_types": [{{"source": "SourceLabel", "type": "REL_TYPE", "target": "TargetLabel"}}]
-}}
-"""
         # Initialize components
         self.llm = OpenAILike(
             api_base=self.api_base,
@@ -101,15 +76,14 @@ Return STRICTLY a JSON object with:
     def _parse_json(self, text: str) -> Dict[str, Any]:
         """Extracts and parses JSON from LLM response, with robust cleaning."""
         import re
-        # Find the first { and last }
+        # Find the first {
         start = text.find('{')
-        end = text.rfind('}')
-        if start == -1 or end == -1 or end <= start:
+        if start == -1:
             return {}
         
-        json_str = text[start:end+1]
+        json_str = text[start:]
         
-        # 1. Handle common unescaped backslashes
+        # 1. Basic cleaning to handle common LLM issues
         # Escape backslashes that are NOT part of a valid JSON escape sequence
         json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
         
@@ -118,22 +92,27 @@ Return STRICTLY a JSON object with:
         json_str = re.sub(r'("(?:\\["\\/bfnrtu]|[^"\\])*")\s+(")', r'\1, \2', json_str)
         # Between brace/bracket and string: } "key" or ] "key"
         json_str = re.sub(r'([}\]])\s+(")', r'\1, \2', json_str)
+        # Between number/bool and string: 123 "key" or true "key"
+        json_str = re.sub(r'(\b\d+\b|true|false|null)\s+(")', r'\1, \2', json_str)
         
         # 3. Remove trailing commas (illegal in standard JSON)
         json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
         
         try:
-            return json.loads(json_str)
+            # Use raw_decode to handle "extra data" after the JSON object
+            decoder = json.JSONDecoder()
+            obj, index = decoder.raw_decode(json_str)
+            return obj
         except json.JSONDecodeError as e:
             # Final attempt: try to handle single quotes if they were used as markers
             try:
-                # Naive replacement of single quotes around keys and values
                 fixed_json = re.sub(r"'\s*([^'\" ]+)\s*'\s*:", r'"\1":', json_str)
                 fixed_json = re.sub(r":\s*'\s*([^'\" ]+)\s*'", r': "\1"', fixed_json)
-                return json.loads(fixed_json)
+                obj, index = decoder.raw_decode(fixed_json)
+                return obj
             except:
                 logger.error(f"JSON Parsing Error: {e}")
-                llm_logger.debug(f"Failed JSON string: {json_str}")
+                llm_logger.debug(f"Failed JSON string: {json_str[:500]}...")
                 return {}
 
     def discover(self, file_path: str, output_path: str = None, full_scan: bool = False) -> dict:
