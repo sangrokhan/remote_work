@@ -83,11 +83,18 @@ class OntologyDiscovery:
         
         json_str = text[start:]
         
-        # 1. Basic cleaning to handle common LLM issues
+        # 1. Handle common LLM JSON formatting issues
+        # Remove unescaped newlines within strings (common cause of "unterminated string")
+        def replace_newlines(match):
+            return match.group(0).replace('\n', ' ').replace('\r', ' ')
+        
+        json_str = re.sub(r'"[^"]*"', replace_newlines, json_str, flags=re.DOTALL)
+
+        # 2. Basic cleaning
         # Escape backslashes that are NOT part of a valid JSON escape sequence
         json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
         
-        # 2. Try to fix missing commas between fields
+        # 3. Try to fix missing commas between fields
         # Between string and string: "val" "key"
         json_str = re.sub(r'("(?:\\["\\/bfnrtu]|[^"\\])*")\s+(")', r'\1, \2', json_str)
         # Between brace/bracket and string: } "key" or ] "key"
@@ -95,8 +102,12 @@ class OntologyDiscovery:
         # Between number/bool and string: 123 "key" or true "key"
         json_str = re.sub(r'(\b\d+\b|true|false|null)\s+(")', r'\1, \2', json_str)
         
-        # 3. Remove trailing commas (illegal in standard JSON)
+        # 4. Remove trailing commas (illegal in standard JSON)
         json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+        
+        # 5. Fix "expecting property name enclosed in double quotes"
+        # Often caused by single quotes: 'property': value
+        json_str = re.sub(r"'\s*([^'\" ]+)\s*'\s*:", r'"\1":', json_str)
         
         try:
             # Use raw_decode to handle "extra data" after the JSON object
@@ -104,16 +115,18 @@ class OntologyDiscovery:
             obj, index = decoder.raw_decode(json_str)
             return obj
         except json.JSONDecodeError as e:
-            # Final attempt: try to handle single quotes if they were used as markers
-            try:
-                fixed_json = re.sub(r"'\s*([^'\" ]+)\s*'\s*:", r'"\1":', json_str)
-                fixed_json = re.sub(r":\s*'\s*([^'\" ]+)\s*'", r': "\1"', fixed_json)
-                obj, index = decoder.raw_decode(fixed_json)
-                return obj
-            except:
-                logger.error(f"JSON Parsing Error: {e}")
-                llm_logger.debug(f"Failed JSON string: {json_str[:500]}...")
-                return {}
+            # Final desperate attempt: replace all single quotes with double quotes
+            if "expecting property name" in str(e) or "enclosed in double quotes" in str(e):
+                try:
+                    fallback_json = json_str.replace("'", '"')
+                    obj, index = decoder.raw_decode(fallback_json)
+                    return obj
+                except:
+                    pass
+            
+            logger.error(f"JSON Parsing Error: {e}")
+            llm_logger.debug(f"Failed JSON string: {json_str[:500]}...")
+            return {}
 
     def discover(self, file_path: str, output_path: str = None, full_scan: bool = False) -> dict:
         """Analyzes a document to discover its underlying ontology."""

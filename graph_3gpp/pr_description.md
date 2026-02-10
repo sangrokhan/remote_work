@@ -1,20 +1,18 @@
-# Enhanced Robust JSON Parsing for Graph Construction
+# Fix for JSON Property Quoting and Unterminated String Errors
 
-This PR significantly improves the JSON parsing resilience in the graph pipeline to handle common LLM formatting errors encountered during technical document processing.
+This PR provides advanced JSON cleaning to resolve "expecting property name enclosed in double quotes" and "unterminated string" errors occurring during graph construction.
 
 ## Changes
 
-### 1. Advanced JSON Cleaning Logic
-- Enhanced `_parse_json` method in `GraphPipeline` and `OntologyDiscovery`.
-- **Trailing Comma Removal**: Automatically strips illegal trailing commas in objects and arrays (e.g., `{"a": 1, }`).
-- **Improved Delimiter Recovery**: Better detection and insertion of missing commas between fields.
-- **Single Quote Fallback**: Added a secondary parsing attempt that tries to fix non-standard single-quoted JSON markers.
-- **Refined Block Extraction**: Improved logic for isolating the outermost JSON object from conversational LLM noise.
+### 1. Advanced JSON "Healing" Logic
+- Updated `_parse_json` in `GraphPipeline` and `OntologyDiscovery`.
+- **Newline Stripping**: Automatically replaces literal newlines within double-quoted strings with spaces. This directly fixes "unterminated string" errors caused by LLMs spreading a single string across multiple lines.
+- **Property Quoting Fix**: Specifically targets and converts single-quoted keys (e.g., `'id': 1`) to valid double-quoted JSON keys.
+- **Global Quoting Fallback**: Implements a last-resort recovery that attempts to swap all single quotes for double quotes if the parser explicitly flags a property quoting error.
 
-### 2. Improved Diagnostics
-- Added more granular logging for JSON parsing errors.
-- Failed JSON strings are now logged at the `DEBUG` level to facilitate rapid troubleshooting of new LLM failure modes.
+### 2. Maintained Robustness
+- Keeps previous improvements: `raw_decode` for "extra data" handling, backslash escaping, and missing comma insertion.
 
 ## Impact
-- Resolves "Expecting ',' delimiter" and "Invalid \escape" errors occurring during the graph construction phase.
-- Increases the overall success rate of triple extraction when using smaller or more creative LLM models.
+- Resolves the most persistent JSON parsing failures reported during large-scale graph generation.
+- Increases system autonomy by allowing the pipeline to self-correct common structural LLM errors.

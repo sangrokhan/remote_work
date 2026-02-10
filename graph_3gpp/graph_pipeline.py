@@ -145,11 +145,24 @@ class GraphPipeline:
         
         json_str = text[start:]
         
-        # 1. Basic cleaning to handle common LLM issues
+        # 1. Handle common LLM JSON formatting issues
+        # Remove unescaped newlines within strings (common cause of "unterminated string")
+        # This replaces newlines that are NOT preceded by a comma, brace, or bracket
+        # and are followed by more text within what looks like a JSON string.
+        # A simpler way is to replace all newlines with spaces within the JSON block
+        # except those between valid JSON tokens.
+        # For technical docs, we can usually safely replace newlines with spaces
+        # if they appear inside double quotes.
+        def replace_newlines(match):
+            return match.group(0).replace('\n', ' ').replace('\r', ' ')
+        
+        json_str = re.sub(r'"[^"]*"', replace_newlines, json_str, flags=re.DOTALL)
+
+        # 2. Basic cleaning
         # Escape backslashes that are NOT part of a valid JSON escape sequence
         json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
         
-        # 2. Try to fix missing commas between fields
+        # 3. Try to fix missing commas between fields
         # Between string and string: "val" "key"
         json_str = re.sub(r'("(?:\\["\\/bfnrtu]|[^"\\])*")\s+(")', r'\1, \2', json_str)
         # Between brace/bracket and string: } "key" or ] "key"
@@ -157,13 +170,12 @@ class GraphPipeline:
         # Between number/bool and string: 123 "key" or true "key"
         json_str = re.sub(r'(\b\d+\b|true|false|null)\s+(")', r'\1, \2', json_str)
         
-        # 3. Remove trailing commas (illegal in standard JSON)
+        # 4. Remove trailing commas (illegal in standard JSON)
         json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
         
-        # 4. Handle common issue: unescaped double quotes inside values
-        # This is hard to fix perfectly with regex, but we can try to fix simple cases
-        # where there's a " inside a string that isn't followed by : or , or } or ]
-        # json_str = re.sub(r'(?<=:)\s*"([^"]*)"([^"]*)"(?=\s*[,}\]])', r'"\1\"\2"', json_str)
+        # 5. Fix "expecting property name enclosed in double quotes"
+        # Often caused by single quotes: 'property': value
+        json_str = re.sub(r"'\s*([^'\" ]+)\s*'\s*:", r'"\1":', json_str)
 
         try:
             # Use raw_decode to handle "extra data" after the JSON object
@@ -171,16 +183,21 @@ class GraphPipeline:
             obj, index = decoder.raw_decode(json_str)
             return obj
         except json.JSONDecodeError as e:
-            # Final attempt: try to handle single quotes if they were used as markers
-            try:
-                fixed_json = re.sub(r"'\s*([^'\" ]+)\s*'\s*:", r'"\1":', json_str)
-                fixed_json = re.sub(r":\s*'\s*([^'\" ]+)\s*'", r': "\1"', fixed_json)
-                obj, index = decoder.raw_decode(fixed_json)
-                return obj
-            except:
-                logger.error(f"JSON Parsing Error: {e}")
-                logger.debug(f"Failed JSON string: {json_str[:500]}...") # Log start of failed string
-                return {}
+            # Final desperate attempt: replace all single quotes with double quotes
+            # ONLY if the error seems related to quoting
+            if "expecting property name" in str(e) or "enclosed in double quotes" in str(e):
+                try:
+                    # Naive replacement of single quotes with double quotes for the whole string
+                    # This can break things if values contain single quotes, but it's a fallback
+                    fallback_json = json_str.replace("'", '"')
+                    obj, index = decoder.raw_decode(fallback_json)
+                    return obj
+                except:
+                    pass
+            
+            logger.error(f"JSON Parsing Error: {e}")
+            logger.debug(f"Failed JSON string: {json_str[:500]}...")
+            return {}
 
     def extract_triples(self, chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Calls LLM to extract triples from text based on ontology."""
