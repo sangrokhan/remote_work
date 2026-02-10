@@ -42,7 +42,7 @@ class GraphPipeline:
         # Initialize components
         self.driver = GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password))
         self.chunker = SentenceSplitter(chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap)
-        self.ontology = self._load_ontology()
+        self.ontology_data = self._load_ontology()
         
         self.llm = OpenAILike(
             api_base=self.api_base,
@@ -52,13 +52,68 @@ class GraphPipeline:
             timeout=self.timeout
         )
 
-    def _load_ontology(self) -> str:
+    def _load_ontology(self) -> Dict[str, Any]:
         if os.path.exists(self.ontology_path):
-            with open(self.ontology_path, 'r') as f:
-                data = json.load(f)
-                return json.dumps(data, indent=2)
-        logger.warning(f"Ontology file {self.ontology_path} not found. Using generic schema.")
-        return "Generic (Subject, Predicate, Object)"
+            try:
+                with open(self.ontology_path, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load ontology JSON: {e}")
+        logger.warning(f"Ontology file {self.ontology_path} not found or invalid. Using empty schema.")
+        return {}
+
+    def _get_relevant_ontology_str(self, text: str) -> str:
+        """Filters the ontology to only include elements relevant to the text chunk."""
+        if not self.ontology_data:
+            return "Generic (Subject, Predicate, Object)"
+        
+        import re
+        node_types = self.ontology_data.get("node_types", [])
+        rel_types = self.ontology_data.get("relationship_types", [])
+        
+        # 1. Identify relevant node labels by checking their presence in text
+        relevant_labels = set()
+        # Heuristic: search for node labels in the text chunk
+        # To avoid massive regex, we only check if the label is mentioned
+        text_lower = text.lower()
+        for node in node_types:
+            label = node.get("label", "")
+            if label.lower() in text_lower:
+                relevant_labels.add(label)
+        
+        # 2. Filter node types and strip descriptions to save tokens
+        filtered_nodes = [
+            {"label": n["label"]}
+            for n in node_types if n["label"] in relevant_labels
+        ]
+        
+        # 3. Filter relationship types
+        # Include relationships where either source or target is in relevant_labels
+        filtered_rels = [
+            {"source": r["source"], "type": r["type"], "target": r["target"]}
+            for r in rel_types 
+            if r["source"] in relevant_labels or r["target"] in relevant_labels
+        ]
+        
+        # 4. Token management: If still too large or nothing found
+        # If nothing found, provide a subset of the ontology as a hint
+        if not filtered_nodes:
+            filtered_nodes = [{"label": n["label"]} for n in node_types[:20]]
+            filtered_rels = [
+                {"source": r["source"], "type": r["type"], "target": r["target"]}
+                for r in rel_types[:20]
+            ]
+        
+        # Limit to reasonable number of types to stay under token limits
+        filtered_nodes = filtered_nodes[:100]
+        filtered_rels = filtered_rels[:150]
+
+        compact_ontology = {
+            "node_types": filtered_nodes,
+            "relationship_types": filtered_rels
+        }
+        
+        return json.dumps(compact_ontology, separators=(',', ':'))
 
     def close(self):
         self.driver.close()
@@ -117,7 +172,9 @@ class GraphPipeline:
         text = chunk["text"]
         chunk_id = chunk["chunk_id"]
 
-        prompt = self.extraction_prompt.format(ontology=self.ontology, text=text)
+        # Get relevant ontology for this chunk to save tokens
+        ontology_str = self._get_relevant_ontology_str(text)
+        prompt = self.extraction_prompt.format(ontology=ontology_str, text=text)
 
         try:
             response = self.llm.complete(prompt)
