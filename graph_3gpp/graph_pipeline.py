@@ -116,21 +116,30 @@ class GraphPipeline:
         self.driver.close()
 
     def chunk_document(self, file_path: str) -> List[Dict[str, Any]]:
-        """Reads a file and splits it into chunks."""
+        """Reads a file and splits it into chunks, respecting document structure."""
         logger.info(f"Reading file: {file_path}")
         with open(file_path, 'r', encoding='utf-8') as f:
             text = f.read()
 
-        doc = Document(text=text)
-        nodes = self.chunker.get_nodes_from_documents([doc])
+        # Improved chunking strategy:
+        # For .md files, we use MarkdownNodeParser to respect headers and sections
+        if file_path.lower().endswith(('.md', '.markdown')):
+            from llama_index.core.node_parser import MarkdownNodeParser
+            parser = MarkdownNodeParser()
+            nodes = parser.get_nodes_from_documents([Document(text=text)])
+        else:
+            # Fallback to SentenceSplitter
+            nodes = self.chunker.get_nodes_from_documents([Document(text=text)])
         
         chunks = []
         for node in nodes:
-            chunks.append({
-                "chunk_id": str(uuid4()), 
-                "text": node.get_content(),
-                "source": file_path
-            })
+            content = node.get_content().strip()
+            if content:
+                chunks.append({
+                    "chunk_id": str(uuid4()), 
+                    "text": content,
+                    "source": file_path
+                })
         
         logger.info(f"Generated {len(chunks)} chunks.")
         return chunks
@@ -161,7 +170,6 @@ class GraphPipeline:
         
         # 4. Fix Quoting and Delimiters
         # Fix "expecting property name enclosed in double quotes" (unquoted keys)
-        # { head: "UE" } -> { "head": "UE" }
         json_str = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', json_str)
         
         # Fix single quotes for keys: 'property': value -> "property": value
@@ -196,8 +204,8 @@ class GraphPipeline:
             logger.debug(f"Failed JSON string: {json_str[:500]}...")
             return {}
 
-    def extract_triples(self, chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Calls LLM to extract triples from text based on ontology."""
+    def extract_triples(self, chunk: Dict[str, Any], retry_count: int = 1) -> List[Dict[str, Any]]:
+        """Calls LLM to extract triples from text based on ontology with self-correction logic."""
         text = chunk["text"]
         chunk_id = chunk["chunk_id"]
 
@@ -209,7 +217,16 @@ class GraphPipeline:
             response = self.llm.complete(prompt)
             output_text = response.text.strip()
             
+            # caution: small model output_txt can make wrong formatted json.
             data = self._parse_json(output_text)
+            
+            # Self-correction logic: if parsing fails, try one more time with a feedback prompt
+            if not data and retry_count > 0:
+                logger.warning(f"Initial JSON parsing failed for chunk {chunk_id[:8]}. Attempting self-correction...")
+                correction_prompt = f"The following JSON was invalid. Please fix the formatting (ensure double quotes, commas, and proper escaping) and return ONLY the valid JSON object:\n\n{output_text}"
+                retry_response = self.llm.complete(correction_prompt)
+                data = self._parse_json(retry_response.text.strip())
+
             if not data:
                 logger.error(f"Failed to extract valid JSON for chunk {chunk_id}.")
                 return []
