@@ -1,0 +1,51 @@
+{
+  "node_types": [
+    {
+      "label": "NetworkNode",
+      "description": "Represents a node in the network, such as a gNB or UE."
+    },
+    {
+      "label": "ProtocolMessage",
+      "description": "Represents a message exchanged between network nodes."
+    },
+    {
+      "label": "Timer",
+      "description": "Represents a time-based event or process."
+    },
+    {
+      "label": "Procedure",
+      "description": "Represents a sequence of steps or actions."
+    },
+    {
+      "label": "UserState",
+      "description": "Represents the current state of a user, such as RRC_IDLE or RRC_INACTIVE."
+    }
+  ],
+  "relationship_types": [
+    {
+      "source": "ProtocolMessage",
+      "type": "SENDS",
+      "target": "NetworkNode"
+    },
+    {
+      "source": "ProtocolMessage",
+      "type": "EXPIRES_DURING",
+      "target": "Timer"
+    },
+    {
+      "source": "Timer",
+      "type": "TRIGGERS",
+      "target": "Procedure"
+    },
+    {
+      "source": "Procedure",
+      "type": "TRANSITIONS_TO",
+      "target": "NetworkNode"
+    },
+    {
+      "source": "NetworkNode",
+      "type": "SENDS",
+      "target": "ProtocolMessage"
+    }
+  ]
+}
