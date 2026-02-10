@@ -1,5 +1,7 @@
 import os
 import uvicorn
+import uuid
+import time
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
@@ -72,33 +74,108 @@ async def generate_text(request: GenerateRequest):
         import time
         start_time = time.time()
         
-        # Explicitly set max_new_tokens to avoid conflict with max_length if using pipeline defaults
-        # transformers pipeline may use max_length as total length (prompt + new), 
-        # while user might expect it to vary. 
-        # For simplicity with pipeline, we just pass max_new_tokens if that's what we want, 
-        # or rely on max_length. 
-        # The warning said max_new_tokens=256 was set by default ? 
-        # Let's use max_new_tokens explicitly.
-        
+        # Avoid passing individual params with generation_config
         results = generator(
             request.prompt, 
-            max_new_tokens=request.max_length, # Map user's max_length to max_new_tokens for clarity
+            max_new_tokens=request.max_length,
             do_sample=True, 
-            temperature=request.temperature
+            temperature=request.temperature,
+            pad_token_id=tokenizer.eos_token_id,
+            generation_config=None
         )
         
         elapsed = time.time() - start_time
         print(f"[LLM Service] Generation took {elapsed:.2f}s")
         
         summary = results[0]['generated_text']
-        
-        # Strip prompt if included (transformers usually includes it)
         if summary.startswith(request.prompt):
             summary = summary[len(request.prompt):].strip()
             
         return {"text": summary}
     except Exception as e:
         print(f"[LLM Service] Generation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- OpenAI Compatible API ---
+
+@app.get("/v1/models")
+async def list_models():
+    model_path = os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-7B-Instruct")
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model_path,
+                "object": "model",
+                "created": 1686935002,
+                "owned_by": "organization-owner"
+            }
+        ]
+    }
+
+@app.get("/v1/model")
+async def get_model_legacy():
+    return await list_models()
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatCompletionRequest(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    max_tokens: int = 500
+    temperature: float = 0.7
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: ChatCompletionRequest):
+    if generator is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    
+    # Simple chat template fallback
+    prompt = ""
+    for msg in request.messages:
+        prompt += f"{msg.role}: {msg.content}\n"
+    prompt += "assistant: "
+
+    try:
+        import time
+        results = generator(
+            prompt,
+            max_new_tokens=request.max_tokens,
+            do_sample=True,
+            temperature=request.temperature,
+            pad_token_id=tokenizer.eos_token_id,
+            generation_config=None
+        )
+        
+        text = results[0]['generated_text']
+        if text.startswith(prompt):
+            text = text[len(prompt):].strip()
+            
+        return {
+            "id": f"chatcmpl-{uuid.uuid4()}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": request.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": text
+                    },
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": -1,
+                "completion_tokens": -1,
+                "total_tokens": -1
+            }
+        }
+    except Exception as e:
+        print(f"[LLM Service] Chat completion error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
