@@ -36,6 +36,9 @@ class GraphPipeline:
         self.driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
         self.chunker = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         
+        # Load Ontology
+        self.ontology = self._load_ontology()
+        
         # Initialize LLM
         self.llm = OpenAILike(
             api_base=LLM_API_BASE,
@@ -44,6 +47,14 @@ class GraphPipeline:
             is_chat_model=True,
             timeout=60.0
         )
+
+    def _load_ontology(self) -> str:
+        ontology_path = "ontology.json"
+        if os.path.exists(ontology_path):
+            with open(ontology_path, 'r') as f:
+                data = json.load(f)
+                return json.dumps(data, indent=2)
+        return "Generic (Subject, Predicate, Object)"
 
     def close(self):
         self.driver.close()
@@ -69,16 +80,20 @@ class GraphPipeline:
         return chunks
 
     def extract_triples(self, chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Calls LLM to extract triples from text."""
+        """Calls LLM to extract triples from text based on ontology."""
         text = chunk["text"]
         chunk_id = chunk["chunk_id"]
 
         prompt = (
-            "You are a knowledge graph expert. Extract knowledge triples (Subject, Predicate, Object) "
-            "from the following text. \n"
-            "Return strictly a JSON object with a key 'triples' containing a list of objects. "
-            "Each object must have 'head', 'type', and 'tail'.\n"
-            "Example format: {\"triples\": [{\"head\": \"Alice\", \"type\": \"KNOWS\", \"tail\": \"Bob\"}]}\n\n"
+            "You are a 3GPP Knowledge Graph expert. Extract knowledge triples from the text "
+            "strictly following the provided ONTOLOGY.\n\n"
+            "ONTOLOGY:\n"
+            f"{self.ontology}\n\n"
+            "Instructions:\n"
+            "1. Only use Node Labels and Relationship Types defined in the ONTOLOGY.\n"
+            "2. If a relationship is not explicitly in the ontology but is critical, use the most similar type.\n"
+            "3. Return strictly a JSON object with a key 'triples'.\n"
+            "4. Each triple must have: 'head' (node name), 'head_label', 'type' (relationship), 'tail' (node name), 'tail_label'.\n\n"
             f"Text:\n{text}\n\n"
             "JSON Output:"
         )
@@ -114,37 +129,21 @@ class GraphPipeline:
             return []
 
     def save_to_neo4j(self, triples: List[Dict[str, Any]]):
-        """Saves triples to Neo4j."""
+        """Saves triples to Neo4j using ontological labels."""
         if not triples:
             return
 
-        query = """
-        UNWIND $triples AS t
-        MERGE (h:Entity {name: t.head})
-        MERGE (tail:Entity {name: t.tail})
-        MERGE (h)-[r:RELATIONSHIP {type: t.type}]->(tail)
-        SET r.chunk_id = t.chunk_id
-        """
-        
-        # Note: In a real dynamic graph, you'd likely map t.type to the actual Relationship Type dynamically 
-        # using APOC or string concatenation (sanitized), because Cypher doesn't allow dynamic types in MERGE 
-        # without APOC.
-        # For this simplified version, we use a generic :RELATIONSHIP type and store the actual type as a property,
-        # OR we can use string formatting if we trust the LLM output (risky but allows visual graph types).
-        
-        # Better Approach with APOC (if available) or Python-side dynamic query construction.
-        # Let's do Python-side construction for types to make it look nice in Neo4j Bloom/Browser.
-        
         with self.driver.session() as session:
             for triple in triples:
-                # Sanitize type to avoid Cypher injection and syntax errors
-                rel_type = triple['type'].upper().replace(" ", "_").replace("-", "_")
-                if not rel_type: 
-                    rel_type = "RELATED_TO"
-                    
+                # Sanitize labels and types
+                h_label = triple.get('head_label', 'Entity').replace(" ", "_")
+                t_label = triple.get('tail_label', 'Entity').replace(" ", "_")
+                rel_type = triple.get('type', 'RELATED_TO').upper().replace(" ", "_").replace("-", "_")
+                
+                # Cypher query with dynamic labels (using string formatting for labels as they are not parameters)
                 dynamic_query = (
-                    "MERGE (h:Entity {name: $head}) "
-                    "MERGE (t:Entity {name: $tail}) "
+                    f"MERGE (h:`{h_label}` {{name: $head}}) "
+                    f"MERGE (t:`{t_label}` {{name: $tail}}) "
                     f"MERGE (h)-[r:`{rel_type}`]->(t) "
                     "SET r.chunk_id = $chunk_id"
                 )
@@ -179,8 +178,8 @@ class GraphPipeline:
 
 if __name__ == "__main__":
     pipeline = GraphPipeline()
-    # Ensure data/sample.txt exists
-    sample_file = "data/sample.txt"
+    # Ensure sample_3gpp.txt exists
+    sample_file = "sample_3gpp.txt"
     if os.path.exists(sample_file):
         pipeline.run(sample_file)
     else:
