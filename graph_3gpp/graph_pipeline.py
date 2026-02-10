@@ -160,13 +160,14 @@ class GraphPipeline:
         try:
             chunks = self.chunk_document(file_path)
             
-            all_triples = []
+            triples_found = False
             for chunk in chunks:
                 triples = self.extract_triples(chunk)
-                all_triples.extend(triples)
+                if triples:
+                    self.save_to_neo4j(triples)
+                    triples_found = True
                 
-            if all_triples:
-                self.save_to_neo4j(all_triples)
+            if triples_found:
                 logger.info("Pipeline completed successfully.")
             else:
                 logger.warning("No triples were extracted.")
