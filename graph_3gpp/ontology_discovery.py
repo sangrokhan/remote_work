@@ -50,6 +50,7 @@ Instructions:
 2. Standardize relationship names (e.g., "sends_message", "transmitting" -> "SENDS").
 3. Remove generic or noisy types (e.g., "Device", "Thing").
 4. Keep domain-specific types critical for Root Cause Analysis (e.g., "Timer", "RRC_State", "ProtocolError").
+5. IMPORTANT: Ensure the output is VALID JSON. Escape any backslashes (use \\\\) and do not use single quotes.
 
 Raw Node Types:
 {nodes}
@@ -97,6 +98,35 @@ Return STRICTLY a JSON object with:
         samples.append(text[-sample_size:])
         return samples
 
+    def _parse_json(self, text: str) -> Dict[str, Any]:
+        """Extracts and parses JSON from LLM response, with basic cleaning."""
+        import re
+        # Find the first { and last }
+        start = text.find('{')
+        end = text.rfind('}')
+        if start == -1 or end == -1 or end <= start:
+            return {}
+        
+        json_str = text[start:end+1]
+        
+        # Basic cleaning to handle common LLM issues in technical docs
+        # 1. Handle common unescaped backslashes (e.g., in technical markers or paths)
+        # Only escape backslashes that are NOT part of a valid JSON escape sequence
+        json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
+        
+        # 2. Try to fix missing commas between fields
+        # Between string and string: "val" "key"
+        json_str = re.sub(r'("(?:\\["\\/bfnrtu]|[^"\\])*")\s+(")', r'\1, \2', json_str)
+        # Between brace/bracket and string: } "key" or ] "key"
+        json_str = re.sub(r'([}\]])\s+(")', r'\1, \2', json_str)
+        
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON Parsing Error: {e}")
+            llm_logger.debug(f"Failed JSON string: {json_str}")
+            return {}
+
     def discover(self, file_path: str, output_path: str = None, full_scan: bool = False) -> dict:
         """Analyzes a document to discover its underlying ontology."""
         logger.info(f"Analyzing {file_path} for ontology discovery...")
@@ -127,9 +157,8 @@ Return STRICTLY a JSON object with:
                     # Debug log the raw output using the dedicated logger
                     llm_logger.debug(f"--- Raw LLM Output (Chunk {i+1}) ---\n{output_text}\n---------------------------")
                     
-                    json_match = re.search(r"(\{.*\})", output_text, re.DOTALL)
-                    if json_match:
-                        sample_ontology = json.loads(json_match.group(1))
+                    sample_ontology = self._parse_json(output_text)
+                    if sample_ontology:
                         self._merge_ontologies(aggregated_ontology, sample_ontology)
                         
                         # Save after each chunk
@@ -143,7 +172,7 @@ Return STRICTLY a JSON object with:
                             if output_path:
                                 self.save_ontology(aggregated_ontology, output_path)
                     else:
-                        logger.warning(f"No JSON block found in chunk {i+1}. Enable --debug to see raw output.")
+                        logger.warning(f"No valid JSON block found in chunk {i+1}. Enable --debug to see raw output.")
                 except Exception as e:
                     logger.warning(f"Failed to process chunk {i+1}: {e}")
 
@@ -171,9 +200,7 @@ Return STRICTLY a JSON object with:
             output_text = response.text.strip()
             llm_logger.debug(f"--- Raw LLM Output (Consolidation) ---\n{output_text}\n---------------------------")
             
-            json_match = re.search(r"(\{.*\})", output_text, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(1))
+            return self._parse_json(output_text)
         except Exception as e:
             logger.error(f"Consolidation failed: {e}")
         return raw_ontology
