@@ -19,53 +19,45 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Configuration from .env
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
-
-# LLM Configuration
-LLM_API_BASE = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
-LLM_API_KEY = os.getenv("LLM_API_KEY", "EMPTY")
-LLM_MODEL = os.getenv("LLM_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
-LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60.0"))
-
-# Chunking Configuration
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 256))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 20))
-
-# Ontology Configuration
-ONTOLOGY_PATH = os.getenv("ONTOLOGY_PATH", "ontology.json")
-
-# Prompt Configuration
-TRIPLE_EXTRACTION_PROMPT = os.getenv(
-    "TRIPLE_EXTRACTION_PROMPT",
-    "Extract triples from the text.\nONTOLOGY:\n{ontology}\nText:\n{text}\nJSON Output:"
-)
-
 class GraphPipeline:
     def __init__(self):
-        self.driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-        self.chunker = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+        # Load configurations from environment
+        self.neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        self.neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+        self.neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
         
-        # Load Ontology
+        self.api_base = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
+        self.api_key = os.getenv("LLM_API_KEY", "EMPTY")
+        self.model_name = os.getenv("LLM_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
+        self.timeout = float(os.getenv("LLM_TIMEOUT", "60.0"))
+        
+        self.chunk_size = int(os.getenv("CHUNK_SIZE", 256))
+        self.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", 20))
+        self.ontology_path = os.getenv("ONTOLOGY_PATH", "ontology.json")
+        self.extraction_prompt = os.getenv(
+            "TRIPLE_EXTRACTION_PROMPT",
+            "Extract triples from the text.\nONTOLOGY:\n{ontology}\nText:\n{text}\nJSON Output:"
+        ).replace("\\n", "\n")
+
+        # Initialize components
+        self.driver = GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password))
+        self.chunker = SentenceSplitter(chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap)
         self.ontology = self._load_ontology()
         
-        # Initialize LLM
         self.llm = OpenAILike(
-            api_base=LLM_API_BASE,
-            api_key=LLM_API_KEY,
-            model=LLM_MODEL,
+            api_base=self.api_base,
+            api_key=self.api_key,
+            model=self.model_name,
             is_chat_model=True,
-            timeout=LLM_TIMEOUT
+            timeout=self.timeout
         )
 
     def _load_ontology(self) -> str:
-        if os.path.exists(ONTOLOGY_PATH):
-            with open(ONTOLOGY_PATH, 'r') as f:
+        if os.path.exists(self.ontology_path):
+            with open(self.ontology_path, 'r') as f:
                 data = json.load(f)
                 return json.dumps(data, indent=2)
-        logger.warning(f"Ontology file {ONTOLOGY_PATH} not found. Using generic schema.")
+        logger.warning(f"Ontology file {self.ontology_path} not found. Using generic schema.")
         return "Generic (Subject, Predicate, Object)"
 
     def close(self):
@@ -96,16 +88,12 @@ class GraphPipeline:
         text = chunk["text"]
         chunk_id = chunk["chunk_id"]
 
-        # Format the prompt using the configured template
-        # Handling escaped newlines if they come from .env
-        prompt_template = TRIPLE_EXTRACTION_PROMPT.replace("\\n", "\n")
-        prompt = prompt_template.format(ontology=self.ontology, text=text)
+        prompt = self.extraction_prompt.format(ontology=self.ontology, text=text)
 
         try:
             response = self.llm.complete(prompt)
             output_text = response.text.strip()
             
-            # More robust JSON extraction
             import re
             json_match = re.search(r"(\{.*\})", output_text, re.DOTALL)
             if json_match:
@@ -116,7 +104,6 @@ class GraphPipeline:
             data = json.loads(json_str)
             triples = data.get("triples", [])
             
-            # Enrich triples with chunk_id
             for triple in triples:
                 triple["chunk_id"] = chunk_id
                 
@@ -125,7 +112,6 @@ class GraphPipeline:
 
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON from LLM response for chunk {chunk_id}.")
-            logger.error(f"LLM Output: {output_text}")
             return []
         except Exception as e:
             logger.error(f"Error during triple extraction: {e}")
@@ -138,7 +124,6 @@ class GraphPipeline:
 
         with self.driver.session() as session:
             for triple in triples:
-                # Sanitize labels and types
                 h_label = triple.get('head_label', 'Entity').replace(" ", "_")
                 t_label = triple.get('tail_label', 'Entity').replace(" ", "_")
                 rel_type = triple.get('type', 'RELATED_TO').upper().replace(" ", "_").replace("-", "_")
