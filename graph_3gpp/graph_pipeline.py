@@ -34,10 +34,7 @@ class GraphPipeline:
         self.chunk_size = int(os.getenv("CHUNK_SIZE", 256))
         self.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", 20))
         self.ontology_path = os.getenv("ONTOLOGY_PATH", "ontology.json")
-        self.extraction_prompt = os.getenv(
-            "TRIPLE_EXTRACTION_PROMPT",
-            "Extract triples from the text.\nONTOLOGY:\n{ontology}\nText:\n{text}\nJSON Output:"
-        ).replace("\\n", "\n")
+        self.extraction_prompt = os.getenv("TRIPLE_EXTRACTION_PROMPT", "").replace("\\n", "\n")
 
         # Initialize components
         self.driver = GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password))
@@ -141,15 +138,14 @@ class GraphPipeline:
     def _parse_json(self, text: str) -> Dict[str, Any]:
         """Extracts and parses JSON from LLM response, with robust cleaning."""
         import re
-        # Find the first { and last }
+        # Find the first {
         start = text.find('{')
-        end = text.rfind('}')
-        if start == -1 or end == -1 or end <= start:
+        if start == -1:
             return {}
         
-        json_str = text[start:end+1]
+        json_str = text[start:]
         
-        # 1. Handle common unescaped backslashes
+        # 1. Basic cleaning to handle common LLM issues
         # Escape backslashes that are NOT part of a valid JSON escape sequence
         json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
         
@@ -158,23 +154,32 @@ class GraphPipeline:
         json_str = re.sub(r'("(?:\\["\\/bfnrtu]|[^"\\])*")\s+(")', r'\1, \2', json_str)
         # Between brace/bracket and string: } "key" or ] "key"
         json_str = re.sub(r'([}\]])\s+(")', r'\1, \2', json_str)
+        # Between number/bool and string: 123 "key" or true "key"
+        json_str = re.sub(r'(\b\d+\b|true|false|null)\s+(")', r'\1, \2', json_str)
         
         # 3. Remove trailing commas (illegal in standard JSON)
         json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
         
+        # 4. Handle common issue: unescaped double quotes inside values
+        # This is hard to fix perfectly with regex, but we can try to fix simple cases
+        # where there's a " inside a string that isn't followed by : or , or } or ]
+        # json_str = re.sub(r'(?<=:)\s*"([^"]*)"([^"]*)"(?=\s*[,}\]])', r'"\1\"\2"', json_str)
+
         try:
-            return json.loads(json_str)
+            # Use raw_decode to handle "extra data" after the JSON object
+            decoder = json.JSONDecoder()
+            obj, index = decoder.raw_decode(json_str)
+            return obj
         except json.JSONDecodeError as e:
             # Final attempt: try to handle single quotes if they were used as markers
             try:
-                # Naive replacement of single quotes around keys and values
-                # Only if they are not already double quoted
                 fixed_json = re.sub(r"'\s*([^'\" ]+)\s*'\s*:", r'"\1":', json_str)
                 fixed_json = re.sub(r":\s*'\s*([^'\" ]+)\s*'", r': "\1"', fixed_json)
-                return json.loads(fixed_json)
+                obj, index = decoder.raw_decode(fixed_json)
+                return obj
             except:
                 logger.error(f"JSON Parsing Error: {e}")
-                logger.debug(f"Failed JSON string: {json_str}")
+                logger.debug(f"Failed JSON string: {json_str[:500]}...") # Log start of failed string
                 return {}
 
     def extract_triples(self, chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
