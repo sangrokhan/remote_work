@@ -75,18 +75,11 @@ class GraphPipeline:
 
         prompt = (
             "You are a knowledge graph expert. Extract knowledge triples (Subject, Predicate, Object) "
-            "from the following text. 
-"
+            "from the following text. \n"
             "Return strictly a JSON object with a key 'triples' containing a list of objects. "
-            "Each object must have 'head', 'type', and 'tail'.
-"
-            "Example format: {"triples": [{"head": "Alice", "type": "KNOWS", "tail": "Bob"}]}
-
-"
-            f"Text:
-{text}
-
-"
+            "Each object must have 'head', 'type', and 'tail'.\n"
+            "Example format: {\"triples\": [{\"head\": \"Alice\", \"type\": \"KNOWS\", \"tail\": \"Bob\"}]}\n\n"
+            f"Text:\n{text}\n\n"
             "JSON Output:"
         )
 
@@ -94,13 +87,15 @@ class GraphPipeline:
             response = self.llm.complete(prompt)
             output_text = response.text.strip()
             
-            # Basic cleanup if the LLM includes code blocks
-            if output_text.startswith("```json"):
-                output_text = output_text[7:]
-            if output_text.endswith("```"):
-                output_text = output_text[:-3]
-                
-            data = json.loads(output_text)
+            # More robust JSON extraction
+            import re
+            json_match = re.search(r"(\{.*\})", output_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                json_str = output_text
+
+            data = json.loads(json_str)
             triples = data.get("triples", [])
             
             # Enrich triples with chunk_id
@@ -112,7 +107,7 @@ class GraphPipeline:
 
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON from LLM response for chunk {chunk_id}.")
-            logger.debug(f"LLM Output: {output_text}")
+            logger.error(f"LLM Output: {output_text}")
             return []
         except Exception as e:
             logger.error(f"Error during triple extraction: {e}")
