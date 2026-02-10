@@ -16,9 +16,17 @@ load_dotenv()
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+# Create a dedicated logger for LLM raw outputs
+llm_logger = logging.getLogger("llm_output")
 
 class OntologyDiscovery:
-    def __init__(self):
+    def __init__(self, debug: bool = False):
+        self.debug = debug
+        if self.debug:
+            llm_logger.setLevel(logging.DEBUG)
+        else:
+            llm_logger.setLevel(logging.WARNING)
+
         # Load configurations from environment
         self.api_base = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
         self.api_key = os.getenv("LLM_API_KEY", "EMPTY")
@@ -115,10 +123,15 @@ Return STRICTLY a JSON object with:
                     response = self.llm.complete(prompt)
                     output_text = response.text.strip()
                     
+                    # Debug log the raw output using the dedicated logger
+                    llm_logger.debug(f"--- Raw LLM Output (Chunk {i+1}) ---\n{output_text}\n---------------------------")
+                    
                     json_match = re.search(r"(\{.*\})", output_text, re.DOTALL)
                     if json_match:
                         sample_ontology = json.loads(json_match.group(1))
                         self._merge_ontologies(aggregated_ontology, sample_ontology)
+                    else:
+                        logger.warning(f"No JSON block found in chunk {i+1}. Enable --debug to see raw output.")
                 except Exception as e:
                     logger.warning(f"Failed to process chunk {i+1}: {e}")
 
@@ -144,6 +157,8 @@ Return STRICTLY a JSON object with:
         try:
             response = self.llm.complete(prompt)
             output_text = response.text.strip()
+            llm_logger.debug(f"--- Raw LLM Output (Consolidation) ---\n{output_text}\n---------------------------")
+            
             json_match = re.search(r"(\{.*\})", output_text, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group(1))
@@ -176,6 +191,7 @@ def main():
     parser.add_argument("file", help="Path to the document to analyze")
     parser.add_argument("-o", "--output", help="Path to save the generated ontology", default=default_ontology_path)
     parser.add_argument("--full", action="store_true", help="Perform a full scan of the document")
+    parser.add_argument("--debug", action="store_true", help="Print raw LLM outputs for debugging")
     
     args = parser.parse_args()
     
@@ -183,7 +199,8 @@ def main():
         logger.error(f"File not found: {args.file}")
         sys.exit(1)
         
-    discovery = OntologyDiscovery()
+    # Initialize with debug flag
+    discovery = OntologyDiscovery(debug=args.debug)
     result = discovery.discover(args.file, full_scan=args.full)
     
     if result and (result.get('node_types') or result.get('relationship_types')):
