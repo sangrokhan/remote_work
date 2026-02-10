@@ -1,0 +1,12 @@
+# Dockerfile for vLLM Server (Linux/NVIDIA)
+FROM vllm/vllm-openai:latest
+
+# Expose port
+EXPOSE 8000
+
+# The base image already has the entrypoint set to run the server.
+# We just need to ensure the arguments are passed correctly or set via ENV/CMD.
+# Default command in vllm image is usually: python3 -m vllm.entrypoints.openai.api_server
+# We can override CMD to set host/port default
+
+CMD ["--host", "0.0.0.0", "--port", "8000"]
