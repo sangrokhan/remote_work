@@ -35,6 +35,7 @@ class OntologyDiscovery:
         
         self.chunk_size = int(os.getenv("ONTOLOGY_CHUNK_SIZE", "4000"))
         self.chunk_overlap = int(os.getenv("ONTOLOGY_CHUNK_OVERLAP", "500"))
+        self.consolidation_interval = int(os.getenv("ONTOLOGY_CONSOLIDATION_INTERVAL", "10"))
         self.discovery_prompt = os.getenv(
             "ONTOLOGY_DISCOVERY_PROMPT",
             "Extract ontology from text:\n{text}\nJSON Output:"
@@ -96,7 +97,7 @@ Return STRICTLY a JSON object with:
         samples.append(text[-sample_size:])
         return samples
 
-    def discover(self, file_path: str, full_scan: bool = False) -> dict:
+    def discover(self, file_path: str, output_path: str = None, full_scan: bool = False) -> dict:
         """Analyzes a document to discover its underlying ontology."""
         logger.info(f"Analyzing {file_path} for ontology discovery...")
         
@@ -130,13 +131,24 @@ Return STRICTLY a JSON object with:
                     if json_match:
                         sample_ontology = json.loads(json_match.group(1))
                         self._merge_ontologies(aggregated_ontology, sample_ontology)
+                        
+                        # Save after each chunk
+                        if output_path:
+                            self.save_ontology(aggregated_ontology, output_path)
+                        
+                        # Consolidate every N chunks
+                        if (i + 1) % self.consolidation_interval == 0:
+                            logger.info(f"Consolidating ontology after {i+1} chunks...")
+                            aggregated_ontology = self._consolidate_ontology(aggregated_ontology)
+                            if output_path:
+                                self.save_ontology(aggregated_ontology, output_path)
                     else:
                         logger.warning(f"No JSON block found in chunk {i+1}. Enable --debug to see raw output.")
                 except Exception as e:
                     logger.warning(f"Failed to process chunk {i+1}: {e}")
 
             if full_scan:
-                logger.info("Consolidating full scan results...")
+                logger.info("Consolidating final full scan results...")
                 return self._consolidate_ontology(aggregated_ontology)
             
             return aggregated_ontology
@@ -201,7 +213,7 @@ def main():
         
     # Initialize with debug flag
     discovery = OntologyDiscovery(debug=args.debug)
-    result = discovery.discover(args.file, full_scan=args.full)
+    result = discovery.discover(args.file, output_path=args.output, full_scan=args.full)
     
     if result and (result.get('node_types') or result.get('relationship_types')):
         discovery.save_ontology(result, args.output)
