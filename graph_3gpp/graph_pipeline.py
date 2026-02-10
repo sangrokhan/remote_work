@@ -116,33 +116,48 @@ class GraphPipeline:
         self.driver.close()
 
     def chunk_document(self, file_path: str) -> List[Dict[str, Any]]:
-        """Reads a file and splits it into chunks, respecting document structure."""
+        """Reads a file and splits it into chunks, respecting document structure and size limits."""
         logger.info(f"Reading file: {file_path}")
         with open(file_path, 'r', encoding='utf-8') as f:
             text = f.read()
 
-        # Improved chunking strategy:
-        # For .md files, we use MarkdownNodeParser to respect headers and sections
+        # 1. Structural parsing (e.g., by Markdown headers)
         if file_path.lower().endswith(('.md', '.markdown')):
             from llama_index.core.node_parser import MarkdownNodeParser
-            parser = MarkdownNodeParser()
-            nodes = parser.get_nodes_from_documents([Document(text=text)])
+            structural_parser = MarkdownNodeParser()
+            initial_nodes = structural_parser.get_nodes_from_documents([Document(text=text)])
         else:
-            # Fallback to SentenceSplitter
-            nodes = self.chunker.get_nodes_from_documents([Document(text=text)])
+            initial_nodes = [Document(text=text)]
         
-        chunks = []
-        for node in nodes:
+        # 2. Recursive refinement: ensure each structural node fits in the chunk_size
+        final_chunks = []
+        for node in initial_nodes:
             content = node.get_content().strip()
-            if content:
-                chunks.append({
+            if not content:
+                continue
+            
+            # If the node is already small enough, keep it
+            if len(content) <= self.chunk_size:
+                final_chunks.append({
                     "chunk_id": str(uuid4()), 
                     "text": content,
                     "source": file_path
                 })
+            else:
+                # If too large, split it further using SentenceSplitter
+                # This ensures we don't break in the middle of a sentence
+                refined_nodes = self.chunker.get_nodes_from_documents([Document(text=content)])
+                for r_node in refined_nodes:
+                    r_content = r_node.get_content().strip()
+                    if r_content:
+                        final_chunks.append({
+                            "chunk_id": str(uuid4()), 
+                            "text": r_content,
+                            "source": file_path
+                        })
         
-        logger.info(f"Generated {len(chunks)} chunks.")
-        return chunks
+        logger.info(f"Generated {len(final_chunks)} chunks after structural and size-based splitting.")
+        return final_chunks
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         """Extracts and parses JSON from LLM response, with robust cleaning."""
