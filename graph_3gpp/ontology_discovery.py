@@ -2,6 +2,8 @@ import os
 import json
 import logging
 import re
+import argparse
+import sys
 from llama_index.llms.openai_like import OpenAILike
 from dotenv import load_dotenv
 
@@ -12,14 +14,27 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# LLM Configuration
+LLM_API_BASE = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "EMPTY")
+LLM_MODEL = os.getenv("LLM_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120.0"))
+
+# Discovery Configuration
+ONTOLOGY_DISCOVERY_PROMPT = os.getenv(
+    "ONTOLOGY_DISCOVERY_PROMPT",
+    "Extract ontology from text:\n{text}\nJSON Output:"
+)
+DEFAULT_ONTOLOGY_PATH = os.getenv("ONTOLOGY_PATH", "ontology.json")
+
 class OntologyDiscovery:
     def __init__(self):
         self.llm = OpenAILike(
-            api_base=os.getenv("LLM_API_BASE", "http://localhost:8000/v1"),
-            api_key=os.getenv("LLM_API_KEY", "EMPTY"),
-            model=os.getenv("LLM_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct"),
+            api_base=LLM_API_BASE,
+            api_key=LLM_API_KEY,
+            model=LLM_MODEL,
             is_chat_model=True,
-            timeout=120.0
+            timeout=LLM_TIMEOUT
         )
 
     def discover(self, file_path: str) -> dict:
@@ -30,31 +45,15 @@ class OntologyDiscovery:
             with open(file_path, 'r', encoding='utf-8') as f:
                 text = f.read()
             
-            # Use the first 4000 characters as a representative sample for schema induction
+            # Use a representative sample for schema induction
             sample_text = text[:4000]
 
-            prompt = f"""You are an expert in 3GPP standards and Knowledge Graph engineering. 
-Analyze the following technical specification and extract the core ONTOLOGY (schema).
-
-Instructions:
-1. Identify the key ENTITY TYPES (Nodes) mentioned (e.g., NetworkNode, ProtocolMessage, Timer, Procedure, UserState).
-2. Identify the VALID RELATIONSHIPS between these types (e.g., SENDS, TRIGGERED_BY, EXPIRES_DURING, TRANSITIONS_TO).
-3. Focus on creating a schema that supports ROOT CAUSE ANALYSIS and SYSTEM OPTIMIZATION.
-
-Return STRICTLY a JSON object with the following structure:
-{{
-  "node_types": [{{"label": "LabelName", "description": "Brief definition"}}],
-  "relationship_types": [{{"source": "SourceLabel", "type": "REL_TYPE", "target": "TargetLabel"}}]
-}}
-
-Source Text:
-{sample_text}
-
-JSON Output:"""
+            prompt_template = ONTOLOGY_DISCOVERY_PROMPT.replace("\\n", "\n")
+            prompt = prompt_template.format(text=sample_text)
 
             response = self.llm.complete(prompt)
             output_text = response.text.strip()
-            logger.info(f"Raw LLM Output:\n{output_text}")
+            logger.info(f"Raw LLM Output received.")
             
             # Extract JSON from potential markdown code blocks
             json_match = re.search(r"(\{.*\})", output_text, re.DOTALL)
@@ -70,23 +69,36 @@ JSON Output:"""
             logger.error(f"Ontology discovery failed: {e}")
             return {}
 
-    def save_ontology(self, ontology: dict, output_path: str = "ontology.json"):
+    def save_ontology(self, ontology: dict, output_path: str):
         """Saves the discovered ontology to a file."""
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(ontology, f, indent=2)
         logger.info(f"Ontology saved to {output_path}")
 
-if __name__ == "__main__":
-    discovery = OntologyDiscovery()
+def main():
+    parser = argparse.ArgumentParser(description="3GPP Ontology Discovery Tool")
+    parser.add_argument("file", help="Path to the document to analyze")
+    parser.add_argument("-o", "--output", help="Path to save the generated ontology", default=DEFAULT_ONTOLOGY_PATH)
     
-    # Use the sample file we created
-    target_file = "sample_3gpp.txt"
-    if os.path.exists(target_file):
-        result = discovery.discover(target_file)
-        if result:
-            discovery.save_ontology(result)
-            print(json.dumps(result, indent=2))
-        else:
-            print("Failed to discover ontology.")
+    if len(sys.argv) < 2:
+        parser.print_help()
+        sys.exit(1)
+        
+    args = parser.parse_args()
+    
+    if not os.path.exists(args.file):
+        logger.error(f"File not found: {args.file}")
+        sys.exit(1)
+        
+    discovery = OntologyDiscovery()
+    result = discovery.discover(args.file)
+    
+    if result:
+        discovery.save_ontology(result, args.output)
+        print(f"Successfully discovered and saved ontology to {args.output}")
     else:
-        print(f"File {target_file} not found. Please provide a valid document path.")
+        logger.error("Failed to discover ontology.")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
