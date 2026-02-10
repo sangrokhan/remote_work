@@ -99,7 +99,7 @@ Return STRICTLY a JSON object with:
         return samples
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
-        """Extracts and parses JSON from LLM response, with basic cleaning."""
+        """Extracts and parses JSON from LLM response, with robust cleaning."""
         import re
         # Find the first { and last }
         start = text.find('{')
@@ -109,9 +109,8 @@ Return STRICTLY a JSON object with:
         
         json_str = text[start:end+1]
         
-        # Basic cleaning to handle common LLM issues in technical docs
-        # 1. Handle common unescaped backslashes (e.g., in technical markers or paths)
-        # Only escape backslashes that are NOT part of a valid JSON escape sequence
+        # 1. Handle common unescaped backslashes
+        # Escape backslashes that are NOT part of a valid JSON escape sequence
         json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
         
         # 2. Try to fix missing commas between fields
@@ -120,12 +119,22 @@ Return STRICTLY a JSON object with:
         # Between brace/bracket and string: } "key" or ] "key"
         json_str = re.sub(r'([}\]])\s+(")', r'\1, \2', json_str)
         
+        # 3. Remove trailing commas (illegal in standard JSON)
+        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+        
         try:
             return json.loads(json_str)
         except json.JSONDecodeError as e:
-            logger.error(f"JSON Parsing Error: {e}")
-            llm_logger.debug(f"Failed JSON string: {json_str}")
-            return {}
+            # Final attempt: try to handle single quotes if they were used as markers
+            try:
+                # Naive replacement of single quotes around keys and values
+                fixed_json = re.sub(r"'\s*([^'\" ]+)\s*'\s*:", r'"\1":', json_str)
+                fixed_json = re.sub(r":\s*'\s*([^'\" ]+)\s*'", r': "\1"', fixed_json)
+                return json.loads(fixed_json)
+            except:
+                logger.error(f"JSON Parsing Error: {e}")
+                llm_logger.debug(f"Failed JSON string: {json_str}")
+                return {}
 
     def discover(self, file_path: str, output_path: str = None, full_scan: bool = False) -> dict:
         """Analyzes a document to discover its underlying ontology."""
