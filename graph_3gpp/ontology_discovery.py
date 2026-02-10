@@ -134,8 +134,8 @@ class OntologyDiscovery:
             llm_logger.debug(f"Failed JSON string: {json_str[:500]}...")
             return {}
 
-    def discover(self, file_path: str, output_path: str = None, full_scan: bool = False) -> dict:
-        """Analyzes a document to discover its underlying ontology."""
+    def discover(self, file_path: str, output_path: str = None, full_scan: bool = False, retry_count: int = 1) -> dict:
+        """Analyzes a document to discover its underlying ontology with self-correction."""
         logger.info(f"Analyzing {file_path} for ontology discovery...")
         
         try:
@@ -161,10 +161,19 @@ class OntologyDiscovery:
                     response = self.llm.complete(prompt)
                     output_text = response.text.strip()
                     
-                    # Debug log the raw output using the dedicated logger
+                    # Debug log the raw output
                     llm_logger.debug(f"--- Raw LLM Output (Chunk {i+1}) ---\n{output_text}\n---------------------------")
                     
+                    # caution: small model output_txt can make wrong formatted json.
                     sample_ontology = self._parse_json(output_text)
+                    
+                    # Self-correction logic
+                    if not sample_ontology and retry_count > 0:
+                        logger.warning(f"Initial discovery JSON parsing failed for chunk {i+1}. Attempting self-correction...")
+                        correction_prompt = f"The following JSON was invalid. Please fix the formatting and return ONLY the valid JSON object:\n\n{output_text}"
+                        retry_response = self.llm.complete(correction_prompt)
+                        sample_ontology = self._parse_json(retry_response.text.strip())
+
                     if sample_ontology:
                         self._merge_ontologies(aggregated_ontology, sample_ontology)
                         
