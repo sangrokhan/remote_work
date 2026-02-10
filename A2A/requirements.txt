@@ -15,3 +15,5 @@ pyarrow
 peft
 datasets
 scikit-learn
+pytest-playwright
+vllm

@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Configuration
+# Defaulting to local Gemma-2-2b-it.
 export MODEL_PATH=${MODEL_PATH:-"./models/gemma-2-2b-it"}
 export PYTHONUNBUFFERED=1
 
