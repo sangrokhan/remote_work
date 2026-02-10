@@ -83,6 +83,35 @@ class GraphPipeline:
         logger.info(f"Generated {len(chunks)} chunks.")
         return chunks
 
+    def _parse_json(self, text: str) -> Dict[str, Any]:
+        """Extracts and parses JSON from LLM response, with basic cleaning."""
+        import re
+        # Find the first { and last }
+        start = text.find('{')
+        end = text.rfind('}')
+        if start == -1 or end == -1 or end <= start:
+            return {}
+        
+        json_str = text[start:end+1]
+        
+        # Basic cleaning to handle common LLM issues in technical docs
+        # 1. Handle common unescaped backslashes (e.g., in technical markers or paths)
+        # Only escape backslashes that are NOT part of a valid JSON escape sequence
+        json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
+        
+        # 2. Try to fix missing commas between fields
+        # Between string and string: "val" "key"
+        json_str = re.sub(r'("(?:\\["\\/bfnrtu]|[^"\\])*")\s+(")', r'\1, \2', json_str)
+        # Between brace/bracket and string: } "key" or ] "key"
+        json_str = re.sub(r'([}\]])\s+(")', r'\1, \2', json_str)
+        
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON Parsing Error: {e}")
+            logger.debug(f"Failed JSON string: {json_str}")
+            return {}
+
     def extract_triples(self, chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Calls LLM to extract triples from text based on ontology."""
         text = chunk["text"]
@@ -94,14 +123,11 @@ class GraphPipeline:
             response = self.llm.complete(prompt)
             output_text = response.text.strip()
             
-            import re
-            json_match = re.search(r"(\{.*\})", output_text, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-            else:
-                json_str = output_text
+            data = self._parse_json(output_text)
+            if not data:
+                logger.error(f"Failed to extract valid JSON for chunk {chunk_id}.")
+                return []
 
-            data = json.loads(json_str)
             triples = data.get("triples", [])
             
             for triple in triples:
@@ -110,9 +136,6 @@ class GraphPipeline:
             logger.info(f"Extracted {len(triples)} triples from chunk {chunk_id[:8]}...")
             return triples
 
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse JSON from LLM response for chunk {chunk_id}.")
-            return []
         except Exception as e:
             logger.error(f"Error during triple extraction: {e}")
             return []
