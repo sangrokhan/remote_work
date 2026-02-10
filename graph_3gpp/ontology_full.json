@@ -1,0 +1,37 @@
+{
+  "node_types": [
+    {
+      "label": "UserEquipment",
+      "description": "The User Equipment (UE) is a device that connects to the network and performs communication."
+    },
+    {
+      "label": "ProtocolMessage",
+      "description": "A message that carries data between network entities."
+    },
+    {
+      "label": "NetworkNode",
+      "description": "A node in the network that can communicate with other nodes."
+    },
+    {
+      "label": "Timer",
+      "description": "A timer that triggers an event."
+    }
+  ],
+  "relationship_types": [
+    {
+      "source": "SENDS",
+      "type": "REL_TYPE",
+      "target": "NetworkNode"
+    },
+    {
+      "source": "TRIGGERS",
+      "type": "REL_TYPE",
+      "target": "NetworkNode"
+    },
+    {
+      "source": "TRANSITIONS_TO",
+      "type": "REL_TYPE",
+      "target": "UserState"
+    }
+  ]
+}
