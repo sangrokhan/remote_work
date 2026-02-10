@@ -1,18 +1,19 @@
-# Fix for JSON Property Quoting and Unterminated String Errors
+# Fix for Unquoted Keys and Comments in JSON
 
-This PR provides advanced JSON cleaning to resolve "expecting property name enclosed in double quotes" and "unterminated string" errors occurring during graph construction.
+This PR enhances the JSON parsing robustness to handle "expecting property name enclosed in double quotes" errors caused by unquoted keys or comments in the LLM output.
 
 ## Changes
 
-### 1. Advanced JSON "Healing" Logic
+### 1. Advanced JSON Cleaning Enhancements
 - Updated `_parse_json` in `GraphPipeline` and `OntologyDiscovery`.
-- **Newline Stripping**: Automatically replaces literal newlines within double-quoted strings with spaces. This directly fixes "unterminated string" errors caused by LLMs spreading a single string across multiple lines.
-- **Property Quoting Fix**: Specifically targets and converts single-quoted keys (e.g., `'id': 1`) to valid double-quoted JSON keys.
-- **Global Quoting Fallback**: Implements a last-resort recovery that attempts to swap all single quotes for double quotes if the parser explicitly flags a property quoting error.
+- **Unquoted Key Repair**: Added regex to detect and automatically quote unquoted property names (e.g., `{ head: "UE" }` -> `{ "head": "UE" }`).
+- **Comment Stripping**: Automatically removes Javascript-style line (`//`) and block (`/* */`) comments that LLMs sometimes include in JSON responses.
+- **Refined Quoting Logic**: Improved detection and conversion of single-quoted keys.
+- **Literal Newline Handling**: Continued support for stripping illegal newlines within strings.
 
-### 2. Maintained Robustness
-- Keeps previous improvements: `raw_decode` for "extra data" handling, backslash escaping, and missing comma insertion.
+### 2. Resilience
+- Maintains previous improvements including `raw_decode` for "extra data" isolation and backslash escaping.
 
 ## Impact
-- Resolves the most persistent JSON parsing failures reported during large-scale graph generation.
-- Increases system autonomy by allowing the pipeline to self-correct common structural LLM errors.
+- Resolves persistent parsing failures where the LLM produces technically invalid JSON that is still structurally readable.
+- Improves the success rate of the graph pipeline when using models prone to non-standard JSON formatting.
