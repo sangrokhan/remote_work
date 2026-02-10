@@ -146,36 +146,34 @@ class GraphPipeline:
         json_str = text[start:]
         
         # 1. Handle common LLM JSON formatting issues
-        # Remove unescaped newlines within strings (common cause of "unterminated string")
-        # This replaces newlines that are NOT preceded by a comma, brace, or bracket
-        # and are followed by more text within what looks like a JSON string.
-        # A simpler way is to replace all newlines with spaces within the JSON block
-        # except those between valid JSON tokens.
-        # For technical docs, we can usually safely replace newlines with spaces
-        # if they appear inside double quotes.
+        # Remove literal newlines within double-quoted strings
         def replace_newlines(match):
             return match.group(0).replace('\n', ' ').replace('\r', ' ')
         
         json_str = re.sub(r'"[^"]*"', replace_newlines, json_str, flags=re.DOTALL)
 
-        # 2. Basic cleaning
+        # 2. Strip comments (Javascript style // or /* */)
+        json_str = re.sub(r'//.*?\n|/\*.*?\*/', '', json_str, flags=re.DOTALL)
+
+        # 3. Basic cleaning
         # Escape backslashes that are NOT part of a valid JSON escape sequence
         json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
         
-        # 3. Try to fix missing commas between fields
-        # Between string and string: "val" "key"
+        # 4. Fix Quoting and Delimiters
+        # Fix "expecting property name enclosed in double quotes" (unquoted keys)
+        # { head: "UE" } -> { "head": "UE" }
+        json_str = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', json_str)
+        
+        # Fix single quotes for keys: 'property': value -> "property": value
+        json_str = re.sub(r"([{,]\s*)'([^'\" ]+)'\s*:", r'\1"\2":', json_str)
+
+        # Try to fix missing commas between fields
         json_str = re.sub(r'("(?:\\["\\/bfnrtu]|[^"\\])*")\s+(")', r'\1, \2', json_str)
-        # Between brace/bracket and string: } "key" or ] "key"
         json_str = re.sub(r'([}\]])\s+(")', r'\1, \2', json_str)
-        # Between number/bool and string: 123 "key" or true "key"
         json_str = re.sub(r'(\b\d+\b|true|false|null)\s+(")', r'\1, \2', json_str)
         
-        # 4. Remove trailing commas (illegal in standard JSON)
+        # 5. Remove trailing commas (illegal in standard JSON)
         json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
-        
-        # 5. Fix "expecting property name enclosed in double quotes"
-        # Often caused by single quotes: 'property': value
-        json_str = re.sub(r"'\s*([^'\" ]+)\s*'\s*:", r'"\1":', json_str)
 
         try:
             # Use raw_decode to handle "extra data" after the JSON object
@@ -183,12 +181,11 @@ class GraphPipeline:
             obj, index = decoder.raw_decode(json_str)
             return obj
         except json.JSONDecodeError as e:
-            # Final desperate attempt: replace all single quotes with double quotes
+            # Final desperate attempt: replace remaining single quotes with double quotes
             # ONLY if the error seems related to quoting
             if "expecting property name" in str(e) or "enclosed in double quotes" in str(e):
                 try:
                     # Naive replacement of single quotes with double quotes for the whole string
-                    # This can break things if values contain single quotes, but it's a fallback
                     fallback_json = json_str.replace("'", '"')
                     obj, index = decoder.raw_decode(fallback_json)
                     return obj
