@@ -1,139 +1,115 @@
 {
-  "node_types": [
+  "nodes": [
     {
-      "label": "NetworkNode",
-      "description": "Represents a physical or logical entity within the network, such as a cell site, base station, or user equipment."
+      "label": "3GPP",
+      "base_type": "NetworkNode",
+      "properties": {
+        "name": "The name of the organization",
+        "members": "The organizations that are members of the 3GPP"
+      }
     },
     {
-      "label": "ProtocolMessage",
-      "description": "A message exchanged between network entities, carrying information about network operations."
+      "label": "WorkingGroup",
+      "base_type": "NetworkNode",
+      "properties": {
+        "name": "The name of the working group",
+        "focus": "The technical area that the working group focuses on"
+      }
     },
     {
-      "label": "Timer",
-      "description": "A time-based event that triggers a specific action or state transition."
+      "label": "TSG",
+      "base_type": "NetworkNode",
+      "properties": {
+        "name": "The name of the technical specification group",
+        "focus": "The technical area that the technical specification group focuses on"
+      }
     },
     {
-      "label": "Procedure",
-      "description": "A sequence of steps or actions that define a specific network operation."
+      "label": "PCG",
+      "base_type": "NetworkNode",
+      "properties": {
+        "role": "The role of the group in the 3GPP process"
+      }
     },
     {
-      "label": "UserState",
-      "description": "The current state of a user or device within the network."
+      "label": "MCC",
+      "base_type": "NetworkNode",
+      "properties": {
+        "role": "The role of the group in the 3GPP process"
+      }
     },
     {
-      "label": "MessageSegmentContainer",
-      "description": "Container holding the segments of a protocol message."
+      "label": "UE",
+      "base_type": "UserState",
+      "properties": {
+        "id": "Unique identifier for the UE",
+        "location": "The location of the UE",
+        "state": "The current state of the UE"
+      }
     },
     {
-      "label": "RRCReconfiguration",
-      "description": "Message for RRC reconfiguration."
+      "label": "gNB",
+      "base_type": "NetworkNode",
+      "properties": {
+        "name": "The name of the gNB",
+        "location": "The location of the gNB",
+        "role": "The role of the gNB in the network"
+      }
     },
     {
-      "label": "RRCResume",
-      "description": "Message for RRC resume."
+      "label": "AMF",
+      "base_type": "NetworkNode",
+      "properties": {
+        "name": "The name of the AMF",
+        "location": "The location of the AMF",
+        "role": "The role of the AMF in the network"
+      }
     },
     {
-      "label": "ConfiguredGrantConfigIndexMAC",
-      "description": "Information element used to indicate the unique Configured Grant configurations index per MAC entity."
-    },
-    {
-      "label": "AIMLParameters",
-      "description": "Information element containing capabilities for AI/ML-based beam management and CSI prediction."
-    },
-    {
-      "label": "ENUMERATED",
-      "description": "Enumeration type representing a set of values."
-    },
-    {
-      "label": "Supported",
-      "description": "Indicates whether a capability is supported."
-    },
-    {
-      "label": "BWPConfiguration",
-      "description": "Configuration for BWP (Base Station Working Point)"
-    },
-    {
-      "label": "ServingCellConfig",
-      "description": "Configuration for the serving cell"
-    },
-    {
-      "label": "BWP",
-      "description": "Base Station Working Point"
-    },
-    {
-      "label": "RRC-configured BWP",
-      "description": "BWP configured by RRC"
-    },
-    {
-      "label": "Dedicated Configuration",
-      "description": "Dedicated configuration for BWP"
+      "label": "UPF",
+      "base_type": "NetworkNode",
+      "properties": {
+        "name": "The name of the UPF",
+        "location": "The location of the UPF",
+        "role": "The role of the UPF in the network"
+      }
     }
   ],
-  "relationship_types": [
+  "relations": [
     {
-      "source": "NetworkNode",
-      "type": "SENDS",
-      "target": "ProtocolMessage"
+      "source": "3GPP",
+      "target": "WorkingGroup",
+      "relation": "has_working_group"
     },
     {
-      "source": "ProtocolMessage",
-      "type": "TRIGGERED_BY",
-      "target": "Timer"
+      "source": "3GPP",
+      "target": "TSG",
+      "relation": "has_technical_specification_group"
     },
     {
-      "source": "ProtocolMessage",
-      "type": "TRANSITIONS_TO",
-      "target": "Procedure"
+      "source": "3GPP",
+      "target": "PCG",
+      "relation": "has_process_group"
     },
     {
-      "source": "Procedure",
-      "type": "TRANSITIONS_TO",
-      "target": "UserState"
+      "source": "3GPP",
+      "target": "MCC",
+      "relation": "has_process_group"
     },
     {
-      "source": "ProtocolMessage",
-      "type": "RECEIVES",
-      "target": "NetworkNode"
+      "source": "UE",
+      "target": "gNB",
+      "relation": "connects_to"
     },
     {
-      "source": "ProtocolMessage",
-      "type": "TRANSITIONS_TO",
-      "target": "MessageSegmentContainer"
+      "source": "UE",
+      "target": "AMF",
+      "relation": "connects_to"
     },
     {
-      "source": "MessageSegmentContainer",
-      "type": "CONTAINS",
-      "target": "ProtocolMessage"
-    },
-    {
-      "source": "ProtocolMessage",
-      "type": "EXPIRES_DURING",
-      "target": "Timer"
-    },
-    {
-      "source": "AIMLParameters",
-      "type": "HAS_VALUE",
-      "target": "ENUMERATED"
-    },
-    {
-      "source": "BWPConfiguration",
-      "type": "CONFIGURES",
-      "target": "ServingCellConfig"
-    },
-    {
-      "source": "ServingCellConfig",
-      "type": "CONTAINS",
-      "target": "BWP"
-    },
-    {
-      "source": "BWP",
-      "type": "HAS_CONFIGURATIONS",
-      "target": "DedicatedConfiguration"
-    },
-    {
-      "source": "DedicatedConfiguration",
-      "type": "REQUIRES",
-      "target": "BWP"
+      "source": "UE",
+      "target": "UPF",
+      "relation": "connects_to"
     }
   ]
 }
