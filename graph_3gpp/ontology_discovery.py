@@ -74,7 +74,15 @@ class OntologyDiscovery:
 
     def _consolidate_ontology(self, raw_ontology: dict) -> dict:
         raw_nodes = list(set([n.get('label') for n in raw_ontology.get('node_types', [])]))[:200]
-        raw_rels = list(set([f"{r.get('source')} -> {r.get('type')} -> {r.get('target')}" for r in raw_ontology.get('relationship_types', [])]))[:200]
+        
+        # Extract relationship types (verbs) only
+        raw_rels = set()
+        for r in raw_ontology.get('relationship_types', []):
+            if isinstance(r, dict):
+                raw_rels.add(r.get('type'))
+            elif isinstance(r, str):
+                raw_rels.add(r)
+        raw_rels = list(raw_rels)[:100]
 
         prompt = self.consolidation_prompt.format(
             nodes=json.dumps(raw_nodes, indent=2), 
@@ -98,13 +106,16 @@ class OntologyDiscovery:
                     if n.get("label") in valid_labels
                 ]
             
-            # 2. Clean relationship_types (ensure source/target are valid)
+            # 2. Clean relationship_types (now just a list of strings)
             if "relationship_types" in consolidated:
-                clean_rels = []
-                for r in consolidated["relationship_types"]:
-                    if r.get("source") in valid_labels and r.get("target") in valid_labels:
-                        clean_rels.append(r)
-                consolidated["relationship_types"] = clean_rels
+                if isinstance(consolidated["relationship_types"], list):
+                    clean_rels = []
+                    for r in consolidated["relationship_types"]:
+                        if isinstance(r, dict) and "type" in r:
+                            clean_rels.append(r["type"])
+                        elif isinstance(r, str):
+                            clean_rels.append(r)
+                    consolidated["relationship_types"] = list(set(clean_rels))
                 
             return consolidated
         except Exception as e:
@@ -114,37 +125,35 @@ class OntologyDiscovery:
     def _merge_ontologies(self, base: dict, new: dict):
         valid_labels = self.valid_labels
         
-        existing_node_labels = {n['label'].lower(): n for n in base['node_types']}
+        # 1. Merge Nodes and their property definitions
+        existing_nodes = {n['label'].lower(): i for i, n in enumerate(base['node_types'])}
         for node in new.get('node_types', []):
             label = node.get('label')
-            if label in valid_labels and label.lower() not in existing_node_labels:
-                base['node_types'].append(node)
-                existing_node_labels[label.lower()] = node
-        
-        # Dictionary to track existing relationships and their indices for easy updating
-        existing_rels = {}
-        for i, r in enumerate(base['relationship_types']):
-            key = (r['source'].lower(), r['type'].lower(), r['target'].lower())
-            existing_rels[key] = i
-
-        for rel in new.get('relationship_types', []):
-            if rel.get('source') in valid_labels and rel.get('target') in valid_labels:
-                rel_key = (rel['source'].lower(), rel['type'].lower(), rel['target'].lower())
-                
-                if rel_key in existing_rels:
-                    # Merge allowed_properties if they exist
-                    idx = existing_rels[rel_key]
-                    base_rel = base['relationship_types'][idx]
-                    
-                    new_props = rel.get('allowed_properties', [])
-                    if new_props:
-                        base_props = base_rel.get('allowed_properties', [])
-                        # Merge sets and convert back to list
-                        merged_props = list(set(base_props) | set(new_props))
-                        base_rel['allowed_properties'] = merged_props
+            if label in valid_labels:
+                low_label = label.lower()
+                if low_label in existing_nodes:
+                    idx = existing_nodes[low_label]
+                    # Merge properties dictionary
+                    base_props = base['node_types'][idx].get('properties', {})
+                    new_props = node.get('properties', {})
+                    if isinstance(base_props, dict) and isinstance(new_props, dict):
+                        base_props.update(new_props)
+                        base['node_types'][idx]['properties'] = base_props
                 else:
-                    base['relationship_types'].append(rel)
-                    existing_rels[rel_key] = len(base['relationship_types']) - 1
+                    base['node_types'].append(node)
+                    existing_nodes[low_label] = len(base['node_types']) - 1
+        
+        # 2. Merge Relationship Types (simple list of strings)
+        if "relationship_types" not in base:
+            base["relationship_types"] = []
+            
+        base_rels = set(base["relationship_types"])
+        for rel in new.get('relationship_types', []):
+            rel_type = rel["type"] if isinstance(rel, dict) else rel
+            if rel_type:
+                base_rels.add(rel_type)
+        
+        base["relationship_types"] = list(base_rels)
 
     def save_ontology(self, ontology: dict, output_path: str):
         with open(output_path, 'w', encoding='utf-8') as f:

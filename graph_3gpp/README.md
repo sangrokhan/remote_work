@@ -41,9 +41,12 @@ Run the pipeline to extract and store knowledge triples:
 ```bash
 python graph_pipeline.py data/your_spec.md
 ```
-- **Custom Schema**: You can override the default ontology by providing separate files:
+- **Custom Schema & Knowledge**: You can override the default ontology and provide domain knowledge:
   ```bash
-  python graph_pipeline.py data/your_spec.md --node-types node_types.json --relation-types relation_types.json
+  python graph_pipeline.py data/your_spec.md \
+    --node-types node_types.json \
+    --relation-types relation_types.json \
+    --knowledge knowledge.txt
   ```
 
 The script will:

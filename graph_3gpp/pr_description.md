@@ -1,20 +1,20 @@
-# Separate Ontology Files and Schema Enforcement
+# Restored Relation Types and Generalized Schema
 
-This PR separates node and relation types into distinct files and adds CLI support for enforcing specific schemas during extraction and discovery.
+This PR restores the 12 previously defined relation types and removes the strict source/target node constraints for relationships, moving to a more flexible verb-based extraction.
 
 ## Changes
 
-### 1. Separate Ontology Files
-- Created `node_types.json` and `relation_types.json` from the original `ontology.json`.
-- Updated `GraphPipeline` to support loading these separate files via the constructor and new CLI arguments.
+### 1. Restored Relation Types
+- Restored `SENDS`, `RECEIVES`, `TRIGGERED_BY`, `TRANSITIONS_TO`, `CONTAINS`, `EXPIRES_DURING`, `HAS_VALUE`, `CONFIGURES`, `HAS_CONFIGURATIONS`, `REQUIRES`, `STARTS`, and `STOPS` from commit history.
+- Simplified `relation_types.json` to a flat list of allowed relationship verbs.
 
-### 2. CLI Argument Enhancements
-- Added `--node-types` and `--relation-types` to `graph_pipeline.py`.
-- Added `--schema` to `ontology_discovery.py` to allow enforcing a set of valid node labels during the discovery process.
+### 2. Generalized Extraction Logic
+- Updated `GraphPipeline` to treat relationship types as a global list of allowed strings rather than node-dependent triples.
+- Modified `OntologyDiscovery` to consolidate and merge relationship types as unique strings.
 
-### 3. Documentation
-- Updated `README.md` with instructions on how to use the new CLI arguments for custom schema enforcement.
+### 3. Knowledge Base Update
+- Refined `knowledge.txt` to provide general semantic rules for using these restored verbs without limiting them to specific node-type pairs.
 
 ## Impact
-- Provides more granular control over the ontology used for triple extraction.
-- Improves consistency in ontology discovery by allowing users to pre-define valid entity categories.
+- Increases extraction flexibility by allowing the LLM to use valid relationship verbs across any relevant node types.
+- Ensures all previously identified domain-specific relationships are available for use.
