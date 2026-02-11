@@ -228,12 +228,29 @@ class OntologyDiscovery:
                 base['node_types'].append(node)
                 existing_node_labels[node['label'].lower()] = node
         
-        existing_rel_keys = {(r['source'].lower(), r['type'].lower(), r['target'].lower()) for r in base['relationship_types']}
+        # Dictionary to track existing relationships and their indices for easy updating
+        existing_rels = {}
+        for i, r in enumerate(base['relationship_types']):
+            key = (r['source'].lower(), r['type'].lower(), r['target'].lower())
+            existing_rels[key] = i
+
         for rel in new.get('relationship_types', []):
             rel_key = (rel['source'].lower(), rel['type'].lower(), rel['target'].lower())
-            if rel_key not in existing_rel_keys:
+            
+            if rel_key in existing_rels:
+                # Merge allowed_properties if they exist
+                idx = existing_rels[rel_key]
+                base_rel = base['relationship_types'][idx]
+                
+                new_props = rel.get('allowed_properties', [])
+                if new_props:
+                    base_props = base_rel.get('allowed_properties', [])
+                    # Merge sets and convert back to list
+                    merged_props = list(set(base_props) | set(new_props))
+                    base_rel['allowed_properties'] = merged_props
+            else:
                 base['relationship_types'].append(rel)
-                existing_rel_keys.add(rel_key)
+                existing_rels[rel_key] = len(base['relationship_types']) - 1
 
     def save_ontology(self, ontology: dict, output_path: str):
         with open(output_path, 'w', encoding='utf-8') as f:
