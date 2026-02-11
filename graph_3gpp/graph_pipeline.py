@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class GraphPipeline:
-    def __init__(self):
+    def __init__(self, node_types_path=None, rel_types_path=None):
         # Load configurations from environment
         self.neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
         self.neo4j_user = os.getenv("NEO4J_USER", "neo4j")
@@ -34,6 +34,8 @@ class GraphPipeline:
         self.chunk_size = int(os.getenv("CHUNK_SIZE", 256))
         self.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", 20))
         self.ontology_path = os.getenv("ONTOLOGY_PATH", "ontology.json")
+        self.node_types_path = node_types_path
+        self.rel_types_path = rel_types_path
         self.extraction_prompt = os.getenv("TRIPLE_EXTRACTION_PROMPT", "").replace("\\n", "\n")
 
         # Initialize components
@@ -50,14 +52,44 @@ class GraphPipeline:
         )
 
     def _load_ontology(self) -> Dict[str, Any]:
+        ontology = {}
+        
+        # Priority 1: Separate files passed via CLI
+        if self.node_types_path and os.path.exists(self.node_types_path):
+            try:
+                with open(self.node_types_path, 'r') as f:
+                    ontology["node_types"] = json.load(f)
+                logger.info(f"Loaded node types from {self.node_types_path}")
+            except Exception as e:
+                logger.error(f"Failed to load node types from {self.node_types_path}: {e}")
+
+        if self.rel_types_path and os.path.exists(self.rel_types_path):
+            try:
+                with open(self.rel_types_path, 'r') as f:
+                    ontology["relationship_types"] = json.load(f)
+                logger.info(f"Loaded relationship types from {self.rel_types_path}")
+            except Exception as e:
+                logger.error(f"Failed to load relationship types from {self.rel_types_path}: {e}")
+
+        if "node_types" in ontology and "relationship_types" in ontology:
+            return ontology
+
+        # Priority 2: Single ontology JSON file
         if os.path.exists(self.ontology_path):
             try:
                 with open(self.ontology_path, 'r') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    # Use them if they weren't already loaded from separate files
+                    if "node_types" not in ontology:
+                        ontology["node_types"] = data.get("node_types", [])
+                    if "relationship_types" not in ontology:
+                        ontology["relationship_types"] = data.get("relationship_types", [])
+                    return ontology
             except Exception as e:
                 logger.error(f"Failed to load ontology JSON: {e}")
-        logger.warning(f"Ontology file {self.ontology_path} not found or invalid. Using empty schema.")
-        return {}
+        
+        logger.warning(f"Ontology file {self.ontology_path} not found or invalid. Using empty or partial schema.")
+        return ontology
 
     def _get_relevant_ontology_str(self, text: str) -> str:
         """Filters the ontology to only include elements relevant to the text chunk."""
@@ -308,6 +340,8 @@ class GraphPipeline:
 def main():
     parser = argparse.ArgumentParser(description="3GPP Graph Pipeline")
     parser.add_argument("file", help="Path to the document to process")
+    parser.add_argument("--node-types", help="Path to JSON file containing allowed node types")
+    parser.add_argument("--relation-types", help="Path to JSON file containing allowed relationship types")
     
     if len(sys.argv) < 2:
         parser.print_help()
@@ -319,7 +353,7 @@ def main():
         logger.error(f"File not found: {args.file}")
         sys.exit(1)
         
-    pipeline = GraphPipeline()
+    pipeline = GraphPipeline(node_types_path=args.node_types, rel_types_path=args.relation_types)
     pipeline.run(args.file)
 
 if __name__ == "__main__":
