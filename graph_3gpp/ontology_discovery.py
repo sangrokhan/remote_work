@@ -4,7 +4,7 @@ import logging
 import re
 import argparse
 import sys
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Any
 from llama_index.llms.openai_like import OpenAILike
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core import Document

@@ -278,24 +278,21 @@ class GraphPipeline:
                 if not isinstance(edge_props, dict):
                     edge_props = {"info": str(edge_props)}
                 
+                # Clean property keys for Neo4j compatibility
+                cleaned_props = {}
+                for k, v in edge_props.items():
+                    clean_k = "".join(c for c in str(k) if c.isalnum() or c == '_')
+                    if clean_k:
+                        cleaned_props[clean_k] = v
+                
                 # Combine with chunk_id
-                props = {**edge_props, "chunk_id": triple['chunk_id']}
-                
-                # Construct property assignment clause
-                # We use a parameterized query for safety
-                prop_assignments = []
-                for key in props.keys():
-                    # Clean key for Cypher compatibility (simple alphanumeric)
-                    clean_key = "".join(c for c in key if c.isalnum() or c == '_')
-                    prop_assignments.append(f"r.`{clean_key}` = $props.`{key}`")
-                
-                set_clause = "SET " + ", ".join(prop_assignments)
+                props = {**cleaned_props, "chunk_id": triple['chunk_id']}
                 
                 dynamic_query = (
                     f"MERGE (h:`{h_label}` {{name: $head}}) "
                     f"MERGE (t:`{t_label}` {{name: $tail}}) "
                     f"MERGE (h)-[r:`{rel_type}`]->(t) "
-                    f"{set_clause}"
+                    f"SET r += $props"
                 )
                 
                 try:
