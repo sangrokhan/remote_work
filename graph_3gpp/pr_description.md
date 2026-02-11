@@ -1,24 +1,20 @@
-# LLM Self-Correction and Structural Chunking
+# Separate Ontology Files and Schema Enforcement
 
-This PR implements an LLM feedback loop for JSON parsing errors and enhances document chunking to respect logical boundaries (sentences and headers).
+This PR separates node and relation types into distinct files and adds CLI support for enforcing specific schemas during extraction and discovery.
 
 ## Changes
 
-### 1. LLM Self-Correction (Retry Mechanism)
-- Added a 1-time automatic retry logic in `GraphPipeline.extract_triples` and `OntologyDiscovery.discover`.
-- If the initial JSON parsing fails, the pipeline now sends the malformed text back to the LLM with a correction prompt, allowing the model to "fix itself."
-- Added caution notes regarding small model formatting issues.
+### 1. Separate Ontology Files
+- Created `node_types.json` and `relation_types.json` from the original `ontology.json`.
+- Updated `GraphPipeline` to support loading these separate files via the constructor and new CLI arguments.
 
-### 2. Structural Document Chunking
-- Updated `GraphPipeline.chunk_document` to use `MarkdownNodeParser` for `.md` files.
-- This ensures chunks are split at logical headers and sections rather than arbitrary character limits, preventing mid-sentence cuts.
-- Defaults to sentence-level splitting for other file types to maintain data integrity.
+### 2. CLI Argument Enhancements
+- Added `--node-types` and `--relation-types` to `graph_pipeline.py`.
+- Added `--schema` to `ontology_discovery.py` to allow enforcing a set of valid node labels during the discovery process.
 
-### 3. Advanced JSON Repair
-- Added regex to fix **unquoted keys** (e.g., `{ key: "val" }`), addressing "expecting property name" errors.
-- Added **Javascript comment stripping** (`//` and `/* */`) to handle models that include non-JSON text in their blocks.
-- Improved newline-in-string handling to prevent "unterminated string" errors.
+### 3. Documentation
+- Updated `README.md` with instructions on how to use the new CLI arguments for custom schema enforcement.
 
 ## Impact
-- Significantly higher success rate when using smaller models (e.g., 7B/8B params) that struggle with strict JSON formatting.
-- Better data extraction quality by ensuring text chunks contain complete logical context.
+- Provides more granular control over the ontology used for triple extraction.
+- Improves consistency in ontology discovery by allowing users to pre-define valid entity categories.

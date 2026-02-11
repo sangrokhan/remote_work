@@ -28,11 +28,23 @@ This project provides a pipeline to chunk documentation, extract knowledge tripl
 
 ## Usage
 
-Place your text files in the `data/` directory and run the pipeline:
-
+### 1. Ontology Discovery (Optional)
+If you don't have a fixed schema, you can discover one from a document:
 ```bash
-python graph_pipeline.py
+python ontology_discovery.py data/your_spec.md -o ontology.json
 ```
+- Use `--schema schema.json` to enforce specific node labels during discovery.
+- Use `--full` for a comprehensive scan.
+
+### 2. Triple Extraction
+Run the pipeline to extract and store knowledge triples:
+```bash
+python graph_pipeline.py data/your_spec.md
+```
+- **Custom Schema**: You can override the default ontology by providing separate files:
+  ```bash
+  python graph_pipeline.py data/your_spec.md --node-types node_types.json --relation-types relation_types.json
+  ```
 
 The script will:
 1.  Read the document from `data/sample.txt`.

@@ -2,30 +2,108 @@
   "node_types": [
     {
       "label": "NetworkNode",
-      "description": "Represents a node in the network, such as a gNB or UE."
+      "description": "Represents a physical or logical entity within the network, such as a cell site, base station, or user equipment."
     },
     {
       "label": "ProtocolMessage",
-      "description": "Represents a message exchanged between network nodes."
+      "description": "A message exchanged between network entities, carrying information about network operations."
     },
     {
       "label": "Timer",
-      "description": "Represents a time-based event or process."
+      "description": "A time-based event that triggers a specific action or state transition."
     },
     {
       "label": "Procedure",
-      "description": "Represents a sequence of steps or actions."
+      "description": "A sequence of steps or actions that define a specific network operation."
     },
     {
       "label": "UserState",
-      "description": "Represents the current state of a user, such as RRC_IDLE or RRC_INACTIVE."
+      "description": "The current state of a user or device within the network."
+    },
+    {
+      "label": "MessageSegmentContainer",
+      "description": "Container holding the segments of a protocol message."
+    },
+    {
+      "label": "RRCReconfiguration",
+      "description": "Message for RRC reconfiguration."
+    },
+    {
+      "label": "RRCResume",
+      "description": "Message for RRC resume."
+    },
+    {
+      "label": "ConfiguredGrantConfigIndexMAC",
+      "description": "Information element used to indicate the unique Configured Grant configurations index per MAC entity."
+    },
+    {
+      "label": "AIMLParameters",
+      "description": "Information element containing capabilities for AI/ML-based beam management and CSI prediction."
+    },
+    {
+      "label": "ENUMERATED",
+      "description": "Enumeration type representing a set of values."
+    },
+    {
+      "label": "Supported",
+      "description": "Indicates whether a capability is supported."
+    },
+    {
+      "label": "BWPConfiguration",
+      "description": "Configuration for BWP (Base Station Working Point)"
+    },
+    {
+      "label": "ServingCellConfig",
+      "description": "Configuration for the serving cell"
+    },
+    {
+      "label": "BWP",
+      "description": "Base Station Working Point"
+    },
+    {
+      "label": "RRC-configured BWP",
+      "description": "BWP configured by RRC"
+    },
+    {
+      "label": "Dedicated Configuration",
+      "description": "Dedicated configuration for BWP"
     }
   ],
   "relationship_types": [
     {
-      "source": "ProtocolMessage",
+      "source": "NetworkNode",
       "type": "SENDS",
+      "target": "ProtocolMessage"
+    },
+    {
+      "source": "ProtocolMessage",
+      "type": "TRIGGERED_BY",
+      "target": "Timer"
+    },
+    {
+      "source": "ProtocolMessage",
+      "type": "TRANSITIONS_TO",
+      "target": "Procedure"
+    },
+    {
+      "source": "Procedure",
+      "type": "TRANSITIONS_TO",
+      "target": "UserState"
+    },
+    {
+      "source": "ProtocolMessage",
+      "type": "RECEIVES",
       "target": "NetworkNode"
+    },
+    {
+      "source": "ProtocolMessage",
+      "type": "TRANSITIONS_TO",
+      "target": "MessageSegmentContainer"
+    },
+    {
+      "source": "MessageSegmentContainer",
+      "type": "CONTAINS",
+      "target": "ProtocolMessage"
     },
     {
       "source": "ProtocolMessage",
@@ -33,19 +111,29 @@
       "target": "Timer"
     },
     {
-      "source": "Timer",
-      "type": "TRIGGERS",
-      "target": "Procedure"
+      "source": "AIMLParameters",
+      "type": "HAS_VALUE",
+      "target": "ENUMERATED"
     },
     {
-      "source": "Procedure",
-      "type": "TRANSITIONS_TO",
-      "target": "NetworkNode"
+      "source": "BWPConfiguration",
+      "type": "CONFIGURES",
+      "target": "ServingCellConfig"
     },
     {
-      "source": "NetworkNode",
-      "type": "SENDS",
-      "target": "ProtocolMessage"
+      "source": "ServingCellConfig",
+      "type": "CONTAINS",
+      "target": "BWP"
+    },
+    {
+      "source": "BWP",
+      "type": "HAS_CONFIGURATIONS",
+      "target": "DedicatedConfiguration"
+    },
+    {
+      "source": "DedicatedConfiguration",
+      "type": "REQUIRES",
+      "target": "BWP"
     }
   ]
 }

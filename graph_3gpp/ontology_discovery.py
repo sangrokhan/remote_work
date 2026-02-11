@@ -20,8 +20,9 @@ logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("llm_output")
 
 class OntologyDiscovery:
-    def __init__(self, debug: bool = False):
+    def __init__(self, debug: bool = False, schema_path: str = None):
         self.debug = debug
+        self.schema_path = schema_path
         if self.debug:
             llm_logger.setLevel(logging.DEBUG)
         else:
@@ -48,157 +49,28 @@ class OntologyDiscovery:
             timeout=self.timeout
         )
         self.chunker = SentenceSplitter(chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap)
+        self.valid_labels = self._load_valid_labels()
 
-    def _get_samples(self, text: str, file_path: str, sample_size: int = 3000, max_samples: int = 5) -> List[str]:
-        """Extracts samples from text. If MD, uses headers; otherwise uses spatial sampling."""
-        if file_path.lower().endswith(('.md', '.markdown')):
-            logger.info("Markdown detected. Sampling by headers...")
-            sections = re.split(r'\n(?=#+ )', text)
-            if len(sections) > 1:
-                valid_sections = [s for s in sections if len(s.strip()) > 50]
-                if len(valid_sections) > max_samples:
-                    indices = [int(i * (len(valid_sections) - 1) / (max_samples - 1)) for i in range(max_samples)]
-                    return [valid_sections[i][:sample_size] for i in indices]
-                return [s[:sample_size] for s in valid_sections]
-
-        if len(text) <= sample_size * 2:
-            return [text]
-        
-        samples = []
-        samples.append(text[:sample_size])
-        if max_samples > 2:
-            for i in range(1, max_samples - 1):
-                pos = int(len(text) * (i / (max_samples - 1)))
-                samples.append(text[pos - (sample_size // 2) : pos + (sample_size // 2)])
-        samples.append(text[-sample_size:])
-        return samples
-
-    def _parse_json(self, text: str) -> Dict[str, Any]:
-        """Extracts and parses JSON from LLM response, with robust cleaning."""
-        import re
-        # Find the first {
-        start = text.find('{')
-        if start == -1:
-            return {}
-        
-        json_str = text[start:]
-        
-        # 1. Handle common LLM JSON formatting issues
-        # Remove literal newlines within double-quoted strings
-        def replace_newlines(match):
-            return match.group(0).replace('\n', ' ').replace('\r', ' ')
-        
-        json_str = re.sub(r'"[^"]*"', replace_newlines, json_str, flags=re.DOTALL)
-
-        # 2. Strip comments (Javascript style // or /* */)
-        json_str = re.sub(r'//.*?\n|/\*.*?\*/', '', json_str, flags=re.DOTALL)
-
-        # 3. Basic cleaning
-        # Escape backslashes that are NOT part of a valid JSON escape sequence
-        json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
-        
-        # 4. Fix Quoting and Delimiters
-        # Fix "expecting property name enclosed in double quotes" (unquoted keys)
-        # { head: "UE" } -> { "head": "UE" }
-        json_str = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', json_str)
-        
-        # Fix single quotes for keys: 'property': value -> "property": value
-        json_str = re.sub(r"([{,]\s*)'([^'\" ]+)'\s*:", r'\1"\2":', json_str)
-
-        # Try to fix missing commas between fields
-        json_str = re.sub(r'("(?:\\["\\/bfnrtu]|[^"\\])*")\s+(")', r'\1, \2', json_str)
-        json_str = re.sub(r'([}\]])\s+(")', r'\1, \2', json_str)
-        json_str = re.sub(r'(\b\d+\b|true|false|null)\s+(")', r'\1, \2', json_str)
-        
-        # 5. Remove trailing commas (illegal in standard JSON)
-        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
-
-        try:
-            # Use raw_decode to handle "extra data" after the JSON object
-            decoder = json.JSONDecoder()
-            obj, index = decoder.raw_decode(json_str)
-            return obj
-        except json.JSONDecodeError as e:
-            # Final desperate attempt: replace remaining single quotes with double quotes
-            # ONLY if the error seems related to quoting
-            if "expecting property name" in str(e) or "enclosed in double quotes" in str(e):
-                try:
-                    # Naive replacement of single quotes with double quotes for the whole string
-                    fallback_json = json_str.replace("'", '"')
-                    obj, index = decoder.raw_decode(fallback_json)
-                    return obj
-                except:
-                    pass
-            
-            logger.error(f"JSON Parsing Error: {e}")
-            llm_logger.debug(f"Failed JSON string: {json_str[:500]}...")
-            return {}
-
-    def discover(self, file_path: str, output_path: str = None, full_scan: bool = False, retry_count: int = 1) -> dict:
-        """Analyzes a document to discover its underlying ontology with self-correction."""
-        logger.info(f"Analyzing {file_path} for ontology discovery...")
-        
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                text = f.read()
-            
-            if full_scan:
-                logger.info("Performing FULL SCAN of the document. This may take time...")
-                doc = Document(text=text)
-                chunks = self.chunker.get_nodes_from_documents([doc])
-                samples = [chunk.get_content() for chunk in chunks]
-            else:
-                logger.info("Performing SAMPLE-BASED discovery.")
-                samples = self._get_samples(text, file_path)
-
-            aggregated_ontology = {"node_types": [], "relationship_types": []}
-
-            for i, sample in enumerate(samples):
-                logger.info(f"Processing chunk {i+1}/{len(samples)}...")
-                prompt = self.discovery_prompt.format(text=sample)
-                
-                try:
-                    response = self.llm.complete(prompt)
-                    output_text = response.text.strip()
-                    
-                    # Debug log the raw output
-                    llm_logger.debug(f"--- Raw LLM Output (Chunk {i+1}) ---\n{output_text}\n---------------------------")
-                    
-                    # caution: small model output_txt can make wrong formatted json.
-                    sample_ontology = self._parse_json(output_text)
-                    
-                    # Self-correction logic
-                    if not sample_ontology and retry_count > 0:
-                        logger.warning(f"Initial discovery JSON parsing failed for chunk {i+1}. Attempting self-correction...")
-                        correction_prompt = f"The following JSON was invalid. Please fix the formatting and return ONLY the valid JSON object:\n\n{output_text}"
-                        retry_response = self.llm.complete(correction_prompt)
-                        sample_ontology = self._parse_json(retry_response.text.strip())
-
-                    if sample_ontology:
-                        self._merge_ontologies(aggregated_ontology, sample_ontology)
-                        
-                        # Save after each chunk
-                        if output_path:
-                            self.save_ontology(aggregated_ontology, output_path)
-                        
-                        # Consolidate frequently to keep the schema generic
-                        if (i + 1) % self.consolidation_interval == 0 or len(samples) < self.consolidation_interval:
-                            logger.info(f"Consolidating ontology...")
-                            aggregated_ontology = self._consolidate_ontology(aggregated_ontology)
-                            if output_path:
-                                self.save_ontology(aggregated_ontology, output_path)
-                    else:
-                        logger.warning(f"No valid JSON block found in chunk {i+1}. Enable --debug to see raw output.")
-                except Exception as e:
-                    logger.warning(f"Failed to process chunk {i+1}: {e}")
-
-            # Final consolidation to ensure absolute strictness
-            logger.info("Finalizing ontology with strict categorization...")
-            return self._consolidate_ontology(aggregated_ontology)
-
-        except Exception as e:
-            logger.error(f"Ontology discovery failed: {e}")
-            return {}
+    def _load_valid_labels(self) -> Set[str]:
+        default_labels = {"NetworkNode", "ProtocolMessage", "Timer", "Procedure", "UserState"}
+        if self.schema_path and os.path.exists(self.schema_path):
+            try:
+                with open(self.schema_path, 'r') as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        # Assume list of objects with "label" or list of strings
+                        labels = set()
+                        for item in data:
+                            if isinstance(item, dict) and "label" in item:
+                                labels.add(item["label"])
+                            elif isinstance(item, str):
+                                labels.add(item)
+                        if labels:
+                            logger.info(f"Loaded {len(labels)} valid labels from {self.schema_path}")
+                            return labels
+            except Exception as e:
+                logger.error(f"Failed to load schema from {self.schema_path}: {e}")
+        return default_labels
 
     def _consolidate_ontology(self, raw_ontology: dict) -> dict:
         raw_nodes = list(set([n.get('label') for n in raw_ontology.get('node_types', [])]))[:200]
@@ -216,8 +88,8 @@ class OntologyDiscovery:
             
             consolidated = self._parse_json(output_text)
             
-            # Post-processing: Enforce the 5 standard types strictly
-            valid_labels = {"NetworkNode", "ProtocolMessage", "Timer", "Procedure", "UserState"}
+            # Post-processing: Enforce the valid types strictly
+            valid_labels = self.valid_labels
             
             # 1. Clean node_types
             if "node_types" in consolidated:
@@ -240,7 +112,7 @@ class OntologyDiscovery:
         return raw_ontology
 
     def _merge_ontologies(self, base: dict, new: dict):
-        valid_labels = {"NetworkNode", "ProtocolMessage", "Timer", "Procedure", "UserState"}
+        valid_labels = self.valid_labels
         
         existing_node_labels = {n['label'].lower(): n for n in base['node_types']}
         for node in new.get('node_types', []):
@@ -284,6 +156,7 @@ def main():
     parser = argparse.ArgumentParser(description="3GPP Ontology Discovery Tool")
     parser.add_argument("file", help="Path to the document to analyze")
     parser.add_argument("-o", "--output", help="Path to save the generated ontology", default=default_ontology_path)
+    parser.add_argument("--schema", help="Path to a JSON file containing allowed node types/labels")
     parser.add_argument("--full", action="store_true", help="Perform a full scan of the document")
     parser.add_argument("--debug", action="store_true", help="Print raw LLM outputs for debugging")
     
@@ -293,8 +166,8 @@ def main():
         logger.error(f"File not found: {args.file}")
         sys.exit(1)
         
-    # Initialize with debug flag
-    discovery = OntologyDiscovery(debug=args.debug)
+    # Initialize with debug flag and schema_path
+    discovery = OntologyDiscovery(debug=args.debug, schema_path=args.schema)
     result = discovery.discover(args.file, output_path=args.output, full_scan=args.full)
     
     if result and (result.get('node_types') or result.get('relationship_types')):
