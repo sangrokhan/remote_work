@@ -86,20 +86,24 @@ class GraphPipeline:
         
         # 3. Filter relationship types
         # Include relationships where either source or target is in relevant_labels
-        filtered_rels = [
-            {"source": r["source"], "type": r["type"], "target": r["target"]}
-            for r in rel_types 
-            if r["source"] in relevant_labels or r["target"] in relevant_labels
-        ]
+        filtered_rels = []
+        for r in rel_types:
+            if r["source"] in relevant_labels or r["target"] in relevant_labels:
+                rel_info = {"source": r["source"], "type": r["type"], "target": r["target"]}
+                if "allowed_properties" in r:
+                    rel_info["allowed_properties"] = r["allowed_properties"]
+                filtered_rels.append(rel_info)
         
         # 4. Token management: If still too large or nothing found
         # If nothing found, provide a subset of the ontology as a hint
         if not filtered_nodes:
             filtered_nodes = [{"label": n["label"]} for n in node_types[:20]]
-            filtered_rels = [
-                {"source": r["source"], "type": r["type"], "target": r["target"]}
-                for r in rel_types[:20]
-            ]
+            filtered_rels = []
+            for r in rel_types[:20]:
+                rel_info = {"source": r["source"], "type": r["type"], "target": r["target"]}
+                if "allowed_properties" in r:
+                    rel_info["allowed_properties"] = r["allowed_properties"]
+                filtered_rels.append(rel_info)
         
         # Limit to reasonable number of types to stay under token limits
         filtered_nodes = filtered_nodes[:100]
@@ -259,7 +263,7 @@ class GraphPipeline:
             return []
 
     def save_to_neo4j(self, triples: List[Dict[str, Any]]):
-        """Saves triples to Neo4j using ontological labels."""
+        """Saves triples to Neo4j using ontological labels and properties."""
         if not triples:
             return
 
@@ -269,15 +273,33 @@ class GraphPipeline:
                 t_label = triple.get('tail_label', 'Entity').replace(" ", "_")
                 rel_type = triple.get('type', 'RELATED_TO').upper().replace(" ", "_").replace("-", "_")
                 
+                # Extract edge properties
+                edge_props = triple.get('edge_properties', {})
+                if not isinstance(edge_props, dict):
+                    edge_props = {"info": str(edge_props)}
+                
+                # Combine with chunk_id
+                props = {**edge_props, "chunk_id": triple['chunk_id']}
+                
+                # Construct property assignment clause
+                # We use a parameterized query for safety
+                prop_assignments = []
+                for key in props.keys():
+                    # Clean key for Cypher compatibility (simple alphanumeric)
+                    clean_key = "".join(c for c in key if c.isalnum() or c == '_')
+                    prop_assignments.append(f"r.`{clean_key}` = $props.`{key}`")
+                
+                set_clause = "SET " + ", ".join(prop_assignments)
+                
                 dynamic_query = (
                     f"MERGE (h:`{h_label}` {{name: $head}}) "
                     f"MERGE (t:`{t_label}` {{name: $tail}}) "
                     f"MERGE (h)-[r:`{rel_type}`]->(t) "
-                    "SET r.chunk_id = $chunk_id"
+                    f"{set_clause}"
                 )
                 
                 try:
-                    session.run(dynamic_query, head=triple['head'], tail=triple['tail'], chunk_id=triple['chunk_id'])
+                    session.run(dynamic_query, head=triple['head'], tail=triple['tail'], props=props)
                 except Exception as e:
                     logger.error(f"Failed to save triple {triple}: {e}")
 
