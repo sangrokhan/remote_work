@@ -181,9 +181,9 @@ class OntologyDiscovery:
                         if output_path:
                             self.save_ontology(aggregated_ontology, output_path)
                         
-                        # Consolidate every N chunks
-                        if (i + 1) % self.consolidation_interval == 0:
-                            logger.info(f"Consolidating ontology after {i+1} chunks...")
+                        # Consolidate frequently to keep the schema generic
+                        if (i + 1) % self.consolidation_interval == 0 or len(samples) < self.consolidation_interval:
+                            logger.info(f"Consolidating ontology...")
                             aggregated_ontology = self._consolidate_ontology(aggregated_ontology)
                             if output_path:
                                 self.save_ontology(aggregated_ontology, output_path)
@@ -192,11 +192,9 @@ class OntologyDiscovery:
                 except Exception as e:
                     logger.warning(f"Failed to process chunk {i+1}: {e}")
 
-            if full_scan:
-                logger.info("Consolidating final full scan results...")
-                return self._consolidate_ontology(aggregated_ontology)
-            
-            return aggregated_ontology
+            # Final consolidation to ensure absolute strictness
+            logger.info("Finalizing ontology with strict categorization...")
+            return self._consolidate_ontology(aggregated_ontology)
 
         except Exception as e:
             logger.error(f"Ontology discovery failed: {e}")
@@ -216,17 +214,40 @@ class OntologyDiscovery:
             output_text = response.text.strip()
             llm_logger.debug(f"--- Raw LLM Output (Consolidation) ---\n{output_text}\n---------------------------")
             
-            return self._parse_json(output_text)
+            consolidated = self._parse_json(output_text)
+            
+            # Post-processing: Enforce the 5 standard types strictly
+            valid_labels = {"NetworkNode", "ProtocolMessage", "Timer", "Procedure", "UserState"}
+            
+            # 1. Clean node_types
+            if "node_types" in consolidated:
+                consolidated["node_types"] = [
+                    n for n in consolidated["node_types"] 
+                    if n.get("label") in valid_labels
+                ]
+            
+            # 2. Clean relationship_types (ensure source/target are valid)
+            if "relationship_types" in consolidated:
+                clean_rels = []
+                for r in consolidated["relationship_types"]:
+                    if r.get("source") in valid_labels and r.get("target") in valid_labels:
+                        clean_rels.append(r)
+                consolidated["relationship_types"] = clean_rels
+                
+            return consolidated
         except Exception as e:
             logger.error(f"Consolidation failed: {e}")
         return raw_ontology
 
     def _merge_ontologies(self, base: dict, new: dict):
+        valid_labels = {"NetworkNode", "ProtocolMessage", "Timer", "Procedure", "UserState"}
+        
         existing_node_labels = {n['label'].lower(): n for n in base['node_types']}
         for node in new.get('node_types', []):
-            if node['label'].lower() not in existing_node_labels:
+            label = node.get('label')
+            if label in valid_labels and label.lower() not in existing_node_labels:
                 base['node_types'].append(node)
-                existing_node_labels[node['label'].lower()] = node
+                existing_node_labels[label.lower()] = node
         
         # Dictionary to track existing relationships and their indices for easy updating
         existing_rels = {}
@@ -235,22 +256,23 @@ class OntologyDiscovery:
             existing_rels[key] = i
 
         for rel in new.get('relationship_types', []):
-            rel_key = (rel['source'].lower(), rel['type'].lower(), rel['target'].lower())
-            
-            if rel_key in existing_rels:
-                # Merge allowed_properties if they exist
-                idx = existing_rels[rel_key]
-                base_rel = base['relationship_types'][idx]
+            if rel.get('source') in valid_labels and rel.get('target') in valid_labels:
+                rel_key = (rel['source'].lower(), rel['type'].lower(), rel['target'].lower())
                 
-                new_props = rel.get('allowed_properties', [])
-                if new_props:
-                    base_props = base_rel.get('allowed_properties', [])
-                    # Merge sets and convert back to list
-                    merged_props = list(set(base_props) | set(new_props))
-                    base_rel['allowed_properties'] = merged_props
-            else:
-                base['relationship_types'].append(rel)
-                existing_rels[rel_key] = len(base['relationship_types']) - 1
+                if rel_key in existing_rels:
+                    # Merge allowed_properties if they exist
+                    idx = existing_rels[rel_key]
+                    base_rel = base['relationship_types'][idx]
+                    
+                    new_props = rel.get('allowed_properties', [])
+                    if new_props:
+                        base_props = base_rel.get('allowed_properties', [])
+                        # Merge sets and convert back to list
+                        merged_props = list(set(base_props) | set(new_props))
+                        base_rel['allowed_properties'] = merged_props
+                else:
+                    base['relationship_types'].append(rel)
+                    existing_rels[rel_key] = len(base['relationship_types']) - 1
 
     def save_ontology(self, ontology: dict, output_path: str):
         with open(output_path, 'w', encoding='utf-8') as f:

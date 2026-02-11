@@ -64,50 +64,32 @@ class GraphPipeline:
         if not self.ontology_data:
             return "Generic (Subject, Predicate, Object)"
         
-        import re
         node_types = self.ontology_data.get("node_types", [])
         rel_types = self.ontology_data.get("relationship_types", [])
         
-        # 1. Identify relevant node labels by checking their presence in text
-        relevant_labels = set()
-        # Heuristic: search for node labels in the text chunk
-        # To avoid massive regex, we only check if the label is mentioned
+        # 1. We always provide ALL node types (usually small, ~5-15) to ensure mapping consistency
+        filtered_nodes = [{"label": n["label"]} for n in node_types]
+        
+        # 2. Filter relationship types based on text mentions
         text_lower = text.lower()
+        relevant_labels = set()
         for node in node_types:
             label = node.get("label", "")
             if label.lower() in text_lower:
                 relevant_labels.add(label)
         
-        # 2. Filter node types and strip descriptions to save tokens
-        filtered_nodes = [
-            {"label": n["label"]}
-            for n in node_types if n["label"] in relevant_labels
-        ]
-        
-        # 3. Filter relationship types
-        # Include relationships where either source or target is in relevant_labels
         filtered_rels = []
         for r in rel_types:
-            if r["source"] in relevant_labels or r["target"] in relevant_labels:
+            # Include if either node is mentioned or if we have very few labels
+            if not relevant_labels or (r["source"] in relevant_labels or r["target"] in relevant_labels):
                 rel_info = {"source": r["source"], "type": r["type"], "target": r["target"]}
                 if "allowed_properties" in r:
                     rel_info["allowed_properties"] = r["allowed_properties"]
                 filtered_rels.append(rel_info)
         
-        # 4. Token management: If still too large or nothing found
-        # If nothing found, provide a subset of the ontology as a hint
-        if not filtered_nodes:
-            filtered_nodes = [{"label": n["label"]} for n in node_types[:20]]
-            filtered_rels = []
-            for r in rel_types[:20]:
-                rel_info = {"source": r["source"], "type": r["type"], "target": r["target"]}
-                if "allowed_properties" in r:
-                    rel_info["allowed_properties"] = r["allowed_properties"]
-                filtered_rels.append(rel_info)
-        
-        # Limit to reasonable number of types to stay under token limits
-        filtered_nodes = filtered_nodes[:100]
-        filtered_rels = filtered_rels[:150]
+        # 3. Limit to stay under token limits
+        filtered_nodes = filtered_nodes[:50]
+        filtered_rels = filtered_rels[:100]
 
         compact_ontology = {
             "node_types": filtered_nodes,
