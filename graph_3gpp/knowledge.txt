@@ -1,0 +1,24 @@
+# Node Types
+NetworkNode: Physical or logical network entity (cell, gNB, UE).
+ProtocolMessage: Message for network operations.
+Timer: Time-based event triggering actions.
+Procedure: Sequence of network operations or steps.
+UserState: Current state or mode of a user/device.
+
+# Relationships (Allowed Verbs)
+SENDS, RECEIVES, TRIGGERED_BY, TRANSITIONS_TO, CONTAINS, EXPIRES_DURING, HAS_VALUE, CONFIGURES, HAS_CONFIGURATIONS, REQUIRES, STARTS, STOPS
+
+# Semantic Rules
+- NetworkNodes SEND and RECEIVE ProtocolMessages.
+- ProtocolMessages can be TRIGGERED_BY Timers.
+- Procedures can TRANSITION_TO UserStates or other Procedures.
+- Information elements and containers often CONTAINS messages or other elements.
+- Timers can be STARTED or STOPPED by Procedures or Messages.
+- Configurations CONFIGURE network behaviors or cells.
+
+# Domain Knowledge
+UE and gNB are examples of NetworkNode.
+RRCSetup and RRCResume are examples of ProtocolMessage.
+T300 and T301 are examples of Timer.
+RRC Connection Establishment is a Procedure.
+RRC_CONNECTED and RRC_IDLE are UserStates.

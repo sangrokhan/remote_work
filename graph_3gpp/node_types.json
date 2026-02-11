@@ -1,22 +1,22 @@
 [
   {
     "label": "NetworkNode",
-    "description": "Represents a physical or logical entity within the network, such as a cell site, base station, or user equipment."
+    "description": "Physical or logical network entity (cell, gNB, UE)."
   },
   {
     "label": "ProtocolMessage",
-    "description": "A message exchanged between network entities, carrying information about network operations."
+    "description": "Network message carrying operational data."
   },
   {
     "label": "Timer",
-    "description": "A time-based event that triggers a specific action or state transition."
+    "description": "Time-based event triggering actions."
   },
   {
     "label": "Procedure",
-    "description": "A sequence of steps or actions that define a specific network operation."
+    "description": "Sequence of network operations or steps."
   },
   {
     "label": "UserState",
-    "description": "The current state of a user or device within the network."
+    "description": "Current state or mode of a user/device."
   }
 ]

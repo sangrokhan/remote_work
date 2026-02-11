@@ -1,42 +1,14 @@
 [
-  {
-    "source": "NetworkNode",
-    "type": "SENDS",
-    "target": "ProtocolMessage"
-  },
-  {
-    "source": "ProtocolMessage",
-    "type": "TRIGGERED_BY",
-    "target": "Timer"
-  },
-  {
-    "source": "ProtocolMessage",
-    "type": "TRANSITIONS_TO",
-    "target": "Procedure"
-  },
-  {
-    "source": "Procedure",
-    "type": "TRANSITIONS_TO",
-    "target": "UserState"
-  },
-  {
-    "source": "ProtocolMessage",
-    "type": "RECEIVES",
-    "target": "NetworkNode"
-  },
-  {
-    "source": "ProtocolMessage",
-    "type": "TRANSITIONS_TO",
-    "target": "MessageSegmentContainer"
-  },
-  {
-    "source": "MessageSegmentContainer",
-    "type": "CONTAINS",
-    "target": "ProtocolMessage"
-  },
-  {
-    "source": "ProtocolMessage",
-    "type": "EXPIRES_DURING",
-    "target": "Timer"
-  }
+  "SENDS",
+  "TRIGGERED_BY",
+  "TRANSITIONS_TO",
+  "RECEIVES",
+  "CONTAINS",
+  "EXPIRES_DURING",
+  "HAS_VALUE",
+  "CONFIGURES",
+  "HAS_CONFIGURATIONS",
+  "REQUIRES",
+  "STARTS",
+  "STOPS"
 ]

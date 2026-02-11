@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class GraphPipeline:
-    def __init__(self, node_types_path=None, rel_types_path=None):
+    def __init__(self, node_types_path=None, rel_types_path=None, knowledge_path=None):
         # Load configurations from environment
         self.neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
         self.neo4j_user = os.getenv("NEO4J_USER", "neo4j")
@@ -36,12 +36,14 @@ class GraphPipeline:
         self.ontology_path = os.getenv("ONTOLOGY_PATH", "ontology.json")
         self.node_types_path = node_types_path
         self.rel_types_path = rel_types_path
+        self.knowledge_path = knowledge_path
         self.extraction_prompt = os.getenv("TRIPLE_EXTRACTION_PROMPT", "").replace("\\n", "\n")
 
         # Initialize components
         self.driver = GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password))
         self.chunker = SentenceSplitter(chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap)
         self.ontology_data = self._load_ontology()
+        self.knowledge_base = self._load_knowledge()
         
         self.llm = OpenAILike(
             api_base=self.api_base,
@@ -50,6 +52,15 @@ class GraphPipeline:
             is_chat_model=True,
             timeout=self.timeout
         )
+
+    def _load_knowledge(self) -> str:
+        if self.knowledge_path and os.path.exists(self.knowledge_path):
+            try:
+                with open(self.knowledge_path, 'r') as f:
+                    return f.read().strip()
+            except Exception as e:
+                logger.error(f"Failed to load knowledge from {self.knowledge_path}: {e}")
+        return ""
 
     def _load_ontology(self) -> Dict[str, Any]:
         ontology = {}
@@ -102,30 +113,21 @@ class GraphPipeline:
         # 1. We always provide ALL node types (usually small, ~5-15) to ensure mapping consistency
         filtered_nodes = [{"label": n["label"]} for n in node_types]
         
-        # 2. Filter relationship types based on text mentions
-        text_lower = text.lower()
-        relevant_labels = set()
-        for node in node_types:
-            label = node.get("label", "")
-            if label.lower() in text_lower:
-                relevant_labels.add(label)
-        
-        filtered_rels = []
-        for r in rel_types:
-            # Include if either node is mentioned or if we have very few labels
-            if not relevant_labels or (r["source"] in relevant_labels or r["target"] in relevant_labels):
-                rel_info = {"source": r["source"], "type": r["type"], "target": r["target"]}
-                if "allowed_properties" in r:
-                    rel_info["allowed_properties"] = r["allowed_properties"]
-                filtered_rels.append(rel_info)
+        # 2. Relationship types are now a simple list of allowed verbs
+        # If rel_types is a list of strings, use it directly. 
+        # If it's the old list of dicts, extract the types.
+        if rel_types and isinstance(rel_types[0], dict):
+            allowed_rels = list(set([r["type"] for r in rel_types]))
+        else:
+            allowed_rels = rel_types
         
         # 3. Limit to stay under token limits
         filtered_nodes = filtered_nodes[:50]
-        filtered_rels = filtered_rels[:100]
+        allowed_rels = allowed_rels[:100]
 
         compact_ontology = {
             "node_types": filtered_nodes,
-            "relationship_types": filtered_rels
+            "allowed_relationship_types": allowed_rels
         }
         
         return json.dumps(compact_ontology, separators=(',', ':'))
@@ -244,7 +246,13 @@ class GraphPipeline:
 
         # Get relevant ontology for this chunk to save tokens
         ontology_str = self._get_relevant_ontology_str(text)
-        prompt = self.extraction_prompt.format(ontology=ontology_str, text=text)
+        
+        # Combine ontology with knowledge base
+        context = f"ONTOLOGY:\n{ontology_str}"
+        if self.knowledge_base:
+            context += f"\n\nGENERAL KNOWLEDGE & RULES:\n{self.knowledge_base}"
+            
+        prompt = self.extraction_prompt.format(ontology=context, text=text)
 
         try:
             response = self.llm.complete(prompt)
@@ -287,30 +295,44 @@ class GraphPipeline:
                 t_label = triple.get('tail_label', 'Entity').replace(" ", "_")
                 rel_type = triple.get('type', 'RELATED_TO').upper().replace(" ", "_").replace("-", "_")
                 
-                # Extract edge properties
+                # Extract properties
+                h_props = triple.get('head_properties', {})
+                t_props = triple.get('tail_properties', {})
                 edge_props = triple.get('edge_properties', {})
+                
+                # Standardize properties (name is mandatory for nodes)
+                h_props['name'] = triple.get('head', 'Unknown')
+                t_props['name'] = triple.get('tail', 'Unknown')
+                
+                # Combine edge properties with chunk_id
                 if not isinstance(edge_props, dict):
                     edge_props = {"info": str(edge_props)}
-                
+                edge_props['chunk_id'] = triple.get('chunk_id')
+
                 # Clean property keys for Neo4j compatibility
-                cleaned_props = {}
-                for k, v in edge_props.items():
-                    clean_k = "".join(c for c in str(k) if c.isalnum() or c == '_')
-                    if clean_k:
-                        cleaned_props[clean_k] = v
-                
-                # Combine with chunk_id
-                props = {**cleaned_props, "chunk_id": triple['chunk_id']}
+                def clean_dict(d):
+                    return {"".join(c for c in str(k) if c.isalnum() or c == '_'): v for k, v in d.items() if k}
+
+                h_props_clean = clean_dict(h_props)
+                t_props_clean = clean_dict(t_props)
+                edge_props_clean = clean_dict(edge_props)
                 
                 dynamic_query = (
                     f"MERGE (h:`{h_label}` {{name: $head}}) "
+                    f"SET h += $h_props "
                     f"MERGE (t:`{t_label}` {{name: $tail}}) "
+                    f"SET t += $t_props "
                     f"MERGE (h)-[r:`{rel_type}`]->(t) "
-                    f"SET r += $props"
+                    f"SET r += $edge_props"
                 )
                 
                 try:
-                    session.run(dynamic_query, head=triple['head'], tail=triple['tail'], props=props)
+                    session.run(dynamic_query, 
+                                head=h_props_clean['name'], 
+                                h_props=h_props_clean,
+                                tail=t_props_clean['name'], 
+                                t_props=t_props_clean,
+                                edge_props=edge_props_clean)
                 except Exception as e:
                     logger.error(f"Failed to save triple {triple}: {e}")
 
@@ -342,6 +364,7 @@ def main():
     parser.add_argument("file", help="Path to the document to process")
     parser.add_argument("--node-types", help="Path to JSON file containing allowed node types")
     parser.add_argument("--relation-types", help="Path to JSON file containing allowed relationship types")
+    parser.add_argument("--knowledge", help="Path to text file containing general domain knowledge")
     
     if len(sys.argv) < 2:
         parser.print_help()
@@ -353,7 +376,11 @@ def main():
         logger.error(f"File not found: {args.file}")
         sys.exit(1)
         
-    pipeline = GraphPipeline(node_types_path=args.node_types, rel_types_path=args.relation_types)
+    pipeline = GraphPipeline(
+        node_types_path=args.node_types, 
+        rel_types_path=args.relation_types,
+        knowledge_path=args.knowledge
+    )
     pipeline.run(args.file)
 
 if __name__ == "__main__":
