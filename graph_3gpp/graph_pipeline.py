@@ -13,14 +13,14 @@ from llama_index.llms.openai_like import OpenAILike
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class GraphPipeline:
-    def __init__(self, node_types_path=None, rel_types_path=None, knowledge_path=None):
+    def __init__(self, node_types_path="node_types.json", rel_types_path="relation_types.json", knowledge_path=None):
         # Load configurations from environment
         self.neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
         self.neo4j_user = os.getenv("NEO4J_USER", "neo4j")
@@ -29,7 +29,7 @@ class GraphPipeline:
         self.api_base = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
         self.api_key = os.getenv("LLM_API_KEY", "EMPTY")
         self.model_name = os.getenv("LLM_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
-        self.timeout = float(os.getenv("LLM_TIMEOUT", "60.0"))
+        self.timeout = float(os.getenv("LLM_TIMEOUT", "300.0"))
         
         self.chunk_size = int(os.getenv("CHUNK_SIZE", 256))
         self.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", 20))
@@ -37,12 +37,18 @@ class GraphPipeline:
         self.node_types_path = node_types_path
         self.rel_types_path = rel_types_path
         self.knowledge_path = knowledge_path
-        self.extraction_prompt = os.getenv("TRIPLE_EXTRACTION_PROMPT", "").replace("\\n", "\n")
+        self.extraction_prompt = os.getenv("TRIPLE_EXTRACTION_PROMPT", "")
 
         # Initialize components
         self.driver = GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password))
         self.chunker = SentenceSplitter(chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap)
-        self.ontology_data = self._load_ontology()
+        
+        # Load Limitations
+        self.allowed_node_types = self._load_json_file(self.node_types_path, [])
+        self.allowed_rel_types = self._load_json_file(self.rel_types_path, [])
+        
+        # Load Discovered Metadata (Ontology)
+        self.ontology_data = self._load_json_file(self.ontology_path, {})
         self.knowledge_base = self._load_knowledge()
         
         self.llm = OpenAILike(
@@ -50,8 +56,18 @@ class GraphPipeline:
             api_key=self.api_key,
             model=self.model_name,
             is_chat_model=True,
-            timeout=self.timeout
+            timeout=self.timeout,
+            max_tokens=2048
         )
+
+    def _load_json_file(self, path: str, default: Any) -> Any:
+        if path and os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load JSON from {path}: {e}")
+        return default
 
     def _load_knowledge(self) -> str:
         if self.knowledge_path and os.path.exists(self.knowledge_path):
@@ -62,72 +78,17 @@ class GraphPipeline:
                 logger.error(f"Failed to load knowledge from {self.knowledge_path}: {e}")
         return ""
 
-    def _load_ontology(self) -> Dict[str, Any]:
-        ontology = {}
-        
-        # Priority 1: Separate files passed via CLI
-        if self.node_types_path and os.path.exists(self.node_types_path):
-            try:
-                with open(self.node_types_path, 'r') as f:
-                    ontology["node_types"] = json.load(f)
-                logger.info(f"Loaded node types from {self.node_types_path}")
-            except Exception as e:
-                logger.error(f"Failed to load node types from {self.node_types_path}: {e}")
-
-        if self.rel_types_path and os.path.exists(self.rel_types_path):
-            try:
-                with open(self.rel_types_path, 'r') as f:
-                    ontology["relationship_types"] = json.load(f)
-                logger.info(f"Loaded relationship types from {self.rel_types_path}")
-            except Exception as e:
-                logger.error(f"Failed to load relationship types from {self.rel_types_path}: {e}")
-
-        if "node_types" in ontology and "relationship_types" in ontology:
-            return ontology
-
-        # Priority 2: Single ontology JSON file
-        if os.path.exists(self.ontology_path):
-            try:
-                with open(self.ontology_path, 'r') as f:
-                    data = json.load(f)
-                    # Use them if they weren't already loaded from separate files
-                    if "node_types" not in ontology:
-                        ontology["node_types"] = data.get("node_types", [])
-                    if "relationship_types" not in ontology:
-                        ontology["relationship_types"] = data.get("relationship_types", [])
-                    return ontology
-            except Exception as e:
-                logger.error(f"Failed to load ontology JSON: {e}")
-        
-        logger.warning(f"Ontology file {self.ontology_path} not found or invalid. Using empty or partial schema.")
-        return ontology
-
     def _get_relevant_ontology_str(self, text: str) -> str:
         """Filters the ontology to only include elements relevant to the text chunk."""
         if not self.ontology_data:
             return "Generic (Subject, Predicate, Object)"
         
-        node_types = self.ontology_data.get("node_types", [])
-        rel_types = self.ontology_data.get("relationship_types", [])
+        nodes = self.ontology_data.get("nodes", [])
+        relations = self.ontology_data.get("relations", [])
         
-        # 1. We always provide ALL node types (usually small, ~5-15) to ensure mapping consistency
-        filtered_nodes = [{"label": n["label"]} for n in node_types]
-        
-        # 2. Relationship types are now a simple list of allowed verbs
-        # If rel_types is a list of strings, use it directly. 
-        # If it's the old list of dicts, extract the types.
-        if rel_types and isinstance(rel_types[0], dict):
-            allowed_rels = list(set([r["type"] for r in rel_types]))
-        else:
-            allowed_rels = rel_types
-        
-        # 3. Limit to stay under token limits
-        filtered_nodes = filtered_nodes[:50]
-        allowed_rels = allowed_rels[:100]
-
         compact_ontology = {
-            "node_types": filtered_nodes,
-            "allowed_relationship_types": allowed_rels
+            "nodes": nodes[:50],
+            "relations": relations[:100]
         }
         
         return json.dumps(compact_ontology, separators=(',', ':'))
@@ -165,7 +126,6 @@ class GraphPipeline:
                 })
             else:
                 # If too large, split it further using SentenceSplitter
-                # This ensures we don't break in the middle of a sentence
                 refined_nodes = self.chunker.get_nodes_from_documents([Document(text=content)])
                 for r_node in refined_nodes:
                     r_content = r_node.get_content().strip()
@@ -180,64 +140,28 @@ class GraphPipeline:
         return final_chunks
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
-        """Extracts and parses JSON from LLM response, with robust cleaning."""
+        """Extracts and parses JSON from LLM response using dirtyjson for robustness."""
+        import dirtyjson
         import re
-        # Find the first {
+        
+        # 1. Find the start and end of the JSON object
         start = text.find('{')
-        if start == -1:
+        end = text.rfind('}')
+        if start == -1 or end == -1:
             return {}
         
-        json_str = text[start:]
+        json_str = text[start:end+1]
         
-        # 1. Handle common LLM JSON formatting issues
-        # Remove literal newlines within double-quoted strings
-        def replace_newlines(match):
-            return match.group(0).replace('\n', ' ').replace('\r', ' ')
-        
-        json_str = re.sub(r'"[^"]*"', replace_newlines, json_str, flags=re.DOTALL)
-
-        # 2. Strip comments (Javascript style // or /* */)
-        json_str = re.sub(r'//.*?\n|/\*.*?\*/', '', json_str, flags=re.DOTALL)
-
-        # 3. Basic cleaning
-        # Escape backslashes that are NOT part of a valid JSON escape sequence
-        json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
-        
-        # 4. Fix Quoting and Delimiters
-        # Fix "expecting property name enclosed in double quotes" (unquoted keys)
-        json_str = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', json_str)
-        
-        # Fix single quotes for keys: 'property': value -> "property": value
-        json_str = re.sub(r"([{,]\s*)'([^'\" ]+)'\s*:", r'\1"\2":', json_str)
-
-        # Try to fix missing commas between fields
-        json_str = re.sub(r'("(?:\\["\\/bfnrtu]|[^"\\])*")\s+(")', r'\1, \2', json_str)
-        json_str = re.sub(r'([}\]])\s+(")', r'\1, \2', json_str)
-        json_str = re.sub(r'(\b\d+\b|true|false|null)\s+(")', r'\1, \2', json_str)
-        
-        # 5. Remove trailing commas (illegal in standard JSON)
-        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
-
         try:
-            # Use raw_decode to handle "extra data" after the JSON object
-            decoder = json.JSONDecoder()
-            obj, index = decoder.raw_decode(json_str)
-            return obj
-        except json.JSONDecodeError as e:
-            # Final desperate attempt: replace remaining single quotes with double quotes
-            # ONLY if the error seems related to quoting
-            if "expecting property name" in str(e) or "enclosed in double quotes" in str(e):
-                try:
-                    # Naive replacement of single quotes with double quotes for the whole string
-                    fallback_json = json_str.replace("'", '"')
-                    obj, index = decoder.raw_decode(fallback_json)
-                    return obj
-                except:
-                    pass
-            
-            logger.error(f"JSON Parsing Error: {e}")
-            logger.debug(f"Failed JSON string: {json_str[:500]}...")
-            return {}
+            return dirtyjson.loads(json_str)
+        except Exception as e:
+            logger.error(f"JSON Parsing Error with dirtyjson: {e}")
+            try:
+                # Basic cleanup
+                json_str = re.sub(r'//.*?\n|/\*.*?\*/', '', json_str, flags=re.DOTALL)
+                return dirtyjson.loads(json_str)
+            except:
+                return {}
 
     def extract_triples(self, chunk: Dict[str, Any], retry_count: int = 1) -> List[Dict[str, Any]]:
         """Calls LLM to extract triples from text based on ontology with self-correction logic."""
@@ -252,16 +176,20 @@ class GraphPipeline:
         if self.knowledge_base:
             context += f"\n\nGENERAL KNOWLEDGE & RULES:\n{self.knowledge_base}"
             
-        prompt = self.extraction_prompt.format(ontology=context, text=text)
+        prompt = self.extraction_prompt.format(
+            node_types=json.dumps(self.allowed_node_types),
+            relation_types=json.dumps(self.allowed_rel_types),
+            ontology=ontology_str,
+            text=text
+        )
 
         try:
             response = self.llm.complete(prompt)
             output_text = response.text.strip()
             
-            # caution: small model output_txt can make wrong formatted json.
             data = self._parse_json(output_text)
             
-            # Self-correction logic: if parsing fails, try one more time with a feedback prompt
+            # Self-correction logic
             if not data and retry_count > 0:
                 logger.warning(f"Initial JSON parsing failed for chunk {chunk_id[:8]}. Attempting self-correction...")
                 correction_prompt = f"The following JSON was invalid. Please fix the formatting (ensure double quotes, commas, and proper escaping) and return ONLY the valid JSON object:\n\n{output_text}"
@@ -295,21 +223,17 @@ class GraphPipeline:
                 t_label = triple.get('tail_label', 'Entity').replace(" ", "_")
                 rel_type = triple.get('type', 'RELATED_TO').upper().replace(" ", "_").replace("-", "_")
                 
-                # Extract properties
                 h_props = triple.get('head_properties', {})
                 t_props = triple.get('tail_properties', {})
                 edge_props = triple.get('edge_properties', {})
                 
-                # Standardize properties (name is mandatory for nodes)
                 h_props['name'] = triple.get('head', 'Unknown')
                 t_props['name'] = triple.get('tail', 'Unknown')
                 
-                # Combine edge properties with chunk_id
                 if not isinstance(edge_props, dict):
                     edge_props = {"info": str(edge_props)}
                 edge_props['chunk_id'] = triple.get('chunk_id')
 
-                # Clean property keys for Neo4j compatibility
                 def clean_dict(d):
                     return {"".join(c for c in str(k) if c.isalnum() or c == '_'): v for k, v in d.items() if k}
 
@@ -362,9 +286,9 @@ class GraphPipeline:
 def main():
     parser = argparse.ArgumentParser(description="3GPP Graph Pipeline")
     parser.add_argument("file", help="Path to the document to process")
-    parser.add_argument("--node-types", help="Path to JSON file containing allowed node types")
-    parser.add_argument("--relation-types", help="Path to JSON file containing allowed relationship types")
-    parser.add_argument("--knowledge", help="Path to text file containing general domain knowledge")
+    parser.add_argument("--node-types", help="Path to JSON file containing allowed node types", default="node_types.json")
+    parser.add_argument("--relation-types", help="Path to JSON file containing allowed relationship types", default="relation_types.json")
+    parser.add_argument("--knowledge", help="Path to text file containing general domain knowledge", default="knowledge.txt")
     
     if len(sys.argv) < 2:
         parser.print_help()
