@@ -200,7 +200,7 @@ class OntologyDiscovery:
         for n in raw_ontology.get('nodes', []):
              raw_nodes.append({
                  "label": n.get("label"),
-                 "base_type": n.get("base_type"),
+                 "node_type": n.get("node_type"),
                  "properties": n.get("properties")
              })
         
@@ -217,14 +217,14 @@ class OntologyDiscovery:
             
             consolidated = self._parse_json(output_text)
             
-            # Post-processing: Validate base_types strictly
+            # Post-processing: Validate node_types strictly
             valid_base_types = self.valid_base_types
             
             # 1. Clean nodes
             if "nodes" in consolidated:
                 clean_nodes = []
                 for n in consolidated["nodes"]:
-                    b_type = n.get("base_type") or n.get("label")
+                    b_type = n.get("node_type") or n.get("label")
                     if b_type in valid_base_types:
                         clean_nodes.append(n)
                 consolidated["nodes"] = clean_nodes
