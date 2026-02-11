@@ -204,7 +204,13 @@ class OntologyDiscovery:
                  "properties": n.get("properties")
              })
         
-        raw_rels = raw_ontology.get('relations', [])
+        raw_rels = []
+        for r in raw_ontology.get('relations', []):
+            if isinstance(r, dict):
+                r['type'] = r.get('type', 'RELATED_TO').upper()
+                raw_rels.append(r)
+            elif isinstance(r, str):
+                raw_rels.append(r.upper())
 
         prompt = self.consolidation_prompt.format(
             nodes=json.dumps(raw_nodes, indent=2)
@@ -217,7 +223,7 @@ class OntologyDiscovery:
             
             consolidated = self._parse_json(output_text)
             
-            # Post-processing: Validate node_types strictly
+            # Post-processing: Validate node_types and uppercase relations
             valid_base_types = self.valid_base_types
             
             # 1. Clean nodes
@@ -228,6 +234,14 @@ class OntologyDiscovery:
                     if b_type in valid_base_types:
                         clean_nodes.append(n)
                 consolidated["nodes"] = clean_nodes
+            
+            # 2. Uppercase relations
+            if "relations" in consolidated:
+                for r in consolidated["relations"]:
+                    if isinstance(r, dict) and "type" in r:
+                        r["type"] = r["type"].upper()
+                    elif isinstance(r, dict) and "relation" in r: # Handle LLM using 'relation' key
+                        r["type"] = r.pop("relation").upper()
             
             return consolidated
         except Exception as e:
@@ -255,17 +269,21 @@ class OntologyDiscovery:
                     base['nodes'].append(node)
                     existing_nodes[low_label] = len(base['nodes']) - 1
         
-        # 2. Merge Relations
+        # 2. Merge Relations (force uppercase)
         new_rels = new.get('relations', []) or new.get('relationship_types', [])
         if "relations" not in base:
             base["relations"] = []
             
-        existing_rels = {(r.get("source"), r.get("type"), r.get("target")): i 
+        existing_rels = {(r.get("source"), r.get("type", "").upper(), r.get("target")): i 
                          for i, r in enumerate(base["relations"]) if isinstance(r, dict)}
         
         for rel in new_rels:
             if isinstance(rel, dict):
-                key = (rel.get("source"), rel.get("type"), rel.get("target"))
+                r_type = (rel.get("type") or rel.get("relation") or "RELATED_TO").upper()
+                rel["type"] = r_type
+                if "relation" in rel: del rel["relation"]
+                
+                key = (rel.get("source"), r_type, rel.get("target"))
                 if key in existing_rels:
                     idx = existing_rels[key]
                     base_props = base['relations'][idx].get('properties', {})
@@ -278,8 +296,9 @@ class OntologyDiscovery:
                     existing_rels[key] = len(base['relations']) - 1
             else:
                 # If it's just a string, add it if not present
-                if rel not in base["relations"]:
-                    base["relations"].append(rel)
+                r_upper = rel.upper()
+                if r_upper not in base["relations"]:
+                    base["relations"].append(r_upper)
 
     def save_ontology(self, ontology: dict, output_path: str):
         with open(output_path, 'w', encoding='utf-8') as f:
@@ -287,7 +306,7 @@ class OntologyDiscovery:
         logger.info(f"Ontology saved to {output_path}")
 
 def main():
-    default_ontology_path = os.getenv("ONTOLOGY_PATH", "ontology.json")
+    default_ontology_path = os.getenv("ONTOLOGY_PATH", "ontology_output.json")
     parser = argparse.ArgumentParser(description="3GPP Ontology Discovery Tool")
     parser.add_argument("file", help="Path to the document to analyze")
     parser.add_argument("-o", "--output", help="Path to save the generated ontology", default=default_ontology_path)
