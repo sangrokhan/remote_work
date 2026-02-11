@@ -43,3 +43,6 @@ ENV/
 # Local data
 data/
 !data/sample.txt
+
+# PR Description
+pr_description.md
