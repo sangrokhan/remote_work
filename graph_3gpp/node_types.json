@@ -1,22 +1,27 @@
 [
   {
     "label": "NetworkNode",
-    "description": "Physical or logical network entity (cell, gNB, UE)."
+    "description": "Physical or logical entities within the 3GPP network architecture. Includes user devices, base stations, and core network functions.",
+    "examples": ["UE", "gNB", "AMF", "UPF", "SMF", "Cell", "TRP", "DU", "CU"]
   },
   {
     "label": "ProtocolMessage",
-    "description": "Network message carrying operational data."
+    "description": "Specific signaling messages or information elements exchanged between network nodes. Usually part of a protocol stack like RRC, NAS, or NGAP.",
+    "examples": ["RRCSetupRequest", "SIB1", "Registration Accept", "Paging Message", "Measurement Report"]
   },
   {
     "label": "Timer",
-    "description": "Time-based event triggering actions."
+    "description": "Time-based mechanisms used to control protocol behavior, state transitions, or procedure timeouts.",
+    "examples": ["T300", "T301", "T311", "Periodic Registration Update Timer", "Inactivity Timer"]
   },
   {
     "label": "Procedure",
-    "description": "Sequence of network operations or steps."
+    "description": "A set of sequential steps or a logical workflow defined in 3GPP specifications to achieve a specific network goal.",
+    "examples": ["Random Access Procedure", "Initial Registration", "Xn Handover", "Paging Procedure", "Beam Management"]
   },
   {
     "label": "UserState",
-    "description": "Current state or mode of a user/device."
+    "description": "The specific operating mode or connection status of a User Equipment (UE) or its context in the core network.",
+    "examples": ["RRC_IDLE", "RRC_CONNECTED", "RRC_INACTIVE", "CM-IDLE", "CM-CONNECTED"]
   }
 ]
