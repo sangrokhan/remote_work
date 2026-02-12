@@ -50,3 +50,4 @@ pr_description.md
 # Generated Ontology Outputs
 ontology.json
 ontology_output.json
+json_parse_fails.log
