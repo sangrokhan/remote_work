@@ -255,6 +255,20 @@ class OntologyDiscovery:
         return raw_ontology
 
     def _merge_ontologies(self, base: dict, new: dict):
+        def merge_props(base_p, new_p):
+            if not isinstance(base_p, dict) or not isinstance(new_p, dict):
+                return base_p
+            for k, v in new_p.items():
+                if k in base_p:
+                    # If values are different, concatenate them uniquely
+                    b_val = str(base_p[k])
+                    n_val = str(v)
+                    if n_val not in b_val:
+                        base_p[k] = f"{b_val} | {n_val}"
+                else:
+                    base_p[k] = v
+            return base_p
+
         # 1. Merge Nodes (support both old and new keys for transition)
         new_nodes = new.get('nodes', []) or new.get('node_types', [])
         existing_nodes = {n['label'].lower(): i for i, n in enumerate(base.get('nodes', []))}
@@ -265,11 +279,13 @@ class OntologyDiscovery:
                 low_label = label.lower()
                 if low_label in existing_nodes:
                     idx = existing_nodes[low_label]
-                    base_props = base['nodes'][idx].get('properties', {})
-                    new_props = node.get('properties', {})
-                    if isinstance(base_props, dict) and isinstance(new_props, dict):
-                        base_props.update(new_props)
-                        base['nodes'][idx]['properties'] = base_props
+                    base['nodes'][idx]['properties'] = merge_props(
+                        base['nodes'][idx].get('properties', {}),
+                        node.get('properties', {})
+                    )
+                    # Merge descriptions as well if they differ
+                    if node.get('description') and node.get('description') not in base['nodes'][idx].get('description', ''):
+                        base['nodes'][idx]['description'] = f"{base['nodes'][idx].get('description', '')} / {node['description']}"
                 else:
                     if 'nodes' not in base: base['nodes'] = []
                     base['nodes'].append(node)
@@ -294,11 +310,10 @@ class OntologyDiscovery:
                 key = (rel.get("source"), r_type, rel.get("target"))
                 if key in existing_rels:
                     idx = existing_rels[key]
-                    base_props = base['relations'][idx].get('properties', {})
-                    new_props = rel.get('properties', {})
-                    if isinstance(base_props, dict) and isinstance(new_props, dict):
-                        base_props.update(new_props)
-                        base['relations'][idx]['properties'] = base_props
+                    base['relations'][idx]['properties'] = merge_props(
+                        base['relations'][idx].get('properties', {}),
+                        rel.get('properties', {})
+                    )
                 else:
                     base['relations'].append(rel)
                     existing_rels[key] = len(base['relations']) - 1
