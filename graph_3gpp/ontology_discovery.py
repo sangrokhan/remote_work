@@ -52,41 +52,31 @@ class OntologyDiscovery:
         )
         self.chunker = SentenceSplitter(chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap)
         
-        # Load valid base types from node_types_path if provided, else use defaults
-        self.valid_base_types = self._load_node_labels()
-        # Load valid relation types from rel_types_path if provided
-        self.valid_rel_types = self._load_rel_types()
+        # Load metadata
+        self.node_metadata = self._load_json_metadata(self.node_types_path, "label")
+        self.rel_metadata = self._load_json_metadata(self.rel_types_path, "type")
+        
+        # Valid lists for code-level filtering
+        self.valid_base_types = set(self.node_metadata.keys()) if self.node_metadata else {"NetworkNode", "ProtocolMessage", "Timer", "Procedure", "UserState"}
+        self.valid_rel_types = set(self.rel_metadata.keys())
 
-    def _load_node_labels(self) -> Set[str]:
-        default_labels = {"NetworkNode", "ProtocolMessage", "Timer", "Procedure", "UserState"}
-        if self.node_types_path and os.path.exists(self.node_types_path):
+    def _load_json_metadata(self, path: str, key_field: str) -> Dict[str, Any]:
+        """Loads JSON list and returns a dict indexed by the specified field."""
+        metadata = {}
+        if path and os.path.exists(path):
             try:
-                with open(self.node_types_path, 'r') as f:
-                    data = json.load(f)
-                    labels = set()
-                    for item in data:
-                        if isinstance(item, dict) and "label" in item:
-                            labels.add(item["label"])
-                        elif isinstance(item, str):
-                            labels.add(item)
-                    if labels:
-                        logger.info(f"Loaded {len(labels)} valid base types from {self.node_types_path}")
-                        return labels
-            except Exception as e:
-                logger.error(f"Failed to load node types from {self.node_types_path}: {e}")
-        return default_labels
-
-    def _load_rel_types(self) -> Set[str]:
-        if self.rel_types_path and os.path.exists(self.rel_types_path):
-            try:
-                with open(self.rel_types_path, 'r') as f:
+                with open(path, 'r') as f:
                     data = json.load(f)
                     if isinstance(data, list):
-                        logger.info(f"Loaded {len(data)} valid relation types from {self.rel_types_path}")
-                        return set(data)
+                        for item in data:
+                            if isinstance(item, dict) and key_field in item:
+                                metadata[item[key_field]] = item
+                            elif isinstance(item, str):
+                                metadata[item] = {"label": item} if key_field == "label" else {"type": item}
+                        logger.info(f"Loaded {len(metadata)} entries from {path}")
             except Exception as e:
-                logger.error(f"Failed to load relation types from {self.rel_types_path}: {e}")
-        return set()
+                logger.error(f"Failed to load metadata from {path}: {e}")
+        return metadata
 
     def _get_samples(self, text: str, file_path: str, sample_size: int = 3000, max_samples: int = 5) -> List[str]:
         """Extracts samples from text. If MD, uses headers; otherwise uses spatial sampling."""
@@ -154,12 +144,16 @@ class OntologyDiscovery:
                 samples = self._get_samples(text, file_path)
 
             aggregated_ontology = {"nodes": [], "relations": []}
+            
+            node_types_info = json.dumps(list(self.node_metadata.values()), indent=2)
+            rel_types_info = json.dumps(list(self.rel_metadata.values()), indent=2)
 
             for i, sample in enumerate(samples):
                 logger.info(f"Processing chunk {i+1}/{len(samples)}...")
                 prompt = self.discovery_prompt.format(
                     text=sample,
-                    relation_types=json.dumps(list(self.valid_rel_types))
+                    node_types=node_types_info,
+                    relation_types=rel_types_info
                 )
                 
                 try:
@@ -207,11 +201,13 @@ class OntologyDiscovery:
                  "properties": n.get("properties")
              })
         
-        rel_types_str = ", ".join(sorted(list(self.valid_rel_types))) if self.valid_rel_types else "Any"
+        node_types_info = json.dumps(list(self.node_metadata.values()), indent=2)
+        rel_types_info = json.dumps(list(self.rel_metadata.values()), indent=2)
 
         prompt = self.consolidation_prompt.format(
             nodes=json.dumps(raw_nodes, indent=2),
-            relation_types=rel_types_str
+            node_types=node_types_info,
+            relation_types=rel_types_info
         )
         
         try:

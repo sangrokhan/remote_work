@@ -1,14 +1,62 @@
 [
-  "SENDS",
-  "TRIGGERED_BY",
-  "TRANSITIONS_TO",
-  "RECEIVES",
-  "CONTAINS",
-  "EXPIRES_DURING",
-  "HAS_VALUE",
-  "CONFIGURES",
-  "HAS_CONFIGURATIONS",
-  "REQUIRES",
-  "STARTS",
-  "STOPS"
+  {
+    "type": "SENDS",
+    "description": "Transmission of a message or signal from a source node to a target node.",
+    "examples": ["UE SENDS RRCSetupRequest to gNB", "AMF SENDS Paging to gNB"]
+  },
+  {
+    "type": "RECEIVES",
+    "description": "Receipt of a message or signal by a node from another entity.",
+    "examples": ["gNB RECEIVES MeasurementReport from UE"]
+  },
+  {
+    "type": "TRIGGERED_BY",
+    "description": "An event, condition, or message that initiates a procedure, timer, or state change.",
+    "examples": ["Handover is TRIGGERED_BY signal strength drop", "T300 is TRIGGERED_BY sending RRCSetupRequest"]
+  },
+  {
+    "type": "TRANSITIONS_TO",
+    "description": "A change from one state or operating mode to another.",
+    "examples": ["UE TRANSITIONS_TO RRC_CONNECTED", "Procedure TRANSITIONS_TO Failure state"]
+  },
+  {
+    "type": "CONTAINS",
+    "description": "A hierarchical or structural relationship where one entity is a component of another.",
+    "examples": ["ServingCellConfig CONTAINS BWP configurations", "SIB1 CONTAINS CellSelectionInfo"]
+  },
+  {
+    "type": "EXPIRES_DURING",
+    "description": "A timer reaches its limit during the execution of a specific procedure or state.",
+    "examples": ["T300 EXPIRES_DURING Random Access Procedure"]
+  },
+  {
+    "type": "HAS_VALUE",
+    "description": "A property or parameter is assigned a specific setting or measurement.",
+    "examples": ["Priority HAS_VALUE 5", "Capability HAS_VALUE 'supported'"]
+  },
+  {
+    "type": "CONFIGURES",
+    "description": "One entity or configuration object sets the parameters for another.",
+    "examples": ["BWPConfiguration CONFIGURES ServingCell", "RRCReconfiguration CONFIGURES radio bearers"]
+  },
+  {
+    "type": "HAS_CONFIGURATIONS",
+    "description": "An entity possesses or is associated with one or more configuration sets.",
+    "examples": ["Cell HAS_CONFIGURATIONS for multiple BWPs"]
+  },
+  {
+    "type": "REQUIRES",
+    "description": "A dependency where one entity or feature needs another to function correctly.",
+    "examples": ["High-speed mode REQUIRES specific carrier frequency"]
+  },
+  {
+    "type": "STARTS",
+    "description": "The beginning of a procedure, timer, or operational phase.",
+    "examples": ["RACH procedure STARTS when preamble is sent", "T301 STARTS upon receipt of RRCReestablishment"]
+  },
+  {
+    "type": "STOPS",
+    "description": "The termination of a procedure, timer, or operational phase.",
+    "examples": ["T300 STOPS when RRCSetup is received", "Procedure STOPS upon success"]
+  }
 ]
