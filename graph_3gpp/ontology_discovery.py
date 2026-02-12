@@ -4,6 +4,7 @@ import logging
 import re
 import argparse
 import sys
+from datetime import datetime
 from typing import List, Dict, Set, Any
 from llama_index.llms.openai_like import OpenAILike
 from llama_index.core.node_parser import SentenceSplitter
@@ -102,7 +103,17 @@ class OntologyDiscovery:
         samples.append(text[-sample_size:])
         return samples
 
-    def _parse_json(self, text: str) -> Dict[str, Any]:
+    def _log_parse_failure(self, raw_text: str, error: str, context: str = ""):
+        """Logs failed JSON parsing attempts to a dedicated file for debugging."""
+        with open("json_parse_fails.log", "a", encoding="utf-8") as f:
+            f.write(f"--- FAILURE AT {datetime.now().isoformat()} ---\n")
+            f.write(f"CONTEXT: {context}\n")
+            f.write(f"ERROR: {error}\n")
+            f.write("RAW TEXT:\n")
+            f.write(raw_text)
+            f.write("\n" + "="*50 + "\n\n")
+
+    def _parse_json(self, text: str, context: str = "") -> Dict[str, Any]:
         """Extracts and parses JSON from LLM response using dirtyjson for robustness."""
         import dirtyjson
         import re
@@ -111,6 +122,7 @@ class OntologyDiscovery:
         start = text.find('{')
         end = text.rfind('}')
         if start == -1 or end == -1:
+            self._log_parse_failure(text, "No JSON object markers found", context)
             return {}
         
         json_str = text[start:end+1]
@@ -121,9 +133,10 @@ class OntologyDiscovery:
             logger.error(f"JSON Parsing Error with dirtyjson: {e}")
             try:
                 # Basic cleanup
-                json_str = re.sub(r'//.*?\n|/\*.*?\*/', '', json_str, flags=re.DOTALL)
-                return dirtyjson.loads(json_str)
-            except:
+                clean_str = re.sub(r'//.*?\n|/\*.*?\*/', '', json_str, flags=re.DOTALL)
+                return dirtyjson.loads(clean_str)
+            except Exception as e2:
+                self._log_parse_failure(json_str, f"Final parsing failed: {e2}", context)
                 return {}
 
     def discover(self, file_path: str, output_path: str = None, full_scan: bool = False, retry_count: int = 1) -> dict:
@@ -161,13 +174,13 @@ class OntologyDiscovery:
                     output_text = response.text.strip()
                     llm_logger.debug(f"--- Raw LLM Output (Chunk {i+1}) ---\n{output_text}\n---------------------------")
                     
-                    sample_ontology = self._parse_json(output_text)
+                    sample_ontology = self._parse_json(output_text, context=f"Discovery Chunk {i+1}")
                     
                     if not sample_ontology and retry_count > 0:
                         logger.warning(f"Initial discovery JSON parsing failed for chunk {i+1}. Attempting self-correction...")
                         correction_prompt = f"The following JSON was invalid. Please fix the formatting and return ONLY the valid JSON object:\n\n{output_text}"
                         retry_response = self.llm.complete(correction_prompt)
-                        sample_ontology = self._parse_json(retry_response.text.strip())
+                        sample_ontology = self._parse_json(retry_response.text.strip(), context=f"Discovery Chunk {i+1} (RETRY)")
 
                     if sample_ontology:
                         self._merge_ontologies(aggregated_ontology, sample_ontology)
@@ -215,7 +228,7 @@ class OntologyDiscovery:
             output_text = response.text.strip()
             llm_logger.debug(f"--- Raw LLM Output (Consolidation) ---\n{output_text}\n---------------------------")
             
-            consolidated = self._parse_json(output_text)
+            consolidated = self._parse_json(output_text, context="Consolidation")
             
             # Post-processing: Validate node_types and uppercase/filter relations
             valid_base_types = self.valid_base_types

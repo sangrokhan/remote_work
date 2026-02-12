@@ -3,6 +3,7 @@ import json
 import logging
 import argparse
 import sys
+from datetime import datetime
 from typing import List, Dict, Any
 from uuid import uuid4
 
@@ -139,7 +140,17 @@ class GraphPipeline:
         logger.info(f"Generated {len(final_chunks)} chunks after structural and size-based splitting.")
         return final_chunks
 
-    def _parse_json(self, text: str) -> Dict[str, Any]:
+    def _log_parse_failure(self, raw_text: str, error: str, context: str = ""):
+        """Logs failed JSON parsing attempts to a dedicated file for debugging."""
+        with open("json_parse_fails.log", "a", encoding="utf-8") as f:
+            f.write(f"--- FAILURE AT {datetime.now().isoformat()} ---\n")
+            f.write(f"CONTEXT: {context}\n")
+            f.write(f"ERROR: {error}\n")
+            f.write("RAW TEXT:\n")
+            f.write(raw_text)
+            f.write("\n" + "="*50 + "\n\n")
+
+    def _parse_json(self, text: str, context: str = "") -> Dict[str, Any]:
         """Extracts and parses JSON from LLM response using dirtyjson for robustness."""
         import dirtyjson
         import re
@@ -148,6 +159,7 @@ class GraphPipeline:
         start = text.find('{')
         end = text.rfind('}')
         if start == -1 or end == -1:
+            self._log_parse_failure(text, "No JSON object markers found", context)
             return {}
         
         json_str = text[start:end+1]
@@ -158,9 +170,10 @@ class GraphPipeline:
             logger.error(f"JSON Parsing Error with dirtyjson: {e}")
             try:
                 # Basic cleanup
-                json_str = re.sub(r'//.*?\n|/\*.*?\*/', '', json_str, flags=re.DOTALL)
-                return dirtyjson.loads(json_str)
-            except:
+                clean_str = re.sub(r'//.*?\n|/\*.*?\*/', '', json_str, flags=re.DOTALL)
+                return dirtyjson.loads(clean_str)
+            except Exception as e2:
+                self._log_parse_failure(json_str, f"Final parsing failed: {e2}", context)
                 return {}
 
     def extract_triples(self, chunk: Dict[str, Any], retry_count: int = 1) -> List[Dict[str, Any]]:
@@ -187,14 +200,14 @@ class GraphPipeline:
             response = self.llm.complete(prompt)
             output_text = response.text.strip()
             
-            data = self._parse_json(output_text)
+            data = self._parse_json(output_text, context=f"Chunk: {chunk_id[:8]}")
             
             # Self-correction logic
             if not data and retry_count > 0:
                 logger.warning(f"Initial JSON parsing failed for chunk {chunk_id[:8]}. Attempting self-correction...")
                 correction_prompt = f"The following JSON was invalid. Please fix the formatting (ensure double quotes, commas, and proper escaping) and return ONLY the valid JSON object:\n\n{output_text}"
                 retry_response = self.llm.complete(correction_prompt)
-                data = self._parse_json(retry_response.text.strip())
+                data = self._parse_json(retry_response.text.strip(), context=f"Chunk: {chunk_id[:8]} (RETRY)")
 
             if not data:
                 logger.error(f"Failed to extract valid JSON for chunk {chunk_id}.")
