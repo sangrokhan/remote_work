@@ -1,0 +1,14 @@
+neo4j:
+  uri: "bolt://localhost:7687"
+  user: "neo4j"
+  password: "password"
+
+excel_password: "your_excel_password_here"
+
+files:
+  - name: "DocumentA"
+    path: "data/fileA.xlsx"
+    key_column: "SharedID"
+  - name: "DocumentB"
+    path: "data/fileB.xlsx"
+    key_column: "ReferenceID"
