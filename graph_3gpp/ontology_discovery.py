@@ -157,7 +157,10 @@ class OntologyDiscovery:
 
             for i, sample in enumerate(samples):
                 logger.info(f"Processing chunk {i+1}/{len(samples)}...")
-                prompt = self.discovery_prompt.format(text=sample)
+                prompt = self.discovery_prompt.format(
+                    text=sample,
+                    relation_types=json.dumps(list(self.valid_rel_types))
+                )
                 
                 try:
                     response = self.llm.complete(prompt)
@@ -204,16 +207,11 @@ class OntologyDiscovery:
                  "properties": n.get("properties")
              })
         
-        raw_rels = []
-        for r in raw_ontology.get('relations', []):
-            if isinstance(r, dict):
-                r['type'] = r.get('type', 'RELATED_TO').upper()
-                raw_rels.append(r)
-            elif isinstance(r, str):
-                raw_rels.append(r.upper())
+        rel_types_str = ", ".join(sorted(list(self.valid_rel_types))) if self.valid_rel_types else "Any"
 
         prompt = self.consolidation_prompt.format(
-            nodes=json.dumps(raw_nodes, indent=2)
+            nodes=json.dumps(raw_nodes, indent=2),
+            relation_types=rel_types_str
         )
         
         try:
@@ -223,8 +221,9 @@ class OntologyDiscovery:
             
             consolidated = self._parse_json(output_text)
             
-            # Post-processing: Validate node_types and uppercase relations
+            # Post-processing: Validate node_types and uppercase/filter relations
             valid_base_types = self.valid_base_types
+            valid_rel_types = self.valid_rel_types
             
             # 1. Clean nodes
             if "nodes" in consolidated:
@@ -235,13 +234,24 @@ class OntologyDiscovery:
                         clean_nodes.append(n)
                 consolidated["nodes"] = clean_nodes
             
-            # 2. Uppercase relations
+            # 2. Uppercase and Filter relations
             if "relations" in consolidated:
+                clean_rels = []
                 for r in consolidated["relations"]:
-                    if isinstance(r, dict) and "type" in r:
-                        r["type"] = r["type"].upper()
-                    elif isinstance(r, dict) and "relation" in r: # Handle LLM using 'relation' key
-                        r["type"] = r.pop("relation").upper()
+                    r_type = None
+                    if isinstance(r, dict):
+                        # Support multiple keys for robustness
+                        r_type = (r.get("type") or r.get("relation") or r.get("relation_type") or "RELATED_TO").upper()
+                        r["type"] = r_type
+                        # Cleanup redundant keys
+                        for key in ["relation", "relation_type"]:
+                            if key in r: r.pop(key)
+                    elif isinstance(r, str):
+                        r_type = r.upper()
+                    
+                    if not valid_rel_types or r_type in valid_rel_types:
+                        clean_rels.append(r if isinstance(r, dict) else {"type": r_type})
+                consolidated["relations"] = clean_rels
             
             return consolidated
         except Exception as e:
@@ -269,7 +279,7 @@ class OntologyDiscovery:
                     base['nodes'].append(node)
                     existing_nodes[low_label] = len(base['nodes']) - 1
         
-        # 2. Merge Relations (force uppercase)
+        # 2. Merge Relations (force uppercase and handle multiple keys)
         new_rels = new.get('relations', []) or new.get('relationship_types', [])
         if "relations" not in base:
             base["relations"] = []
@@ -279,9 +289,11 @@ class OntologyDiscovery:
         
         for rel in new_rels:
             if isinstance(rel, dict):
-                r_type = (rel.get("type") or rel.get("relation") or "RELATED_TO").upper()
+                r_type = (rel.get("type") or rel.get("relation") or rel.get("relation_type") or "RELATED_TO").upper()
                 rel["type"] = r_type
-                if "relation" in rel: del rel["relation"]
+                # Cleanup
+                for key in ["relation", "relation_type"]:
+                    if key in rel: rel.pop(key)
                 
                 key = (rel.get("source"), r_type, rel.get("target"))
                 if key in existing_rels:
