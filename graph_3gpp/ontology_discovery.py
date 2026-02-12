@@ -207,18 +207,31 @@ class OntologyDiscovery:
     def _consolidate_ontology(self, raw_ontology: dict) -> dict:
         # Prepare the data for the LLM to consolidate
         raw_nodes = []
-        for n in raw_ontology.get('nodes', []):
+        for n in raw_ontology.get("nodes", []):
              raw_nodes.append({
                  "label": n.get("label"),
                  "node_type": n.get("node_type"),
                  "properties": n.get("properties")
              })
         
+        raw_rels = []
+        for r in raw_ontology.get("relations", []):
+            if isinstance(r, dict):
+                raw_rels.append({
+                    "source": r.get("source"),
+                    "target": r.get("target"),
+                    "type": r.get("type"),
+                    "properties": r.get("properties")
+                })
+            else:
+                raw_rels.append(r)
+        
         node_types_info = json.dumps(list(self.node_metadata.values()), indent=2)
         rel_types_info = json.dumps(list(self.rel_metadata.values()), indent=2)
 
         prompt = self.consolidation_prompt.format(
             nodes=json.dumps(raw_nodes, indent=2),
+            relations=json.dumps(raw_rels, indent=2),
             node_types=node_types_info,
             relation_types=rel_types_info
         )
@@ -230,6 +243,9 @@ class OntologyDiscovery:
             
             consolidated = self._parse_json(output_text, context="Consolidation")
             
+            if not consolidated or (not consolidated.get("nodes") and not consolidated.get("relations")):
+                logger.warning("Consolidation returned empty result. Falling back to original ontology.")
+                return raw_ontology
             # Post-processing: Validate node_types and uppercase/filter relations
             valid_base_types = self.valid_base_types
             valid_rel_types = self.valid_rel_types
