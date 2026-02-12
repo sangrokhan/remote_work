@@ -23,5 +23,10 @@
     "label": "UserState",
     "description": "The specific operating mode or connection status of a User Equipment (UE) or its context in the core network.",
     "examples": ["RRC_IDLE", "RRC_CONNECTED", "RRC_INACTIVE", "CM-IDLE", "CM-CONNECTED"]
+  },
+  {
+    "label": "Feature",
+    "description": "A high-level functional capability or service enhancement introduced in 3GPP specifications, often spanning multiple procedures and nodes.",
+    "examples": ["Network Slicing", "URLLC", "Massive MIMO", "RedCap", "Dual Connectivity", "VoNR"]
   }
 ]

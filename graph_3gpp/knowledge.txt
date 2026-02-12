@@ -4,6 +4,7 @@ ProtocolMessage: Message for network operations.
 Timer: Time-based event triggering actions.
 Procedure: Sequence of network operations or steps.
 UserState: Current state or mode of a user/device.
+Feature: High-level functional capability or service enhancement (e.g., Network Slicing, URLLC).
 
 # Relationships (Allowed Verbs)
 SENDS, RECEIVES, TRIGGERED_BY, TRANSITIONS_TO, CONTAINS, EXPIRES_DURING, HAS_VALUE, CONFIGURES, HAS_CONFIGURATIONS, REQUIRES, STARTS, STOPS
