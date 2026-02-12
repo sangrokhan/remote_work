@@ -213,7 +213,7 @@ class GraphPipeline:
             return []
 
     def save_to_neo4j(self, triples: List[Dict[str, Any]]):
-        """Saves triples to Neo4j using ontological labels and properties."""
+        """Saves triples to Neo4j using ontological labels and properties with additive merging."""
         if not triples:
             return
 
@@ -223,17 +223,19 @@ class GraphPipeline:
                 t_label = triple.get('tail_label', 'Entity').replace(" ", "_")
                 rel_type = triple.get('type', 'RELATED_TO').upper().replace(" ", "_").replace("-", "_")
                 
+                # Extract properties
                 h_props = triple.get('head_properties', {})
                 t_props = triple.get('tail_properties', {})
                 edge_props = triple.get('edge_properties', {})
                 
-                h_props['name'] = triple.get('head', 'Unknown')
-                t_props['name'] = triple.get('tail', 'Unknown')
+                # Standardize names
+                h_name = triple.get('head', 'Unknown')
+                t_name = triple.get('tail', 'Unknown')
                 
-                if not isinstance(edge_props, dict):
-                    edge_props = {"info": str(edge_props)}
-                edge_props['chunk_id'] = triple.get('chunk_id')
+                # Metadata
+                chunk_id = triple.get('chunk_id')
 
+                # Clean property keys for Neo4j compatibility
                 def clean_dict(d):
                     return {"".join(c for c in str(k) if c.isalnum() or c == '_'): v for k, v in d.items() if k}
 
@@ -241,26 +243,60 @@ class GraphPipeline:
                 t_props_clean = clean_dict(t_props)
                 edge_props_clean = clean_dict(edge_props)
                 
-                dynamic_query = (
-                    f"MERGE (h:`{h_label}` {{name: $head}}) "
-                    f"SET h += $h_props "
-                    f"MERGE (t:`{t_label}` {{name: $tail}}) "
-                    f"SET t += $t_props "
-                    f"MERGE (h)-[r:`{rel_type}`]->(t) "
-                    f"SET r += $edge_props"
+                # Cypher logic: 
+                # 1. MERGE nodes by name
+                # 2. Add properties additively (concatenate if different)
+                # 3. Collect chunk_ids in a list
+                
+                additive_node_query = (
+                    f"MERGE (n:`{h_label}` {{name: $name}}) "
+                    f"WITH n "
+                    f"UNWIND keys($props) AS key "
+                    f"SET n[key] = CASE "
+                    f"  WHEN n[key] IS NULL THEN $props[key] "
+                    f"  WHEN n[key] CONTAINS $props[key] THEN n[key] "
+                    f"  ELSE n[key] + ' | ' + $props[key] "
+                    f"END "
+                    f"SET n.chunk_ids = apoc.coll.toSet(coalesce(n.chunk_ids, []) + $chunk_id)"
                 )
                 
+                # Fallback for chunk_ids if APOC is not available
+                simple_node_query = (
+                    f"MERGE (n:`{{label}}` {{name: $name}}) "
+                    f"WITH n "
+                    f"UNWIND keys($props) AS key "
+                    f"SET n[key] = CASE "
+                    f"  WHEN n[key] IS NULL THEN $props[key] "
+                    f"  WHEN n[key] CONTAINS $props[key] THEN n[key] "
+                    f"  ELSE n[key] + ' | ' + $props[key] "
+                    f"END "
+                )
+
                 try:
-                    session.run(dynamic_query, 
-                                head=h_props_clean['name'], 
-                                h_props=h_props_clean,
-                                tail=t_props_clean['name'], 
-                                t_props=t_props_clean,
-                                edge_props=edge_props_clean)
+                    # Save Head
+                    session.run(simple_node_query.replace("{label}", h_label), name=h_name, props=h_props_clean)
+                    # Save Tail
+                    session.run(simple_node_query.replace("{label}", t_label), name=t_name, props=t_props_clean)
+                    
+                    # Save Relationship
+                    rel_query = (
+                        f"MATCH (h:`{h_label}` {{name: $h_name}}) "
+                        f"MATCH (t:`{t_label}` {{name: $t_name}}) "
+                        f"MERGE (h)-[r:`{rel_type}`]->(t) "
+                        f"WITH r "
+                        f"UNWIND keys($props) AS key "
+                        f"SET r[key] = CASE "
+                        f"  WHEN r[key] IS NULL THEN $props[key] "
+                        f"  WHEN r[key] CONTAINS $props[key] THEN r[key] "
+                        f"  ELSE r[key] + ' | ' + $props[key] "
+                        f"END "
+                    )
+                    session.run(rel_query, h_name=h_name, t_name=t_name, props=edge_props_clean)
+                    
                 except Exception as e:
                     logger.error(f"Failed to save triple {triple}: {e}")
 
-        logger.info(f"Saved {len(triples)} triples to Neo4j.")
+        logger.info(f"Processed {len(triples)} triples in Neo4j.")
 
     def run(self, file_path: str):
         try:
