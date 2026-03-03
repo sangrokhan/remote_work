@@ -54,12 +54,18 @@ def _get_sheet_by_name(workbook, target_name):
     return None
 
 
-def _append_triple(triples, subject, predicate, object_value, metadata=None):
+def _append_triple(
+    triples, subject, predicate, object_value, metadata=None, subject_label=None, object_label=None
+):
     triple = {
         "subject": subject,
         "predicate": predicate,
         "object": object_value,
     }
+    if subject_label is not None:
+        triple["subject_label"] = subject_label
+    if object_label is not None:
+        triple["object_label"] = object_label
     if metadata:
         triple["meta"] = metadata
     triples.append(triple)
@@ -81,7 +87,6 @@ def process_counters_sheet(sheet, file_stem, triples):
             "subject_properties": {
                 "counter_id": counter_id,
             },
-            "subject_labels": ["FAMILY_NAME"],
         }
         if category is not None:
             _append_triple(
@@ -89,10 +94,9 @@ def process_counters_sheet(sheet, file_stem, triples):
                 subject=subject,
                 predicate="CATEGORY_OF",
                 object_value=category,
-                metadata={
-                    **metadata,
-                    "object_labels": ["CATEGORY"],
-                },
+                subject_label="FAMILY_NAME",
+                object_label="CATEGORY",
+                metadata=metadata,
             )
 
         for system_id in system_ids:
@@ -101,10 +105,9 @@ def process_counters_sheet(sheet, file_stem, triples):
                 subject=subject,
                 predicate="COUNTERS_OF",
                 object_value=system_id,
-                metadata={
-                    **metadata,
-                    "object_labels": ["FEATURE"],
-                },
+                subject_label="FAMILY_NAME",
+                object_label="FEATURE",
+                metadata=metadata,
             )
 
 
@@ -127,7 +130,6 @@ def process_parameters_sheet(sheet, file_stem, triples):
                 "range": range_value,
                 "default_value": default_value,
             },
-            "subject_labels": ["PARAMETER"],
         }
 
         for system_id in system_ids:
@@ -136,10 +138,9 @@ def process_parameters_sheet(sheet, file_stem, triples):
                 subject=parameter,
                 predicate="RELATED_TO",
                 object_value=system_id,
-                metadata={
-                    **metadata,
-                    "object_labels": ["FEATURE"],
-                },
+                subject_label="PARAMETER",
+                object_label="FEATURE",
+                metadata=metadata,
             )
 
 
