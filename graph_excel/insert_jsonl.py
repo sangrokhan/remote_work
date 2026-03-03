@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -13,6 +14,20 @@ def _stringify(value: Any) -> str:
     if isinstance(value, (int, float, bool)) or value is None:
         return json.dumps(value, ensure_ascii=False)
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _to_predicate_type(predicate: str) -> str:
+    pred = predicate.strip()
+    if not pred:
+        return "HAS_TRIPLE"
+    cleaned = re.sub(r"[^0-9A-Za-z_]+", "_", pred).strip("_").upper()
+    if not cleaned:
+        cleaned = "HAS_TRIPLE"
+    if cleaned[0].isdigit():
+        cleaned = f"R_{cleaned}"
+    if re.match(r"^[A-Z]", cleaned) is None:
+        return "HAS_TRIPLE"
+    return cleaned[:50]
 
 
 def _read_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
@@ -51,10 +66,9 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
         records.append(
             {
                 "subject_value": _stringify(subject),
-                "subject_type": type(subject).__name__,
                 "object_value": _stringify(obj),
-                "object_type": type(obj).__name__,
                 "predicate": str(predicate),
+                "predicate_type": _to_predicate_type(str(predicate)),
                 "meta": meta_value,
                 "source": str(jsonl_path.name),
                 "json_line": line_no,
@@ -69,10 +83,10 @@ def _create_indexes_and_constraints(session, dry_run: bool) -> None:
         return
     session.run(
         """
-        CREATE CONSTRAINT jsonl_node_value_unique
+        CREATE CONSTRAINT jsonl_node_name_unique
         IF NOT EXISTS
         FOR (n:JsonlEntity)
-        REQUIRE n.value IS UNIQUE
+        REQUIRE n.name IS UNIQUE
         """
     )
 
@@ -80,44 +94,36 @@ def _create_indexes_and_constraints(session, dry_run: bool) -> None:
 def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> int:
     if not rows:
         return 0
+    total = 0
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["predicate_type"], []).append(row)
 
-    if ignore_meta:
-        query = """
-    UNWIND $rows AS row
-    MERGE (s:JsonlEntity {value: row.subject_value})
-    SET s.type = row.subject_type,
-        s.last_seen_source = row.source,
-        s.name = row.subject_value
-    MERGE (o:JsonlEntity {value: row.object_value})
-    SET o.type = row.object_type,
-        o.last_seen_source = row.source,
-        o.name = row.object_value
-    MERGE (s)-[r:HAS_TRIPLE]->(o)
-    SET r.predicate = row.predicate,
-        r.source_file = row.source,
-        r.source_line = row.json_line
-    RETURN count(*) AS c
-    """
-    else:
-        query = """
-    UNWIND $rows AS row
-    MERGE (s:JsonlEntity {value: row.subject_value})
-    SET s.type = row.subject_type,
-        s.last_seen_source = row.source,
-        s.name = row.subject_value
-    MERGE (o:JsonlEntity {value: row.object_value})
-    SET o.type = row.object_type,
-        o.last_seen_source = row.source,
-        o.name = row.object_value
-    MERGE (s)-[r:HAS_TRIPLE]->(o)
-    SET r.predicate = row.predicate,
-        r.meta = row.meta,
-        r.source_file = row.source,
-        r.source_line = row.json_line
-    RETURN count(*) AS c
-    """
-    result = tx.run(query, rows=rows)
-    return result.single()["c"]
+    for rel_type, grouped_rows in grouped.items():
+        if ignore_meta:
+            query = f"""
+            UNWIND $rows AS row
+            MERGE (s:JsonlEntity {{name: row.subject_value}})
+            MERGE (o:JsonlEntity {{name: row.object_value}})
+            MERGE (s)-[r:`{rel_type}`]->(o)
+            SET r.predicate = row.predicate,
+                r.source_file = row.source,
+                r.source_line = row.json_line
+            """
+        else:
+            query = f"""
+            UNWIND $rows AS row
+            MERGE (s:JsonlEntity {{name: row.subject_value}})
+            MERGE (o:JsonlEntity {{name: row.object_value}})
+            MERGE (s)-[r:`{rel_type}`]->(o)
+            SET r.predicate = row.predicate,
+                r.meta = row.meta,
+                r.source_file = row.source,
+                r.source_line = row.json_line
+            """
+        result = tx.run(query + "\nRETURN count(*) AS c", rows=grouped_rows)
+        total += result.single()["c"]
+    return total
 
 
 def insert_jsonl(
