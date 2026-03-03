@@ -15,18 +15,6 @@ def _stringify(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def _coerce_for_neo4j(value: Any) -> Any:
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    if isinstance(value, list):
-        return [_coerce_for_neo4j(v) for v in value]
-    if isinstance(value, tuple):
-        return [_coerce_for_neo4j(v) for v in list(value)]
-    if isinstance(value, dict):
-        return {str(k): _coerce_for_neo4j(v) for k, v in value.items()}
-    return _stringify(value)
-
-
 def _read_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
     with path.open("r", encoding="utf-8") as f:
         for line_no, raw in enumerate(f, 1):
@@ -56,6 +44,10 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
                 f"Line {line_no} missing required key(s): subject/predicate/object"
             )
 
+        # Neo4j relationships do not accept nested property values.
+        # Store meta as JSON text to keep all metadata fields.
+        meta_json = json.dumps(meta, ensure_ascii=False, sort_keys=True) if meta is not None else None
+
         records.append(
             {
                 "subject_value": _stringify(subject),
@@ -63,7 +55,7 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
                 "object_value": _stringify(obj),
                 "object_type": type(obj).__name__,
                 "predicate": str(predicate),
-                "meta": _coerce_for_neo4j(meta) if isinstance(meta, dict) else {},
+                "meta_json": meta_json,
                 "source": str(jsonl_path.name),
                 "json_line": line_no,
             }
@@ -85,11 +77,12 @@ def _create_indexes_and_constraints(session, dry_run: bool) -> None:
     )
 
 
-def _insert_batch(tx, rows: List[Dict[str, Any]]) -> int:
+def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> int:
     if not rows:
         return 0
 
-    query = """
+    if ignore_meta:
+        query = """
     UNWIND $rows AS row
     MERGE (s:JsonlEntity {value: row.subject_value})
     SET s.type = row.subject_type,
@@ -99,7 +92,22 @@ def _insert_batch(tx, rows: List[Dict[str, Any]]) -> int:
         o.last_seen_source = row.source
     MERGE (s)-[r:HAS_TRIPLE]->(o)
     SET r.predicate = row.predicate,
-        r.meta = row.meta,
+        r.source_file = row.source,
+        r.source_line = row.json_line
+    RETURN count(*) AS c
+    """
+    else:
+        query = """
+    UNWIND $rows AS row
+    MERGE (s:JsonlEntity {value: row.subject_value})
+    SET s.type = row.subject_type,
+        s.last_seen_source = row.source
+    MERGE (o:JsonlEntity {value: row.object_value})
+    SET o.type = row.object_type,
+        o.last_seen_source = row.source
+    MERGE (s)-[r:HAS_TRIPLE]->(o)
+    SET r.predicate = row.predicate,
+        r.meta_json = row.meta_json,
         r.source_file = row.source,
         r.source_line = row.json_line
     RETURN count(*) AS c
@@ -117,6 +125,7 @@ def insert_jsonl(
     database: str = None,
     skip_invalid: bool = False,
     dry_run: bool = False,
+    ignore_meta: bool = False,
 ) -> None:
     path = Path(jsonl_path)
     records = _prepare_rows(path, skip_invalid=skip_invalid)
@@ -136,9 +145,13 @@ def insert_jsonl(
             _create_indexes_and_constraints(session, dry_run=False)
 
             total = 0
+            for record in records:
+                if ignore_meta:
+                    record["meta_json"] = None
+
             for i in range(0, len(records), batch_size):
                 batch = records[i : i + batch_size]
-                count = session.execute_write(_insert_batch, batch)
+                count = session.execute_write(_insert_batch, batch, ignore_meta)
                 total += count
             print(f"Inserted/updated {total} triples.")
     finally:
@@ -186,6 +199,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Validate JSONL and print count without writing to Neo4j.",
     )
+    parser.add_argument(
+        "--ignore-meta",
+        action="store_true",
+        help="Do not write meta metadata to Neo4j (ignore meta_json field).",
+    )
     return parser.parse_args()
 
 
@@ -200,6 +218,7 @@ def main():
         database=args.database,
         skip_invalid=args.skip_invalid,
         dry_run=args.dry_run,
+        ignore_meta=args.ignore_meta,
     )
 
 
