@@ -78,12 +78,10 @@ def process_counters_sheet(sheet, file_stem, triples):
 
         subject = name
         metadata = {
-            "file": file_stem,
-            "sheet": "Counter",
-            "category": category,
-            "row": row,
+            "subject_properties": {
+                "counter_id": counter_id,
+            }
         }
-        metadata["subject_properties"] = {"counter_id": counter_id}
         if category is not None:
             _append_triple(
                 triples,
@@ -107,15 +105,23 @@ def process_parameters_sheet(sheet, file_stem, triples):
     max_row = _max_used_row(sheet)
     for row in range(2, max_row + 1):
         parameter = _normalize_cell(_read_cell(sheet, "B", row))
+        hierarchy = _normalize_cell(_read_cell(sheet, "A", row))
+        range_value = _normalize_cell(_read_cell(sheet, "J", row))
+        default_value = _normalize_cell(_read_cell(sheet, "K", row))
         system_ids = _split_system_ids(_read_cell(sheet, "U", row))
         if not parameter or not system_ids:
             continue
+        if hierarchy is None:
+            continue
 
         metadata = {
-            "file": file_stem,
-            "sheet": "Parameter Description",
-            "row": row,
+            "subject_properties": {
+                "hierarchy": hierarchy,
+                "range": range_value,
+                "default_value": default_value,
+            }
         }
+
         for system_id in system_ids:
             _append_triple(
                 triples,
