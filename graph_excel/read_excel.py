@@ -80,7 +80,8 @@ def process_counters_sheet(sheet, file_stem, triples):
         metadata = {
             "subject_properties": {
                 "counter_id": counter_id,
-            }
+            },
+            "subject_labels": ["COUNTER"],
         }
         if category is not None:
             _append_triple(
@@ -119,7 +120,8 @@ def process_parameters_sheet(sheet, file_stem, triples):
                 "hierarchy": hierarchy,
                 "range": range_value,
                 "default_value": default_value,
-            }
+            },
+            "subject_labels": ["PARAMETER"],
         }
 
         for system_id in system_ids:

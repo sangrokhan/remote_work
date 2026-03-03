@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -21,6 +22,45 @@ def _is_nullish_object(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"none", "null", "n/a", "na"}
     return False
+
+
+def _safe_label(label: Any) -> str:
+    if not isinstance(label, str):
+        label = str(label)
+    label = re.sub(r"[^0-9A-Za-z_]", "_", label.strip().replace(" ", "_"))
+    if not label:
+        return ""
+    if not re.match(r"^[A-Za-z_]", label):
+        label = f"_{label}"
+    return label
+
+
+def _parse_node_labels(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        items = [raw]
+    labels: List[str] = []
+    seen = set()
+    for item in items:
+        label = _safe_label(item)
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return labels
+
+
+def _label_assignment_clause(row_key: str, alias: str, labels: List[str]) -> str:
+    if not labels:
+        return ""
+    clauses = [
+        f"FOREACH (_ IN CASE WHEN '{label}' IN coalesce(row.{row_key}, []) THEN [1] ELSE [] END | SET {alias}:{label})"
+        for label in labels
+    ]
+    return "\n            ".join(clauses)
 
 
 def _read_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
@@ -63,9 +103,17 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
         meta_value = json.dumps(meta, ensure_ascii=False, sort_keys=True) if meta is not None else None
         subject_properties = {}
         object_properties = {}
+        subject_labels: List[str] = []
+        object_labels: List[str] = []
         if isinstance(meta, dict):
             subject_properties = meta.get("subject_properties", {}) or {}
             object_properties = meta.get("object_properties", {}) or {}
+            subject_labels = _parse_node_labels(
+                meta.get("subject_labels", meta.get("subject_label"))
+            )
+            object_labels = _parse_node_labels(
+                meta.get("object_labels", meta.get("object_label"))
+            )
             if not isinstance(subject_properties, dict):
                 subject_properties = {}
             if not isinstance(object_properties, dict):
@@ -81,6 +129,8 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
                 "meta": meta_value,
                 "subject_properties": subject_properties,
                 "object_properties": object_properties,
+                "subject_labels": subject_labels,
+                "object_labels": object_labels,
                 "source": str(jsonl_path.name),
                 "json_line": line_no,
             }
@@ -113,11 +163,18 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
         grouped.setdefault(rel_type, []).append(row)
 
     for rel_type, grouped_rows in grouped.items():
+        subject_labels = sorted(
+            {label for row in grouped_rows for label in row.get("subject_labels", [])}
+        )
+        subject_label_clause = _label_assignment_clause(
+            "subject_labels", "s", subject_labels
+        )
         if ignore_meta:
             query = f"""
             UNWIND $rows AS row
             MERGE (s:JsonlEntity {{name: row.subject_value}})
             SET s += coalesce(row.subject_properties, {{}})
+            {subject_label_clause}
             MERGE (o:JsonlEntity {{name: row.object_value}})
             SET o += coalesce(row.object_properties, {{}})
             MERGE (s)-[r:`{rel_type}`]->(o)
@@ -130,6 +187,7 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
             UNWIND $rows AS row
             MERGE (s:JsonlEntity {{name: row.subject_value}})
             SET s += coalesce(row.subject_properties, {{}})
+            {subject_label_clause}
             MERGE (o:JsonlEntity {{name: row.object_value}})
             SET o += coalesce(row.object_properties, {{}})
             MERGE (s)-[r:`{rel_type}`]->(o)
