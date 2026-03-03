@@ -47,6 +47,17 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
         # Neo4j relationships do not accept nested property values.
         # Store meta (kept under its original key) as JSON text.
         meta_value = json.dumps(meta, ensure_ascii=False, sort_keys=True) if meta is not None else None
+        subject_properties = {}
+        object_properties = {}
+        if isinstance(meta, dict):
+            subject_properties = meta.get("subject_properties", {}) or {}
+            object_properties = meta.get("object_properties", {}) or {}
+            if not isinstance(subject_properties, dict):
+                subject_properties = {}
+            if not isinstance(object_properties, dict):
+                object_properties = {}
+            subject_properties = {str(k): v for k, v in subject_properties.items() if k is not None}
+            object_properties = {str(k): v for k, v in object_properties.items() if k is not None}
 
         records.append(
             {
@@ -54,6 +65,8 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
                 "object_value": _stringify(obj),
                 "predicate": str(predicate).strip(),
                 "meta": meta_value,
+                "subject_properties": subject_properties,
+                "object_properties": object_properties,
                 "source": str(jsonl_path.name),
                 "json_line": line_no,
             }
@@ -90,7 +103,9 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
             query = f"""
             UNWIND $rows AS row
             MERGE (s:JsonlEntity {{name: row.subject_value}})
+            SET s += coalesce(row.subject_properties, {{}})
             MERGE (o:JsonlEntity {{name: row.object_value}})
+            SET o += coalesce(row.object_properties, {{}})
             MERGE (s)-[r:`{rel_type}`]->(o)
             SET r.predicate = row.predicate,
                 r.source_file = row.source,
@@ -100,7 +115,9 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
             query = f"""
             UNWIND $rows AS row
             MERGE (s:JsonlEntity {{name: row.subject_value}})
+            SET s += coalesce(row.subject_properties, {{}})
             MERGE (o:JsonlEntity {{name: row.object_value}})
+            SET o += coalesce(row.object_properties, {{}})
             MERGE (s)-[r:`{rel_type}`]->(o)
             SET r.predicate = row.predicate,
                 r.meta = row.meta,
