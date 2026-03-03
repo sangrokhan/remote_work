@@ -8,7 +8,7 @@ def load_config(config_path="config.yaml"):
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
-def process_file(client, file_config, password):
+def process_file(client, file_config):
     path = file_config['path']
     doc_name = file_config['name']
     key_col = file_config['key_column']
@@ -16,7 +16,7 @@ def process_file(client, file_config, password):
     print(f"Processing {doc_name} from {path}...")
     
     # Decrypt
-    decrypted_file = decrypt_excel(path, password)
+    decrypted_file = decrypt_excel(path)
     
     # Load into Pandas
     df = pd.read_excel(decrypted_file, engine='openpyxl')
@@ -37,9 +37,8 @@ def main():
     client = Neo4jClient(neo4j_conf['uri'], neo4j_conf['user'], neo4j_conf['password'])
     
     try:
-        password = config.get('excel_password')
         for file_cfg in config['files']:
-            process_file(client, file_cfg, password)
+            process_file(client, file_cfg)
     finally:
         client.close()
 

@@ -3,11 +3,11 @@ import argparse
 import xlwings as xw
 
 
-def read_excel(path: str, password: str | None = None) -> None:
+def read_excel(path: str) -> None:
     app = xw.App(visible=False)
     wb = None
     try:
-        wb = app.books.open(path, password=password, read_only=True)
+        wb = app.books.open(path, read_only=True)
 
         print("Sheet names:")
         for sheet in wb.sheets:
@@ -33,13 +33,12 @@ def read_excel(path: str, password: str | None = None) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read sheet names and 10th-row contents from an Excel file.")
     parser.add_argument("file", help="Path to the Excel file")
-    parser.add_argument("--password", help="Password for protected/DRM-like encrypted file")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    read_excel(args.file, args.password)
+    read_excel(args.file)
 
 
 if __name__ == "__main__":
