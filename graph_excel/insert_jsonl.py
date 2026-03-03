@@ -45,8 +45,8 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
             )
 
         # Neo4j relationships do not accept nested property values.
-        # Store meta as JSON text to keep all metadata fields.
-        meta_json = json.dumps(meta, ensure_ascii=False, sort_keys=True) if meta is not None else None
+        # Store meta (kept under its original key) as JSON text.
+        meta_value = json.dumps(meta, ensure_ascii=False, sort_keys=True) if meta is not None else None
 
         records.append(
             {
@@ -55,7 +55,7 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
                 "object_value": _stringify(obj),
                 "object_type": type(obj).__name__,
                 "predicate": str(predicate),
-                "meta_json": meta_json,
+                "meta": meta_value,
                 "source": str(jsonl_path.name),
                 "json_line": line_no,
             }
@@ -107,7 +107,7 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
         o.last_seen_source = row.source
     MERGE (s)-[r:HAS_TRIPLE]->(o)
     SET r.predicate = row.predicate,
-        r.meta_json = row.meta_json,
+        r.meta = row.meta,
         r.source_file = row.source,
         r.source_line = row.json_line
     RETURN count(*) AS c
@@ -147,7 +147,7 @@ def insert_jsonl(
             total = 0
             for record in records:
                 if ignore_meta:
-                    record["meta_json"] = None
+                    record["meta"] = None
 
             for i in range(0, len(records), batch_size):
                 batch = records[i : i + batch_size]
@@ -202,7 +202,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ignore-meta",
         action="store_true",
-        help="Do not write meta metadata to Neo4j (ignore meta_json field).",
+        help="Do not write meta metadata to Neo4j (ignore meta field).",
     )
     return parser.parse_args()
 
