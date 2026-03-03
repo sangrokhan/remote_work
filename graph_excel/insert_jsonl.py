@@ -1,7 +1,6 @@
 import argparse
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -14,20 +13,6 @@ def _stringify(value: Any) -> str:
     if isinstance(value, (int, float, bool)) or value is None:
         return json.dumps(value, ensure_ascii=False)
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
-
-
-def _to_predicate_type(predicate: str) -> str:
-    pred = predicate.strip()
-    if not pred:
-        return "HAS_TRIPLE"
-    cleaned = re.sub(r"[^0-9A-Za-z_]+", "_", pred).strip("_").upper()
-    if not cleaned:
-        cleaned = "HAS_TRIPLE"
-    if cleaned[0].isdigit():
-        cleaned = f"R_{cleaned}"
-    if re.match(r"^[A-Z]", cleaned) is None:
-        return "HAS_TRIPLE"
-    return cleaned[:50]
 
 
 def _read_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
@@ -67,8 +52,7 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
             {
                 "subject_value": _stringify(subject),
                 "object_value": _stringify(obj),
-                "predicate": str(predicate),
-                "predicate_type": _to_predicate_type(str(predicate)),
+                "predicate": str(predicate).strip(),
                 "meta": meta_value,
                 "source": str(jsonl_path.name),
                 "json_line": line_no,
@@ -97,7 +81,9 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
     total = 0
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
-        grouped.setdefault(row["predicate_type"], []).append(row)
+        rel_type = row["predicate"] or "HAS_TRIPLE"
+        row["predicate"] = rel_type
+        grouped.setdefault(rel_type, []).append(row)
 
     for rel_type, grouped_rows in grouped.items():
         if ignore_meta:
