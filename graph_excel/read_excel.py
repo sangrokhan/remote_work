@@ -81,7 +81,7 @@ def process_counters_sheet(sheet, file_stem, triples):
             "subject_properties": {
                 "counter_id": counter_id,
             },
-            "subject_labels": ["COUNTER"],
+            "subject_labels": ["FAMILY_NAME"],
         }
         if category is not None:
             _append_triple(
@@ -89,7 +89,10 @@ def process_counters_sheet(sheet, file_stem, triples):
                 subject=subject,
                 predicate="CATEGORY_OF",
                 object_value=category,
-                metadata=metadata,
+                metadata={
+                    **metadata,
+                    "object_labels": ["CATEGORY"],
+                },
             )
 
         for system_id in system_ids:
@@ -98,7 +101,10 @@ def process_counters_sheet(sheet, file_stem, triples):
                 subject=subject,
                 predicate="COUNTERS_OF",
                 object_value=system_id,
-                metadata=metadata,
+                metadata={
+                    **metadata,
+                    "object_labels": ["FEATURE"],
+                },
             )
 
 
@@ -130,7 +136,10 @@ def process_parameters_sheet(sheet, file_stem, triples):
                 subject=parameter,
                 predicate="RELATED_TO",
                 object_value=system_id,
-                metadata=metadata,
+                metadata={
+                    **metadata,
+                    "object_labels": ["FEATURE"],
+                },
             )
 
 

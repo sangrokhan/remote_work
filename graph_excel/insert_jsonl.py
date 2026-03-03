@@ -166,8 +166,14 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
         subject_labels = sorted(
             {label for row in grouped_rows for label in row.get("subject_labels", [])}
         )
+        object_labels = sorted(
+            {label for row in grouped_rows for label in row.get("object_labels", [])}
+        )
         subject_label_clause = _label_assignment_clause(
             "subject_labels", "s", subject_labels
+        )
+        object_label_clause = _label_assignment_clause(
+            "object_labels", "o", object_labels
         )
         if ignore_meta:
             query = f"""
@@ -177,6 +183,7 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
             {subject_label_clause}
             MERGE (o:JsonlEntity {{name: row.object_value}})
             SET o += coalesce(row.object_properties, {{}})
+            {object_label_clause}
             MERGE (s)-[r:`{rel_type}`]->(o)
             SET r.predicate = row.predicate,
                 r.source_file = row.source,
@@ -190,6 +197,7 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
             {subject_label_clause}
             MERGE (o:JsonlEntity {{name: row.object_value}})
             SET o += coalesce(row.object_properties, {{}})
+            {object_label_clause}
             MERGE (s)-[r:`{rel_type}`]->(o)
             SET r.predicate = row.predicate,
                 r.meta = row.meta,
