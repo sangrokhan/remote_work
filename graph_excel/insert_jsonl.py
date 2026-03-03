@@ -15,6 +15,14 @@ def _stringify(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
+def _is_nullish_object(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {"none", "null"}
+    return False
+
+
 def _read_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
     with path.open("r", encoding="utf-8") as f:
         for line_no, raw in enumerate(f, 1):
@@ -44,11 +52,10 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
                 f"Line {line_no} missing required key(s): subject/predicate"
             )
 
-        if obj is None:
+        if _is_nullish_object(obj):
             if skip_invalid:
                 continue
-            if not skip_invalid:
-                print(f"Line {line_no} skipped: object is null")
+            print(f"Line {line_no} skipped: object is null/empty")
             continue
 
         # Neo4j relationships do not accept nested property values.
