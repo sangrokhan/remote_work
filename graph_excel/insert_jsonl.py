@@ -19,7 +19,7 @@ def _is_nullish_object(value: Any) -> bool:
     if value is None:
         return True
     if isinstance(value, str):
-        return value.strip().lower() in {"none", "null"}
+        return value.strip().lower() in {"none", "null", "n/a", "na"}
     return False
 
 
@@ -55,7 +55,7 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
         if _is_nullish_object(obj):
             if skip_invalid:
                 continue
-            print(f"Line {line_no} skipped: object is null/empty")
+            raise ValueError(f"Line {line_no} skipped: object is null-like")
             continue
 
         # Neo4j relationships do not accept nested property values.
