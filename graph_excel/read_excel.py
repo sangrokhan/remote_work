@@ -3,7 +3,7 @@ import json
 import re
 from pathlib import Path
 
-from openpyxl import load_workbook
+import xlwings as xw
 
 
 def _normalize_cell(value):
@@ -33,6 +33,27 @@ def _split_system_ids(value):
     return [part.strip() for part in parts if part and part.strip()]
 
 
+def _read_cell(sheet, column, row):
+    return sheet.range(f"{column}{row}").value
+
+
+def _max_used_row(sheet):
+    used_range = sheet.used_range
+    if used_range is None:
+        return 1
+    try:
+        return used_range.last_cell.row
+    except Exception:
+        return 1
+
+
+def _get_sheet_by_name(workbook, target_name):
+    for sheet in workbook.sheets:
+        if sheet.name.lower() == target_name.lower():
+            return sheet
+    return None
+
+
 def _append_triple(triples, subject, predicate, object_value, metadata=None):
     triple = {
         "subject": subject,
@@ -45,11 +66,12 @@ def _append_triple(triples, subject, predicate, object_value, metadata=None):
 
 
 def process_counters_sheet(sheet, file_stem, triples):
-    for row in range(2, sheet.max_row + 1):
-        category = _normalize_cell(sheet[f"A{row}"].value)
-        name = _normalize_cell(sheet[f"B{row}"].value)
-        counter_id = _normalize_cell(sheet[f"C{row}"].value)
-        system_ids = _split_system_ids(sheet[f"X{row}"].value)
+    max_row = _max_used_row(sheet)
+    for row in range(2, max_row + 1):
+        category = _normalize_cell(_read_cell(sheet, "A", row))
+        name = _normalize_cell(_read_cell(sheet, "B", row))
+        counter_id = _normalize_cell(_read_cell(sheet, "C", row))
+        system_ids = _split_system_ids(_read_cell(sheet, "X", row))
 
         if not name or not counter_id:
             continue
@@ -89,9 +111,10 @@ def process_counters_sheet(sheet, file_stem, triples):
 
 
 def process_parameters_sheet(sheet, file_stem, triples):
-    for row in range(2, sheet.max_row + 1):
-        parameter = _normalize_cell(sheet[f"B{row}"].value)
-        system_ids = _split_system_ids(sheet[f"U{row}"].value)
+    max_row = _max_used_row(sheet)
+    for row in range(2, max_row + 1):
+        parameter = _normalize_cell(_read_cell(sheet, "B", row))
+        system_ids = _split_system_ids(_read_cell(sheet, "U", row))
         if not parameter or not system_ids:
             continue
 
@@ -111,38 +134,52 @@ def process_parameters_sheet(sheet, file_stem, triples):
 
 
 def preprocess_excel(path, file_type="auto"):
-    workbook = load_workbook(filename=path, data_only=True, read_only=True)
-    sheet_names = [name.lower() for name in workbook.sheetnames]
+    app = xw.App(visible=False, add_book=False)
+    app.display_alerts = False
+    app.screen_updating = False
+
+    workbook = None
+    try:
+        workbook = app.books.open(str(path))
+    except Exception:
+        app.quit()
+        raise
+
     file_stem = Path(path).stem
     triples = []
 
-    if file_type in ("auto", "counters"):
-        if "counter" in sheet_names:
-            process_counters_sheet(workbook["Counter"], file_stem, triples)
-        elif file_type == "counters":
-            workbook.close()
-            raise ValueError("Counter sheet not found. Expected sheet name: 'Counter'.")
+    try:
+        if file_type in ("auto", "counters"):
+            counter_sheet = _get_sheet_by_name(workbook, "Counter")
+            if counter_sheet is not None:
+                process_counters_sheet(counter_sheet, file_stem, triples)
+            elif file_type == "counters":
+                raise ValueError(
+                    "Counter sheet not found. Expected sheet name: 'Counter'."
+                )
 
-    if file_type in ("auto", "parameters"):
-        if "parameter description" in sheet_names:
-            process_parameters_sheet(
-                workbook["Parameter Description"],
-                file_stem,
-                triples,
-            )
-        elif file_type == "parameters":
-            workbook.close()
+        if file_type in ("auto", "parameters"):
+            parameter_sheet = _get_sheet_by_name(workbook, "Parameter Description")
+            if parameter_sheet is not None:
+                process_parameters_sheet(
+                    parameter_sheet,
+                    file_stem,
+                    triples,
+                )
+            elif file_type == "parameters":
+                raise ValueError(
+                    "Parameter sheet not found. Expected sheet name: 'Parameter Description'."
+                )
+
+        if file_type == "auto" and not triples:
             raise ValueError(
-                "Parameter sheet not found. Expected sheet name: 'Parameter Description'."
+                "No supported sheet found. Expected 'Counter' or 'Parameter Description'."
             )
-
-    workbook.close()
-
-    if file_type == "auto" and not triples:
-        raise ValueError(
-            "No supported sheet found. Expected 'Counter' or 'Parameter Description'."
-        )
-    return triples
+        return triples
+    finally:
+        if workbook is not None:
+            workbook.close()
+        app.quit()
 
 
 def write_triples(triples, output_path):
