@@ -3,8 +3,6 @@ neo4j:
   user: "neo4j"
   password: "password"
 
-excel_password: "your_excel_password_here"
-
 files:
   - name: "DocumentA"
     path: "data/fileA.xlsx"
