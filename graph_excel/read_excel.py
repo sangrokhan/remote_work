@@ -86,7 +86,7 @@ def process_counters_sheet(sheet, file_stem, triples):
             _append_triple(
                 triples,
                 subject=subject,
-                predicate="category of",
+                predicate="CATEGORY_OF",
                 object_value=category,
                 metadata=metadata,
             )
@@ -95,7 +95,7 @@ def process_counters_sheet(sheet, file_stem, triples):
             _append_triple(
                 triples,
                 subject=subject,
-                predicate="counters of",
+                predicate="COUNTERS_OF",
                 object_value=system_id,
                 metadata=metadata,
             )
