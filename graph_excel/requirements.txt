@@ -1,0 +1,5 @@
+msoffcrypto-tool
+neo4j
+pandas
+PyYAML
+xlwings
