@@ -86,10 +86,12 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
     UNWIND $rows AS row
     MERGE (s:JsonlEntity {value: row.subject_value})
     SET s.type = row.subject_type,
-        s.last_seen_source = row.source
+        s.last_seen_source = row.source,
+        s.name = row.subject_value
     MERGE (o:JsonlEntity {value: row.object_value})
     SET o.type = row.object_type,
-        o.last_seen_source = row.source
+        o.last_seen_source = row.source,
+        o.name = row.object_value
     MERGE (s)-[r:HAS_TRIPLE]->(o)
     SET r.predicate = row.predicate,
         r.source_file = row.source,
@@ -101,10 +103,12 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
     UNWIND $rows AS row
     MERGE (s:JsonlEntity {value: row.subject_value})
     SET s.type = row.subject_type,
-        s.last_seen_source = row.source
+        s.last_seen_source = row.source,
+        s.name = row.subject_value
     MERGE (o:JsonlEntity {value: row.object_value})
     SET o.type = row.object_type,
-        o.last_seen_source = row.source
+        o.last_seen_source = row.source,
+        o.name = row.object_value
     MERGE (s)-[r:HAS_TRIPLE]->(o)
     SET r.predicate = row.predicate,
         r.meta = row.meta,
