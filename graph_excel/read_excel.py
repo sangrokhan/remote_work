@@ -86,7 +86,7 @@ def process_counters_sheet(sheet, file_stem, triples):
             _append_triple(
                 triples,
                 subject=subject,
-                predicate="HAS_CATEGORY",
+                predicate="category of",
                 object_value=category,
                 metadata=metadata,
             )
@@ -95,7 +95,7 @@ def process_counters_sheet(sheet, file_stem, triples):
             _append_triple(
                 triples,
                 subject=subject,
-                predicate="HAS_SYSTEM_ID",
+                predicate="counters of",
                 object_value=system_id,
                 metadata=metadata,
             )
@@ -126,7 +126,7 @@ def process_parameters_sheet(sheet, file_stem, triples):
             _append_triple(
                 triples,
                 subject=parameter,
-                predicate="HAS_SYSTEM_ID",
+                predicate="RELATED_TO",
                 object_value=system_id,
                 metadata=metadata,
             )
