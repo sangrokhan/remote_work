@@ -55,7 +55,15 @@ def _get_sheet_by_name(workbook, target_name):
 
 
 def _append_triple(
-    triples, subject, predicate, object_value, metadata=None, subject_label=None, object_label=None
+    triples,
+    subject,
+    predicate,
+    object_value,
+    metadata=None,
+    subject_label=None,
+    object_label=None,
+    subject_node_key=None,
+    object_node_key=None,
 ):
     triple = {
         "subject": subject,
@@ -66,6 +74,10 @@ def _append_triple(
         triple["subject_label"] = subject_label
     if object_label is not None:
         triple["object_label"] = object_label
+    if subject_node_key is not None:
+        triple["subject_node_key"] = subject_node_key
+    if object_node_key is not None:
+        triple["object_node_key"] = object_node_key
     if metadata:
         triple["meta"] = metadata
     triples.append(triple)
@@ -96,6 +108,8 @@ def process_counters_sheet(sheet, file_stem, triples):
                 object_value=category,
                 subject_label="FAMILY_NAME",
                 object_label="CATEGORY",
+                subject_node_key=f"{name}::{category}",
+                object_node_key=f"CATEGORY::{category}::{name}",
                 metadata=metadata,
             )
 
@@ -107,6 +121,7 @@ def process_counters_sheet(sheet, file_stem, triples):
                 object_value=system_id,
                 subject_label="FAMILY_NAME",
                 object_label="FEATURE",
+                subject_node_key=f"{name}::{counter_id}",
                 metadata=metadata,
             )
 
@@ -140,6 +155,7 @@ def process_parameters_sheet(sheet, file_stem, triples):
                 object_value=system_id,
                 subject_label="PARAMETER",
                 object_label="FEATURE",
+                subject_node_key=f"{hierarchy}::{parameter}",
                 metadata=metadata,
             )
 
