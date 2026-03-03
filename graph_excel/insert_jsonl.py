@@ -1,7 +1,6 @@
 import argparse
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -14,53 +13,6 @@ def _stringify(value: Any) -> str:
     if isinstance(value, (int, float, bool)) or value is None:
         return json.dumps(value, ensure_ascii=False)
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
-
-
-def _is_nullish_object(value: Any) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, str):
-        return value.strip().lower() in {"none", "null", "n/a", "na"}
-    return False
-
-
-def _safe_label(label: Any) -> str:
-    if not isinstance(label, str):
-        label = str(label)
-    label = re.sub(r"[^0-9A-Za-z_]", "_", label.strip().replace(" ", "_"))
-    if not label:
-        return ""
-    if not re.match(r"^[A-Za-z_]", label):
-        label = f"_{label}"
-    return label
-
-
-def _parse_node_labels(raw: Any) -> List[str]:
-    if raw is None:
-        return []
-    if isinstance(raw, (list, tuple, set)):
-        items = list(raw)
-    else:
-        items = [raw]
-    labels: List[str] = []
-    seen = set()
-    for item in items:
-        label = _safe_label(item)
-        if not label or label in seen:
-            continue
-        seen.add(label)
-        labels.append(label)
-    return labels
-
-
-def _label_assignment_clause(row_key: str, alias: str, labels: List[str]) -> str:
-    if not labels:
-        return ""
-    clauses = [
-        f"FOREACH (_ IN CASE WHEN '{label}' IN coalesce(row.{row_key}, []) THEN [1] ELSE [] END | SET {alias}:{label})"
-        for label in labels
-    ]
-    return "\n            ".join(clauses)
 
 
 def _read_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
@@ -76,6 +28,14 @@ def _read_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
             if not isinstance(item, dict):
                 raise ValueError(f"Invalid JSON object on line {line_no}: expected dict")
             yield item
+
+
+def _is_nullish_object(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {"none", "null", "n/a", "na"}
+    return False
 
 
 def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
@@ -108,12 +68,12 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
         if isinstance(meta, dict):
             subject_properties = meta.get("subject_properties", {}) or {}
             object_properties = meta.get("object_properties", {}) or {}
-            subject_labels = _parse_node_labels(
-                meta.get("subject_labels", meta.get("subject_label"))
-            )
-            object_labels = _parse_node_labels(
-                meta.get("object_labels", meta.get("object_label"))
-            )
+            subject_labels = meta.get("subject_labels", meta.get("subject_label")) or []
+            object_labels = meta.get("object_labels", meta.get("object_label")) or []
+            if isinstance(subject_labels, str):
+                subject_labels = [subject_labels]
+            if isinstance(object_labels, str):
+                object_labels = [object_labels]
             if not isinstance(subject_properties, dict):
                 subject_properties = {}
             if not isinstance(object_properties, dict):
@@ -164,16 +124,22 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
 
     for rel_type, grouped_rows in grouped.items():
         subject_labels = sorted(
-            {label for row in grouped_rows for label in row.get("subject_labels", [])}
+            {str(label) for row in grouped_rows for label in row.get("subject_labels", [])}
         )
         object_labels = sorted(
-            {label for row in grouped_rows for label in row.get("object_labels", [])}
+            {str(label) for row in grouped_rows for label in row.get("object_labels", [])}
         )
-        subject_label_clause = _label_assignment_clause(
-            "subject_labels", "s", subject_labels
+        subject_label_clause = "\n            ".join(
+            [
+                f"FOREACH (_ IN CASE WHEN '{label}' IN coalesce(row.subject_labels, []) THEN [1] ELSE [] END | SET s:{label})"
+                for label in subject_labels
+            ]
         )
-        object_label_clause = _label_assignment_clause(
-            "object_labels", "o", object_labels
+        object_label_clause = "\n            ".join(
+            [
+                f"FOREACH (_ IN CASE WHEN '{label}' IN coalesce(row.object_labels, []) THEN [1] ELSE [] END | SET o:{label})"
+                for label in object_labels
+            ]
         )
         if ignore_meta:
             query = f"""
@@ -216,7 +182,7 @@ def insert_jsonl(
     jsonl_path: str,
     batch_size: int = 500,
     database: str = None,
-    skip_invalid: bool = False,
+    skip_invalid: bool = True,
     dry_run: bool = False,
     ignore_meta: bool = False,
 ) -> None:
