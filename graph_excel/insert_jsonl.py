@@ -30,6 +30,14 @@ def _read_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
             yield item
 
 
+def _make_node_key(subject_value: Any, subject_label: Any, explicit_key: Any) -> str:
+    if explicit_key is not None:
+        return str(explicit_key)
+    if subject_label is not None and str(subject_label).strip():
+        return f"{str(subject_label).strip()}:{_stringify(subject_value)}"
+    return _stringify(subject_value)
+
+
 def _is_nullish_object(value: Any) -> bool:
     if value is None:
         return True
@@ -46,6 +54,8 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
         obj = item.get("object")
         subject_label = item.get("subject_label")
         object_label = item.get("object_label")
+        subject_node_key = item.get("subject_node_key", item.get("subject_key"))
+        object_node_key = item.get("object_node_key", item.get("object_key"))
         meta = item.get("meta", {})
         if subject is None or predicate is None:
             if skip_invalid:
@@ -78,6 +88,13 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
                 object_properties = {}
             subject_properties = {str(k): v for k, v in subject_properties.items() if k is not None}
             object_properties = {str(k): v for k, v in object_properties.items() if k is not None}
+            if subject_node_key is None:
+                subject_node_key = meta.get("subject_node_key")
+            if object_node_key is None:
+                object_node_key = meta.get("object_node_key")
+
+        subject_node_key = _make_node_key(subject, subject_label, subject_node_key)
+        object_node_key = _make_node_key(obj, object_label, object_node_key)
 
         records.append(
             {
@@ -89,6 +106,8 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
                 "object_properties": object_properties,
                 "subject_label": subject_label,
                 "object_label": object_label,
+                "subject_node_key": subject_node_key,
+                "object_node_key": object_node_key,
                 "source": str(jsonl_path.name),
                 "json_line": line_no,
             }
@@ -100,12 +119,13 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
 def _create_indexes_and_constraints(session, dry_run: bool) -> None:
     if dry_run:
         return
+    session.run("DROP CONSTRAINT jsonl_node_name_unique IF EXISTS")
     session.run(
         """
-        CREATE CONSTRAINT jsonl_node_name_unique
+        CREATE CONSTRAINT jsonl_node_key_unique
         IF NOT EXISTS
         FOR (n:JsonlEntity)
-        REQUIRE n.name IS UNIQUE
+        REQUIRE n.node_key IS UNIQUE
         """
     )
 
@@ -135,9 +155,9 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
             if ignore_meta:
                 query = f"""
                 UNWIND $rows AS row
-                MERGE (s:JsonlEntity{subject_suffix} {{name: row.subject_value}})
+                MERGE (s:JsonlEntity{subject_suffix} {{node_key: row.subject_node_key, name: row.subject_value}})
                 SET s += coalesce(row.subject_properties, {{}})
-                MERGE (o:JsonlEntity{object_suffix} {{name: row.object_value}})
+                MERGE (o:JsonlEntity{object_suffix} {{node_key: row.object_node_key, name: row.object_value}})
                 SET o += coalesce(row.object_properties, {{}})
                 MERGE (s)-[r:`{rel_type}`]->(o)
                 SET r.predicate = row.predicate,
@@ -147,9 +167,9 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
             else:
                 query = f"""
                 UNWIND $rows AS row
-                MERGE (s:JsonlEntity{subject_suffix} {{name: row.subject_value}})
+                MERGE (s:JsonlEntity{subject_suffix} {{node_key: row.subject_node_key, name: row.subject_value}})
                 SET s += coalesce(row.subject_properties, {{}})
-                MERGE (o:JsonlEntity{object_suffix} {{name: row.object_value}})
+                MERGE (o:JsonlEntity{object_suffix} {{node_key: row.object_node_key, name: row.object_value}})
                 SET o += coalesce(row.object_properties, {{}})
                 MERGE (s)-[r:`{rel_type}`]->(o)
                 SET r.predicate = row.predicate,
