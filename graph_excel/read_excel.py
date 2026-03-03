@@ -83,14 +83,7 @@ def process_counters_sheet(sheet, file_stem, triples):
             "category": category,
             "row": row,
         }
-        _append_triple(
-            triples,
-            subject=subject,
-            predicate="HAS_ID",
-            object_value=counter_id,
-            metadata=metadata,
-        )
-
+        metadata["subject_properties"] = {"counter_id": counter_id}
         if category is not None:
             _append_triple(
                 triples,
