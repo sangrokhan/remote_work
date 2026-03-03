@@ -218,8 +218,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--skip-invalid",
-        action="store_true",
-        help="Skip lines missing required fields instead of failing.",
+        "--no-skip-invalid",
+        dest="skip_invalid",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip invalid lines (default: True).",
     )
     parser.add_argument(
         "--dry-run",
