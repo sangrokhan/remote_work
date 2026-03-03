@@ -37,12 +37,19 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
         predicate = item.get("predicate")
         obj = item.get("object")
         meta = item.get("meta", {})
-        if subject is None or predicate is None or obj is None:
+        if subject is None or predicate is None:
             if skip_invalid:
                 continue
             raise ValueError(
-                f"Line {line_no} missing required key(s): subject/predicate/object"
+                f"Line {line_no} missing required key(s): subject/predicate"
             )
+
+        if obj is None:
+            if skip_invalid:
+                continue
+            if not skip_invalid:
+                print(f"Line {line_no} skipped: object is null")
+            continue
 
         # Neo4j relationships do not accept nested property values.
         # Store meta (kept under its original key) as JSON text.
