@@ -92,27 +92,11 @@ RETURN
 
 ### Query parameters
 
-Use either form depending on your client:
-
-Neo4j Browser (or any Cypher interface with `:param` support):
+In Neo4j Browser (or any Cypher interface with `:param` support):
 
 ```cypher
 :param name => "counter";
 :param names => ["counter", "temperature"];
-```
-
-Application / driver (Python, JS, etc.):
-
-```json
-{
-  "name": "counter"
-}
-```
-
-```json
-{
-  "names": ["counter", "temperature"]
-}
 ```
 
 ### Match multiple names in the initial search
