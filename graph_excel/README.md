@@ -33,9 +33,17 @@ python read_excel.py <path-to-file.xlsx> [--type {auto,counters,parameters}] [--
 
 ### `read_pdf.py`
 
-Reads a PDF file with PyMuPDF and writes each page text as Markdown-style JSONL (`page`, `text`) records.
-Each output record also includes `header`, `footer`, and `watermark` sections, with `text` containing only the body content by default.
-Each page record also includes:
+Reads a PDF file with PyMuPDF and writes each extracted text line/paragraph as one JSON object per line (JSONL).
+Each output line is minimal by default and includes only:
+
+- `page`
+- `text`
+- `x`
+- `y`
+- `rotation`
+
+Using legacy page JSONL (`--legacy-page-jsonl`) you can still get page records with `header`, `footer`, and `watermark` fields.
+That legacy page record includes:
 
 - `regions`: per-line metadata for `header`, `body`, `footer`, and `watermark` lines
 - `region_summary`: baseline/position/style stats for each region
@@ -45,23 +53,11 @@ Each page record also includes:
 python read_pdf.py <path-to-file.pdf> [--output output.jsonl] [--watermark-patterns "CONFIDENTIAL" "COPY"]
 python read_pdf.py <path-to-file.pdf> --no-strip-watermarks
 python read_pdf.py <path-to-file.pdf> --header-ratio 0.06 --footer-ratio 0.06
+python read_pdf.py <path-to-file.pdf> --max-pages 100
+python read_pdf.py <path-to-file.pdf> --legacy-page-jsonl
 ```
 
-`regions` entries include at least:
-
-- `line_no`
-- `rotation`
-- `rotation_axis` (`x`/`y`)
-- `position.baseline` (`axis`, `value`, `ratio`)
-- `bbox`
-- `font_family`, `size`, `span_count`
-- `removed_reason` (for filtered lines)
-
-`region_summary.<region>` also includes:
-
-- `rotation.axis_counts` and `rotation.counts`
-- `baseline.ratio` (`min`, `max`, `avg`)
-- `baseline.dominant_axis`
+Legacy `regions` entries include more metadata if needed, including style and baseline information.
 
 ### `main.py`
 
