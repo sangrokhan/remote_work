@@ -301,6 +301,48 @@ def _classify_region(page_rect, bbox, rotation, header_ratio, footer_ratio):
     return "body"
 
 
+def _estimate_row_tolerance(lines):
+    sizes = [float(line.get("size", 0.0) or 0.0) for line in lines if line.get("size")]
+    if not sizes:
+        return 2.5
+
+    sizes.sort()
+    median = sizes[len(sizes) // 2]
+    if median <= 0:
+        return 2.5
+    return max(1.0, median * 0.7)
+
+
+def _assign_row_ids(lines):
+    if not lines:
+        return
+
+    order = list(range(len(lines)))
+    order.sort(
+        key=lambda idx: (
+            _round_float(lines[idx].get("baseline", {}).get("value", 0.0) or 0.0),
+            _round_float(lines[idx].get("position", {}).get("x", 0.0) or 0.0),
+        )
+    )
+
+    tolerance = _estimate_row_tolerance(lines)
+    current = None
+    row_no = 0
+    for idx in order:
+        line = lines[idx]
+        baseline = line.get("baseline", {})
+        value = baseline.get("value")
+        if value is None:
+            row_no += 1
+            current = None
+        else:
+            value = float(value)
+            if current is None or abs(value - current) > tolerance:
+                row_no += 1
+                current = value
+        line["row_no"] = row_no
+
+
 def _line_baseline(spans, axis):
     centers = []
     for span in spans:
@@ -766,9 +808,11 @@ def _extract_page_lines(
                         "x_ratio": x_ratio,
                         "y_ratio": y_ratio,
                     },
+                    "row_no": 0,
                 }
             )
 
+    _assign_row_ids(lines)
     return lines
 
 
@@ -814,6 +858,7 @@ def _line_to_payload(line, markdown_line, target_region, removed_reason, removed
         "removed": removed,
         "removed_reason": removed_reason,
         "line_no": line["line"],
+        "row_no": line.get("row_no"),
         "text": line["raw"],
         "markdown": markdown_line,
         "rotation": line["rotation"],
@@ -1428,6 +1473,7 @@ def write_jsonl(records, output_path):
                                 "font_size": _round_float(item.get("font_size", item.get("size"))),
                                 "x": _round_float(item.get("x")),
                                 "y": _round_float(item.get("y")),
+                                "row_no": item.get("row_no"),
                                 "rotation": item.get("rotation"),
                                 "text": _sanitize_text(item.get("text", "")),
                             },
@@ -1485,6 +1531,7 @@ def write_raw_line_log(records, output_path):
                         "page": page_no,
                         "region": item.get("region") or region_name,
                         "line_no": item.get("line_no"),
+                        "row_no": item.get("row_no"),
                         "global_line_no": global_line_no,
                         "removed": item.get("removed"),
                         "removed_reason": item.get("removed_reason"),
