@@ -15,6 +15,99 @@ _SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 _LOGGER = logging.getLogger("read_pdf")
 
 _SUPPORTED_ROTATIONS = {0, 90, 180, 270}
+_BULLET_REPLACEMENTS = {
+    "•": "-",
+    "◦": "-",
+    "·": "-",
+    "▪": "-",
+    "‣": "-",
+    "∙": "-",
+    "○": "-",
+    "◉": "-",
+    "★": "-",
+}
+
+
+def _normalize_bullets(text):
+    if not text:
+        return text
+    return "".join(_BULLET_REPLACEMENTS.get(ch, ch) for ch in text)
+
+
+def _round_float(value, ndigits=2):
+    if value is None:
+        return None
+    try:
+        return round(float(value), ndigits)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_pages(pages):
+    if pages is None:
+        return None
+
+    normalized = []
+    seen = set()
+    for part in str(pages).split(","):
+        part = part.strip()
+        if not part:
+            continue
+
+        if "-" in part:
+            begin_str, end_str = part.split("-", 1)
+            if not begin_str.strip() or not end_str.strip():
+                raise ValueError(f"Invalid page range '{part}'")
+
+            start = int(begin_str.strip())
+            end = int(end_str.strip())
+            if start < 1 or end < 1:
+                raise ValueError(f"Page numbers must be >= 1: '{part}'")
+
+            step = 1 if start <= end else -1
+            for page_no in range(start, end + step, step):
+                if page_no in seen:
+                    continue
+                seen.add(page_no)
+                normalized.append(page_no)
+        else:
+            page_no = int(part)
+            if page_no < 1:
+                raise ValueError(f"Page numbers must be >= 1: '{part}'")
+            if page_no in seen:
+                continue
+            seen.add(page_no)
+            normalized.append(page_no)
+
+    return normalized
+
+
+def _coerce_page_numbers(doc, requested_pages, max_pages):
+    if requested_pages is not None:
+        if not requested_pages:
+            return []
+
+        total_pages = int(doc.page_count or 0)
+        page_numbers = [p for p in requested_pages if 1 <= p <= total_pages]
+        if len(page_numbers) != len(requested_pages):
+            _LOGGER.warning(
+                "Some requested page numbers are out of range. source=%s requested=%s filtered=%s total=%s",
+                getattr(doc, "name", ""),
+                requested_pages,
+                page_numbers,
+                total_pages,
+            )
+        return sorted(page_numbers)
+
+    if max_pages is None:
+        return list(range(1, int(doc.page_count) + 1))
+
+    if max_pages <= 0:
+        return []
+
+    total_pages = int(doc.page_count or 0)
+    end_page = min(int(max_pages), total_pages)
+    return list(range(1, end_page + 1))
 
 
 def _surrounding_snippet(text, position, radius=40):
@@ -31,10 +124,10 @@ def _sanitize_text(value, context=None):
     raw = str(value)
     matches = list(_SURROGATE_RE.finditer(raw))
     if not matches:
-        return raw
+        return _normalize_bullets(raw)
 
     if context is None:
-        return _SURROGATE_RE.sub("", raw)
+        return _normalize_bullets(_SURROGATE_RE.sub("", raw))
 
     positions = [match.start() for match in matches]
     preview = [_surrounding_snippet(raw, position) for position in positions[:3]]
@@ -47,7 +140,7 @@ def _sanitize_text(value, context=None):
         len(positions),
         ", ".join(preview),
     )
-    return _SURROGATE_RE.sub("", raw)
+    return _normalize_bullets(_SURROGATE_RE.sub("", raw))
 
 
 def _normalize_line(line):
@@ -248,7 +341,14 @@ def _line_tilt_angle(line_obj, spans):
     return float(sum(angles) / len(angles))
 
 
-def _extract_page_lines(page, page_no, source, header_ratio, footer_ratio):
+def _extract_page_lines(
+    page,
+    page_no,
+    source,
+    header_ratio,
+    footer_ratio,
+    preserve_newlines=False,
+):
     page_data = page.get_text("dict", sort=True)
     page_rect = page.rect
     rotation = int(page.rotation or 0)
@@ -294,7 +394,10 @@ def _extract_page_lines(page, page_no, source, header_ratio, footer_ratio):
                     continue
 
                 styled = _span_to_markdown(raw, span)
-                _append_span(raw_parts, raw)
+                if preserve_newlines:
+                    raw_parts.append(raw)
+                else:
+                    _append_span(raw_parts, raw)
                 _append_span(markdown_parts, styled)
                 max_size = max(max_size, float(span.get("size") or 0.0))
                 span_count += 1
@@ -307,7 +410,9 @@ def _extract_page_lines(page, page_no, source, header_ratio, footer_ratio):
                 if color is not None:
                     colors.append(color)
 
-            raw_text = _normalize_line("".join(raw_parts))
+            raw_text = "".join(raw_parts)
+            if not preserve_newlines:
+                raw_text = _normalize_line(raw_text)
             if not raw_text:
                 continue
 
@@ -393,6 +498,7 @@ def _line_to_markdown(line_text, line_size, body_size):
 def _line_to_payload(line, markdown_line, target_region, removed_reason, removed):
     position = line.get("position", {})
     baseline = position.get("baseline", {})
+    font_size = line.get("size")
     return {
         "region": target_region,
         "removed": removed,
@@ -401,12 +507,13 @@ def _line_to_payload(line, markdown_line, target_region, removed_reason, removed
         "text": line["raw"],
         "markdown": markdown_line,
         "rotation": line["rotation"],
+        "font_size": font_size,
         "rotation_axis": line["rotation_axis"],
         "rotation_ratio": baseline.get("ratio"),
-        "x": position.get("x"),
-        "y": position.get("y"),
-        "x_ratio": position.get("x_ratio"),
-        "y_ratio": position.get("y_ratio"),
+        "x": _round_float(position.get("x")),
+        "y": _round_float(position.get("y")),
+        "x_ratio": _round_float(position.get("x_ratio")),
+        "y_ratio": _round_float(position.get("y_ratio")),
         "font_family": line.get("font_family"),
         "size": line.get("size"),
         "span_count": line.get("span_count", 0),
@@ -808,15 +915,32 @@ def _build_sections(lines, body_size, repeated_watermarks, compiled_patterns, st
     return sections, summary, removed, kept_lines
 
 
-def _extract_pages(doc, source, header_ratio, footer_ratio, max_pages=None):
+def _extract_pages(
+    doc,
+    source,
+    header_ratio,
+    footer_ratio,
+    max_pages=None,
+    pages=None,
+    preserve_newlines=False,
+):
     extracted = []
-    for page_no, page in enumerate(doc, start=1):
-        if max_pages is not None and page_no > max_pages:
-            break
-        lines = _extract_page_lines(page, page_no, source, header_ratio, footer_ratio)
+    page_numbers = _coerce_page_numbers(doc, pages, max_pages)
+    for page_no in page_numbers:
+        if page_no < 1 or page_no > doc.page_count:
+            continue
+        page = doc[page_no - 1]
+        lines = _extract_page_lines(
+            page,
+            page_no,
+            source,
+            header_ratio,
+            footer_ratio,
+            preserve_newlines=preserve_newlines,
+        )
         for line in lines:
             line["source"] = source
-        extracted.append(lines)
+        extracted.append((page_no, lines))
     return extracted
 
 
@@ -834,6 +958,8 @@ def read_pdf(
     header_ratio=0.08,
     footer_ratio=0.08,
     max_pages=100,
+    pages=None,
+    preserve_newlines=False,
 ):
     path = Path(path)
 
@@ -844,18 +970,21 @@ def read_pdf(
             header_ratio,
             footer_ratio,
             max_pages=max_pages,
+            pages=pages,
+            preserve_newlines=preserve_newlines,
         )
 
     compiled_patterns = _compile_patterns(patterns or [])
+    extracted_lines = [lines for _, lines in pages_with_lines]
     repeated_watermarks = set()
     if strip_watermarks:
         repeated_watermarks = _collect_repeated_lines(
-            pages_with_lines,
+            extracted_lines,
             ratio_threshold=ratio_threshold,
         )
 
     records = []
-    for page_no, lines in enumerate(pages_with_lines, start=1):
+    for page_no, lines in pages_with_lines:
         body_size = _estimate_body_font_size(lines)
         sections, region_summary, removed, kept_text = _build_sections(
             lines,
@@ -931,8 +1060,9 @@ def write_jsonl(records, output_path):
                             item.get("line_no", 0),
                             {
                                 "page": record.get("page"),
-                                "x": item.get("x"),
-                                "y": item.get("y"),
+                                "font_size": item.get("font_size", item.get("size")),
+                                "x": _round_float(item.get("x")),
+                                "y": _round_float(item.get("y")),
                                 "rotation": item.get("rotation"),
                                 "text": _sanitize_text(item.get("text", "")),
                             },
@@ -1039,6 +1169,17 @@ def parse_args():
         help="Maximum number of pages to read from the PDF (default: 100).",
     )
     parser.add_argument(
+        "--pages",
+        type=str,
+        default=None,
+        help="Specific pages or ranges to read (example: 1-5,10,20-30). Overrides --max-pages.",
+    )
+    parser.add_argument(
+        "--preserve-newlines",
+        action="store_true",
+        help="Keep whitespace/newline characters from source line text instead of collapsing into single spaces.",
+    )
+    parser.add_argument(
         "--legacy-page-jsonl",
         action="store_true",
         help="Keep old page-based JSONL output instead of line-by-line JSONL output.",
@@ -1053,6 +1194,11 @@ def main():
     )
 
     args = parse_args()
+    try:
+        requested_pages = _parse_pages(args.pages)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid --pages argument: {exc}")
+
     output = args.output or f"{Path(args.file).stem}_pages.jsonl"
     records = read_pdf(
         args.file,
@@ -1064,6 +1210,8 @@ def main():
         header_ratio=args.header_ratio,
         footer_ratio=args.footer_ratio,
         max_pages=args.max_pages,
+        pages=requested_pages,
+        preserve_newlines=args.preserve_newlines,
     )
     if args.legacy_page_jsonl:
         write_jsonl_pages(records, output)
