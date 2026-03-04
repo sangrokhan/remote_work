@@ -1475,14 +1475,17 @@ def write_jsonl_pages(records, output_path):
 
 def write_raw_line_log(records, output_path):
     with open(output_path, "w", encoding="utf-8", errors="replace") as f:
+        global_line_no = 1
         for record in records:
             page_no = record.get("page")
             for region_name in ("header", "body", "footer", "watermark"):
                 for item in record.get("regions", {}).get(region_name, []):
                     payload = {
+                        "type": "line",
                         "page": page_no,
-                        "region": region_name,
+                        "region": item.get("region") or region_name,
                         "line_no": item.get("line_no"),
+                        "global_line_no": global_line_no,
                         "removed": item.get("removed"),
                         "removed_reason": item.get("removed_reason"),
                         "rotation": item.get("rotation"),
@@ -1495,6 +1498,30 @@ def write_raw_line_log(records, output_path):
                     }
                     f.write(json.dumps(payload, ensure_ascii=False))
                     f.write("\n")
+                    global_line_no += 1
+
+            for table in record.get("tables", []):
+                normalized = _normalize_table_record(table)
+                payload = {
+                    "type": "table",
+                    "page": page_no,
+                    "table_no": normalized.get("table_no"),
+                    "start_page": normalized.get("start_page"),
+                    "end_page": normalized.get("end_page"),
+                    "pages": normalized.get("pages"),
+                    "region": "table",
+                    "global_line_no": global_line_no,
+                    "rotation": normalized.get("rotation"),
+                    "x": normalized.get("x"),
+                    "y": normalized.get("y"),
+                    "bbox": normalized.get("bbox"),
+                    "rows": normalized.get("rows"),
+                    "cols": normalized.get("cols"),
+                    "text": normalized.get("text"),
+                }
+                f.write(json.dumps(payload, ensure_ascii=False))
+                f.write("\n")
+                global_line_no += 1
 
 
 def parse_args():
