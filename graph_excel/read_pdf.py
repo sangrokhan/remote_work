@@ -171,6 +171,13 @@ def _line_bbox(block_line, spans):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def _line_center(bbox):
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return 0.0, 0.0
+    x0, y0, x1, y1 = [float(v) for v in bbox]
+    return (x0 + x1) / 2.0, (y0 + y1) / 2.0
+
+
 def _rotation_axis(rotation):
     normalized = int(rotation or 0) % 360
     if normalized in (90, 270):
@@ -238,6 +245,9 @@ def _extract_page_lines(page, page_no, source, header_ratio, footer_ratio):
             line_no += 1
             line_bbox = _line_bbox(line, spans)
             location = _classify_region(page_rect, line_bbox, rotation, header_ratio, footer_ratio)
+            x, y = _line_center(line_bbox)
+            x_ratio = x / float(page_rect.width) if page_rect and float(page_rect.width) > 0 else None
+            y_ratio = y / float(page_rect.height) if page_rect and float(page_rect.height) > 0 else None
 
             raw_parts = []
             markdown_parts = []
@@ -306,6 +316,17 @@ def _extract_page_lines(page, page_no, source, header_ratio, footer_ratio):
                         "ratio": baseline_ratio,
                     },
                     "source": source,
+                    "position": {
+                        "baseline": {
+                            "axis": baseline_axis,
+                            "value": baseline_value,
+                            "ratio": baseline_ratio,
+                        },
+                        "x": x,
+                        "y": y,
+                        "x_ratio": x_ratio,
+                        "y_ratio": y_ratio,
+                    },
                 }
             )
 
@@ -346,6 +367,8 @@ def _line_to_markdown(line_text, line_size, body_size):
 
 
 def _line_to_payload(line, markdown_line, target_region, removed_reason, removed):
+    position = line.get("position", {})
+    baseline = position.get("baseline", {})
     return {
         "region": target_region,
         "removed": removed,
@@ -355,13 +378,18 @@ def _line_to_payload(line, markdown_line, target_region, removed_reason, removed
         "markdown": markdown_line,
         "rotation": line["rotation"],
         "rotation_axis": line["rotation_axis"],
+        "rotation_ratio": baseline.get("ratio"),
+        "x": position.get("x"),
+        "y": position.get("y"),
+        "x_ratio": position.get("x_ratio"),
+        "y_ratio": position.get("y_ratio"),
         "font_family": line.get("font_family"),
         "size": line.get("size"),
         "span_count": line.get("span_count", 0),
         "color": line.get("color"),
         "bbox": line.get("bbox"),
         "position": {
-            "baseline": line.get("baseline", {}),
+            "baseline": baseline,
         },
         "page": line["page"],
         "source": line.get("source"),
@@ -756,9 +784,11 @@ def _build_sections(lines, body_size, repeated_watermarks, compiled_patterns, st
     return sections, summary, removed, kept_lines
 
 
-def _extract_pages(doc, source, header_ratio, footer_ratio):
+def _extract_pages(doc, source, header_ratio, footer_ratio, max_pages=None):
     extracted = []
     for page_no, page in enumerate(doc, start=1):
+        if max_pages is not None and page_no > max_pages:
+            break
         lines = _extract_page_lines(page, page_no, source, header_ratio, footer_ratio)
         for line in lines:
             line["source"] = source
@@ -779,11 +809,18 @@ def read_pdf(
     ratio_threshold=0.6,
     header_ratio=0.08,
     footer_ratio=0.08,
+    max_pages=100,
 ):
     path = Path(path)
 
     with pymupdf.open(path) as doc:
-        pages_with_lines = _extract_pages(doc, str(path), header_ratio, footer_ratio)
+        pages_with_lines = _extract_pages(
+            doc,
+            str(path),
+            header_ratio,
+            footer_ratio,
+            max_pages=max_pages,
+        )
 
     compiled_patterns = _compile_patterns(patterns or [])
     repeated_watermarks = set()
@@ -860,6 +897,30 @@ def read_pdf(
 
 
 def write_jsonl(records, output_path):
+    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
+        for record in records:
+            ordered_items = []
+            for region_name in ("header", "body", "footer", "watermark"):
+                for item in record.get("regions", {}).get(region_name, []):
+                    ordered_items.append(
+                        (
+                            item.get("line_no", 0),
+                            {
+                                "page": record.get("page"),
+                                "x": item.get("x"),
+                                "y": item.get("y"),
+                                "rotation": item.get("rotation"),
+                                "text": _sanitize_text(item.get("text", "")),
+                            },
+                        )
+                    )
+            ordered_items.sort(key=lambda entry: entry[0] if entry[0] is not None else 0)
+            for _, payload in ordered_items:
+                f.write(json.dumps(payload, ensure_ascii=False))
+                f.write("\n")
+
+
+def write_jsonl_pages(records, output_path):
     with open(output_path, "w", encoding="utf-8", errors="replace") as f:
         for record in records:
             safe_record = {
@@ -947,6 +1008,17 @@ def parse_args():
         default=0.08,
         help="Bottom zone ratio (page fraction) considered footer.",
     )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=100,
+        help="Maximum number of pages to read from the PDF (default: 100).",
+    )
+    parser.add_argument(
+        "--legacy-page-jsonl",
+        action="store_true",
+        help="Keep old page-based JSONL output instead of line-by-line JSONL output.",
+    )
     return parser.parse_args()
 
 
@@ -967,9 +1039,19 @@ def main():
         ratio_threshold=args.watermark_ratio,
         header_ratio=args.header_ratio,
         footer_ratio=args.footer_ratio,
+        max_pages=args.max_pages,
     )
-    write_jsonl(records, output)
-    print(f"Extracted {len(records)} pages -> {output}")
+    if args.legacy_page_jsonl:
+        write_jsonl_pages(records, output)
+        print(f"Extracted {len(records)} pages -> {output}")
+    else:
+        write_jsonl(records, output)
+        total_lines = sum(
+            len(record.get("regions", {}).get(region, []))
+            for record in records
+            for region in ("header", "body", "footer", "watermark")
+        )
+        print(f"Extracted {len(records)} pages, {total_lines} text lines -> {output}")
 
 
 if __name__ == "__main__":
