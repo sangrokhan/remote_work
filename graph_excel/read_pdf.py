@@ -341,6 +341,179 @@ def _line_tilt_angle(line_obj, spans):
     return float(sum(angles) / len(angles))
 
 
+def _extract_page_tables(page, page_no, source):
+    try:
+        tables = page.find_tables()
+    except Exception:
+        return []
+
+    if not tables or not getattr(tables, "tables", None):
+        return []
+
+    table_items = []
+    for table_index, table in enumerate(tables.tables, start=1):
+        bbox = getattr(table, "bbox", None)
+        if not bbox:
+            continue
+
+        try:
+            rows = table.extract()
+        except Exception:
+            rows = []
+            for cell in (getattr(table, "cells", None) or []):
+                row = getattr(cell, "row", None)
+                col = getattr(cell, "col", None)
+                if row is None or col is None:
+                    continue
+                while len(rows) <= row:
+                    rows.append([])
+                row_cells = rows[row]
+                while len(row_cells) <= col:
+                    row_cells.append("")
+                row_cells[col] = _sanitize_text(
+                    getattr(cell, "text", "") or getattr(cell, "content", "") or ""
+                )
+
+        if not rows:
+            continue
+
+        row_count = 0
+        col_count = 0
+        row_texts = []
+        for row in rows:
+            if not isinstance(row, (list, tuple)):
+                continue
+            row_count += 1
+            col_count = max(col_count, len(row))
+            row_texts.append(" | ".join(_sanitize_text(cell or "") for cell in row))
+
+        x0, y0, x1, y1 = [float(v) for v in bbox]
+        table_items.append(
+            {
+                "page": page_no,
+                "start_page": page_no,
+                "table_no": table_index,
+                "bbox": [x0, y0, x1, y1],
+                "row_count": row_count,
+                "col_count": col_count,
+                "rotation": int(page.rotation or 0),
+                "rows_text": row_texts,
+                "x": _round_float((x0 + x1) / 2.0),
+                "y": _round_float((y0 + y1) / 2.0),
+                "page_width": float(page.rect.width),
+                "page_height": float(page.rect.height),
+                "text": "\n".join(row_texts),
+                "source": source,
+            }
+        )
+
+    return table_items
+
+
+def _table_row_signature(row):
+    return re.sub(r"\s+", " ", (row or "").strip().lower())
+
+
+def _bbox_overlap_ratio(a_bbox, b_bbox):
+    ax0, ay0, ax1, ay1 = a_bbox
+    bx0, by0, bx1, by1 = b_bbox
+
+    x_overlap = max(0.0, min(ax1, bx1) - max(ax0, bx0))
+    y_overlap = max(0.0, min(ay1, by1) - max(ay0, by0))
+    if x_overlap <= 0 or y_overlap <= 0:
+        return 0.0, 0.0
+
+    a_area = max(0.0, (ax1 - ax0) * (ay1 - ay0))
+    b_area = max(0.0, (bx1 - bx0) * (by1 - by0))
+    if a_area <= 0 or b_area <= 0:
+        return 0.0, 0.0
+
+    overlap_area = x_overlap * y_overlap
+    return overlap_area / min(a_area, b_area), overlap_area / (a_area + b_area - overlap_area)
+
+
+def _is_cross_page_split(prev_table, next_table):
+    prev_height = prev_table.get("page_height") or 0.0
+    next_height = next_table.get("page_height") or 0.0
+    if prev_height <= 0.0 or next_height <= 0.0:
+        return False
+
+    prev_ratio_from_bottom = 1.0 - (prev_table.get("bbox", [0, 0, 0, 0])[3] / prev_height)
+    next_ratio_from_top = next_table.get("bbox", [0, 0, 0, 0])[1] / next_height
+
+    # table continues near page boundary (bottom of prev and top of next)
+    return prev_ratio_from_bottom <= 0.35 and next_ratio_from_top <= 0.35
+
+
+def _merge_cross_page_tables(tables):
+    if len(tables) <= 1:
+        return tables
+
+    sorted_tables = sorted(
+        tables,
+        key=lambda item: (item.get("page", 0), item.get("bbox", [0, 0, 0, 0])[1], item.get("table_no", 0)),
+    )
+    merged = []
+    current = None
+
+    for table in sorted_tables:
+        if current is None:
+            current = dict(table)
+            current["current_end_page"] = current.get("page")
+            current["pages"] = [current.get("start_page", current.get("page"))]
+            continue
+
+        same_col = current.get("col_count") == table.get("col_count")
+        same_rotation = current.get("rotation") == table.get("rotation")
+        current_end_page = current.get("current_end_page", current.get("page", 0))
+        adjacent_page = table.get("page", 0) == current_end_page + 1
+        if not (same_col and same_rotation and adjacent_page):
+            merged.append(current)
+            current = dict(table)
+            current["current_end_page"] = current.get("page")
+            current["pages"] = [current.get("start_page", current.get("page"))]
+            continue
+
+        overlap_ratio, _ = _bbox_overlap_ratio(current.get("bbox", [0, 0, 0, 0]), table.get("bbox", [0, 0, 0, 0]))
+        if overlap_ratio < 0.1 or not _is_cross_page_split(current, table):
+            merged.append(current)
+            current = dict(table)
+            current["pages"] = [current.get("start_page", current.get("page"))]
+            continue
+
+        current_rows = list(current.get("rows_text", []))
+        next_rows = list(table.get("rows_text", []))
+        if current_rows and next_rows:
+            header_signature = _table_row_signature(current_rows[0])
+            next_first = _table_row_signature(next_rows[0])
+            if header_signature and next_first and header_signature == next_first:
+                next_rows = next_rows[1:]
+
+        current_rows.extend(next_rows)
+        current["rows_text"] = current_rows
+        current["text"] = "\n".join(current_rows)
+        current["row_count"] = len(current_rows)
+        current["page_end"] = table.get("page")
+        current["current_end_page"] = table.get("page")
+        if "pages" not in current:
+            current["pages"] = [current.get("start_page", current.get("page", 0))]
+        current["pages"].append(table.get("page"))
+        current["pages"] = sorted(set(current["pages"]))
+
+        continue
+
+    if current is not None:
+        merged.append(current)
+
+    # keep page field as the first page
+    for item in merged:
+        item["page"] = item.get("start_page", item.get("page"))
+        if "current_end_page" in item:
+            item["page_end"] = max(item.get("start_page", item.get("page", 0)), item.get("current_end_page", item.get("page", 0)))
+            del item["current_end_page"]
+    return merged
+
+
 def _extract_page_lines(
     page,
     page_no,
@@ -428,7 +601,7 @@ def _extract_page_lines(
                 {
                     "raw": raw_text,
                     "markdown": _normalize_line("".join(markdown_parts)) or raw_text,
-                    "size": max_size,
+                    "size": _round_float(max_size),
                     "bbox": line_bbox,
                     "location": location,
                     "rotation": line_rotation,
@@ -463,7 +636,7 @@ def _extract_page_lines(
 
 
 def _estimate_body_font_size(lines):
-    sizes = [round(line.get("size", 0.0), 1) for line in lines if line.get("size")]
+    sizes = [line.get("size", 0.0) for line in lines if line.get("size")]
     if not sizes:
         return 12.0
     return float(Counter(sizes).most_common(1)[0][0])
@@ -498,7 +671,7 @@ def _line_to_markdown(line_text, line_size, body_size):
 def _line_to_payload(line, markdown_line, target_region, removed_reason, removed):
     position = line.get("position", {})
     baseline = position.get("baseline", {})
-    font_size = line.get("size")
+    font_size = _round_float(line.get("size"))
     return {
         "region": target_region,
         "removed": removed,
@@ -515,7 +688,7 @@ def _line_to_payload(line, markdown_line, target_region, removed_reason, removed
         "x_ratio": _round_float(position.get("x_ratio")),
         "y_ratio": _round_float(position.get("y_ratio")),
         "font_family": line.get("font_family"),
-        "size": line.get("size"),
+        "size": font_size,
         "span_count": line.get("span_count", 0),
         "color": line.get("color"),
         "bbox": line.get("bbox"),
@@ -923,6 +1096,7 @@ def _extract_pages(
     max_pages=None,
     pages=None,
     preserve_newlines=False,
+    extract_tables=False,
 ):
     extracted = []
     page_numbers = _coerce_page_numbers(doc, pages, max_pages)
@@ -940,12 +1114,34 @@ def _extract_pages(
         )
         for line in lines:
             line["source"] = source
-        extracted.append((page_no, lines))
+        tables = []
+        if extract_tables:
+            tables = _extract_page_tables(page, page_no, source)
+        extracted.append((page_no, lines, tables))
     return extracted
 
 
 def _safe_text_list(values):
     return [_sanitize_text(value) for value in values if value is not None]
+
+
+def _normalize_table_record(table):
+    pages = table.get("pages", [table.get("page")])
+    return {
+        "page": table.get("page"),
+        "start_page": table.get("start_page", table.get("page")),
+        "end_page": table.get("page_end", table.get("page")),
+        "pages": pages,
+        "table_no": table.get("table_no"),
+        "x": table.get("x"),
+        "y": table.get("y"),
+        "bbox": table.get("bbox"),
+        "rotation": table.get("rotation"),
+        "rows": table.get("row_count"),
+        "cols": table.get("col_count"),
+        "font_size": None,
+        "text": _sanitize_text(table.get("text", "")),
+    }
 
 
 def read_pdf(
@@ -960,6 +1156,7 @@ def read_pdf(
     max_pages=100,
     pages=None,
     preserve_newlines=False,
+    extract_tables=False,
 ):
     path = Path(path)
 
@@ -972,10 +1169,23 @@ def read_pdf(
             max_pages=max_pages,
             pages=pages,
             preserve_newlines=preserve_newlines,
+            extract_tables=extract_tables,
         )
 
+    tables = []
+    for _, _, page_tables in pages_with_lines:
+        tables.extend(page_tables)
+
+    if extract_tables:
+        tables = _merge_cross_page_tables(tables)
+
+    table_by_page = {}
+    for table in tables:
+        page_key = table.get("page")
+        table_by_page.setdefault(page_key, []).append(table)
+
     compiled_patterns = _compile_patterns(patterns or [])
-    extracted_lines = [lines for _, lines in pages_with_lines]
+    extracted_lines = [lines for _, lines, _ in pages_with_lines]
     repeated_watermarks = set()
     if strip_watermarks:
         repeated_watermarks = _collect_repeated_lines(
@@ -984,7 +1194,7 @@ def read_pdf(
         )
 
     records = []
-    for page_no, lines in pages_with_lines:
+    for page_no, lines, _ in pages_with_lines:
         body_size = _estimate_body_font_size(lines)
         sections, region_summary, removed, kept_text = _build_sections(
             lines,
@@ -1043,6 +1253,8 @@ def read_pdf(
                 },
                 "region_summary": region_summary,
                 "anomalies": anomalies,
+                "tables": table_by_page.get(page_no, []),
+                "table_count": len(table_by_page.get(page_no, [])),
             }
         )
 
@@ -1060,7 +1272,7 @@ def write_jsonl(records, output_path):
                             item.get("line_no", 0),
                             {
                                 "page": record.get("page"),
-                                "font_size": item.get("font_size", item.get("size")),
+                                "font_size": _round_float(item.get("font_size", item.get("size"))),
                                 "x": _round_float(item.get("x")),
                                 "y": _round_float(item.get("y")),
                                 "rotation": item.get("rotation"),
@@ -1071,6 +1283,19 @@ def write_jsonl(records, output_path):
             ordered_items.sort(key=lambda entry: entry[0] if entry[0] is not None else 0)
             for _, payload in ordered_items:
                 f.write(json.dumps(payload, ensure_ascii=False))
+                f.write("\n")
+
+            for table in record.get("tables", []):
+                f.write(
+                    json.dumps(
+                        {
+                    "type": "table",
+                    "page": record.get("page"),
+                    **_normalize_table_record(table),
+                    },
+                        ensure_ascii=False,
+                    )
+                )
                 f.write("\n")
 
 
@@ -1088,6 +1313,8 @@ def write_jsonl_pages(records, output_path):
                 "regions": record.get("regions", {}),
                 "region_summary": record.get("region_summary", {}),
                 "anomalies": record.get("anomalies", []),
+                "tables": [_normalize_table_record(table) for table in record.get("tables", [])],
+                "table_count": record.get("table_count", 0),
             }
             f.write(json.dumps(safe_record, ensure_ascii=False))
             f.write("\n")
@@ -1180,6 +1407,11 @@ def parse_args():
         help="Keep whitespace/newline characters from source line text instead of collapsing into single spaces.",
     )
     parser.add_argument(
+        "--find-tables",
+        action="store_true",
+        help="Detect tables on each page with PyMuPDF table extractor.",
+    )
+    parser.add_argument(
         "--legacy-page-jsonl",
         action="store_true",
         help="Keep old page-based JSONL output instead of line-by-line JSONL output.",
@@ -1212,6 +1444,7 @@ def main():
         max_pages=args.max_pages,
         pages=requested_pages,
         preserve_newlines=args.preserve_newlines,
+        extract_tables=args.find_tables,
     )
     if args.legacy_page_jsonl:
         write_jsonl_pages(records, output)
@@ -1223,7 +1456,10 @@ def main():
             for record in records
             for region in ("header", "body", "footer", "watermark")
         )
-        print(f"Extracted {len(records)} pages, {total_lines} text lines -> {output}")
+        total_tables = sum(record.get("table_count", 0) for record in records)
+        print(
+            f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
+        )
 
 
 if __name__ == "__main__":
