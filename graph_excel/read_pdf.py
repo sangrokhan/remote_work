@@ -341,24 +341,138 @@ def _line_tilt_angle(line_obj, spans):
     return float(sum(angles) / len(angles))
 
 
-def _extract_page_tables(page, page_no, source):
+def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
     try:
-        tables = page.find_tables()
+        has_find_tables = hasattr(page, "find_tables")
     except Exception:
+        has_find_tables = False
+
+    if not has_find_tables:
+        _LOGGER.warning("Page has no table detection API: source=%s page=%s", source, page_no)
         return []
 
-    if not tables or not getattr(tables, "tables", None):
+    strategies = [("default", {})]
+    if table_mode in ("auto", "lines"):
+        strategies.append(("lines", {"vertical_strategy": "lines", "horizontal_strategy": "lines"}))
+    if table_mode in ("auto", "text"):
+        strategies.append(("text", {"vertical_strategy": "text", "horizontal_strategy": "text"}))
+    if table_mode not in ("auto", "default", "lines", "text"):
+        table_mode = "auto"
+
+    selected = None
+    selected_label = None
+    fallback_selected = None
+    fallback_label = None
+    for label, options in strategies:
+        try:
+            tables = page.find_tables(**options)
+        except TypeError:
+            if debug:
+                _LOGGER.debug(
+                    "find_tables options unsupported, skipping: source=%s page=%s strategy=%s options=%s",
+                    source,
+                    page_no,
+                    label,
+                    options,
+                )
+            continue
+        except Exception:
+            if debug:
+                _LOGGER.warning(
+                    "find_tables() failed: source=%s page=%s strategy=%s options=%s",
+                    source,
+                    page_no,
+                    label,
+                    options,
+                    exc_info=True,
+                )
+            continue
+
+        rows = getattr(tables, "tables", None)
+        count = len(rows or [])
+        if debug:
+            _LOGGER.debug(
+                "find_tables returned %s table(s): source=%s page=%s strategy=%s options=%s",
+                count,
+                source,
+                page_no,
+                label,
+                options,
+            )
+        if count:
+            selected = tables
+            selected_label = label
+            break
+
+        if fallback_selected is None:
+            fallback_selected = tables
+            fallback_label = label
+
+        if table_mode != "auto":
+            selected = tables
+            selected_label = label
+            break
+
+    if selected is None:
+        selected = fallback_selected
+        selected_label = fallback_label
+
+    if not selected or not getattr(selected, "tables", None):
+        if debug:
+            _LOGGER.info(
+                "No tables found on page after strategies: source=%s page=%s",
+                source,
+                page_no,
+            )
         return []
+
+    if _LOGGER.isEnabledFor(logging.INFO):
+        _LOGGER.info(
+            "Detected tables on page: source=%s page=%s count=%s",
+            source,
+            page_no,
+            len(selected.tables),
+        )
+    elif debug:
+        _LOGGER.debug(
+            "Using tables strategy %s on page=%s table_count=%s",
+            selected_label,
+            page_no,
+            len(selected.tables),
+        )
 
     table_items = []
-    for table_index, table in enumerate(tables.tables, start=1):
+    for table_index, table in enumerate(selected.tables, start=1):
         bbox = getattr(table, "bbox", None)
         if not bbox:
+            _LOGGER.warning(
+                "Table %s on page %s has no bbox and was skipped: source=%s",
+                table_index,
+                page_no,
+                source,
+            )
             continue
+
+        if debug:
+            _LOGGER.debug(
+                "Table parse: source=%s page=%s table=%s strategy=%s",
+                source,
+                page_no,
+                table_index,
+                selected_label,
+            )
 
         try:
             rows = table.extract()
         except Exception:
+            if debug:
+                _LOGGER.warning(
+                    "table.extract() failed, falling back to cell text: source=%s page=%s table=%s",
+                    source,
+                    page_no,
+                    table_index,
+                    exc_info=True,
+                )
             rows = []
             for cell in (getattr(table, "cells", None) or []):
                 row = getattr(cell, "row", None)
@@ -386,6 +500,15 @@ def _extract_page_tables(page, page_no, source):
             row_count += 1
             col_count = max(col_count, len(row))
             row_texts.append(" | ".join(_sanitize_text(cell or "") for cell in row))
+
+        if debug:
+            _LOGGER.debug(
+                "Table %s on page %s row_count=%s col_count=%s",
+                table_index,
+                page_no,
+                row_count,
+                col_count,
+            )
 
         x0, y0, x1, y1 = [float(v) for v in bbox]
         table_items.append(
@@ -521,6 +644,7 @@ def _extract_page_lines(
     header_ratio,
     footer_ratio,
     preserve_newlines=False,
+    debug=False,
 ):
     page_data = page.get_text("dict", sort=True)
     page_rect = page.rect
@@ -594,6 +718,19 @@ def _extract_page_lines(
             page_axis_size = float(page_rect.width) if baseline_axis == "x" else float(page_rect.height)
             baseline_ratio = baseline_value / page_axis_size if page_axis_size > 0 else None
             line_rotation = (int(rotation) + round(_line_tilt_angle(line, spans))) % 360
+
+            if debug:
+                text_snippet = raw_text if len(raw_text) <= 120 else raw_text[:117] + "..."
+                _LOGGER.debug(
+                    "raw line: source=%s page=%s line=%s x=%s y=%s rotation=%s text=%r",
+                    source,
+                    page_no,
+                    line_no,
+                    _round_float(x),
+                    _round_float(y),
+                    line_rotation,
+                    text_snippet,
+                )
 
             dominant_font = font_counts.most_common(1)[0][0] if font_counts else None
 
@@ -1097,6 +1234,9 @@ def _extract_pages(
     pages=None,
     preserve_newlines=False,
     extract_tables=False,
+    debug=False,
+    table_debug=False,
+    table_mode="auto",
 ):
     extracted = []
     page_numbers = _coerce_page_numbers(doc, pages, max_pages)
@@ -1111,12 +1251,19 @@ def _extract_pages(
             header_ratio,
             footer_ratio,
             preserve_newlines=preserve_newlines,
+            debug=debug,
         )
         for line in lines:
             line["source"] = source
         tables = []
         if extract_tables:
-            tables = _extract_page_tables(page, page_no, source)
+            tables = _extract_page_tables(
+                page,
+                page_no,
+                source,
+                debug=table_debug,
+                table_mode=table_mode,
+            )
         extracted.append((page_no, lines, tables))
     return extracted
 
@@ -1157,6 +1304,9 @@ def read_pdf(
     pages=None,
     preserve_newlines=False,
     extract_tables=False,
+    debug=False,
+    table_debug=None,
+    table_mode="auto",
 ):
     path = Path(path)
 
@@ -1170,6 +1320,9 @@ def read_pdf(
             pages=pages,
             preserve_newlines=preserve_newlines,
             extract_tables=extract_tables,
+            debug=debug,
+            table_debug=table_debug if table_debug is not None else debug,
+            table_mode=table_mode,
         )
 
     tables = []
@@ -1320,6 +1473,30 @@ def write_jsonl_pages(records, output_path):
             f.write("\n")
 
 
+def write_raw_line_log(records, output_path):
+    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
+        for record in records:
+            page_no = record.get("page")
+            for region_name in ("header", "body", "footer", "watermark"):
+                for item in record.get("regions", {}).get(region_name, []):
+                    payload = {
+                        "page": page_no,
+                        "region": region_name,
+                        "line_no": item.get("line_no"),
+                        "removed": item.get("removed"),
+                        "removed_reason": item.get("removed_reason"),
+                        "rotation": item.get("rotation"),
+                        "font_size": item.get("font_size"),
+                        "x": item.get("x"),
+                        "y": item.get("y"),
+                        "x_ratio": item.get("x_ratio"),
+                        "y_ratio": item.get("y_ratio"),
+                        "text": item.get("text"),
+                    }
+                    f.write(json.dumps(payload, ensure_ascii=False))
+                    f.write("\n")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Read PDF pages with PyMuPDF, split/remove headers/footers/watermarks."
@@ -1412,6 +1589,27 @@ def parse_args():
         help="Detect tables on each page with PyMuPDF table extractor.",
     )
     parser.add_argument(
+        "--table-mode",
+        default="auto",
+        choices=("auto", "default", "lines", "text"),
+        help="PyMuPDF table strategy to try.",
+    )
+    parser.add_argument(
+        "--table-debug",
+        action="store_true",
+        help="Emit table detection diagnostics to log.",
+    )
+    parser.add_argument(
+        "--raw-line-log",
+        default=None,
+        help="Write raw line extraction records to this file.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable verbose debug logging, including raw line/table diagnostics.",
+    )
+    parser.add_argument(
         "--legacy-page-jsonl",
         action="store_true",
         help="Keep old page-based JSONL output instead of line-by-line JSONL output.",
@@ -1420,12 +1618,11 @@ def parse_args():
 
 
 def main():
+    args = parse_args()
     logging.basicConfig(
-        level=logging.WARNING,
+        level=logging.DEBUG if args.debug or args.table_debug else logging.WARNING,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-
-    args = parse_args()
     try:
         requested_pages = _parse_pages(args.pages)
     except ValueError as exc:
@@ -1445,7 +1642,12 @@ def main():
         pages=requested_pages,
         preserve_newlines=args.preserve_newlines,
         extract_tables=args.find_tables,
+        debug=args.debug,
+        table_debug=args.debug or args.table_debug,
+        table_mode=args.table_mode,
     )
+    if args.raw_line_log:
+        write_raw_line_log(records, args.raw_line_log)
     if args.legacy_page_jsonl:
         write_jsonl_pages(records, output)
         print(f"Extracted {len(records)} pages -> {output}")
