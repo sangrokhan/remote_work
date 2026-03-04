@@ -556,6 +556,317 @@ def _segment_orientation(x0, y0, x1, y1, tolerance=1.5):
     return "other"
 
 
+def _merge_numeric(values, tolerance):
+    if not values:
+        return []
+
+    sorted_values = sorted(float(v) for v in values if v is not None)
+    if not sorted_values:
+        return []
+
+    merged = []
+    current = [sorted_values[0]]
+    for value in sorted_values[1:]:
+        if value <= current[-1] + tolerance:
+            current.append(value)
+        else:
+            merged.append(sum(current) / len(current))
+            current = [value]
+    merged.append(sum(current) / len(current))
+    return merged
+
+
+def _collect_span_cells(lines, bbox=None):
+    filter_bbox = None
+    if (
+        isinstance(bbox, (list, tuple))
+        and len(bbox) == 4
+        and all(v is not None for v in bbox)
+    ):
+        try:
+            filter_bbox = [float(v) for v in bbox]
+            if filter_bbox[0] == filter_bbox[2] or filter_bbox[1] == filter_bbox[3]:
+                filter_bbox = None
+        except (TypeError, ValueError):
+            filter_bbox = None
+
+    if filter_bbox is not None:
+        fx0, fy0, fx1, fy1 = filter_bbox
+
+    if not lines:
+        return []
+
+    spans = []
+    for line in lines:
+        location = line.get("location", "body")
+        if location == "watermark":
+            continue
+
+        for span in line.get("spans", []) or []:
+            raw = _normalize_line((span.get("text") or "").strip())
+            if not raw:
+                continue
+
+            span_bbox = span.get("bbox")
+            if not isinstance(span_bbox, (list, tuple)) or len(span_bbox) != 4:
+                continue
+
+            try:
+                x0, y0, x1, y1 = [float(v) for v in span_bbox]
+            except (TypeError, ValueError):
+                continue
+            if x0 == x1 or y0 == y1:
+                continue
+            if filter_bbox is not None and (
+                x1 < fx0
+                or x0 > fx1
+                or y1 < fy0
+                or y0 > fy1
+            ):
+                continue
+
+            spans.append(
+                {
+                    "text": raw,
+                    "bbox": [x0, y0, x1, y1],
+                    "x0": x0,
+                    "x1": x1,
+                    "y0": y0,
+                    "y1": y1,
+                    "cx": (x0 + x1) / 2.0,
+                    "cy": (y0 + y1) / 2.0,
+                    "line_no": line.get("line"),
+                }
+            )
+    return spans
+
+
+def _build_text_grid_table(
+    lines,
+    page_rect,
+    page_no,
+    source,
+    rotation=0,
+    debug=False,
+    bbox=None,
+    min_rows=2,
+    min_row_candidates=2,
+    min_support_ratio=0.25,
+    infer_method="text-grid",
+    override_row_lines=None,
+    override_vertical_lines=None,
+):
+    spans = _collect_span_cells(lines, bbox=bbox)
+    if not spans:
+        return []
+
+    row_tolerance = max(2.5, _estimate_row_tolerance(lines))
+    rows = []
+    for span in sorted(spans, key=lambda item: item["cy"]):
+        if rows and abs(span["cy"] - rows[-1]["cy"]) <= row_tolerance:
+            row = rows[-1]
+            row["items"].append(span)
+            row["count"] += 1
+            row["cy"] = (row["cy"] * (row["count"] - 1) + span["cy"]) / row["count"]
+            row["y0"] = min(row["y0"], span["y0"])
+            row["y1"] = max(row["y1"], span["y1"])
+        else:
+            rows.append(
+                {
+                    "cy": span["cy"],
+                    "count": 1,
+                    "items": [span],
+                    "y0": span["y0"],
+                    "y1": span["y1"],
+                }
+            )
+
+    if len(rows) < min_rows:
+        if debug:
+            _LOGGER.debug(
+                "%s inference skipped: too few row clusters. source=%s page=%s rows=%s",
+                infer_method,
+                source,
+                page_no,
+                len(rows),
+            )
+        return []
+
+    row_candidates = [row for row in rows if len(row["items"]) >= 2]
+    if len(row_candidates) < min_row_candidates:
+        if debug:
+            _LOGGER.debug(
+                "%s inference skipped: too few multi-cell rows. source=%s page=%s candidate_rows=%s",
+                infer_method,
+                source,
+                page_no,
+                len(row_candidates),
+            )
+        return []
+
+    column_count_stats = Counter(len(row["items"]) for row in row_candidates)
+    dominant_col_count, _ = column_count_stats.most_common(1)[0]
+    if dominant_col_count < 2:
+        return []
+
+    support_threshold = max(2, dominant_col_count - 1)
+    required_support = max(
+        2,
+        min(len(row_candidates), max(2, math.ceil(len(row_candidates) * min_support_ratio))),
+    )
+    support_rows = [
+        row for row in row_candidates
+        if len(row["items"]) >= support_threshold
+    ]
+    if len(support_rows) < required_support:
+        if debug:
+            _LOGGER.debug(
+                "%s inference skipped: unstable row consistency. source=%s page=%s support_rows=%s required=%s",
+                infer_method,
+                source,
+                page_no,
+                len(support_rows),
+                required_support,
+            )
+        return []
+
+    column_points = [[] for _ in range(dominant_col_count + 1)]
+    selected_rows = []
+    for row in support_rows:
+        cells = sorted(row["items"], key=lambda item: item["x0"])
+        cells = cells[:dominant_col_count]
+        if len(cells) < dominant_col_count:
+            continue
+
+        column_points[0].append(cells[0]["x0"])
+        for idx in range(1, dominant_col_count):
+            boundary = (cells[idx - 1]["x1"] + cells[idx]["x0"]) / 2.0
+            column_points[idx].append(boundary)
+        column_points[dominant_col_count].append(cells[dominant_col_count - 1]["x1"])
+        selected_rows.append(
+            {
+                "y0": row["y0"],
+                "y1": row["y1"],
+                "items": cells,
+            }
+        )
+
+    if len(selected_rows) < 2:
+        return []
+
+    merged_columns = [
+        _merge_numeric(points, max(2.0, row_tolerance * 0.75))
+        for points in column_points
+    ]
+    merged_columns = [points for points in merged_columns if points]
+    if not merged_columns:
+        return []
+
+    x_positions = sorted(
+        x
+        for points in merged_columns
+        for x in points
+    )
+    if not x_positions:
+        return []
+
+    tx0 = min(x_positions)
+    tx1 = max(x_positions)
+
+    y_values = []
+    for row in selected_rows:
+        y_values.append(row["y0"])
+        y_values.append(row["y1"])
+
+    ty0 = min(y_values)
+    ty1 = max(y_values)
+    if tx1 <= tx0 or ty1 <= ty0:
+        return []
+
+    row_boundaries = _merge_numeric(
+        y_values,
+        max(1.5, row_tolerance * 0.75),
+    )
+    if not row_boundaries:
+        return []
+
+    if override_row_lines and len(override_row_lines) >= 2:
+        row_lines = list(override_row_lines)
+    else:
+        row_lines = [
+            {
+                "orientation": "horizontal",
+                "x0": _round_float(tx0),
+                "y0": _round_float(y),
+                "x1": _round_float(tx1),
+                "y1": _round_float(y),
+            }
+            for y in row_boundaries
+        ]
+
+    vertical_positions = _merge_numeric(
+        x_positions,
+        max(2.0, row_tolerance * 0.75),
+    )
+    if not vertical_positions:
+        return []
+
+    if override_vertical_lines and len(override_vertical_lines) >= 2:
+        vertical_lines = list(override_vertical_lines)
+    else:
+        vertical_lines = [
+            {
+                "orientation": "vertical",
+                "x0": _round_float(x),
+                "y0": _round_float(ty0),
+                "x1": _round_float(x),
+                "y1": _round_float(ty1),
+            }
+            for x in vertical_positions
+        ]
+
+    row_texts = []
+    for row in selected_rows:
+        cells = sorted(row["items"], key=lambda item: item["x0"])
+        row_texts.append(" | ".join(_sanitize_text(cell.get("text", "")) for cell in cells[:dominant_col_count]))
+
+    if not row_texts:
+        return []
+
+    return [
+        {
+            "page": page_no,
+            "start_page": page_no,
+            "table_no": 1,
+            "bbox": [tx0, ty0, tx1, ty1],
+            "row_count": len(selected_rows),
+            "col_count": dominant_col_count,
+            "rotation": int(rotation or 0),
+            "rows_text": row_texts,
+            "x": _round_float((tx0 + tx1) / 2.0),
+            "y": _round_float((ty0 + ty1) / 2.0),
+            "page_width": float(page_rect.width) if page_rect else None,
+            "page_height": float(page_rect.height) if page_rect else None,
+            "text": "\n".join(row_texts),
+            "row_lines": row_lines,
+            "vertical_lines": vertical_lines,
+            "components": {
+                "bbox": [tx0, ty0, tx1, ty1],
+                "row_lines": row_lines,
+                "vertical_lines": vertical_lines,
+            },
+            "source": source,
+            "infer_method": infer_method,
+            "score": len(selected_rows) * dominant_col_count,
+            "debug": {
+                "candidate_rows": len(row_candidates),
+                "selected_rows": len(selected_rows),
+                "dominant_col_count": dominant_col_count,
+            },
+        }
+    ]
+
+
 def _extract_page_drawings(
     page,
     page_no,
@@ -823,7 +1134,181 @@ def _infer_table_components(table, row_count=None, col_count=None):
     }
 
 
-def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
+def _rows_from_cells(cells):
+    if not cells:
+        return []
+
+    rows = []
+    for cell in cells:
+        cell_row = _cell_value(
+            cell,
+            "row",
+            _cell_value(cell, "row_idx", _cell_value(cell, "row_i", _cell_value(cell, "r", None))),
+        )
+        cell_col = _cell_value(
+            cell,
+            "col",
+            _cell_value(cell, "col_idx", _cell_value(cell, "col_i", _cell_value(cell, "c", None))),
+        )
+        if cell_row is None or cell_col is None:
+            continue
+
+        try:
+            row_index = int(cell_row)
+            col_index = int(cell_col)
+        except (TypeError, ValueError):
+            continue
+
+        while len(rows) <= row_index:
+            rows.append([])
+        row_cells = rows[row_index]
+        while len(row_cells) <= col_index:
+            row_cells.append("")
+
+        row_cells[col_index] = _sanitize_text(
+            _cell_value(
+                cell,
+                "text",
+                _cell_value(cell, "content", _cell_value(cell, "text_content", "")),
+            )
+        )
+
+    return rows
+
+
+def _build_shape_grid_table(shape_lines, lines, page_rect, page_no, source, rotation=0, debug=False):
+    shape_lines = [line for line in (shape_lines or []) if line.get("type") == "shape-line"]
+    if not shape_lines or not lines:
+        return []
+
+    spans = _collect_span_cells(lines)
+    if not spans:
+        return []
+
+    tx0 = min(span["x0"] for span in spans)
+    ty0 = min(span["y0"] for span in spans)
+    tx1 = max(span["x1"] for span in spans)
+    ty1 = max(span["y1"] for span in spans)
+    pad = 30.0
+    span_bbox = (tx0 - pad, ty0 - pad, tx1 + pad, ty1 + pad)
+
+    page_width = float(page_rect.width) if page_rect else (tx1 - tx0 if tx1 > tx0 else 0.0)
+    page_height = float(page_rect.height) if page_rect else (ty1 - ty0 if ty1 > ty0 else 0.0)
+    line_min_len = max(5.0, min(page_width, page_height) * 0.02 or 0.0)
+
+    horizontal = []
+    vertical = []
+    for line in shape_lines:
+        x0 = line.get("x0")
+        y0 = line.get("y0")
+        x1 = line.get("x1")
+        y1 = line.get("y1")
+        if not all(v is not None for v in (x0, y0, x1, y1)):
+            continue
+        try:
+            x0 = float(x0)
+            y0 = float(y0)
+            x1 = float(x1)
+            y1 = float(y1)
+        except (TypeError, ValueError):
+            continue
+
+        length = _segment_length(x0, y0, x1, y1)
+        if length < line_min_len:
+            continue
+
+        orientation = line.get("orientation")
+        intersects_text = not (
+            max(x0, x1) < span_bbox[0]
+            or min(x0, x1) > span_bbox[2]
+            or max(y0, y1) < span_bbox[1]
+            or min(y0, y1) > span_bbox[3]
+        )
+        if not intersects_text:
+            continue
+
+        if orientation == "horizontal" or abs(y1 - y0) < 3.0:
+            horizontal.append({"y": (y0 + y1) / 2.0, "x0": min(x0, x1), "x1": max(x0, x1)})
+        elif orientation == "vertical" or abs(x1 - x0) < 3.0:
+            vertical.append({"x": (x0 + x1) / 2.0, "y0": min(y0, y1), "y1": max(y0, y1)})
+
+    if len(horizontal) < 2 or len(vertical) < 2:
+        return []
+
+    tol = max(2.0, _estimate_row_tolerance(lines))
+    h_positions = _merge_numeric([entry["y"] for entry in horizontal], tol)
+    v_positions = _merge_numeric([entry["x"] for entry in vertical], tol)
+
+    if len(h_positions) < 2 or len(v_positions) < 2:
+        return []
+
+    # keep only drawing lines near the extracted text bounding area
+    h_positions = [
+        pos for pos in h_positions if ty0 - pad <= pos <= ty1 + pad
+    ]
+    v_positions = [
+        pos for pos in v_positions if tx0 - pad <= pos <= tx1 + pad
+    ]
+    if len(h_positions) < 2 or len(v_positions) < 2:
+        return []
+
+    cand_x0 = min(v_positions)
+    cand_x1 = max(v_positions)
+    cand_y0 = min(h_positions)
+    cand_y1 = max(h_positions)
+    if cand_x1 <= cand_x0 or cand_y1 <= cand_y0:
+        return []
+
+    shape_row_lines = [
+        {"orientation": "horizontal", "x0": cand_x0, "y0": y, "x1": cand_x1, "y1": y}
+        for y in h_positions
+    ]
+    shape_vertical_lines = [
+        {"orientation": "vertical", "x0": x, "y0": cand_y0, "x1": x, "y1": cand_y1}
+        for x in v_positions
+    ]
+
+    tables = _build_text_grid_table(
+        lines,
+        page_rect,
+        page_no,
+        source,
+        rotation=rotation,
+        debug=debug,
+        bbox=(cand_x0, cand_y0, cand_x1, cand_y1),
+        min_rows=2,
+        min_row_candidates=2,
+        min_support_ratio=0.2,
+        infer_method="shape-grid",
+        override_row_lines=shape_row_lines,
+        override_vertical_lines=shape_vertical_lines,
+    )
+    if not tables:
+        return []
+
+    result = []
+    for table in tables:
+        if table.get("bbox") is None:
+            table["bbox"] = [cand_x0, cand_y0, cand_x1, cand_y1]
+        table["source"] = source
+        table["components"] = table.get("components", {})
+        table["components"].setdefault("bbox", table.get("bbox"))
+        table["components"]["row_lines"] = table.get("row_lines", [])
+        table["components"]["vertical_lines"] = table.get("vertical_lines", [])
+        result.append(table)
+
+    return result
+
+
+def _extract_page_tables(
+    page,
+    page_no,
+    source,
+    lines=None,
+    shape_lines=None,
+    debug=False,
+    table_mode="auto",
+):
     try:
         has_find_tables = hasattr(page, "find_tables")
     except Exception:
@@ -900,6 +1385,37 @@ def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
         selected_label = fallback_label
 
     if not selected or not getattr(selected, "tables", None):
+        inferred = []
+        inferred.extend(
+            _build_shape_grid_table(
+                shape_lines=shape_lines or [],
+                lines=lines or [],
+                page_rect=getattr(page, "rect", None),
+                page_no=page_no,
+                source=source,
+                rotation=page.rotation,
+                debug=debug,
+            )
+        )
+        if not inferred:
+            inferred = _build_text_grid_table(
+                lines=lines or [],
+                page_rect=getattr(page, "rect", None),
+                page_no=page_no,
+                source=source,
+                rotation=page.rotation,
+                debug=debug,
+            )
+        if inferred:
+            if debug:
+                _LOGGER.debug(
+                    "Text-grid fallback created %s table(s): source=%s page=%s",
+                    len(inferred),
+                    source,
+                    page_no,
+                )
+            return inferred
+
         if debug:
             _LOGGER.info(
                 "No tables found on page after strategies: source=%s page=%s",
@@ -944,6 +1460,9 @@ def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
                 selected_label,
             )
 
+        rows = []
+        cells = getattr(table, "cells", None) or []
+
         try:
             rows = table.extract()
         except Exception:
@@ -955,8 +1474,8 @@ def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
                     table_index,
                     exc_info=True,
                 )
-            rows = []
-            for cell in (getattr(table, "cells", None) or []):
+                rows = []
+            for cell in cells:
                 row = getattr(cell, "row", None)
                 col = getattr(cell, "col", None)
                 if row is None or col is None:
@@ -969,6 +1488,9 @@ def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
                 row_cells[col] = _sanitize_text(
                     getattr(cell, "text", "") or getattr(cell, "content", "") or ""
                 )
+
+        if not rows and cells:
+            rows = _rows_from_cells(cells)
 
         if not rows:
             continue
@@ -1019,14 +1541,15 @@ def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
                 "text": "\n".join(row_texts),
                 "row_lines": list(components.get("row_lines", [])),
                 "vertical_lines": list(components.get("vertical_lines", [])),
-                "components": {
-                    "bbox": components.get("bbox"),
-                    "row_lines": list(components.get("row_lines", [])),
-                    "vertical_lines": list(components.get("vertical_lines", [])),
-                },
-                "source": source,
-            }
-        )
+                    "components": {
+                        "bbox": components.get("bbox"),
+                        "row_lines": list(components.get("row_lines", [])),
+                        "vertical_lines": list(components.get("vertical_lines", [])),
+                    },
+                    "infer_method": "find-tables",
+                    "source": source,
+                }
+            )
 
     return table_items
 
@@ -1152,6 +1675,7 @@ def _extract_page_lines(
     debug=False,
 ):
     page_data = page.get_text("dict", sort=True)
+    page_words = page.get_text("words")
     page_rect = page.rect
     rotation = int(page.rotation or 0)
     axis = _rotation_axis(rotation)
@@ -1180,6 +1704,7 @@ def _extract_page_lines(
             font_counts = Counter()
             colors = []
             span_count = 0
+            span_items = []
 
             for span_idx, span in enumerate(spans, start=1):
                 raw = (span.get("text") or "").replace("\xa0", " ")
@@ -1211,6 +1736,21 @@ def _extract_page_lines(
                 color = span.get("color")
                 if color is not None:
                     colors.append(color)
+                span_bbox = span.get("bbox")
+                if isinstance(span_bbox, (list, tuple)) and len(span_bbox) == 4:
+                    try:
+                        x0, y0, x1, y1 = [float(v) for v in span_bbox]
+                        span_items.append(
+                            {
+                                "text": raw,
+                                "bbox": [x0, y0, x1, y1],
+                                "size": _round_float(span.get("size", 0.0)),
+                                "font": span.get("font"),
+                                "color": color,
+                            }
+                        )
+                    except (TypeError, ValueError):
+                        pass
 
             raw_text = "".join(raw_parts)
             if not preserve_newlines:
@@ -1238,6 +1778,25 @@ def _extract_page_lines(
                 )
 
             dominant_font = font_counts.most_common(1)[0][0] if font_counts else None
+            if span_count <= 1:
+                for word in page_words or []:
+                    if len(word) < 5:
+                        continue
+                    wx0, wy0, wx1, wy1, wtext = word[:5]
+                    wtext = (wtext or "").strip()
+                    if not wtext:
+                        continue
+                    if wx1 <= line_bbox[0] or wx0 >= line_bbox[2] or wy1 <= line_bbox[1] or wy0 >= line_bbox[3]:
+                        continue
+                    span_items.append(
+                        {
+                            "text": _normalize_line(wtext),
+                            "bbox": [float(wx0), float(wy0), float(wx1), float(wy1)],
+                            "size": _round_float(max_size),
+                            "font": None,
+                            "color": colors[0] if colors else None,
+                        }
+                    )
 
             lines.append(
                 {
@@ -1271,6 +1830,7 @@ def _extract_page_lines(
                         "x_ratio": x_ratio,
                         "y_ratio": y_ratio,
                     },
+                    "spans": span_items,
                     "row_no": 0,
                 }
             )
@@ -1777,6 +2337,8 @@ def _extract_pages(
                 page,
                 page_no,
                 source,
+                lines=lines,
+                shape_lines=shape_lines,
                 debug=table_debug,
                 table_mode=table_mode,
             )
@@ -1800,6 +2362,7 @@ def _normalize_table_record(table):
         "y": table.get("y"),
         "bbox": table.get("bbox"),
         "rotation": table.get("rotation"),
+        "infer_method": table.get("infer_method"),
         "rows": table.get("row_count"),
         "cols": table.get("col_count"),
         "font_size": None,
@@ -1826,6 +2389,7 @@ def read_pdf(
     debug=False,
     table_debug=None,
     table_mode="auto",
+    return_pages_with_lines=False,
 ):
     path = Path(path)
 
@@ -1932,6 +2496,9 @@ def read_pdf(
             }
         )
 
+    if return_pages_with_lines:
+        return records, pages_with_lines
+
     return records
 
 
@@ -2024,6 +2591,18 @@ def write_raw_line_log(records, output_path):
                     f.write("\n")
                     global_line_no += 1
 
+            payload = {
+                "type": "table-detection-summary",
+                "page": page_no,
+                "region": "table-detection",
+                "global_line_no": global_line_no,
+                "shape_line_count": len(record.get("shape_lines") or []),
+                "table_count": record.get("table_count", 0),
+            }
+            f.write(json.dumps(payload, ensure_ascii=False))
+            f.write("\n")
+            global_line_no += 1
+
             for table in record.get("tables", []):
                 normalized = _normalize_table_record(table)
                 payload = {
@@ -2041,6 +2620,7 @@ def write_raw_line_log(records, output_path):
                     "bbox": normalized.get("bbox"),
                     "rows": normalized.get("rows"),
                     "cols": normalized.get("cols"),
+                    "infer_method": normalized.get("infer_method"),
                     "text": normalized.get("text"),
                 }
                 f.write(json.dumps(payload, ensure_ascii=False))
@@ -2111,6 +2691,75 @@ def write_raw_line_log(records, output_path):
                 f.write(json.dumps(payload, ensure_ascii=False))
                 f.write("\n")
                 global_line_no += 1
+
+
+def write_raw_components(pages_with_lines, output_path):
+    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
+        for page_no, lines, tables, shape_lines in pages_with_lines:
+            for line in lines:
+                payload = {
+                    "type": "raw-line",
+                    "page": page_no,
+                    "line_no": line.get("line"),
+                    "row_no": line.get("row_no"),
+                    "region": line.get("location"),
+                    "rotation": line.get("rotation"),
+                    "rotation_axis": line.get("rotation_axis"),
+                    "font_family": line.get("font_family"),
+                    "font_size": line.get("size"),
+                    "x": (line.get("position", {}) or {}).get("x"),
+                    "y": (line.get("position", {}) or {}).get("y"),
+                    "x_ratio": (line.get("position", {}) or {}).get("x_ratio"),
+                    "y_ratio": (line.get("position", {}) or {}).get("y_ratio"),
+                    "bbox": line.get("bbox"),
+                    "text": line.get("raw"),
+                    "markdown": line.get("markdown"),
+                    "spans": line.get("spans", []),
+                    "source": line.get("source"),
+                }
+                f.write(json.dumps(payload, ensure_ascii=False))
+                f.write("\n")
+
+            for table in tables:
+                payload = {
+                    "type": "raw-table",
+                    "page": page_no,
+                    "table_no": table.get("table_no"),
+                    "source": table.get("source"),
+                    "rotation": table.get("rotation"),
+                    "bbox": table.get("bbox"),
+                    "infer_method": table.get("infer_method"),
+                    "rows": table.get("row_count"),
+                    "cols": table.get("col_count"),
+                    "text": table.get("text"),
+                    "row_lines": table.get("row_lines", []),
+                    "vertical_lines": table.get("vertical_lines", []),
+                    "components": table.get("components", {}),
+                }
+                f.write(json.dumps(payload, ensure_ascii=False))
+                f.write("\n")
+
+            for line in shape_lines:
+                if line.get("type") != "shape-line":
+                    continue
+                payload = {
+                    "type": "raw-shape-line",
+                    "page": page_no,
+                    "rotation": lines[0].get("rotation", 0) if lines else 0,
+                    "x0": line.get("x0"),
+                    "y0": line.get("y0"),
+                    "x1": line.get("x1"),
+                    "y1": line.get("y1"),
+                    "x": line.get("x"),
+                    "y": line.get("y"),
+                    "length": line.get("length"),
+                    "orientation": line.get("orientation"),
+                    "linewidth": line.get("linewidth"),
+                    "color": line.get("color"),
+                    "region": line.get("region", "shape"),
+                }
+                f.write(json.dumps(payload, ensure_ascii=False))
+                f.write("\n")
 
 
 def parse_args():
@@ -2221,6 +2870,16 @@ def parse_args():
         help="Write raw line extraction records to this file.",
     )
     parser.add_argument(
+        "--raw-components",
+        nargs="?",
+        const="",
+        default=None,
+        help=(
+            "Write full raw page components (lines + shape lines + tables) to JSONL."
+            " Optional path can be provided."
+        ),
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable verbose debug logging, including raw line/table diagnostics.",
@@ -2245,7 +2904,17 @@ def main():
         raise SystemExit(f"Invalid --pages argument: {exc}")
 
     output = args.output or f"{Path(args.file).stem}_pages.jsonl"
-    records = read_pdf(
+    request_raw_components = args.raw_components is not None
+    raw_components_output = (
+        str(
+            Path(output).with_name(
+                f"{Path(output).stem}_raw_components.jsonl"
+            )
+        )
+        if request_raw_components and args.raw_components == ""
+        else args.raw_components
+    )
+    result = read_pdf(
         args.file,
         strip_watermarks=args.strip_watermarks,
         strip_headers=args.strip_headers,
@@ -2261,12 +2930,23 @@ def main():
         debug=args.debug,
         table_debug=args.debug or args.table_debug,
         table_mode=args.table_mode,
+        return_pages_with_lines=request_raw_components,
     )
+    if request_raw_components:
+        records, pages_with_lines = result
+    else:
+        records = result
     if args.raw_line_log:
         write_raw_line_log(records, args.raw_line_log)
+    if request_raw_components and raw_components_output:
+        write_raw_components(pages_with_lines, raw_components_output)
     if args.legacy_page_jsonl:
         write_jsonl_pages(records, output)
-        print(f"Extracted {len(records)} pages -> {output}")
+        if request_raw_components:
+            print(f"Extracted {len(records)} pages -> {output}")
+            print(f"Raw components -> {raw_components_output}")
+        else:
+            print(f"Extracted {len(records)} pages -> {output}")
     else:
         write_jsonl(records, output)
         total_lines = sum(
@@ -2275,9 +2955,15 @@ def main():
             for region in ("header", "body", "footer", "watermark")
         )
         total_tables = sum(record.get("table_count", 0) for record in records)
-        print(
-            f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
-        )
+        if request_raw_components:
+            print(
+                f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
+            )
+            print(f"Raw components -> {raw_components_output}")
+        else:
+            print(
+                f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
+            )
 
 
 if __name__ == "__main__":
