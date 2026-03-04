@@ -31,6 +31,15 @@ Converts an `.xlsx` file into JSON-LD-like triples (`.jsonl`) based on sheet str
 python read_excel.py <path-to-file.xlsx> [--type {auto,counters,parameters}] [--output output.jsonl]
 ```
 
+### `read_pdf.py`
+
+Reads a PDF file with PyMuPDF and writes each page text as JSONL (`page`, `text`) records.
+
+```bash
+python read_pdf.py <path-to-file.pdf> [--output output.jsonl] [--watermark-patterns "CONFIDENTIAL" "COPY"]
+python read_pdf.py <path-to-file.pdf> --no-strip-watermarks
+```
+
 ### `main.py`
 
 Reads files listed in `config.yaml`, decrypts if needed, parses each sheet into a DataFrame using `xlwings`, and ingests rows into Neo4j.
