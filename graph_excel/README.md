@@ -42,6 +42,7 @@ Each output line is minimal by default and includes only:
 - `y`
 - `font_size`
 - `rotation` (effective text direction, including tilt where available)
+`font_size` is rounded to two decimal places in output (0.01 precision), matching position fields.
 
 Using legacy page JSONL (`--legacy-page-jsonl`) you can still get page records with `header`, `footer`, and `watermark` fields.
 That legacy page record includes:
@@ -49,6 +50,7 @@ That legacy page record includes:
 - `regions`: per-line metadata for `header`, `body`, `footer`, and `watermark` lines
 - `region_summary`: baseline/position/style stats for each region
 - `anomalies`: page-level exception hints (including unusual header/footer baseline and mixed rotation cases)
+- `tables`: optional table detections from `--find-tables`, each with `page`, `table_no`, `bbox`, `row_count`, `col_count`, `text`, `start_page`, `end_page`, and `pages` when a table spans multiple pages
 
 ```bash
 python read_pdf.py <path-to-file.pdf> [--output output.jsonl] [--watermark-patterns "CONFIDENTIAL" "COPY"]
@@ -57,8 +59,11 @@ python read_pdf.py <path-to-file.pdf> --header-ratio 0.06 --footer-ratio 0.06
 python read_pdf.py <path-to-file.pdf> --max-pages 100
 python read_pdf.py <path-to-file.pdf> --pages 2-10,20,30-35
 python read_pdf.py <path-to-file.pdf> --preserve-newlines
+python read_pdf.py <path-to-file.pdf> --find-tables
 python read_pdf.py <path-to-file.pdf> --legacy-page-jsonl
 ```
+When `--find-tables` is used in default mode, table records are emitted with `"type":"table"` in JSONL.
+Cross-page tables are merged automatically when the continuation table appears on the next page, shares column count and overlapping geometry, and sits at page boundaries; duplicated header rows are removed during merge.
 If `--pages` is set, it overrides `--max-pages`.
 `--preserve-newlines` keeps original whitespace/newline characters in each extracted line text instead of collapsing them.
 
