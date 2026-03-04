@@ -92,15 +92,22 @@ RETURN
 
 ### Query parameters
 
-Single-name query (`$name`):
+Use either form depending on your client:
+
+Neo4j Browser (or any Cypher interface with `:param` support):
+
+```cypher
+:param name => "counter";
+:param names => ["counter", "temperature"];
+```
+
+Application / driver (Python, JS, etc.):
 
 ```json
 {
   "name": "counter"
 }
 ```
-
-Multiple-name query (`$names`):
 
 ```json
 {
