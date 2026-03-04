@@ -3,3 +3,4 @@ neo4j
 pandas
 PyYAML
 xlwings
+pymupdf
