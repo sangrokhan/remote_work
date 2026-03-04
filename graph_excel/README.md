@@ -40,6 +40,7 @@ Each output line is minimal by default and includes only:
 - `text`
 - `x`
 - `y`
+- `font_size`
 - `rotation` (effective text direction, including tilt where available)
 
 Using legacy page JSONL (`--legacy-page-jsonl`) you can still get page records with `header`, `footer`, and `watermark` fields.
@@ -54,8 +55,12 @@ python read_pdf.py <path-to-file.pdf> [--output output.jsonl] [--watermark-patte
 python read_pdf.py <path-to-file.pdf> --no-strip-watermarks
 python read_pdf.py <path-to-file.pdf> --header-ratio 0.06 --footer-ratio 0.06
 python read_pdf.py <path-to-file.pdf> --max-pages 100
+python read_pdf.py <path-to-file.pdf> --pages 2-10,20,30-35
+python read_pdf.py <path-to-file.pdf> --preserve-newlines
 python read_pdf.py <path-to-file.pdf> --legacy-page-jsonl
 ```
+If `--pages` is set, it overrides `--max-pages`.
+`--preserve-newlines` keeps original whitespace/newline characters in each extracted line text instead of collapsing them.
 
 Legacy `regions` entries include more metadata if needed, including style and baseline information.
 
