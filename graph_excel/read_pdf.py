@@ -426,6 +426,211 @@ def _line_tilt_angle(line_obj, spans):
     return float(sum(angles) / len(angles))
 
 
+def _to_point(value):
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)):
+        return None
+    if len(value) != 2:
+        return None
+    try:
+        return float(value[0]), float(value[1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_rect_from_re(args):
+    if not args:
+        return None
+
+    first = args[0]
+    if isinstance(first, (list, tuple)) and len(first) == 4:
+        try:
+            return [float(first[0]), float(first[1]), float(first[2]), float(first[3])]
+        except (TypeError, ValueError):
+            return None
+
+    if len(args) == 4:
+        try:
+            return [float(args[0]), float(args[1]), float(args[2]), float(args[3])]
+        except (TypeError, ValueError):
+            return None
+
+    return None
+
+
+def _coerce_number(value, default=None):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _extract_shape_lines_from_drawing(drawing):
+    if not isinstance(drawing, dict):
+        return []
+
+    items = drawing.get("items")
+    if not isinstance(items, list):
+        return []
+
+    linewidth = _coerce_number(drawing.get("linewidth"), 0.0)
+    color = drawing.get("color")
+    if color is None and isinstance(drawing.get("fill"), (int, float)):
+        color = drawing.get("fill")
+    if color is None:
+        color = drawing.get("stroke")
+
+    segments = []
+    cursor = None
+    for item in items:
+        if not item:
+            continue
+
+        op = item[0]
+        args = item[1:]
+        if op == "m" and args:
+            cursor = _to_point(args[0]) if len(args) == 1 else _to_point(args)
+            continue
+
+        if op == "l" and args and cursor is not None:
+            point = _to_point(args[0]) if len(args) == 1 else _to_point(args)
+            if point is None:
+                continue
+
+            x0, y0 = cursor
+            x1, y1 = point
+            segments.append((x0, y0, x1, y1, linewidth, color))
+            cursor = point
+            continue
+
+        if op == "re":
+            rect = _to_rect_from_re(args)
+            if rect is None:
+                continue
+            x0, y0, x1, y1 = rect
+            if x0 == x1 or y0 == y1:
+                continue
+            segments.append((x0, y0, x0, y1, linewidth, color))
+            segments.append((x0, y1, x1, y1, linewidth, color))
+            segments.append((x1, y1, x1, y0, linewidth, color))
+            segments.append((x1, y0, x0, y0, linewidth, color))
+            continue
+
+        if op in ("v", "y") and cursor is not None:
+            if len(args) == 1:
+                cursor = _to_point(args[0]) or cursor
+            else:
+                cursor = _to_point(args) or cursor
+            continue
+
+        if op == "h":
+            if cursor is not None:
+                segments.append((cursor[0], cursor[1], cursor[0], cursor[1], linewidth, color))
+            continue
+
+        if op.startswith("c") and args:
+            # ignore Bézier control data unless it starts with a point-like argument
+            if op in ("c",):
+                end = _to_point(args[-1]) if len(args) >= 6 else _to_point(args)
+                if end is not None and cursor is not None:
+                    x0, y0 = cursor
+                    x1, y1 = end
+                    segments.append((x0, y0, x1, y1, linewidth, color))
+                cursor = end
+
+    return segments
+
+
+def _segment_length(x0, y0, x1, y1):
+    return math.hypot(x1 - x0, y1 - y0)
+
+
+def _segment_orientation(x0, y0, x1, y1, tolerance=1.5):
+    dx = x1 - x0
+    dy = y1 - y0
+    if abs(dy) <= tolerance and abs(dx) > tolerance:
+        return "horizontal"
+    if abs(dx) <= tolerance and abs(dy) > tolerance:
+        return "vertical"
+    return "other"
+
+
+def _extract_page_drawings(
+    page,
+    page_no,
+    source,
+    debug=False,
+    header_ratio=0.08,
+    footer_ratio=0.08,
+):
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        if debug:
+            _LOGGER.debug(
+                "Could not read drawing objects: source=%s page=%s",
+                source,
+                page_no,
+                exc_info=True,
+            )
+        return []
+
+    lines = []
+    page_rect = page.rect
+    page_rotation = int(page.rotation or 0)
+    for drawing in drawings:
+        for x0, y0, x1, y1, linewidth, color in _extract_shape_lines_from_drawing(drawing):
+            length = _segment_length(x0, y0, x1, y1)
+            if length <= 1.5:
+                continue
+            if x0 == x1 and y0 == y1:
+                continue
+
+            min_x, min_y, max_x, max_y = (
+                min(x0, x1),
+                min(y0, y1),
+                max(x0, x1),
+                max(y0, y1),
+            )
+            region = _classify_region(
+                page_rect,
+                (min_x, min_y, max_x, max_y),
+                page_rotation,
+                header_ratio,
+                footer_ratio,
+            )
+            orientation = _segment_orientation(x0, y0, x1, y1)
+            lines.append(
+                {
+                    "type": "shape-line",
+                    "page": page_no,
+                    "source": source,
+                    "region": region,
+                    "x0": _round_float(x0),
+                    "y0": _round_float(y0),
+                    "x1": _round_float(x1),
+                    "y1": _round_float(y1),
+                    "x": _round_float((x0 + x1) / 2.0),
+                    "y": _round_float((y0 + y1) / 2.0),
+                    "length": _round_float(length),
+                    "orientation": orientation,
+                    "linewidth": _round_float(linewidth),
+                    "color": color,
+                }
+            )
+
+    if debug:
+        _LOGGER.debug(
+            "Extracted shape lines: source=%s page=%s count=%s",
+            source,
+            page_no,
+            len(lines),
+        )
+
+    return lines
+
+
 def _cell_value(cell, name, default=None):
     if cell is None:
         return default
@@ -465,13 +670,6 @@ def _merge_positions(values, tolerance):
             continue
         merged.append(value)
     return merged
-
-
-def _coerce_number(value, default=None):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _infer_table_components(table, row_count=None, col_count=None):
@@ -623,6 +821,8 @@ def _infer_table_components(table, row_count=None, col_count=None):
         "row_lines": row_lines,
         "vertical_lines": vertical_lines,
     }
+
+
 def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
     try:
         has_find_tables = hasattr(page, "find_tables")
@@ -1563,6 +1763,14 @@ def _extract_pages(
         )
         for line in lines:
             line["source"] = source
+        shape_lines = _extract_page_drawings(
+            page,
+            page_no,
+            source,
+            debug=table_debug or debug,
+            header_ratio=header_ratio,
+            footer_ratio=footer_ratio,
+        )
         tables = []
         if extract_tables:
             tables = _extract_page_tables(
@@ -1572,7 +1780,7 @@ def _extract_pages(
                 debug=table_debug,
                 table_mode=table_mode,
             )
-        extracted.append((page_no, lines, tables))
+        extracted.append((page_no, lines, tables, shape_lines))
     return extracted
 
 
@@ -1637,7 +1845,7 @@ def read_pdf(
         )
 
     tables = []
-    for _, _, page_tables in pages_with_lines:
+    for _, _, page_tables, _ in pages_with_lines:
         tables.extend(page_tables)
 
     if extract_tables:
@@ -1649,7 +1857,7 @@ def read_pdf(
         table_by_page.setdefault(page_key, []).append(table)
 
     compiled_patterns = _compile_patterns(patterns or [])
-    extracted_lines = [lines for _, lines, _ in pages_with_lines]
+    extracted_lines = [lines for _, lines, _, _ in pages_with_lines]
     repeated_watermarks = set()
     if strip_watermarks:
         repeated_watermarks = _collect_repeated_lines(
@@ -1658,7 +1866,7 @@ def read_pdf(
         )
 
     records = []
-    for page_no, lines, _ in pages_with_lines:
+    for page_no, lines, _, shape_lines in pages_with_lines:
         body_size = _estimate_body_font_size(lines)
         sections, region_summary, removed, kept_text = _build_sections(
             lines,
@@ -1719,6 +1927,8 @@ def read_pdf(
                 "anomalies": anomalies,
                 "tables": table_by_page.get(page_no, []),
                 "table_count": len(table_by_page.get(page_no, [])),
+                "shape_lines": shape_lines,
+                "shape_line_count": len(shape_lines),
             }
         )
 
@@ -1790,6 +2000,7 @@ def write_raw_line_log(records, output_path):
         global_line_no = 1
         for record in records:
             page_no = record.get("page")
+
             for region_name in ("header", "body", "footer", "watermark"):
                 for item in record.get("regions", {}).get(region_name, []):
                     payload = {
@@ -1877,6 +2088,29 @@ def write_raw_line_log(records, output_path):
                     )
                     f.write("\n")
                     global_line_no += 1
+
+            for line in record.get("shape_lines", []) or []:
+                if line.get("type") != "shape-line":
+                    continue
+                payload = {
+                    "type": "shape-line",
+                    "page": page_no,
+                    "region": line.get("region", "shape"),
+                    "global_line_no": global_line_no,
+                    "orientation": line.get("orientation"),
+                    "x0": line.get("x0"),
+                    "y0": line.get("y0"),
+                    "x1": line.get("x1"),
+                    "y1": line.get("y1"),
+                    "x": line.get("x"),
+                    "y": line.get("y"),
+                    "length": line.get("length"),
+                    "linewidth": line.get("linewidth"),
+                    "color": line.get("color"),
+                }
+                f.write(json.dumps(payload, ensure_ascii=False))
+                f.write("\n")
+                global_line_no += 1
 
 
 def parse_args():
