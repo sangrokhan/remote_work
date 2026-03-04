@@ -1,4 +1,5 @@
 import argparse
+import logging
 import json
 import math
 import re
@@ -10,8 +11,44 @@ try:
 except ImportError:
     import fitz as pymupdf
 
+_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+_LOGGER = logging.getLogger("read_pdf")
+
+
+def _surrounding_snippet(text, position, radius=40):
+    start = max(0, position - radius)
+    end = min(len(text), position + radius + 1)
+    segment = text[start:end]
+    return segment.encode("unicode_escape").decode("ascii")
+
+
+def _sanitize_text(value, context=None):
+    if value is None:
+        return value
+    raw = str(value)
+    matches = list(_SURROGATE_RE.finditer(raw))
+    if not matches:
+        return raw
+
+    if context is None:
+        return _SURROGATE_RE.sub("", raw)
+
+    positions = [match.start() for match in matches]
+    preview = [surrounding_snippet(raw, position) for position in positions[:3]]
+    _LOGGER.warning(
+        "Removed surrogate code units in PDF text. source=%s page=%s line=%s span=%s count=%s snippets=%s",
+        context.get("source") if context else "unknown",
+        context.get("page") if context else None,
+        context.get("line") if context else None,
+        context.get("span") if context else None,
+        len(positions),
+        ", ".join(preview),
+    )
+    return _SURROGATE_RE.sub("", raw)
+
 
 def _normalize_line(line):
+    line = _sanitize_text(line)
     return re.sub(r"\s+", " ", line).strip()
 
 
@@ -76,8 +113,8 @@ def _style_token(span):
     return is_bold, is_italic, is_mono
 
 
-def _span_to_markdown(span):
-    raw = (span.get("text") or "").replace("\n", " ")
+def _span_to_markdown(raw, span):
+    raw = str(raw).replace("\n", " ")
     if not raw:
         return ""
 
@@ -97,25 +134,36 @@ def _span_to_markdown(span):
     return text
 
 
-def _extract_page_lines(page):
+def _extract_page_lines(page, page_no, source):
     page_data = page.get_text("dict", sort=True)
     lines = []
+    line_no = 0
 
     for block in page_data.get("blocks", []):
         if block.get("type") != 0:
             continue
         for line in block.get("lines", []):
+            line_no += 1
             spans = line.get("spans", []) or []
             if not spans:
                 continue
 
             styled_parts = []
             max_size = 0.0
-            for span in spans:
+            for span_idx, span in enumerate(spans, start=1):
                 raw = (span.get("text") or "").replace("\xa0", " ")
+                raw = _sanitize_text(
+                    raw,
+                    context={
+                        "source": source,
+                        "page": page_no,
+                        "line": line_no,
+                        "span": span_idx,
+                    },
+                )
                 if not raw.strip():
                     continue
-                text = _span_to_markdown(span)
+                text = _span_to_markdown(raw, span)
                 if not text:
                     continue
                 if styled_parts and not text.startswith(" ") and not styled_parts[-1].endswith(" "):
@@ -163,10 +211,10 @@ def _line_to_markdown(line_text, line_size, body_size):
     return cleaned
 
 
-def _extract_pages_to_markdown(doc):
+def _extract_pages_to_markdown(doc, source):
     extracted = []
-    for page in doc:
-        extracted.append(_extract_page_lines(page))
+    for page_no, page in enumerate(doc, start=1):
+        extracted.append(_extract_page_lines(page, page_no, source))
     return extracted
 
 
@@ -174,7 +222,7 @@ def read_pdf(path, strip_watermarks=True, patterns=None, ratio_threshold=0.6):
     path = Path(path)
 
     with pymupdf.open(path) as doc:
-        pages_with_lines = _extract_pages_to_markdown(doc)
+        pages_with_lines = _extract_pages_to_markdown(doc, str(path))
 
     compiled_patterns = _compile_patterns(patterns or [])
     repeated_watermarks = set()
@@ -209,9 +257,13 @@ def read_pdf(path, strip_watermarks=True, patterns=None, ratio_threshold=0.6):
 
 
 def write_jsonl(records, output_path):
-    with open(output_path, "w", encoding="utf-8") as f:
+    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
         for record in records:
-            f.write(json.dumps(record, ensure_ascii=False))
+            safe_record = {
+                "page": record.get("page"),
+                "text": _sanitize_text(record.get("text", "")),
+            }
+            f.write(json.dumps(safe_record, ensure_ascii=False))
             f.write("\n")
 
 
@@ -252,6 +304,7 @@ def parse_args():
 
 
 def main():
+    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
     args = parse_args()
     output = args.output or f"{Path(args.file).stem}_pages.jsonl"
     records = read_pdf(
