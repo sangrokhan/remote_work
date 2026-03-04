@@ -35,12 +35,33 @@ python read_excel.py <path-to-file.xlsx> [--type {auto,counters,parameters}] [--
 
 Reads a PDF file with PyMuPDF and writes each page text as Markdown-style JSONL (`page`, `text`) records.
 Each output record also includes `header`, `footer`, and `watermark` sections, with `text` containing only the body content by default.
+Each page record also includes:
+
+- `regions`: per-line metadata for `header`, `body`, `footer`, and `watermark` lines
+- `region_summary`: baseline/position/style stats for each region
+- `anomalies`: page-level exception hints (including unusual header/footer baseline and mixed rotation cases)
 
 ```bash
 python read_pdf.py <path-to-file.pdf> [--output output.jsonl] [--watermark-patterns "CONFIDENTIAL" "COPY"]
 python read_pdf.py <path-to-file.pdf> --no-strip-watermarks
 python read_pdf.py <path-to-file.pdf> --header-ratio 0.06 --footer-ratio 0.06
 ```
+
+`regions` entries include at least:
+
+- `line_no`
+- `rotation`
+- `rotation_axis` (`x`/`y`)
+- `position.baseline` (`axis`, `value`, `ratio`)
+- `bbox`
+- `font_family`, `size`, `span_count`
+- `removed_reason` (for filtered lines)
+
+`region_summary.<region>` also includes:
+
+- `rotation.axis_counts` and `rotation.counts`
+- `baseline.ratio` (`min`, `max`, `avg`)
+- `baseline.dominant_axis`
 
 ### `main.py`
 
