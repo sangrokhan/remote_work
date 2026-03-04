@@ -67,30 +67,137 @@ def _line_matches_patterns(line, patterns):
     return any(pattern.search(line) for pattern in patterns)
 
 
+def _style_token(span):
+    font = (span.get("font") or "").lower()
+    flags = int(span.get("flags") or 0)
+    is_bold = "bold" in font or bool(flags & 16)
+    is_italic = "italic" in font or "oblique" in font or bool(flags & 2)
+    is_mono = any(token in font for token in ("mono", "courier", "consola", "consolas"))
+    return is_bold, is_italic, is_mono
+
+
+def _span_to_markdown(span):
+    raw = (span.get("text") or "").replace("\n", " ")
+    if not raw:
+        return ""
+
+    is_bold, is_italic, is_mono = _style_token(span)
+    text = raw.strip("\n\r")
+    if not text:
+        return ""
+
+    if is_bold and is_italic:
+        text = f"***{text}***"
+    elif is_bold:
+        text = f"**{text}**"
+    elif is_italic:
+        text = f"*{text}*"
+    elif is_mono:
+        text = f"`{text}`"
+    return text
+
+
+def _extract_page_lines(page):
+    page_data = page.get_text("dict", sort=True)
+    lines = []
+
+    for block in page_data.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            spans = line.get("spans", []) or []
+            if not spans:
+                continue
+
+            styled_parts = []
+            max_size = 0.0
+            for span in spans:
+                raw = (span.get("text") or "").replace("\xa0", " ")
+                if not raw.strip():
+                    continue
+                text = _span_to_markdown(span)
+                if not text:
+                    continue
+                if styled_parts and not text.startswith(" ") and not styled_parts[-1].endswith(" "):
+                    styled_parts.append(" ")
+                styled_parts.append(text)
+                max_size = max(max_size, float(span.get("size") or 0.0))
+
+            joined = "".join(styled_parts).strip()
+            if joined:
+                lines.append({"text": joined, "size": max_size})
+
+    return lines
+
+
+def _estimate_body_font_size(lines):
+    sizes = [round(line.get("size", 0.0), 1) for line in lines if line.get("size")]
+    if not sizes:
+        return 12.0
+    return float(Counter(sizes).most_common(1)[0][0])
+
+
+def _heading_level(size, body_size):
+    if body_size <= 0:
+        return 0
+    ratio = size / body_size
+    if ratio >= 1.7:
+        return 1
+    if ratio >= 1.45:
+        return 2
+    if ratio >= 1.25:
+        return 3
+    return 0
+
+
+def _line_to_markdown(line_text, line_size, body_size):
+    text = _normalize_line(line_text)
+    if not text:
+        return ""
+
+    cleaned = re.sub(r"^\s*([•●▪◦·]|\*|-)\s+", "- ", text)
+
+    heading = _heading_level(line_size, body_size)
+    if heading:
+        return f"{'#' * heading} {cleaned}"
+    return cleaned
+
+
+def _extract_pages_to_markdown(doc):
+    extracted = []
+    for page in doc:
+        extracted.append(_extract_page_lines(page))
+    return extracted
+
+
 def read_pdf(path, strip_watermarks=True, patterns=None, ratio_threshold=0.6):
     path = Path(path)
-    pages_raw = []
 
     with pymupdf.open(path) as doc:
-        for page in doc:
-            text = page.get_text() or ""
-            pages_raw.append([_normalize_line(line) for line in text.splitlines() if line.strip()])
+        pages_with_lines = _extract_pages_to_markdown(doc)
 
     compiled_patterns = _compile_patterns(patterns or [])
     repeated_watermarks = set()
 
     if strip_watermarks:
-        repeated_watermarks = _collect_repeated_lines(pages_raw, ratio_threshold)
+        page_text_lines = [[line["text"] for line in lines] for lines in pages_with_lines]
+        repeated_watermarks = _collect_repeated_lines(page_text_lines, ratio_threshold)
 
     records = []
-    for page_no, lines in enumerate(pages_raw, start=1):
+    for page_no, lines in enumerate(pages_with_lines, start=1):
+        body_size = _estimate_body_font_size(lines)
         filtered_lines = []
+
         for line in lines:
-            if compiled_patterns and _line_matches_patterns(line, compiled_patterns):
+            text = line["text"]
+            if compiled_patterns and _line_matches_patterns(text, compiled_patterns):
                 continue
-            if strip_watermarks and line.casefold() in repeated_watermarks:
+            if strip_watermarks and _normalize_line(text).casefold() in repeated_watermarks:
                 continue
-            filtered_lines.append(line)
+            markdown_line = _line_to_markdown(text, line["size"], body_size)
+            if markdown_line:
+                filtered_lines.append(markdown_line)
+
         records.append(
             {
                 "page": page_no,
@@ -110,7 +217,7 @@ def write_jsonl(records, output_path):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Read PDF pages with PyMuPDF and output page text as JSONL."
+        description="Read PDF pages with PyMuPDF and output Markdown-style page text as JSONL."
     )
     parser.add_argument("file", help="Path to the PDF file")
     parser.add_argument(
