@@ -47,3 +47,17 @@ Each entry in `config.yaml` may include an optional `password` field for encrypt
   key_column: "SharedID"
   password: "optional-password"
 ```
+
+## Neo4j: matching nodes by name
+
+If you used `insert_jsonl.py`, all entity nodes are stored as `:JsonlEntity` with a `name` field.  
+Use this query to find nodes whose name contains a term (case-insensitive):
+
+```cypher
+MATCH (n:JsonlEntity)
+WHERE n.name IS NOT NULL
+  AND toLower(n.name) CONTAINS toLower($name)
+RETURN n.node_key AS nodeKey, n.name AS name, labels(n) AS labels
+ORDER BY name
+LIMIT 50;
+```
