@@ -225,6 +225,29 @@ def _line_baseline(spans, axis):
     return float(sum(centers) / len(centers))
 
 
+def _line_tilt_angle(line_obj, spans):
+    line_direction = line_obj.get("dir")
+    if line_direction and len(line_direction) == 2:
+        dx, dy = line_direction
+        if dx or dy:
+            return float(math.degrees(math.atan2(-dy, dx)))
+
+    angles = []
+    for span in spans:
+        direction = span.get("dir")
+        if not direction or len(direction) != 2:
+            continue
+        dx, dy = direction
+        if not dx and not dy:
+            continue
+        angle = math.degrees(math.atan2(-dy, dx))
+        angles.append(angle)
+
+    if not angles:
+        return 0.0
+    return float(sum(angles) / len(angles))
+
+
 def _extract_page_lines(page, page_no, source, header_ratio, footer_ratio):
     page_data = page.get_text("dict", sort=True)
     page_rect = page.rect
@@ -292,6 +315,7 @@ def _extract_page_lines(page, page_no, source, header_ratio, footer_ratio):
             baseline_value = _line_baseline(spans, baseline_axis)
             page_axis_size = float(page_rect.width) if baseline_axis == "x" else float(page_rect.height)
             baseline_ratio = baseline_value / page_axis_size if page_axis_size > 0 else None
+            line_rotation = (int(rotation) + round(_line_tilt_angle(line, spans))) % 360
 
             dominant_font = font_counts.most_common(1)[0][0] if font_counts else None
 
@@ -302,7 +326,7 @@ def _extract_page_lines(page, page_no, source, header_ratio, footer_ratio):
                     "size": max_size,
                     "bbox": line_bbox,
                     "location": location,
-                    "rotation": int(rotation % 360),
+                    "rotation": line_rotation,
                     "rotation_axis": baseline_axis,
                     "page": page_no,
                     "line": line_no,

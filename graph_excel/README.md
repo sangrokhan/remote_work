@@ -40,7 +40,7 @@ Each output line is minimal by default and includes only:
 - `text`
 - `x`
 - `y`
-- `rotation`
+- `rotation` (effective text direction, including tilt where available)
 
 Using legacy page JSONL (`--legacy-page-jsonl`) you can still get page records with `header`, `footer`, and `watermark` fields.
 That legacy page record includes:
