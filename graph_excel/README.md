@@ -90,6 +90,24 @@ RETURN
   collect(DISTINCT r) AS subgraphRels;
 ```
 
+### Query parameters
+
+Single-name query (`$name`):
+
+```json
+{
+  "name": "counter"
+}
+```
+
+Multiple-name query (`$names`):
+
+```json
+{
+  "names": ["counter", "temperature"]
+}
+```
+
 ### Match multiple names in the initial search
 
 Use a list parameter to match several names at once:
