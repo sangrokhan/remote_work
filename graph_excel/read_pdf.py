@@ -34,7 +34,7 @@ def _sanitize_text(value, context=None):
         return _SURROGATE_RE.sub("", raw)
 
     positions = [match.start() for match in matches]
-    preview = [surrounding_snippet(raw, position) for position in positions[:3]]
+    preview = [_surrounding_snippet(raw, position) for position in positions[:3]]
     _LOGGER.warning(
         "Removed surrogate code units in PDF text. source=%s page=%s line=%s span=%s count=%s snippets=%s",
         context.get("source") if context else "unknown",
