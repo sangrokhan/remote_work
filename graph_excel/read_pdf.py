@@ -5,7 +5,10 @@ import re
 from collections import Counter
 from pathlib import Path
 
-import fitz
+try:
+    import pymupdf
+except ImportError:
+    import fitz as pymupdf
 
 
 def _normalize_line(line):
@@ -68,7 +71,7 @@ def read_pdf(path, strip_watermarks=True, patterns=None, ratio_threshold=0.6):
     path = Path(path)
     pages_raw = []
 
-    with fitz.open(path) as doc:
+    with pymupdf.open(path) as doc:
         for page in doc:
             text = page.get_text() or ""
             pages_raw.append([_normalize_line(line) for line in text.splitlines() if line.strip()])
