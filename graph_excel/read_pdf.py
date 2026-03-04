@@ -2305,8 +2305,10 @@ def _extract_pages(
     debug=False,
     table_debug=False,
     table_mode="auto",
+    capture_raw_pages=False,
 ):
     extracted = []
+    raw_pages = []
     page_numbers = _coerce_page_numbers(doc, pages, max_pages)
     for page_no in page_numbers:
         if page_no < 1 or page_no > doc.page_count:
@@ -2342,8 +2344,116 @@ def _extract_pages(
                 debug=table_debug,
                 table_mode=table_mode,
             )
+        if capture_raw_pages:
+            raw_pages.append(
+                _extract_page_raw_payload(
+                    page=page,
+                    page_no=page_no,
+                    source=source,
+                    debug=debug,
+                )
+            )
         extracted.append((page_no, lines, tables, shape_lines))
+
+    if capture_raw_pages:
+        return extracted, raw_pages
     return extracted
+
+
+def _to_json_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, (list, tuple, set)):
+        return [_to_json_value(item) for item in value]
+
+    if isinstance(value, dict):
+        return {str(key): _to_json_value(val) for key, val in value.items()}
+
+    if hasattr(value, "x0") and hasattr(value, "y0") and hasattr(value, "x1") and hasattr(value, "y1"):
+        try:
+            return [
+                _round_float(float(value.x0)),
+                _round_float(float(value.y0)),
+                _round_float(float(value.x1)),
+                _round_float(float(value.y1)),
+            ]
+        except (TypeError, ValueError, AttributeError):
+            pass
+
+    if hasattr(value, "__iter__") and not isinstance(value, (str, bytes, dict)):
+        try:
+            return [_to_json_value(item) for item in value]
+        except Exception:
+            pass
+
+    return str(value)
+
+
+def _extract_page_raw_payload(page, page_no, source, debug=False):
+    payload = {
+        "type": "raw-page",
+        "page": page_no,
+        "source": source,
+    }
+
+    try:
+        page_rect = page.rect
+        payload["rect"] = _to_json_value(page_rect)
+        payload["rotation"] = int(page.rotation or 0)
+        payload["media_box"] = _to_json_value(getattr(page, "mediabox", page_rect))
+    except Exception:
+        if debug:
+            _LOGGER.debug(
+                "Failed page geometry extraction: source=%s page=%s",
+                source,
+                page_no,
+                exc_info=True,
+            )
+        payload["rect"] = None
+        payload["rotation"] = 0
+        payload["media_box"] = None
+
+    text_modes = (
+        ("text", "text"),
+        ("text_dict", "dict"),
+        ("text_rawdict", "rawdict"),
+        ("text_words", "words"),
+    )
+    for key, mode in text_modes:
+        try:
+            payload[key] = _to_json_value(page.get_text(mode))
+        except Exception as exc:
+            if debug:
+                _LOGGER.debug(
+                    "Failed page.get_text('%s'): source=%s page=%s error=%s",
+                    mode,
+                    source,
+                    page_no,
+                    exc,
+                )
+            payload[key] = {"error": str(exc)}
+
+    for key, getter in (
+        ("links", lambda: page.get_links()),
+        ("drawings", lambda: page.get_drawings()),
+        ("images", lambda: page.get_images(full=True)),
+        ("blocks", lambda: page.get_text("blocks")),
+    ):
+        try:
+            payload[key] = _to_json_value(getter())
+        except Exception as exc:
+            if debug:
+                _LOGGER.debug(
+                    "Failed to extract page field=%s: source=%s page=%s error=%s",
+                    key,
+                    source,
+                    page_no,
+                    exc,
+                )
+            payload[key] = {"error": str(exc)}
+
+    return payload
 
 
 def _safe_text_list(values):
@@ -2390,23 +2500,41 @@ def read_pdf(
     table_debug=None,
     table_mode="auto",
     return_pages_with_lines=False,
+    return_raw_pages=False,
 ):
     path = Path(path)
 
     with pymupdf.open(path) as doc:
-        pages_with_lines = _extract_pages(
-            doc,
-            str(path),
-            header_ratio,
-            footer_ratio,
-            max_pages=max_pages,
-            pages=pages,
-            preserve_newlines=preserve_newlines,
-            extract_tables=extract_tables,
-            debug=debug,
-            table_debug=table_debug if table_debug is not None else debug,
-            table_mode=table_mode,
-        )
+        if return_pages_with_lines or return_raw_pages:
+            pages_with_lines, raw_pages = _extract_pages(
+                doc,
+                str(path),
+                header_ratio,
+                footer_ratio,
+                max_pages=max_pages,
+                pages=pages,
+                preserve_newlines=preserve_newlines,
+                extract_tables=extract_tables,
+                debug=debug,
+                table_debug=table_debug if table_debug is not None else debug,
+                table_mode=table_mode,
+                capture_raw_pages=return_raw_pages,
+            )
+        else:
+            pages_with_lines = _extract_pages(
+                doc,
+                str(path),
+                header_ratio,
+                footer_ratio,
+                max_pages=max_pages,
+                pages=pages,
+                preserve_newlines=preserve_newlines,
+                extract_tables=extract_tables,
+                debug=debug,
+                table_debug=table_debug if table_debug is not None else debug,
+                table_mode=table_mode,
+            )
+            raw_pages = None
 
     tables = []
     for _, _, page_tables, _ in pages_with_lines:
@@ -2498,6 +2626,8 @@ def read_pdf(
 
     if return_pages_with_lines:
         return records, pages_with_lines
+    if return_raw_pages:
+        return records, raw_pages
 
     return records
 
@@ -2762,6 +2892,13 @@ def write_raw_components(pages_with_lines, output_path):
                 f.write("\n")
 
 
+def write_raw_pages(raw_pages, output_path):
+    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
+        for payload in raw_pages:
+            f.write(json.dumps(payload, ensure_ascii=False))
+            f.write("\n")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Read PDF pages with PyMuPDF, split/remove headers/footers/watermarks."
@@ -2880,6 +3017,16 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--raw-page",
+        nargs="?",
+        const="",
+        default=None,
+        help=(
+            "Write pure PyMuPDF page objects (get_text/get_drawings/get_links) for selected pages."
+            " Optional path can be provided."
+        ),
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable verbose debug logging, including raw line/table diagnostics.",
@@ -2914,6 +3061,16 @@ def main():
         if request_raw_components and args.raw_components == ""
         else args.raw_components
     )
+    request_raw_page = args.raw_page is not None
+    raw_page_output = (
+        str(
+            Path(output).with_name(
+                f"{Path(output).stem}_raw_page.jsonl"
+            )
+        )
+        if request_raw_page and args.raw_page == ""
+        else args.raw_page
+    )
     result = read_pdf(
         args.file,
         strip_watermarks=args.strip_watermarks,
@@ -2931,20 +3088,31 @@ def main():
         table_debug=args.debug or args.table_debug,
         table_mode=args.table_mode,
         return_pages_with_lines=request_raw_components,
+        return_raw_pages=request_raw_page,
     )
-    if request_raw_components:
+    if request_raw_components and request_raw_page:
+        records, pages_with_lines, raw_pages = result
+    elif request_raw_components:
         records, pages_with_lines = result
+        raw_pages = None
+    elif request_raw_page:
+        records, raw_pages = result
     else:
         records = result
     if args.raw_line_log:
         write_raw_line_log(records, args.raw_line_log)
     if request_raw_components and raw_components_output:
         write_raw_components(pages_with_lines, raw_components_output)
+    if request_raw_page and raw_page_output:
+        write_raw_pages(raw_pages or [], raw_page_output)
     if args.legacy_page_jsonl:
         write_jsonl_pages(records, output)
-        if request_raw_components:
+        if request_raw_components or request_raw_page:
             print(f"Extracted {len(records)} pages -> {output}")
-            print(f"Raw components -> {raw_components_output}")
+            if request_raw_components:
+                print(f"Raw components -> {raw_components_output}")
+            if request_raw_page:
+                print(f"Raw page objects -> {raw_page_output}")
         else:
             print(f"Extracted {len(records)} pages -> {output}")
     else:
@@ -2955,11 +3123,14 @@ def main():
             for region in ("header", "body", "footer", "watermark")
         )
         total_tables = sum(record.get("table_count", 0) for record in records)
-        if request_raw_components:
+        if request_raw_components or request_raw_page:
             print(
                 f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
             )
-            print(f"Raw components -> {raw_components_output}")
+            if request_raw_components:
+                print(f"Raw components -> {raw_components_output}")
+            if request_raw_page:
+                print(f"Raw page objects -> {raw_page_output}")
         else:
             print(
                 f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
