@@ -61,3 +61,60 @@ RETURN n.node_key AS nodeKey, n.name AS name, labels(n) AS labels
 ORDER BY name
 LIMIT 50;
 ```
+
+Find a subgraph from the matched node and stop when there is no further predicate from the current node:
+
+```cypher
+MATCH (start:JsonlEntity)
+WHERE toLower(start.name) CONTAINS toLower($name)
+
+MATCH p = (start)-[*1..]->(leaf)
+WHERE NOT (leaf)-[]->()
+
+RETURN start, p, leaf
+ORDER BY length(p) ASC;
+```
+
+If your start node can branch to both directions and you want the full connected subgraph around it, use:
+
+```cypher
+MATCH (start:JsonlEntity)
+WHERE toLower(start.name) CONTAINS toLower($name)
+
+MATCH p = (start)-[*0..10]-(node)
+UNWIND nodes(p) AS n
+UNWIND relationships(p) AS r
+RETURN
+  start AS startNode,
+  collect(DISTINCT n) AS subgraphNodes,
+  collect(DISTINCT r) AS subgraphRels;
+```
+
+### Match multiple names in the initial search
+
+Use a list parameter to match several names at once:
+
+```cypher
+MATCH (n:JsonlEntity)
+WHERE n.name IS NOT NULL
+  AND toLower(n.name) IN [name IN $names | toLower(name)]
+RETURN n.node_key AS nodeKey, n.name AS name, labels(n) AS labels
+ORDER BY name
+LIMIT 100;
+```
+
+You can combine this with subgraph traversal:
+
+```cypher
+MATCH (start:JsonlEntity)
+WHERE toLower(start.name) IS NOT NULL
+  AND toLower(start.name) IN [name IN $names | toLower(name)]
+
+MATCH p = (start)-[*0..10]-(node)
+UNWIND nodes(p) AS n
+UNWIND relationships(p) AS r
+RETURN
+  start AS startNode,
+  collect(DISTINCT n) AS subgraphNodes,
+  collect(DISTINCT r) AS subgraphRels;
+```
