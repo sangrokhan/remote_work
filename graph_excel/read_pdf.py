@@ -313,6 +313,27 @@ def _estimate_row_tolerance(lines):
     return max(1.0, median * 0.7)
 
 
+def _line_axis_span(line):
+    bbox = line.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None, None
+
+    x0, y0, x1, y1 = [float(v) for v in bbox]
+    axis = (line.get("baseline") or {}).get("axis", "y")
+    if axis == "x":
+        start, end = min(x0, x1), max(x0, x1)
+    else:
+        start, end = min(y0, y1), max(y0, y1)
+
+    return start, end
+
+
+def _spans_overlap(a_start, a_end, b_start, b_end, tolerance):
+    if a_start is None or a_end is None or b_start is None or b_end is None:
+        return False
+    return b_start <= a_end + tolerance and a_start <= b_end + tolerance
+
+
 def _assign_row_ids(lines):
     if not lines:
         return
@@ -330,16 +351,38 @@ def _assign_row_ids(lines):
     row_no = 0
     for idx in order:
         line = lines[idx]
-        baseline = line.get("baseline", {})
-        value = baseline.get("value")
-        if value is None:
+        axis = (line.get("baseline") or {}).get("axis", "y")
+        value = (line.get("baseline") or {}).get("value")
+        span_start, span_end = _line_axis_span(line)
+
+        if value is None or span_start is None or span_end is None:
             row_no += 1
             current = None
+            line["row_no"] = row_no
+            continue
+
+        span_start = float(span_start)
+        span_end = float(span_end)
+
+        if (
+            current is None
+            or current["axis"] != axis
+            or not _spans_overlap(
+                current["start"],
+                current["end"],
+                span_start,
+                span_end,
+                tolerance,
+            )
+        ):
+            row_no += 1
+            current = {"axis": axis, "start": span_start, "end": span_end}
         else:
-            value = float(value)
-            if current is None or abs(value - current) > tolerance:
-                row_no += 1
-                current = value
+            if span_start < current["start"]:
+                current["start"] = span_start
+            if span_end > current["end"]:
+                current["end"] = span_end
+
         line["row_no"] = row_no
 
 
@@ -383,6 +426,203 @@ def _line_tilt_angle(line_obj, spans):
     return float(sum(angles) / len(angles))
 
 
+def _cell_value(cell, name, default=None):
+    if cell is None:
+        return default
+    if isinstance(cell, dict):
+        return cell.get(name, default)
+    return getattr(cell, name, default)
+
+
+def _cell_bbox(cell):
+    raw_bbox = _cell_value(cell, "bbox")
+    if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) == 4:
+        try:
+            return [float(v) for v in raw_bbox]
+        except (TypeError, ValueError):
+            pass
+
+    x0 = _cell_value(cell, "x0")
+    y0 = _cell_value(cell, "y0")
+    x1 = _cell_value(cell, "x1")
+    y1 = _cell_value(cell, "y1")
+    if None in (x0, y0, x1, y1):
+        return None
+    try:
+        return [float(x0), float(y0), float(x1), float(y1)]
+    except (TypeError, ValueError):
+        return None
+
+
+def _merge_positions(values, tolerance):
+    if not values:
+        return []
+
+    sorted_values = sorted(values)
+    merged = [sorted_values[0]]
+    for value in sorted_values[1:]:
+        if value <= merged[-1] + tolerance:
+            continue
+        merged.append(value)
+    return merged
+
+
+def _coerce_number(value, default=None):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _infer_table_components(table, row_count=None, col_count=None):
+    cells = _cell_value(table, "cells", []) or []
+    table_bbox = _cell_value(table, "bbox")
+    if not (
+        isinstance(table_bbox, (list, tuple))
+        and len(table_bbox) == 4
+        and all(v is not None for v in table_bbox)
+    ):
+        return {"bbox": [], "row_lines": [], "vertical_lines": []}
+
+    try:
+        tx0, ty0, tx1, ty1 = [float(v) for v in table_bbox]
+    except (TypeError, ValueError):
+        return {"bbox": [], "row_lines": [], "vertical_lines": []}
+
+    table_row_count = (
+        _coerce_number(row_count)
+        or _coerce_number(_cell_value(table, "row_count"))
+        or _coerce_number(_cell_value(table, "rows"))
+        or 0.0
+    )
+    table_col_count = (
+        _coerce_number(col_count)
+        or _coerce_number(_cell_value(table, "col_count"))
+        or _coerce_number(_cell_value(table, "cols"))
+        or 0.0
+    )
+
+    raw_y_starts = []
+    raw_y_ends = []
+    raw_x_starts = []
+    raw_x_ends = []
+    row_cells = []
+    col_cells = []
+
+    for cell in cells:
+        row = _cell_value(
+            cell,
+            "row",
+            _cell_value(
+                cell,
+                "row_idx",
+                _cell_value(cell, "row_i", _cell_value(cell, "r", None)),
+            ),
+        )
+        col = _cell_value(
+            cell,
+            "col",
+            _cell_value(
+                cell,
+                "col_idx",
+                _cell_value(cell, "col_i", _cell_value(cell, "c", None)),
+            ),
+        )
+
+        bbox = _cell_bbox(cell)
+        if bbox is None:
+            continue
+
+        c_x0, c_y0, c_x1, c_y1 = bbox
+        raw_y_starts.append(c_y0)
+        raw_y_ends.append(c_y1)
+        raw_x_starts.append(c_x0)
+        raw_x_ends.append(c_x1)
+
+        if row is not None:
+            row_cells.append((row, c_y0, c_y1))
+        if col is not None:
+            col_cells.append((col, c_x0, c_x1))
+
+    row_heights = [float(end - start) for start, end in zip(raw_y_starts, raw_y_ends)]
+    col_widths = [float(end - start) for start, end in zip(raw_x_starts, raw_x_ends)]
+    row_tol = max(0.75, (sorted(row_heights)[len(row_heights) // 2] * 0.25)) if row_heights else 1.5
+    col_tol = max(0.75, (sorted(col_widths)[len(col_widths) // 2] * 0.25)) if col_widths else 1.5
+
+    y_positions = []
+    x_positions = []
+
+    if row_cells:
+        y_values = []
+        for _, top, bottom in row_cells:
+            y_values.extend([top, bottom])
+        y_positions = _merge_positions(y_values, row_tol)
+
+    if col_cells:
+        x_values = []
+        for _, left, right in col_cells:
+            x_values.extend([left, right])
+        x_positions = _merge_positions(x_values, col_tol)
+
+    if not y_positions and raw_y_starts:
+        y_positions = _merge_positions(raw_y_starts + raw_y_ends, row_tol)
+
+    if not x_positions and raw_x_starts:
+        x_positions = _merge_positions(raw_x_starts + raw_x_ends, col_tol)
+
+    if not y_positions and table_row_count > 0:
+        if table_row_count > 0 and table_row_count == int(table_row_count):
+            row_step = (ty1 - ty0) / table_row_count
+            y_positions = [ty0 + row_step * i for i in range(int(table_row_count) + 1)]
+
+    if not x_positions and table_col_count > 0:
+        if table_col_count > 0 and table_col_count == int(table_col_count):
+            col_step = (tx1 - tx0) / table_col_count
+            x_positions = [tx0 + col_step * i for i in range(int(table_col_count) + 1)]
+
+    if not y_positions:
+        y_positions = [ty0, ty1]
+    if not x_positions:
+        x_positions = [tx0, tx1]
+
+    y_positions = _merge_positions(sorted(set(_coerce_number(v, 0.0) for v in y_positions)), row_tol)
+    x_positions = _merge_positions(sorted(set(_coerce_number(v, 0.0) for v in x_positions)), col_tol)
+    if ty0 not in y_positions:
+        y_positions.insert(0, ty0)
+    if ty1 not in y_positions:
+        y_positions.append(ty1)
+    if tx0 not in x_positions:
+        x_positions.insert(0, tx0)
+    if tx1 not in x_positions:
+        x_positions.append(tx1)
+
+    row_lines = [
+        {
+            "orientation": "horizontal",
+            "x0": _round_float(tx0),
+            "y0": _round_float(y),
+            "x1": _round_float(tx1),
+            "y1": _round_float(y),
+        }
+        for y in y_positions
+    ]
+
+    vertical_lines = [
+        {
+            "orientation": "vertical",
+            "x0": _round_float(x),
+            "y0": _round_float(ty0),
+            "x1": _round_float(x),
+            "y1": _round_float(ty1),
+        }
+        for x in x_positions
+    ]
+
+    return {
+        "bbox": [tx0, ty0, tx1, ty1],
+        "row_lines": row_lines,
+        "vertical_lines": vertical_lines,
+    }
 def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
     try:
         has_find_tables = hasattr(page, "find_tables")
@@ -543,6 +783,7 @@ def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
             col_count = max(col_count, len(row))
             row_texts.append(" | ".join(_sanitize_text(cell or "") for cell in row))
 
+        components = _infer_table_components(table, row_count=row_count, col_count=col_count)
         if debug:
             _LOGGER.debug(
                 "Table %s on page %s row_count=%s col_count=%s",
@@ -550,6 +791,14 @@ def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
                 page_no,
                 row_count,
                 col_count,
+            )
+            _LOGGER.debug(
+                "Table %s geometry: source=%s page=%s row_lines=%s col_lines=%s",
+                table_index,
+                source,
+                page_no,
+                len(components.get("row_lines", [])),
+                len(components.get("vertical_lines", [])),
             )
 
         x0, y0, x1, y1 = [float(v) for v in bbox]
@@ -568,6 +817,13 @@ def _extract_page_tables(page, page_no, source, debug=False, table_mode="auto"):
                 "page_width": float(page.rect.width),
                 "page_height": float(page.rect.height),
                 "text": "\n".join(row_texts),
+                "row_lines": list(components.get("row_lines", [])),
+                "vertical_lines": list(components.get("vertical_lines", [])),
+                "components": {
+                    "bbox": components.get("bbox"),
+                    "row_lines": list(components.get("row_lines", [])),
+                    "vertical_lines": list(components.get("vertical_lines", [])),
+                },
                 "source": source,
             }
         )
@@ -658,6 +914,13 @@ def _merge_cross_page_tables(tables):
         current["rows_text"] = current_rows
         current["text"] = "\n".join(current_rows)
         current["row_count"] = len(current_rows)
+        current["row_lines"] = list(current.get("row_lines", [])) + list(table.get("row_lines", []))
+        current["vertical_lines"] = list(current.get("vertical_lines", [])) + list(table.get("vertical_lines", []))
+        current["components"] = {
+            "bbox": current.get("components", {}).get("bbox"),
+            "row_lines": list(current.get("row_lines", [])),
+            "vertical_lines": list(current.get("vertical_lines", [])),
+        }
         current["page_end"] = table.get("page")
         current["current_end_page"] = table.get("page")
         if "pages" not in current:
@@ -1333,6 +1596,9 @@ def _normalize_table_record(table):
         "cols": table.get("col_count"),
         "font_size": None,
         "text": _sanitize_text(table.get("text", "")),
+        "row_lines": table.get("row_lines", []),
+        "vertical_lines": table.get("vertical_lines", []),
+        "components": table.get("components", {}),
     }
 
 
@@ -1569,6 +1835,48 @@ def write_raw_line_log(records, output_path):
                 f.write(json.dumps(payload, ensure_ascii=False))
                 f.write("\n")
                 global_line_no += 1
+
+                for line in normalized.get("row_lines", []) or []:
+                    f.write(
+                        json.dumps(
+                            {
+                                "type": "table-line",
+                                "page": page_no,
+                                "table_no": normalized.get("table_no"),
+                                "line_kind": "row",
+                                "orientation": "horizontal",
+                                "global_line_no": global_line_no,
+                                "x0": line.get("x0"),
+                                "y0": line.get("y0"),
+                                "x1": line.get("x1"),
+                                "y1": line.get("y1"),
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                    f.write("\n")
+                    global_line_no += 1
+
+                for line in normalized.get("vertical_lines", []) or []:
+                    f.write(
+                        json.dumps(
+                            {
+                                "type": "table-line",
+                                "page": page_no,
+                                "table_no": normalized.get("table_no"),
+                                "line_kind": "column",
+                                "orientation": "vertical",
+                                "global_line_no": global_line_no,
+                                "x0": line.get("x0"),
+                                "y0": line.get("y0"),
+                                "x1": line.get("x1"),
+                                "y1": line.get("y1"),
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                    f.write("\n")
+                    global_line_no += 1
 
 
 def parse_args():
