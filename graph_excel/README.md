@@ -34,10 +34,12 @@ python read_excel.py <path-to-file.xlsx> [--type {auto,counters,parameters}] [--
 ### `read_pdf.py`
 
 Reads a PDF file with PyMuPDF and writes each page text as Markdown-style JSONL (`page`, `text`) records.
+Each output record also includes `header`, `footer`, and `watermark` sections, with `text` containing only the body content by default.
 
 ```bash
 python read_pdf.py <path-to-file.pdf> [--output output.jsonl] [--watermark-patterns "CONFIDENTIAL" "COPY"]
 python read_pdf.py <path-to-file.pdf> --no-strip-watermarks
+python read_pdf.py <path-to-file.pdf> --header-ratio 0.06 --footer-ratio 0.06
 ```
 
 ### `main.py`
