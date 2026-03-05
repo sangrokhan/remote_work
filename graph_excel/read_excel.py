@@ -108,7 +108,7 @@ def process_counters_sheet(sheet, file_stem, triples):
                 object_value=category,
                 subject_label="FAMILY_NAME",
                 object_label="CATEGORY",
-                subject_node_key=f"{name}::{category}",
+                subject_node_key=f"FAMILY:{name}",
                 object_node_key=f"CATEGORY::{category}::{name}",
                 metadata=metadata,
             )
@@ -121,7 +121,8 @@ def process_counters_sheet(sheet, file_stem, triples):
                 object_value=system_id,
                 subject_label="FAMILY_NAME",
                 object_label="FEATURE",
-                subject_node_key=f"{name}::{counter_id}",
+                subject_node_key=f"FAMILY:{name}",
+                object_node_key=f"FEATURE:{system_id}",
                 metadata=metadata,
             )
 
@@ -155,7 +156,8 @@ def process_parameters_sheet(sheet, file_stem, triples):
                 object_value=system_id,
                 subject_label="PARAMETER",
                 object_label="FEATURE",
-                subject_node_key=f"{hierarchy}::{parameter}",
+                subject_node_key=f"PARAMETER:{hierarchy}:{parameter}",
+                object_node_key=f"FEATURE:{system_id}",
                 metadata=metadata,
             )
 

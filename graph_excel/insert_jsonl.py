@@ -140,45 +140,34 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
         row["predicate"] = rel_type
         grouped.setdefault(rel_type, []).append(row)
 
-    for rel_type, grouped_rows in grouped.items():
-        rel_rows: Dict[tuple, List[Dict[str, Any]]] = {}
-        for row in grouped_rows:
-            key = (
-                str(row.get("subject_label") or ""),
-                str(row.get("object_label") or ""),
-            )
-            rel_rows.setdefault(key, []).append(row)
-
-        for (subject_label, object_label), rel_group_rows in rel_rows.items():
-            subject_suffix = f":{subject_label}" if subject_label else ""
-            object_suffix = f":{object_label}" if object_label else ""
-            if ignore_meta:
-                query = f"""
-                UNWIND $rows AS row
-                MERGE (s:JsonlEntity{subject_suffix} {{node_key: row.subject_node_key, name: row.subject_value}})
-                SET s += coalesce(row.subject_properties, {{}})
-                MERGE (o:JsonlEntity{object_suffix} {{node_key: row.object_node_key, name: row.object_value}})
-                SET o += coalesce(row.object_properties, {{}})
-                MERGE (s)-[r:`{rel_type}`]->(o)
-                SET r.predicate = row.predicate,
-                    r.source_file = row.source,
-                    r.source_line = row.json_line
-                """
-            else:
-                query = f"""
-                UNWIND $rows AS row
-                MERGE (s:JsonlEntity{subject_suffix} {{node_key: row.subject_node_key, name: row.subject_value}})
-                SET s += coalesce(row.subject_properties, {{}})
-                MERGE (o:JsonlEntity{object_suffix} {{node_key: row.object_node_key, name: row.object_value}})
-                SET o += coalesce(row.object_properties, {{}})
-                MERGE (s)-[r:`{rel_type}`]->(o)
-                SET r.predicate = row.predicate,
-                    r.meta = row.meta,
-                    r.source_file = row.source,
-                    r.source_line = row.json_line
-                """
-            result = tx.run(query + "\nRETURN count(*) AS c", rows=rel_group_rows)
-            total += result.single()["c"]
+    for rel_type, rel_group_rows in grouped.items():
+        if ignore_meta:
+            query = f"""
+            UNWIND $rows AS row
+            MERGE (s:JsonlEntity {{node_key: row.subject_node_key, name: row.subject_value}})
+            SET s += coalesce(row.subject_properties, {{}})
+            MERGE (o:JsonlEntity {{node_key: row.object_node_key, name: row.object_value}})
+            SET o += coalesce(row.object_properties, {{}})
+            MERGE (s)-[r:`{rel_type}`]->(o)
+            SET r.predicate = row.predicate,
+                r.source_file = row.source,
+                r.source_line = row.json_line
+            """
+        else:
+            query = f"""
+            UNWIND $rows AS row
+            MERGE (s:JsonlEntity {{node_key: row.subject_node_key, name: row.subject_value}})
+            SET s += coalesce(row.subject_properties, {{}})
+            MERGE (o:JsonlEntity {{node_key: row.object_node_key, name: row.object_value}})
+            SET o += coalesce(row.object_properties, {{}})
+            MERGE (s)-[r:`{rel_type}`]->(o)
+            SET r.predicate = row.predicate,
+                r.meta = row.meta,
+                r.source_file = row.source,
+                r.source_line = row.json_line
+            """
+        result = tx.run(query + "\nRETURN count(*) AS c", rows=rel_group_rows)
+        total += result.single()["c"]
     return total
 
 
