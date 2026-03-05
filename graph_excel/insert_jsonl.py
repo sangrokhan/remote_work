@@ -2,7 +2,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import re
 from typing import Any, Dict, Iterable, List
 
 from neo4j import GraphDatabase
@@ -31,21 +30,10 @@ def _read_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
             yield item
 
 
-def _make_node_key(subject_value: Any, subject_label: Any, explicit_key: Any) -> str:
+def _make_node_key(subject_value: Any, explicit_key: Any) -> str:
     if explicit_key is not None:
         return str(explicit_key)
     return _stringify(subject_value)
-
-
-def _normalize_label(value: Any) -> str:
-    if value is None:
-        return ""
-    label = re.sub(r"[^A-Za-z0-9_]", "_", str(value).strip().upper())
-    if not label:
-        return ""
-    if not re.match(r"^[A-Za-z_]", label):
-        return f"_{label}"
-    return label
 
 
 def _is_nullish_object(value: Any) -> bool:
@@ -103,8 +91,8 @@ def _prepare_rows(jsonl_path: Path, skip_invalid: bool) -> List[Dict[str, Any]]:
             if object_node_key is None:
                 object_node_key = meta.get("object_node_key")
 
-        subject_node_key = _make_node_key(subject, subject_label, subject_node_key)
-        object_node_key = _make_node_key(obj, object_label, object_node_key)
+        subject_node_key = _make_node_key(subject, subject_node_key)
+        object_node_key = _make_node_key(obj, object_node_key)
 
         records.append(
             {
@@ -153,8 +141,8 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
     for rel_type, rel_group_rows in grouped.items():
         rel_rows: Dict[tuple, List[Dict[str, Any]]] = {}
         for row in rel_group_rows:
-            subject_label = _normalize_label(row.get("subject_label"))
-            object_label = _normalize_label(row.get("object_label"))
+            subject_label = row.get("subject_label")
+            object_label = row.get("object_label")
             rel_rows.setdefault((subject_label, object_label), []).append(row)
 
         for (subject_label, object_label), grouped_rows in rel_rows.items():
