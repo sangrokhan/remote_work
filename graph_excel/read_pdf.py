@@ -2457,7 +2457,7 @@ def _extract_page_raw_payload(page, page_no, source, debug=False):
     return payload
 
 
-def _write_image_only_page_pdf(source_path, page_no, output_path, dpi=180):
+def _write_image_only_page_pdf(source_path, page_no, output_path):
     page_no = int(page_no)
     if page_no < 1:
         raise ValueError(f"Page number must be >=1: {page_no}")
@@ -2469,15 +2469,43 @@ def _write_image_only_page_pdf(source_path, page_no, output_path, dpi=180):
             )
 
         page = doc[page_no - 1]
-        if dpi is None:
-            dpi = 180
-        if dpi <= 0:
-            raise ValueError(f"dpi must be a positive integer: {dpi}")
+        page_images = page.get_images(full=True)
+        png_xref_to_stream = {}
+        for item in page_images:
+            if not item:
+                continue
+            xref = item[0]
+            if xref in png_xref_to_stream:
+                continue
 
-        pix = page.get_pixmap(dpi=dpi, alpha=False)
+            try:
+                image_info = doc.extract_image(int(xref))
+            except Exception:
+                continue
+
+            if (image_info.get("ext") or "").lower() != "png":
+                continue
+
+            image_bytes = image_info.get("image")
+            if not isinstance(image_bytes, (bytes, bytearray)):
+                continue
+            png_xref_to_stream[xref] = bytes(image_bytes)
+
         rendered_pdf = pymupdf.open()
-        out_page = rendered_pdf.new_page(width=pix.width, height=pix.height)
-        out_page.insert_image(out_page.rect, stream=pix.tobytes("png"))
+        out_page = rendered_pdf.new_page(width=page.rect.width, height=page.rect.height)
+        for xref, image_bytes in png_xref_to_stream.items():
+            try:
+                rects = page.get_image_rects(xref)
+            except Exception:
+                continue
+
+            if not rects:
+                continue
+            for rect in rects:
+                if rect is None:
+                    continue
+                out_page.insert_image(rect, stream=image_bytes)
+
         rendered_pdf.save(output_path, deflate=True, garbage=4)
         rendered_pdf.close()
 
@@ -3040,7 +3068,7 @@ def parse_args():
         "--image-only-dpi",
         type=int,
         default=180,
-        help="DPI used to render page image for --image-only-page (default: 180).",
+        help="(legacy) Kept for backward compatibility; currently ignored for image-only extraction.",
     )
     parser.add_argument(
         "--table-mode",
@@ -3119,7 +3147,6 @@ def main():
                 args.file,
                 page_no,
                 output_path,
-                dpi=args.image_only_dpi,
             )
         except Exception as exc:
             raise SystemExit(f"Failed to create image-only page PDF: {exc}")
