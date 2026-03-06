@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import re
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -2456,6 +2457,40 @@ def _extract_page_raw_payload(page, page_no, source, debug=False):
     return payload
 
 
+def _write_image_only_page_pdf(source_path, page_no, output_path, dpi=180):
+    page_no = int(page_no)
+    if page_no < 1:
+        raise ValueError(f"Page number must be >=1: {page_no}")
+
+    with pymupdf.open(source_path) as doc:
+        if page_no > doc.page_count:
+            raise ValueError(
+                f"Page number out of range: {page_no} (total: {doc.page_count})"
+            )
+
+        page = doc[page_no - 1]
+        if dpi is None:
+            dpi = 180
+        if dpi <= 0:
+            raise ValueError(f"dpi must be a positive integer: {dpi}")
+
+        pix = page.get_pixmap(dpi=dpi, alpha=False)
+        rendered_pdf = pymupdf.open()
+        out_page = rendered_pdf.new_page(width=pix.width, height=pix.height)
+        out_page.insert_image(out_page.rect, stream=pix.tobytes("png"))
+        rendered_pdf.save(output_path, deflate=True, garbage=4)
+        rendered_pdf.close()
+
+    return str(Path(output_path))
+
+
+def _image_only_output_path(source_path, page_no):
+    prefix = f"{Path(source_path).stem}_page{page_no}_"
+    tmp = tempfile.NamedTemporaryFile(prefix=prefix, suffix="_image_only.pdf", delete=False)
+    tmp.close()
+    return tmp.name
+
+
 def _safe_text_list(values):
     return [_sanitize_text(value) for value in values if value is not None]
 
@@ -2991,6 +3026,23 @@ def parse_args():
         help="Detect tables on each page with PyMuPDF table extractor.",
     )
     parser.add_argument(
+        "--image-only-page",
+        type=int,
+        default=None,
+        help="Render one page as an image-only PDF (flattened page image).",
+    )
+    parser.add_argument(
+        "--image-only-output",
+        default=None,
+        help="Output path for --image-only-page. If omitted, a temporary file is created.",
+    )
+    parser.add_argument(
+        "--image-only-dpi",
+        type=int,
+        default=180,
+        help="DPI used to render page image for --image-only-page (default: 180).",
+    )
+    parser.add_argument(
         "--table-mode",
         default="auto",
         choices=("auto", "default", "lines", "text"),
@@ -3045,6 +3097,36 @@ def main():
         level=logging.DEBUG if args.debug or args.table_debug else logging.WARNING,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+
+    if args.image_only_page is not None:
+        try:
+            page_no = int(args.image_only_page)
+        except (TypeError, ValueError):
+            raise SystemExit("--image-only-page must be an integer.")
+
+        if args.pages is not None:
+            raise SystemExit("--image-only-page cannot be combined with --pages.")
+
+        if page_no < 1:
+            raise SystemExit("--image-only-page must be >= 1.")
+
+        output_path = args.image_only_output
+        if not output_path:
+            output_path = _image_only_output_path(args.file, page_no)
+
+        try:
+            created_path = _write_image_only_page_pdf(
+                args.file,
+                page_no,
+                output_path,
+                dpi=args.image_only_dpi,
+            )
+        except Exception as exc:
+            raise SystemExit(f"Failed to create image-only page PDF: {exc}")
+
+        print(f"Image-only page PDF saved to: {created_path}")
+        return
+
     try:
         requested_pages = _parse_pages(args.pages)
     except ValueError as exc:
