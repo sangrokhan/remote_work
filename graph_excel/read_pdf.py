@@ -2525,6 +2525,7 @@ def _safe_text_list(values):
 
 def _normalize_table_record(table):
     pages = table.get("pages", [table.get("page")])
+    row_texts = table.get("rows_text") or []
     return {
         "page": table.get("page"),
         "start_page": table.get("start_page", table.get("page")),
@@ -2540,10 +2541,102 @@ def _normalize_table_record(table):
         "cols": table.get("col_count"),
         "font_size": None,
         "text": _sanitize_text(table.get("text", "")),
+        "rows_text": [_sanitize_text(row) for row in row_texts],
         "row_lines": table.get("row_lines", []),
         "vertical_lines": table.get("vertical_lines", []),
         "components": table.get("components", {}),
     }
+
+
+def _split_table_row(row_text):
+    if row_text is None:
+        return []
+    text = _sanitize_text(row_text)
+    if not text:
+        return []
+    return [_sanitize_text(cell) for cell in str(text).split(" | ")]
+
+
+def _markdown_cell(value):
+    if value is None:
+        return ""
+    text = _sanitize_text(value)
+    if text is None:
+        return ""
+    return str(text).replace("|", r"\|").replace("\n", "<br>")
+
+
+def _collect_markdown_rows(table):
+    rows = []
+    for row_text in table.get("rows_text") or []:
+        cells = _split_table_row(row_text)
+        if not cells:
+            continue
+        rows.append([_markdown_cell(cell) for cell in cells])
+
+    if not rows:
+        text = _sanitize_text(table.get("text", ""))
+        for line in str(text).splitlines() if text is not None else []:
+            cells = _split_table_row(line)
+            if cells:
+                rows.append([_markdown_cell(cell) for cell in cells])
+
+    return rows
+
+
+def _table_to_markdown_block(index, table):
+    rows = _collect_markdown_rows(table)
+    page_no = table.get("page")
+    start_page = table.get("start_page", page_no)
+    end_page = table.get("page_end", table.get("end_page", page_no))
+    pages = table.get("pages")
+    if not pages:
+        pages = [start_page]
+    header_cells = []
+    body_rows = rows
+    if rows:
+        max_cols = max(len(row) for row in rows)
+        rows = [row + [""] * max(0, max_cols - len(row)) for row in rows]
+        header_cells = rows[0]
+        body_rows = rows[1:]
+
+    lines = [f"## Table {index}"]
+    location = f"page {start_page}" if start_page == end_page else f"pages {start_page}-{end_page}"
+    lines.append(f"- page: {location}")
+    lines.append(f"- table_no: {table.get('table_no')}")
+    lines.append(f"- infer_method: {table.get('infer_method')}")
+    lines.append(f"- rows: {table.get('row_count', len(rows))} cols: {table.get('col_count', len(header_cells))}")
+    lines.append("")
+
+    if not rows:
+        lines.append("_(No rows detected)_")
+        return lines
+
+    lines.append("| " + " | ".join(_markdown_cell(cell) for cell in header_cells) + " |")
+    lines.append("| " + " | ".join("---" for _ in header_cells) + " |")
+    for row in body_rows:
+        lines.append("| " + " | ".join(row) + " |")
+
+    return lines
+
+
+def _write_tables_markdown(records, output_path):
+    table_blocks = []
+    table_index = 1
+    for record in records:
+        for table in record.get("tables", []) or []:
+            table_blocks.extend(_table_to_markdown_block(table_index, table))
+            table_index += 1
+            table_blocks.append("")
+
+    if not table_blocks:
+        table_blocks = ["# Tables", "", "No tables detected."]
+
+    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
+        for line in table_blocks:
+            f.write(f"{line}\n")
+
+    return output_path
 
 
 def read_pdf(
@@ -3054,6 +3147,15 @@ def parse_args():
         help="Detect tables on each page with PyMuPDF table extractor.",
     )
     parser.add_argument(
+        "--tables-markdown",
+        nargs="?",
+        const="",
+        default=None,
+        help=(
+            "Write detected tables into markdown. Optional path can be provided."
+        ),
+    )
+    parser.add_argument(
         "--image-only-page",
         type=int,
         default=None,
@@ -3160,6 +3262,12 @@ def main():
         raise SystemExit(f"Invalid --pages argument: {exc}")
 
     output = args.output or f"{Path(args.file).stem}_pages.jsonl"
+    request_tables_markdown = args.tables_markdown is not None
+    tables_markdown_output = (
+        str(Path(output).with_name(f"{Path(output).stem}_tables.md"))
+        if request_tables_markdown and args.tables_markdown == ""
+        else args.tables_markdown
+    )
     request_raw_components = args.raw_components is not None
     raw_components_output = (
         str(
@@ -3232,6 +3340,8 @@ def main():
             for region in ("header", "body", "footer", "watermark")
         )
         total_tables = sum(record.get("table_count", 0) for record in records)
+        if request_tables_markdown and tables_markdown_output:
+            _write_tables_markdown(records, tables_markdown_output)
         if request_raw_components or request_raw_page:
             print(
                 f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
@@ -3240,10 +3350,12 @@ def main():
                 print(f"Raw components -> {raw_components_output}")
             if request_raw_page:
                 print(f"Raw page objects -> {raw_page_output}")
+            if request_tables_markdown:
+                print(f"Tables markdown -> {tables_markdown_output}")
         else:
-            print(
-                f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
-            )
+            print(f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}")
+            if request_tables_markdown:
+                print(f"Tables markdown -> {tables_markdown_output}")
 
 
 if __name__ == "__main__":

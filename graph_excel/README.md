@@ -51,6 +51,7 @@ That legacy page record includes:
 - `region_summary`: baseline/position/style stats for each region
 - `anomalies`: page-level exception hints (including unusual header/footer baseline and mixed rotation cases)
 - `tables`: optional table detections from `--find-tables`, each with `page`, `table_no`, `bbox`, `row_count`, `col_count`, `text`, `start_page`, `end_page`, and `pages` when a table spans multiple pages
+- each table object also includes `rows_text` (array of row strings) for easier row-by-row consumption.
 
 ```bash
 python read_pdf.py <path-to-file.pdf> [--output output.jsonl] [--watermark-patterns "CONFIDENTIAL" "COPY"]
@@ -60,10 +61,12 @@ python read_pdf.py <path-to-file.pdf> --max-pages 100
 python read_pdf.py <path-to-file.pdf> --pages 2-10,20,30-35
 python read_pdf.py <path-to-file.pdf> --preserve-newlines
 python read_pdf.py <path-to-file.pdf> --find-tables
+python read_pdf.py <path-to-file.pdf> --find-tables --tables-markdown
 python read_pdf.py <path-to-file.pdf> --image-only-page 3 --image-only-output /tmp/page3_image_only.pdf
 python read_pdf.py <path-to-file.pdf> --legacy-page-jsonl
 ```
 When `--find-tables` is used in default mode, table records are emitted with `"type":"table"` in JSONL.
+`--tables-markdown` exports each detected table to markdown blocks with sequential names (`Table 1`, `Table 2`, ...).
 `--image-only-page` creates a single-page PDF that keeps only embedded PNG image objects from the selected source page (no text/vector/table objects kept in the output), useful for verifying image-based tables quickly.
 Cross-page tables are merged automatically when the continuation table appears on the next page, shares column count and overlapping geometry, and sits at page boundaries; duplicated header rows are removed during merge.
 If `--pages` is set, it overrides `--max-pages`.
