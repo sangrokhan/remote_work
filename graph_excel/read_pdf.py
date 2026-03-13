@@ -3600,11 +3600,11 @@ def _write_reconstructed_page_pdf(
                         current = None
                         continue
 
-                    if op == "re":
-                        rect_values = _to_rect(args)
-                        if rect_values is None:
-                            if debug:
-                                _LOGGER.debug(
+                        if op == "re":
+                            rect_values = _to_rect(args)
+                            if rect_values is None:
+                                if debug:
+                                    _LOGGER.debug(
                                     "Drawing[%s] skip invalid rect args=%r page=%s",
                                     drawing_index,
                                     args,
@@ -3621,9 +3621,9 @@ def _write_reconstructed_page_pdf(
                                     rect_values,
                                 )
                             continue
-                        try:
-                            shape.draw_rect(pymupdf.Rect(x0, y0, x1, y1))
-                            has_geom = True
+                            try:
+                                shape.draw_rect(pymupdf.Rect(x0, y0, x1, y1))
+                                has_geom = True
                             except Exception as exc:
                                 if debug:
                                     _LOGGER.debug(
@@ -3632,7 +3632,7 @@ def _write_reconstructed_page_pdf(
                                         exc,
                                         page_no,
                                     )
-                        continue
+                            continue
 
                     if op in fill_ops:
                         fill_op_executed = True
