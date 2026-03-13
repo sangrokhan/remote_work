@@ -3414,8 +3414,12 @@ def _write_reconstructed_page_pdf(
     remove_watermark=False,
     watermark_patterns=None,
     watermark_ratio=0.6,
+    watermark_angle=_WATERMARK_ROTATION_DEGREE,
+    watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
     header_ratio=0.08,
     footer_ratio=0.08,
+    strip_body_rotation=False,
+    remove_markdown_lines=False,
     debug=False,
 ):
     page_no = int(page_no)
@@ -3455,16 +3459,25 @@ def _write_reconstructed_page_pdf(
                     debug=debug,
                 )
                 watermark_skip_stats["total_lines"] = len(target_lines)
-
-                watermark_line_numbers = {
-                    line.get("line")
-                    for line in target_lines
-                    if line.get("is_watermark_rotation")
-                }
-                watermark_skip_stats["watermark_rotation"] = len(watermark_line_numbers)
+                watermark_result = _remove_watermark_lines(
+                    target_lines,
+                    watermark_angle=watermark_angle,
+                    watermark_tolerance=watermark_tolerance,
+                    source=source_text,
+                    page_no=page_no,
+                    strip_body_rotation=strip_body_rotation,
+                    remove_markdown_lines=remove_markdown_lines,
+                    debug=debug,
+                )
+                removed_line_numbers = watermark_result["removed_line_numbers"]
+                removed_lines = watermark_result["removed_lines"]
+                watermark_skip_stats["watermark_lines"] = watermark_result["removed_count"]
+                watermark_skip_stats["watermark_rotation"] = len(
+                    [item for item in removed_lines if item.get("reason") == "watermark-rotation"]
+                )
 
                 for line in target_lines:
-                    if line.get("line") not in watermark_line_numbers:
+                    if line.get("line") not in removed_line_numbers:
                         continue
                     line_bbox = line.get("bbox")
                     if isinstance(line_bbox, (list, tuple)) and len(line_bbox) == 4:
@@ -3487,7 +3500,6 @@ def _write_reconstructed_page_pdf(
                         except (TypeError, ValueError):
                             continue
 
-                watermark_skip_stats["watermark_lines"] = len(watermark_line_numbers)
                 if watermark_skip_stats["watermark_lines"] and watermark_skip_stats["total_lines"]:
                     watermark_skip_stats["watermark_line_ratio"] = round(
                         watermark_skip_stats["watermark_lines"] / float(watermark_skip_stats["total_lines"]),
@@ -3496,15 +3508,14 @@ def _write_reconstructed_page_pdf(
 
                 if debug:
                     _LOGGER.debug(
-                        "Reconstruct watermark config: source=%s page=%s enabled=%s rotation=%s header_ratio=%s footer_ratio=%s pattern_args=%s ratio=%s",
+                        "Reconstruct watermark config: source=%s page=%s enabled=%s rotation=%s tolerance=%s header_ratio=%s footer_ratio=%s",
                         source_text,
                         page_no,
                         watermark_skip_stats["enabled"],
-                        _WATERMARK_ROTATION_DEGREE,
+                        _round_float(watermark_angle),
+                        _round_float(watermark_tolerance),
                         _round_float(header_ratio),
                         _round_float(footer_ratio),
-                        watermark_patterns,
-                        _round_float(watermark_ratio),
                     )
                     _LOGGER.debug(
                         "Reconstruct watermark summary: source=%s page=%s total_lines=%s watermark_lines=%s ratio=%s rotation=%s bbox=%s",
@@ -4759,8 +4770,12 @@ def _write_reconstructed_pages_pdf(
     remove_watermark=False,
     watermark_patterns=None,
     watermark_ratio=0.6,
+    watermark_angle=_WATERMARK_ROTATION_DEGREE,
+    watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
     header_ratio=0.08,
     footer_ratio=0.08,
+    strip_body_rotation=False,
+    remove_markdown_lines=False,
     debug=False,
 ):
     if not page_numbers:
@@ -4781,8 +4796,12 @@ def _write_reconstructed_pages_pdf(
                     remove_watermark=remove_watermark,
                     watermark_patterns=watermark_patterns,
                     watermark_ratio=watermark_ratio,
+                    watermark_angle=watermark_angle,
+                    watermark_tolerance=watermark_tolerance,
                     header_ratio=header_ratio,
                     footer_ratio=footer_ratio,
+                    strip_body_rotation=strip_body_rotation,
+                    remove_markdown_lines=remove_markdown_lines,
                     debug=debug,
                 )
 
@@ -5670,8 +5689,12 @@ def main():
                 remove_watermark=args.remove_watermark,
                 watermark_patterns=args.watermark_patterns,
                 watermark_ratio=args.watermark_ratio,
+                watermark_angle=args.watermark_angle,
+                watermark_tolerance=args.watermark_angle_tolerance,
                 header_ratio=args.header_ratio,
                 footer_ratio=args.footer_ratio,
+                strip_body_rotation=False,
+                remove_markdown_lines=False,
                 debug=args.debug or args.table_debug,
             )
         except Exception as exc:
