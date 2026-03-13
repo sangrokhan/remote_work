@@ -1808,7 +1808,19 @@ def _ensure_page_font_resource(
 
     font_name = "reconstruct_korean"
     last_failure = None
-    for fontfile in font_candidates:
+
+    def _resolve_fontname(insert_result):
+        if isinstance(insert_result, str):
+            return insert_result
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "Non-string font registration result for font=%r result=%r",
+                font_name,
+                insert_result,
+            )
+        return font_name
+
+    for candidate_index, fontfile in enumerate(font_candidates, 1):
         if not fontfile:
             continue
         try:
@@ -1816,7 +1828,8 @@ def _ensure_page_font_resource(
             candidate_exists = font_path.is_file()
             if _LOGGER.isEnabledFor(logging.DEBUG):
                 _LOGGER.debug(
-                    "Korean font candidate check: path=%s exists=%s source=%s page=%s",
+                    "Korean font candidate check: index=%s path=%s exists=%s source=%s page=%s",
+                    candidate_index,
                     font_path,
                     candidate_exists,
                     source_path,
@@ -1840,10 +1853,11 @@ def _ensure_page_font_resource(
                     fontname=font_name,
                     fontfile=str(font_path),
                 )
+                korean_fontname = _resolve_fontname(korean_fontname)
                 candidate_used = str(font_path)
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     _LOGGER.debug(
-                        "Font insert(fontfile) succeeded: candidate=%s returned=%r",
+                    "Font insert(fontfile) succeeded: candidate=%s returned=%r",
                         candidate_used,
                         korean_fontname,
                     )
@@ -1858,7 +1872,8 @@ def _ensure_page_font_resource(
                 last_failure = ("fontfile", str(font_path), str(exc))
                 if debug:
                     _LOGGER.debug(
-                        "Font insert with fontfile failed: candidate=%s source=%s page=%s error=%s",
+                        "Font insert with fontfile failed: candidate_index=%s candidate=%s source=%s page=%s error=%s",
+                        candidate_index,
                         font_path,
                         source_path,
                         page_no,
@@ -1874,13 +1889,15 @@ def _ensure_page_font_resource(
                         fontname=font_name,
                         fontbuffer=font_bytes,
                     )
+                    korean_fontname = _resolve_fontname(korean_fontname)
                     candidate_used = str(font_path)
                 except TypeError:
                     pass
                 except Exception as exc:
                     if debug:
                         _LOGGER.debug(
-                            "Font insert with fontbuffer failed: candidate=%s source=%s page=%s error=%s",
+                            "Font insert with fontbuffer failed: candidate_index=%s candidate=%s source=%s page=%s error=%s",
+                            candidate_index,
                             font_path,
                             source_path,
                             page_no,
@@ -1904,13 +1921,15 @@ def _ensure_page_font_resource(
                         fontbuffer=font_bytes,
                         set_simple=False,
                     )
+                    korean_fontname = _resolve_fontname(korean_fontname)
                     candidate_used = str(font_path)
                 except TypeError:
                     pass
                 except Exception as exc:
                     if debug:
                         _LOGGER.debug(
-                            "Font insert with fontbuffer(set_simple=False) failed: candidate=%s source=%s page=%s error=%s",
+                            "Font insert with fontbuffer(set_simple=False) failed: candidate_index=%s candidate=%s source=%s page=%s error=%s",
+                            candidate_index,
                             font_path,
                             source_path,
                             page_no,
@@ -1934,20 +1953,24 @@ def _ensure_page_font_resource(
                         page_no,
                     )
                 return korean_fontname
-            last_failure = ("not_registered", str(font_path), "all attempts returned empty fontname")
+            last_failure = (
+                "not_registered",
+                f"{candidate_index}:{font_path}",
+                "all attempts returned empty fontname",
+            )
         except OSError:
-            last_failure = ("os_error", str(fontfile), "path check/read error")
+            last_failure = ("os_error", f"{candidate_index}:{fontfile}", "path check/read error")
             continue
         except Exception as exc:
-            last_failure = ("unknown", str(fontfile), str(exc))
+            last_failure = ("unknown", f"{candidate_index}:{fontfile}", str(exc))
 
     if debug:
         _LOGGER.debug(
-            "Failed to register fallback Korean font: attempted candidates=%s source=%s page=%s",
-            font_candidates,
-            source_path,
-            page_no,
-        )
+                "Failed to register fallback Korean font: attempted candidates=%s source=%s page=%s",
+                font_candidates,
+                source_path,
+                page_no,
+            )
         if last_failure:
             _LOGGER.debug(
                 "Last font registration failure detail: method=%s path=%s error=%s",
