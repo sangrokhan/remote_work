@@ -3462,6 +3462,7 @@ def _write_reconstructed_page_pdf(
             if not isinstance(drawing, dict):
                 return
 
+            fill_key_present = "fill" in drawing
             stroke_color = _normalize_color(drawing.get("color"), default=(0.0, 0.0, 0.0))
             fill_color_raw = drawing.get("fill")
             fill_color = _normalize_color(fill_color_raw) if fill_color_raw is not None else None
@@ -3486,8 +3487,8 @@ def _write_reconstructed_page_pdf(
             if not isinstance(items, list):
                 return
 
-            # Fast path: for filled drawing, use PyMuPDF Shape API when available
-            use_shape = fill_color is not None and hasattr(out_page, "new_shape")
+            # Fast path: use PyMuPDF Shape API when available.
+            use_shape = hasattr(out_page, "new_shape")
             if use_shape:
                 try:
                     shape = out_page.new_shape()
@@ -3496,6 +3497,7 @@ def _write_reconstructed_page_pdf(
                     shape = None
 
                 if use_shape:
+                    has_fill_op = False
                     current = None
                     for item in items:
                         if not item:
@@ -3568,6 +3570,7 @@ def _write_reconstructed_page_pdf(
                             continue
 
                         if op in ("f", "F", "f*", "b", "B", "b*"):
+                            has_fill_op = True
                             try:
                                 shape.finish(
                                     color=stroke_color,
@@ -3590,6 +3593,34 @@ def _write_reconstructed_page_pdf(
                             break
 
                     if use_shape:
+                        if fill_color is not None and not has_fill_op:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing has fill key=%s fill=%s but no fill operator; applying fill on commit: page=%s fill_color=%r",
+                                    fill_key_present,
+                                    fill_color,
+                                    page_no,
+                                    fill_color,
+                                )
+                            try:
+                                shape.finish(
+                                    color=stroke_color,
+                                    fill=fill_color,
+                                    width=line_width,
+                                    closePath=drawing.get("closePath", True),
+                                    fill_opacity=fill_opacity,
+                                    stroke_opacity=stroke_opacity,
+                                    dashes=drawing.get("dashes"),
+                                    lineCap=drawing.get("lineCap"),
+                                    lineJoin=drawing.get("lineJoin"),
+                                    miterLimit=drawing.get("miterLimit", 1),
+                                )
+                                shape.commit()
+                            except TypeError:
+                                shape.finish(color=stroke_color, fill=fill_color, width=line_width)
+                                shape.commit()
+                            except Exception:
+                                pass
                         if hasattr(shape, "close"):
                             try:
                                 shape.close()
@@ -3710,13 +3741,32 @@ def _write_reconstructed_page_pdf(
         images = page.get_images(full=True)
 
         if debug:
+            fill_with_color = 0
+            fill_op_missing = 0
+            for drawing in drawings:
+                if not isinstance(drawing, dict):
+                    continue
+                drawing_fill = _normalize_color(drawing.get("fill"), default=None) if drawing.get("fill") is not None else None
+                if drawing_fill is not None:
+                    fill_with_color += 1
+                    items = drawing.get("items") or []
+                    if not any(
+                        isinstance(item, (list, tuple))
+                        and item
+                        and item[0] in ("f", "F", "f*", "b", "B", "b*")
+                        for item in items
+                    ):
+                        fill_op_missing += 1
+
             _LOGGER.debug(
-                "Reconstruct source=%s page=%s extracted_text_blocks=%s drawings=%s images=%s",
+                "Reconstruct source=%s page=%s extracted_text_blocks=%s drawings=%s images=%s fill_with_color=%s fill_ops_missing=%s",
                 source_text,
                 page_no,
                 len((raw_text or {}).get("blocks", [])) if isinstance(raw_text, dict) else "n/a",
                 len(drawings),
                 len(images),
+                fill_with_color,
+                fill_op_missing,
             )
 
         rendered_pdf = pymupdf.open()
@@ -3727,6 +3777,64 @@ def _write_reconstructed_page_pdf(
             color=(1, 1, 1),
             width=0,
         )
+
+        fontfile_for_korean = _get_reconstruct_fontfile()
+        korean_fontname = None
+        if not fontfile_for_korean:
+            if debug:
+                _LOGGER.debug(
+                    "No Korean fallback fontfile found; text may use Latin-only fonts: source=%s page=%s",
+                    source_path,
+                    page_no,
+                )
+        else:
+            if hasattr(rendered_pdf, "insert_font"):
+                try:
+                    korean_fontname = rendered_pdf.insert_font(
+                        fontname="reconstruct_korean",
+                        fontfile=fontfile_for_korean,
+                    )
+                    if debug:
+                        _LOGGER.debug(
+                            "Registered Korean fallback fontname=%s fontfile=%s source=%s page=%s",
+                            korean_fontname,
+                            fontfile_for_korean,
+                            source_path,
+                            page_no,
+                        )
+                except TypeError:
+                    try:
+                        with open(fontfile_for_korean, "rb") as font_handle:
+                            font_bytes = font_handle.read()
+                        korean_fontname = rendered_pdf.insert_font(
+                            fontname="reconstruct_korean",
+                            fontbuffer=font_bytes,
+                        )
+                    except Exception as exc:
+                        if debug:
+                            _LOGGER.debug(
+                                "Failed to register fallback Korean font via buffer path=%s source=%s page=%s error=%s",
+                                fontfile_for_korean,
+                                source_path,
+                                page_no,
+                                exc,
+                            )
+                except Exception as exc:
+                    if debug:
+                        _LOGGER.debug(
+                            "Failed to register fallback Korean fontfile=%s source=%s page=%s error=%s",
+                            fontfile_for_korean,
+                            source_path,
+                            page_no,
+                            exc,
+                        )
+            elif debug:
+                _LOGGER.debug(
+                    "rendered_pdf.insert_font missing; cannot register fallback Korean fontfile=%s source=%s page=%s",
+                    fontfile_for_korean,
+                    source_path,
+                    page_no,
+                )
 
         image_xref_to_stream = {}
         for item in images:
@@ -3771,19 +3879,12 @@ def _write_reconstructed_page_pdf(
             _render_drawing(drawing)
 
         raw_blocks = raw_text.get("blocks") if isinstance(raw_text, dict) else []
-        fontfile_for_korean = _get_reconstruct_fontfile()
-        fontfile_supported = bool(fontfile_for_korean)
         if debug and fontfile_for_korean:
             _LOGGER.debug(
-                "Reconstruct using Korean fallback fontfile=%s for page=%s",
+                "Reconstruct with Korean fallback fontfile=%s for page=%s (fontname=%r)",
                 fontfile_for_korean,
                 page_no,
-            )
-        if debug and not fontfile_for_korean:
-            _LOGGER.debug(
-                "No Korean fallback fontfile found; text may be rendered with Latin-only fonts: source=%s page=%s",
-                source_path,
-                page_no,
+                korean_fontname,
             )
 
         for block in raw_blocks:
@@ -3829,9 +3930,14 @@ def _write_reconstructed_page_pdf(
                     font = (span.get("font") or "helv").strip() or "helv"
                     rotate = _to_rotation(span.get("dir"))
                     inserted = False
-                    use_fontfile = fontfile_supported and _contains_korean(text)
+                    use_korean_font = korean_fontname is not None and _contains_korean(text)
 
-                    for font_name in (font, "helv"):
+                    font_candidates = []
+                    if use_korean_font:
+                        font_candidates.append(korean_fontname)
+                    font_candidates.extend([font, "helv"])
+
+                    for font_name in font_candidates:
                         for angle in (rotate, 0.0):
                             try:
                                 out_page.insert_text(
@@ -3843,28 +3949,6 @@ def _write_reconstructed_page_pdf(
                                     rotate=angle,
                                 )
                                 inserted = True
-                                break
-                            except Exception:
-                                continue
-                        if inserted:
-                            break
-
-                    if not inserted and use_fontfile:
-                        for angle in (rotate, 0.0):
-                            try:
-                                out_page.insert_text(
-                                    point,
-                                    text,
-                                    fontfile=fontfile_for_korean,
-                                    fontsize=size,
-                                    color=color,
-                                    rotate=angle,
-                                )
-                                inserted = True
-                                break
-                            except TypeError:
-                                fontfile_supported = False
-                                use_fontfile = False
                                 break
                             except Exception:
                                 continue
