@@ -3265,9 +3265,337 @@ def _write_preview_cleaned_page_pdf(
     return str(Path(output_path))
 
 
+def _write_reconstructed_page_pdf(
+    source_path,
+    page_no,
+    output_path,
+    debug=False,
+):
+    page_no = int(page_no)
+    if page_no < 1:
+        raise ValueError(f"Page number must be >=1: {page_no}")
+
+    with pymupdf.open(source_path) as doc:
+        if page_no > doc.page_count:
+            raise ValueError(
+                f"Page number out of range: {page_no} (total: {doc.page_count})"
+            )
+
+        page = doc[page_no - 1]
+        source_text = str(source_path)
+
+        def _normalize_color(color_value, default=(0.0, 0.0, 0.0)):
+            if color_value is None:
+                return default
+
+            if isinstance(color_value, (list, tuple)):
+                if len(color_value) >= 3:
+                    try:
+                        return tuple(max(0.0, min(1.0, float(v))) for v in color_value[:3])
+                    except (TypeError, ValueError):
+                        return default
+                return default
+
+            try:
+                value = float(color_value)
+            except (TypeError, ValueError):
+                return default
+
+            if 0.0 <= value <= 1.0:
+                return (value, value, value)
+            if value <= 0:
+                return default
+
+            value = int(value)
+            if value <= 0xFFFFFF:
+                return (
+                    ((value >> 16) & 0xFF) / 255.0,
+                    ((value >> 8) & 0xFF) / 255.0,
+                    (value & 0xFF) / 255.0,
+                )
+            return default
+
+        def _to_point(value):
+            if value is None:
+                return None
+            if not isinstance(value, (list, tuple)):
+                return None
+            if len(value) != 2:
+                return None
+            try:
+                return float(value[0]), float(value[1])
+            except (TypeError, ValueError):
+                return None
+
+        def _to_point_from_args(args):
+            if not args:
+                return None
+            if len(args) == 1:
+                return _to_point(args[0])
+            try:
+                return float(args[-2]), float(args[-1])
+            except (TypeError, ValueError):
+                return None
+
+        def _to_rect(value):
+            if not isinstance(value, (list, tuple)):
+                return None
+            if len(value) != 4:
+                return None
+            try:
+                return float(value[0]), float(value[1]), float(value[2]), float(value[3])
+            except (TypeError, ValueError):
+                return None
+
+        def _to_rotation(direction):
+            if not direction or len(direction) != 2:
+                return 0.0
+            try:
+                dx, dy = direction
+                if not dx and not dy:
+                    return 0.0
+                return float(math.degrees(math.atan2(-float(dy), float(dx))))
+            except (TypeError, ValueError):
+                return 0.0
+
+        raw_text = page.get_text("dict", sort=True)
+        drawings = page.get_drawings()
+        images = page.get_images(full=True)
+
+        if debug:
+            _LOGGER.debug(
+                "Reconstruct source=%s page=%s extracted_text_blocks=%s drawings=%s images=%s",
+                source_text,
+                page_no,
+                len((raw_text or {}).get("blocks", [])) if isinstance(raw_text, dict) else "n/a",
+                len(drawings),
+                len(images),
+            )
+
+        rendered_pdf = pymupdf.open()
+        out_page = rendered_pdf.new_page(width=page.rect.width, height=page.rect.height)
+        out_page.draw_rect(
+            out_page.rect,
+            fill=(1, 1, 1),
+            color=(1, 1, 1),
+            width=0,
+        )
+
+        image_xref_to_stream = {}
+        for item in images:
+            if not item:
+                continue
+            xref = item[0]
+            if xref in image_xref_to_stream:
+                continue
+
+            try:
+                image_info = doc.extract_image(int(xref))
+            except Exception:
+                continue
+
+            image_bytes = image_info.get("image")
+            if not isinstance(image_bytes, (bytes, bytearray)):
+                continue
+            image_xref_to_stream[int(xref)] = bytes(image_bytes)
+
+        for item in images:
+            if not item:
+                continue
+            xref = int(item[0])
+            image_bytes = image_xref_to_stream.get(xref)
+            if not image_bytes:
+                continue
+            try:
+                rects = page.get_image_rects(xref)
+            except Exception:
+                continue
+            if not rects:
+                continue
+            for rect in rects:
+                if rect is None:
+                    continue
+                try:
+                    out_page.insert_image(rect, stream=image_bytes)
+                except Exception:
+                    continue
+
+        for drawing in drawings:
+            if not isinstance(drawing, dict):
+                continue
+
+            stroke_color = _normalize_color(drawing.get("color"), default=(0.0, 0.0, 0.0))
+            fill_color = _normalize_color(drawing.get("fill"), default=None)
+            line_width = drawing.get("linewidth", 1.0)
+            try:
+                line_width = float(line_width) if float(line_width) > 0 else 0.5
+            except (TypeError, ValueError):
+                line_width = 0.5
+
+            items = drawing.get("items")
+            if not isinstance(items, list):
+                continue
+
+            current = None
+            for item in items:
+                if not item:
+                    continue
+                op = item[0]
+                args = item[1:]
+
+                if op == "m":
+                    current = _to_point_from_args(args)
+                    continue
+
+                if op == "l":
+                    target = _to_point_from_args(args)
+                    if current is not None and target is not None:
+                        try:
+                            if target[0] != current[0] or target[1] != current[1]:
+                                out_page.draw_line(
+                                    pymupdf.Point(current[0], current[1]),
+                                    pymupdf.Point(target[0], target[1]),
+                                    color=stroke_color,
+                                    width=line_width,
+                                )
+                        except Exception:
+                            pass
+                    current = target
+                    continue
+
+                if op in ("v", "y"):
+                    current = _to_point_from_args(args)
+                    continue
+
+                if op == "h":
+                    current = None
+                    continue
+
+                if op == "c":
+                    target = _to_point_from_args(args)
+                    if current is not None and target is not None:
+                        try:
+                            out_page.draw_line(
+                                pymupdf.Point(current[0], current[1]),
+                                pymupdf.Point(target[0], target[1]),
+                                color=stroke_color,
+                                width=line_width,
+                            )
+                        except Exception:
+                            pass
+                    current = target
+                    continue
+
+                if op == "re" and len(args) == 4:
+                    rect_values = _to_rect(args)
+                    if not rect_values:
+                        continue
+                    x0, y0, x1, y1 = rect_values
+                    if x1 == x0 or y1 == y0:
+                        continue
+                    try:
+                        out_page.draw_rect(
+                            pymupdf.Rect(x0, y0, x1, y1),
+                            color=stroke_color,
+                            width=line_width,
+                            fill=fill_color,
+                        )
+                    except Exception:
+                        continue
+                    continue
+
+        raw_blocks = raw_text.get("blocks") if isinstance(raw_text, dict) else []
+        for block in raw_blocks:
+            if not isinstance(block, dict) or block.get("type") != 0:
+                continue
+            for line in block.get("lines", []) or []:
+                if not isinstance(line, dict):
+                    continue
+                for span in line.get("spans", []) or []:
+                    if not isinstance(span, dict):
+                        continue
+
+                    text = (span.get("text") or "").replace("\xa0", " ")
+                    if not text:
+                        continue
+
+                    origin = span.get("origin")
+                    if origin is None:
+                        bbox = span.get("bbox")
+                        if not (
+                            isinstance(bbox, (list, tuple))
+                            and len(bbox) == 4
+                        ):
+                            continue
+                        try:
+                            x0, y0, x1, y1 = [float(v) for v in bbox]
+                            origin = (x0, y1)
+                        except (TypeError, ValueError):
+                            continue
+
+                    point = _to_point(origin)
+                    if point is None:
+                        continue
+                    size = span.get("size")
+                    try:
+                        size = float(size)
+                    except (TypeError, ValueError):
+                        size = 11.0
+                    if size <= 0:
+                        size = 11.0
+
+                    color = _normalize_color(span.get("color"), default=(0.0, 0.0, 0.0))
+                    font = (span.get("font") or "helv").strip() or "helv"
+                    rotate = _to_rotation(span.get("dir"))
+                    inserted = False
+
+                    for font_name in (font, "helv"):
+                        for angle in (rotate, 0.0):
+                            try:
+                                out_page.insert_text(
+                                    point,
+                                    text,
+                                    fontname=font_name,
+                                    fontsize=size,
+                                    color=color,
+                                    rotate=angle,
+                                )
+                                inserted = True
+                                break
+                            except Exception:
+                                continue
+                        if inserted:
+                            break
+
+                    if not inserted and debug:
+                        _LOGGER.debug(
+                            "Reconstruct text span insert failed: source=%s page=%s font=%r size=%s rotate=%s text=%r",
+                            source_text,
+                            page_no,
+                            font,
+                            _round_float(size),
+                            _round_float(rotate),
+                            text[:120],
+                        )
+
+        rendered_pdf.save(output_path, deflate=True, garbage=4)
+        rendered_pdf.close()
+
+    return str(Path(output_path))
+
+
 def _image_only_output_path(source_path, page_no):
     prefix = f"{Path(source_path).stem}_page{page_no}_"
     tmp = tempfile.NamedTemporaryFile(prefix=prefix, suffix="_image_only.pdf", delete=False)
+    tmp.close()
+    return tmp.name
+
+
+def _reconstruct_output_path(source_path, page_no):
+    prefix = f"{Path(source_path).stem}_page{page_no}_"
+    tmp = tempfile.NamedTemporaryFile(
+        prefix=prefix, suffix="_reconstruct_from_extract.pdf", delete=False
+    )
     tmp.close()
     return tmp.name
 
@@ -3870,6 +4198,26 @@ def write_raw_pages(raw_pages, output_path):
             f.write("\n")
 
 
+def write_rawdict_pages(raw_pages, output_path):
+    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
+        for payload in raw_pages:
+            if not isinstance(payload, dict):
+                continue
+            f.write(
+                json.dumps(
+                    {
+                        "page": payload.get("page"),
+                        "source": payload.get("source"),
+                        "rotation": payload.get("rotation"),
+                        "rect": payload.get("rect"),
+                        "text_rawdict": payload.get("text_rawdict"),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            f.write("\n")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Read PDF pages with PyMuPDF, split/remove headers/footers/watermarks."
@@ -4038,6 +4386,19 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--reconstruct-page",
+        type=int,
+        default=None,
+        help=(
+            "Reconstruct one page from get_text/get_drawings/get_images and save as a PDF."
+        ),
+    )
+    parser.add_argument(
+        "--reconstruct-output",
+        default=None,
+        help="Output path for --reconstruct-page. If omitted, a temporary file is created.",
+    )
+    parser.add_argument(
         "--table-mode",
         default="auto",
         choices=("auto", "default", "lines", "text"),
@@ -4070,7 +4431,7 @@ def parse_args():
         default=None,
         help=(
             "Write pure PyMuPDF page objects (get_text/get_drawings/get_links) for selected pages."
-            " Optional path can be provided."
+            " Optional path can be provided. Pass `rawdict` to output only page.get_text('rawdict') content."
         ),
     )
     parser.add_argument(
@@ -4170,6 +4531,38 @@ def main():
 
         return
 
+    if args.reconstruct_page is not None:
+        try:
+            page_no = int(args.reconstruct_page)
+        except (TypeError, ValueError):
+            raise SystemExit("--reconstruct-page must be an integer.")
+
+        if args.pages is not None:
+            raise SystemExit("--reconstruct-page cannot be combined with --pages.")
+        if args.image_only_page is not None:
+            raise SystemExit("--reconstruct-page cannot be combined with --image-only-page.")
+        if args.preview_page is not None:
+            raise SystemExit("--reconstruct-page cannot be combined with --preview-page.")
+        if page_no < 1:
+            raise SystemExit("--reconstruct-page must be >= 1.")
+
+        output_path = args.reconstruct_output
+        if not output_path:
+            output_path = _reconstruct_output_path(args.file, page_no)
+
+        try:
+            created_path = _write_reconstructed_page_pdf(
+                args.file,
+                page_no,
+                output_path,
+                debug=args.debug or args.table_debug,
+            )
+        except Exception as exc:
+            raise SystemExit(f"Failed to create reconstructed page PDF: {exc}")
+
+        print(f"Reconstructed page PDF saved to: {created_path}")
+        return
+
     if args.image_only_page is not None:
         try:
             page_no = int(args.image_only_page)
@@ -4224,11 +4617,16 @@ def main():
         else args.raw_components
     )
     request_raw_page = args.raw_page is not None
+    request_rawdict_page = (
+        request_raw_page
+        and isinstance(args.raw_page, str)
+        and args.raw_page.lower() == "rawdict"
+    )
     raw_page_output = (
-        str(
-            Path(output).with_name(
-                f"{Path(output).stem}_raw_page.jsonl"
-            )
+        "raw.jsonl"
+        if request_rawdict_page
+        else str(
+            Path(output).with_name(f"{Path(output).stem}_raw_page.jsonl")
         )
         if request_raw_page and args.raw_page == ""
         else args.raw_page
@@ -4267,7 +4665,10 @@ def main():
     if request_raw_components and raw_components_output:
         write_raw_components(pages_with_lines, raw_components_output)
     if request_raw_page and raw_page_output:
-        write_raw_pages(raw_pages or [], raw_page_output)
+        if request_rawdict_page:
+            write_rawdict_pages(raw_pages or [], raw_page_output)
+        else:
+            write_raw_pages(raw_pages or [], raw_page_output)
     if args.legacy_page_jsonl:
         write_jsonl_pages(records, output)
         if request_raw_components or request_raw_page:
@@ -4275,7 +4676,10 @@ def main():
             if request_raw_components:
                 print(f"Raw components -> {raw_components_output}")
             if request_raw_page:
-                print(f"Raw page objects -> {raw_page_output}")
+                if request_rawdict_page:
+                    print(f"Raw page rawdict -> {raw_page_output}")
+                else:
+                    print(f"Raw page objects -> {raw_page_output}")
         else:
             print(f"Extracted {len(records)} pages -> {output}")
     else:
@@ -4295,7 +4699,10 @@ def main():
             if request_raw_components:
                 print(f"Raw components -> {raw_components_output}")
             if request_raw_page:
-                print(f"Raw page objects -> {raw_page_output}")
+                if request_rawdict_page:
+                    print(f"Raw page rawdict -> {raw_page_output}")
+                else:
+                    print(f"Raw page objects -> {raw_page_output}")
             if request_tables_markdown:
                 print(f"Tables markdown -> {tables_markdown_output}")
         else:
