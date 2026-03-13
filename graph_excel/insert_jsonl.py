@@ -178,6 +178,8 @@ def _insert_batch(tx, rows: List[Dict[str, Any]], ignore_meta: bool = False) -> 
     return total
 
 
+
+
 def insert_jsonl(
     uri: str,
     user: str,
