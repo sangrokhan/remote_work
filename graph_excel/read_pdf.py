@@ -148,28 +148,6 @@ def _normalize_font_match_key(value):
     return "".join(ch for ch in normalized if not ch.isspace())
 
 
-def _normalize_windows_drive_path(relative_path):
-    parts = [
-        part
-        for part in str(relative_path).replace("\\", "/").split("/")
-        if part
-    ]
-    if not parts:
-        return ""
-
-    head = parts[0].lower()
-    if head == "windows":
-        parts[0] = "Windows"
-        if len(parts) >= 2 and parts[1].lower() == "fonts":
-            parts[1] = "Fonts"
-    elif head == "winnt":
-        parts[0] = "WINNT"
-        if len(parts) >= 2 and parts[1].lower() == "fonts":
-            parts[1] = "Fonts"
-
-    return "/".join(parts)
-
-
 def _normalize_font_path_candidates(fontfile):
     if not fontfile:
         return []
@@ -213,9 +191,6 @@ def _normalize_font_path_candidates(fontfile):
             drive = drive_match.group(1).lower()
             relative = drive_match.group(2).replace("\\", "/").lstrip("/")
             add_candidate(f"/mnt/{drive}/{relative}")
-            normalized_relative = _normalize_windows_drive_path(relative)
-            if normalized_relative and normalized_relative != relative:
-                add_candidate(f"/mnt/{drive}/{normalized_relative}")
 
     return candidates
 
