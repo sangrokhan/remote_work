@@ -66,6 +66,7 @@ python read_pdf.py <path-to-file.pdf> --find-tables --tables-markdown
 python read_pdf.py <path-to-file.pdf> --raw rawdict
 python read_pdf.py <path-to-file.pdf> --raw rawjson
 python read_pdf.py <path-to-file.pdf> --pages 2,3,4 --reconstruction --output /tmp/reconstructed.pdf --remove-watermark
+python read_pdf.py <path-to-file.pdf> --pages 2,3,4 --reconstruction --output /tmp/reconstructed.pdf --reconstruction-fontfile "C:/Windows/Fonts/Malgun.ttf"
 python read_pdf.py <path-to-file.pdf> --legacy-page-jsonl
 ```
 When `--find-tables` is used in default mode, table records are emitted with `"type":"table"` in JSONL.
