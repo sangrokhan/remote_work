@@ -64,7 +64,8 @@ python read_pdf.py <path-to-file.pdf> --preserve-newlines
 python read_pdf.py <path-to-file.pdf> --find-tables
 python read_pdf.py <path-to-file.pdf> --find-tables --tables-markdown
 python read_pdf.py <path-to-file.pdf> --image-only-page 3 --image-only-output /tmp/page3_image_only.pdf
-python read_pdf.py <path-to-file.pdf> --pages 2,3,4 --reconstruct-output /tmp/reconstructed.pdf --remove-watermark
+python read_pdf.py <path-to-file.pdf> --pages 2,3,4 --reconstruction --output /tmp/reconstructed.pdf --remove-watermark
+python read_pdf.py <path-to-file.pdf> --pages 5,7 --preview --output /tmp/preview.pdf
 python read_pdf.py <path-to-file.pdf> --legacy-page-jsonl
 ```
 When `--find-tables` is used in default mode, table records are emitted with `"type":"table"` in JSONL.
