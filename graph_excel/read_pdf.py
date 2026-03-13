@@ -259,6 +259,80 @@ def _is_markdown_like(text):
     return False
 
 
+def _is_rotation_match(rotation, target_rotation, tolerance):
+    if target_rotation is None or tolerance is None:
+        return False
+
+    try:
+        target = float(target_rotation)
+        tolerance_value = float(tolerance)
+    except (TypeError, ValueError):
+        return False
+
+    if tolerance_value < 0:
+        tolerance_value = abs(tolerance_value)
+
+    value = int(rotation or 0) % 360
+    return abs((value - target + 180) % 360 - 180) <= tolerance_value
+
+
+def _collect_removal_rects(
+    page,
+    page_no,
+    source,
+    header_ratio,
+    footer_ratio,
+    watermark_angle,
+    watermark_tolerance,
+    remove_rotation_markdown=True,
+    remove_markdown_lines=False,
+    debug=False,
+):
+    lines = _extract_page_lines(
+        page,
+        page_no,
+        source,
+        header_ratio,
+        footer_ratio,
+        preserve_newlines=False,
+        strip_markdown_lines=False,
+        debug=debug,
+    )
+
+    removal_rects = []
+    for line in lines:
+        raw_text = _normalize_line(line.get("raw") or "")
+        if not raw_text:
+            continue
+
+        rotation = line.get("rotation")
+        should_remove = False
+        if remove_rotation_markdown and _is_rotation_match(rotation, watermark_angle, watermark_tolerance):
+            should_remove = True
+
+        if remove_markdown_lines and _is_markdown_like(raw_text):
+            should_remove = True
+
+        if not should_remove:
+            continue
+
+        bbox = line.get("bbox")
+        if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
+            continue
+
+        try:
+            x0, y0, x1, y1 = [float(v) for v in bbox]
+        except (TypeError, ValueError):
+            continue
+
+        if x1 <= x0 or y1 <= y0:
+            continue
+
+        removal_rects.append(pymupdf.Rect(x0, y0, x1, y1))
+
+    return removal_rects
+
+
 def _append_span(parts, text):
     if not text:
         return
@@ -2687,7 +2761,14 @@ def _extract_page_raw_payload(page, page_no, source, debug=False):
     return payload
 
 
-def _write_image_only_page_pdf(source_path, page_no, output_path):
+def _write_image_only_page_pdf(
+    source_path,
+    page_no,
+    output_path,
+    strip_markdown_lines=False,
+    header_ratio=0.08,
+    footer_ratio=0.08,
+):
     page_no = int(page_no)
     if page_no < 1:
         raise ValueError(f"Page number must be >=1: {page_no}")
@@ -2699,6 +2780,32 @@ def _write_image_only_page_pdf(source_path, page_no, output_path):
             )
 
         page = doc[page_no - 1]
+        markdown_rects = []
+        if strip_markdown_lines:
+            lines = _extract_page_lines(
+                page,
+                page_no,
+                str(source_path),
+                header_ratio,
+                footer_ratio,
+                preserve_newlines=False,
+                strip_markdown_lines=False,
+                debug=False,
+            )
+            for line in lines:
+                raw_text = _normalize_line(line.get("raw") or "")
+                if not raw_text or not _is_markdown_like(raw_text):
+                    continue
+                bbox = line.get("bbox")
+                if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
+                    continue
+                try:
+                    x0, y0, x1, y1 = [float(v) for v in bbox]
+                except (TypeError, ValueError):
+                    continue
+                if x1 <= x0 or y1 <= y0:
+                    continue
+                markdown_rects.append(pymupdf.Rect(x0, y0, x1, y1))
         page_images = page.get_images(full=True)
         png_xref_to_stream = {}
         for item in page_images:
@@ -2735,6 +2842,65 @@ def _write_image_only_page_pdf(source_path, page_no, output_path):
                 if rect is None:
                     continue
                 out_page.insert_image(rect, stream=image_bytes)
+
+        for rect in markdown_rects:
+            try:
+                out_page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), width=0)
+            except Exception:
+                continue
+
+        rendered_pdf.save(output_path, deflate=True, garbage=4)
+        rendered_pdf.close()
+
+    return str(Path(output_path))
+
+
+def _write_preview_cleaned_page_pdf(
+    source_path,
+    page_no,
+    output_path,
+    watermark_angle=_WATERMARK_ROTATION_DEGREE,
+    watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
+    header_ratio=0.08,
+    footer_ratio=0.08,
+    remove_markdown_lines=False,
+    debug=False,
+):
+    page_no = int(page_no)
+    if page_no < 1:
+        raise ValueError(f"Page number must be >=1: {page_no}")
+
+    with pymupdf.open(source_path) as doc:
+        if page_no > doc.page_count:
+            raise ValueError(
+                f"Page number out of range: {page_no} (total: {doc.page_count})"
+            )
+
+        page = doc[page_no - 1]
+        removal_rects = _collect_removal_rects(
+            page=page,
+            page_no=page_no,
+            source=str(source_path),
+            header_ratio=header_ratio,
+            footer_ratio=footer_ratio,
+            watermark_angle=watermark_angle,
+            watermark_tolerance=watermark_tolerance,
+            remove_rotation_markdown=True,
+            remove_markdown_lines=remove_markdown_lines,
+            debug=debug,
+        )
+
+        rendered_pdf = pymupdf.open()
+        out_page = rendered_pdf.new_page(width=page.rect.width, height=page.rect.height)
+        out_page.show_pdf_page(out_page.rect, doc, page_no - 1)
+
+        for rect in removal_rects:
+            try:
+                out_page.add_redact_annot(rect, fill=(1, 1, 1))
+            except Exception:
+                continue
+        if removal_rects:
+            out_page.apply_redactions()
 
         rendered_pdf.save(output_path, deflate=True, garbage=4)
         rendered_pdf.close()
@@ -3459,7 +3625,10 @@ def parse_args():
         "--image-only-page",
         type=int,
         default=None,
-        help="Render one page as an image-only PDF (flattened page image).",
+        help=(
+            "Render one page as an image-only PDF (flattened page image). "
+            "With --strip-markdown-lines, markdown-like text lines are removed before output."
+        ),
     )
     parser.add_argument(
         "--image-only-output",
@@ -3471,6 +3640,37 @@ def parse_args():
         type=int,
         default=180,
         help="(legacy) Kept for backward compatibility; currently ignored for image-only extraction.",
+    )
+    parser.add_argument(
+        "--preview-page",
+        type=int,
+        default=None,
+        help=(
+            "Render one single page after removing watermark-rotation text and print/save the cleaned PDF "
+            "(default rotation=55°)."
+        ),
+    )
+    parser.add_argument(
+        "--preview-output",
+        default=None,
+        help="Output path for --preview-page. If omitted, a temporary file is created.",
+    )
+    parser.add_argument(
+        "--watermark-angle",
+        type=float,
+        default=_WATERMARK_ROTATION_DEGREE,
+        help="Target text rotation (degrees) treated as watermark in --preview-page.",
+    )
+    parser.add_argument(
+        "--watermark-angle-tolerance",
+        type=float,
+        default=_WATERMARK_ROTATION_TOLERANCE,
+        help="Angle tolerance used for watermark matching in --preview-page.",
+    )
+    parser.add_argument(
+        "--preview-strip-markdown",
+        action="store_true",
+        help="Also remove markdown-like lines in --preview-page.",
     )
     parser.add_argument(
         "--table-mode",
@@ -3528,6 +3728,82 @@ def main():
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
+    if args.preview_page is not None:
+        try:
+            page_no = int(args.preview_page)
+        except (TypeError, ValueError):
+            raise SystemExit("--preview-page must be an integer.")
+
+        if args.pages is not None:
+            raise SystemExit("--preview-page cannot be combined with --pages.")
+
+        if args.image_only_page is not None:
+            raise SystemExit("--preview-page cannot be combined with --image-only-page.")
+
+        if page_no < 1:
+            raise SystemExit("--preview-page must be >= 1.")
+
+        if args.watermark_angle is None:
+            raise SystemExit("--watermark-angle is required.")
+        if args.watermark_angle_tolerance is None:
+            raise SystemExit("--watermark-angle-tolerance is required.")
+
+        preview_output_path = args.preview_output
+        if not preview_output_path:
+            preview_output_path = _image_only_output_path(args.file, page_no)
+
+        try:
+            created_path = _write_preview_cleaned_page_pdf(
+                args.file,
+                page_no,
+                preview_output_path,
+                watermark_angle=args.watermark_angle,
+                watermark_tolerance=args.watermark_angle_tolerance,
+                header_ratio=args.header_ratio,
+                footer_ratio=args.footer_ratio,
+                remove_markdown_lines=args.preview_strip_markdown,
+                debug=args.debug or args.table_debug,
+            )
+        except Exception as exc:
+            raise SystemExit(f"Failed to create preview cleaned page PDF: {exc}")
+
+        print(f"Preview cleaned page PDF saved to: {created_path}")
+
+        if args.find_tables:
+            preview_records = read_pdf(
+                created_path,
+                strip_watermarks=False,
+                strip_headers=False,
+                strip_footers=False,
+                patterns=[],
+                ratio_threshold=args.watermark_ratio,
+                header_ratio=args.header_ratio,
+                footer_ratio=args.footer_ratio,
+                max_pages=1,
+                pages=[1],
+                preserve_newlines=args.preserve_newlines,
+                extract_tables=True,
+                debug=args.debug,
+                table_debug=args.debug or args.table_debug,
+                table_mode=args.table_mode,
+                return_pages_with_lines=False,
+                return_raw_pages=False,
+            )
+            total_tables = sum(record.get("table_count", 0) for record in preview_records)
+            print(f"Detected tables (preview): {total_tables}")
+
+            if args.tables_markdown is not None:
+                preview_tables_md = (
+                    str(Path(created_path).with_name(f"{Path(created_path).stem}_tables.md"))
+                    if args.tables_markdown == ""
+                    else args.tables_markdown
+                )
+                if preview_tables_md:
+                    _write_tables_markdown(preview_records, preview_tables_md)
+                    print(f"Preview tables markdown -> {preview_tables_md}")
+
+        return
+
     if args.image_only_page is not None:
         try:
             page_no = int(args.image_only_page)
@@ -3549,6 +3825,9 @@ def main():
                 args.file,
                 page_no,
                 output_path,
+                strip_markdown_lines=args.strip_markdown_lines,
+                header_ratio=args.header_ratio,
+                footer_ratio=args.footer_ratio,
             )
         except Exception as exc:
             raise SystemExit(f"Failed to create image-only page PDF: {exc}")
