@@ -52,6 +52,7 @@ That legacy page record includes:
 - `anomalies`: page-level exception hints (including unusual header/footer baseline and mixed rotation cases)
 - `tables`: optional table detections from `--find-tables`, each with `page`, `table_no`, `bbox`, `row_count`, `col_count`, `text`, `start_page`, `end_page`, and `pages` when a table spans multiple pages
 - each table object also includes `rows_text` (array of row strings) for easier row-by-row consumption.
+- `find-tables` builds table geometry first (`rows`/`cols` from table structure), then re-extracts text per cell rectangle so table rows are filled with layout-aligned text instead of relying only on detector text output.
 
 ```bash
 python read_pdf.py <path-to-file.pdf> [--output output.jsonl] [--watermark-patterns "CONFIDENTIAL" "COPY"]

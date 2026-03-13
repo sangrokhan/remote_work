@@ -1187,6 +1187,143 @@ def _rows_from_cells(cells):
     return rows
 
 
+def _extract_text_from_cell_clip(page, clip):
+    if page is None or not clip:
+        return ""
+
+    try:
+        x0, y0, x1, y1 = [float(v) for v in clip]
+    except (TypeError, ValueError):
+        return ""
+
+    if x1 <= x0 or y1 <= y0:
+        return ""
+
+    try:
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+    except Exception:
+        return ""
+
+    try:
+        cell_text = page.get_text("text", clip=rect)
+    except Exception:
+        cell_text = ""
+
+    normalized = _normalize_line(cell_text or "")
+    if normalized:
+        return normalized
+
+    try:
+        words = page.get_text("words", clip=rect)
+    except Exception:
+        return ""
+
+    if not words:
+        return ""
+
+    rows = []
+    line_tokens = []
+    current_y = None
+    line_tolerance = 1.2
+    for word in sorted(words, key=lambda item: (_coerce_number(item[1], 0.0), _coerce_number(item[0], 0.0)):
+        if len(word) < 5:
+            continue
+
+        try:
+            x0w, y0w, _, _, value = word[:5]
+        except Exception:
+            continue
+
+        text = _normalize_line(_sanitize_text(value))
+        if not text:
+            continue
+
+        try:
+            y0w = float(y0w)
+            x0w = float(x0w)
+        except (TypeError, ValueError):
+            continue
+
+        if current_y is None or abs(y0w - current_y) > line_tolerance:
+            if line_tokens:
+                rows.append(" ".join(token for _, token in sorted(line_tokens, key=lambda item: item[0])))
+            line_tokens = [(x0w, text)]
+            current_y = y0w
+        else:
+            line_tokens.append((x0w, text))
+
+    if line_tokens:
+        rows.append(" ".join(token for _, token in sorted(line_tokens, key=lambda item: item[0])))
+
+    return _normalize_line(" ".join(rows))
+
+
+def _reextract_table_rows(page, table, row_count=None, col_count=None):
+    components = _infer_table_components(table, row_count=row_count, col_count=col_count)
+    row_lines = components.get("row_lines") or []
+    vertical_lines = components.get("vertical_lines") or []
+    if len(row_lines) < 2 or len(vertical_lines) < 2:
+        return [], components
+
+    row_positions = []
+    for line in row_lines:
+        if not isinstance(line, dict):
+            continue
+        y0 = _coerce_number(line.get("y0"))
+        y1 = _coerce_number(line.get("y1"))
+        if y0 is None or y1 is None:
+            continue
+        row_positions.append(min(y0, y1))
+
+    col_positions = []
+    for line in vertical_lines:
+        if not isinstance(line, dict):
+            continue
+        x0 = _coerce_number(line.get("x0"))
+        x1 = _coerce_number(line.get("x1"))
+        if x0 is None or x1 is None:
+            continue
+        col_positions.append(min(x0, x1))
+
+    row_positions = _merge_positions(sorted(set(row_positions)), 1.0)
+    col_positions = _merge_positions(sorted(set(col_positions)), 1.0)
+    if len(row_positions) < 2 or len(col_positions) < 2:
+        return [], components
+
+    if row_count:
+        target_rows = int(max(row_count, 0))
+        if target_rows >= 1 and len(row_positions) > target_rows + 1:
+            row_positions = row_positions[: target_rows + 1]
+
+    if col_count:
+        target_cols = int(max(col_count, 0))
+        if target_cols >= 1 and len(col_positions) > target_cols + 1:
+            col_positions = col_positions[: target_cols + 1]
+
+    rows = []
+    for row_index in range(len(row_positions) - 1):
+        y0 = row_positions[row_index]
+        y1 = row_positions[row_index + 1]
+        if y1 <= y0:
+            continue
+
+        row_cells = []
+        for col_index in range(len(col_positions) - 1):
+            x0 = col_positions[col_index]
+            x1 = col_positions[col_index + 1]
+            if x1 <= x0:
+                row_cells.append("")
+                continue
+
+            cell_text = _extract_text_from_cell_clip(page, (x0, y0, x1, y1))
+            row_cells.append(cell_text)
+
+        if any(cell for cell in row_cells):
+            rows.append(row_cells)
+
+    return rows, components
+
+
 def _build_shape_grid_table(shape_lines, lines, page_rect, page_no, source, rotation=0, debug=False):
     shape_lines = [line for line in (shape_lines or []) if line.get("type") == "shape-line"]
     if not shape_lines or not lines:
@@ -1504,7 +1641,26 @@ def _extract_page_tables(
             rows = _rows_from_cells(cells)
 
         if not rows:
+            # no table content recovered from detector
             continue
+
+        table_rows = len(rows)
+        table_cols = 0
+        for row in rows:
+            if isinstance(row, (list, tuple)):
+                table_cols = max(table_cols, len(row))
+
+        components = None
+        re_rows, components = _reextract_table_rows(
+            page,
+            table,
+            row_count=table_rows,
+            col_count=table_cols,
+        )
+        if re_rows:
+            rows = re_rows
+        else:
+            components = None
 
         row_count = 0
         col_count = 0
@@ -1515,8 +1671,20 @@ def _extract_page_tables(
             row_count += 1
             col_count = max(col_count, len(row))
             row_texts.append(" | ".join(_sanitize_text(cell or "") for cell in row))
+        if row_count == 0:
+            if debug:
+                _LOGGER.debug(
+                    "No readable rows after table re-extraction: source=%s page=%s table=%s",
+                    source,
+                    page_no,
+                    table_index,
+                )
+            continue
 
-        components = _infer_table_components(table, row_count=row_count, col_count=col_count)
+        if components is None:
+            components = _infer_table_components(table, row_count=row_count, col_count=col_count)
+        elif row_count != table_rows or col_count != table_cols:
+            components = _infer_table_components(table, row_count=row_count, col_count=col_count)
         if debug:
             _LOGGER.debug(
                 "Table %s on page %s row_count=%s col_count=%s",
