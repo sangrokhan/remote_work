@@ -240,6 +240,25 @@ def _span_to_markdown(raw, span):
     return text
 
 
+def _is_markdown_like(text):
+    normalized = _normalize_line(text)
+    if not normalized:
+        return False
+
+    if "|" in normalized and normalized.count("|") >= 2:
+        marker_count = sum(1 for ch in normalized if ch in "|-+:")
+        if marker_count >= normalized.count("|") and marker_count >= 2:
+            return True
+        if re.fullmatch(r"\|[-\s\|:]+\|", normalized):
+            return True
+
+    if re.search(r"^\s*`{1,3}.+`{1,3}\s*$", normalized):
+        return True
+    if re.fullmatch(r"\s*[`*_-]{3,}\s*", normalized):
+        return True
+    return False
+
+
 def _append_span(parts, text):
     if not text:
         return
@@ -1225,7 +1244,7 @@ def _extract_text_from_cell_clip(page, clip):
     line_tokens = []
     current_y = None
     line_tolerance = 1.2
-    for word in sorted(words, key=lambda item: (_coerce_number(item[1], 0.0), _coerce_number(item[0], 0.0)):
+    for word in sorted(words, key=lambda item: (_coerce_number(item[1], 0.0), _coerce_number(item[0], 0.0))):
         if len(word) < 5:
             continue
 
@@ -1851,6 +1870,7 @@ def _extract_page_lines(
     header_ratio,
     footer_ratio,
     preserve_newlines=False,
+    strip_markdown_lines=False,
     debug=False,
 ):
     page_data = page.get_text("dict", sort=True)
@@ -1935,6 +1955,16 @@ def _extract_page_lines(
             if not preserve_newlines:
                 raw_text = _normalize_line(raw_text)
             if not raw_text:
+                continue
+            if strip_markdown_lines and _is_markdown_like(raw_text):
+                if debug:
+                    _LOGGER.debug(
+                        "Skipped markdown-like line: source=%s page=%s line=%s text=%r",
+                        source,
+                        page_no,
+                        line_no,
+                        raw_text[:120],
+                    )
                 continue
 
             baseline_axis = axis
@@ -2499,6 +2529,7 @@ def _extract_pages(
     max_pages=None,
     pages=None,
     preserve_newlines=False,
+    strip_markdown_lines=False,
     extract_tables=False,
     debug=False,
     table_debug=False,
@@ -2519,6 +2550,7 @@ def _extract_pages(
             header_ratio,
             footer_ratio,
             preserve_newlines=preserve_newlines,
+            strip_markdown_lines=strip_markdown_lines,
             debug=debug,
         )
         for line in lines:
@@ -2901,6 +2933,7 @@ def read_pdf(
     pages=None,
     preserve_newlines=False,
     extract_tables=False,
+    strip_markdown_lines=False,
     debug=False,
     table_debug=None,
     table_mode="auto",
@@ -2919,6 +2952,7 @@ def read_pdf(
                 max_pages=max_pages,
                 pages=pages,
                 preserve_newlines=preserve_newlines,
+                strip_markdown_lines=strip_markdown_lines,
                 extract_tables=extract_tables,
                 debug=debug,
                 table_debug=table_debug if table_debug is not None else debug,
@@ -2934,6 +2968,7 @@ def read_pdf(
                 max_pages=max_pages,
                 pages=pages,
                 preserve_newlines=preserve_newlines,
+                strip_markdown_lines=strip_markdown_lines,
                 extract_tables=extract_tables,
                 debug=debug,
                 table_debug=table_debug if table_debug is not None else debug,
@@ -3404,6 +3439,14 @@ def parse_args():
         help="Detect tables on each page with PyMuPDF table extractor.",
     )
     parser.add_argument(
+        "--strip-markdown-lines",
+        "--strip_markdown_lines",
+        "--strip-markdown",
+        dest="strip_markdown_lines",
+        action="store_true",
+        help="Skip markdown-like table/text-art lines before building sections and table structure.",
+    )
+    parser.add_argument(
         "--tables-markdown",
         nargs="?",
         const="",
@@ -3558,6 +3601,7 @@ def main():
         pages=requested_pages,
         preserve_newlines=args.preserve_newlines,
         extract_tables=args.find_tables,
+        strip_markdown_lines=args.strip_markdown_lines,
         debug=args.debug,
         table_debug=args.debug or args.table_debug,
         table_mode=args.table_mode,
