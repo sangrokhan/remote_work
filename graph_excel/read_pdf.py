@@ -3556,7 +3556,7 @@ def _write_reconstructed_page_pdf(
 
             if debug:
                 _LOGGER.debug(
-                    "Drawing[%s] start page=%s fill_key=%s raw_fill=%r norm_fill=%r stroke=%r linewidth=%s fill_op=%s non_fill_ops=%s raw_op_types=%s closePath=%s",
+                    "Drawing[%s] start page=%s fill_key=%s raw_fill=%r norm_fill=%r stroke=%r linewidth=%s fill_op=%s fill_opacity=%r ops=%s non_fill_ops=%s raw_op_types=%s closePath=%s",
                     drawing_index,
                     page_no,
                     fill_key_present,
@@ -3564,6 +3564,7 @@ def _write_reconstructed_page_pdf(
                     fill_color,
                     stroke_color,
                     _round_float(line_width),
+                    has_fill_op,
                     fill_opacity,
                     " ".join(f"{k}:{op_counts[k]}" for k in sorted(op_counts.keys())),
                     " ".join(f"{k}:{non_fill_op_counts[k]}" for k in sorted(non_fill_op_counts.keys())),
@@ -4080,6 +4081,7 @@ def _write_reconstructed_page_pdf(
                             fill_color,
                             fill_opacity,
                             line_width,
+                            stroke_color,
                             _debug_args(args),
                         )
                     try:
