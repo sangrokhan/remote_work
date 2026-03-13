@@ -347,25 +347,6 @@ def _span_to_markdown(raw, span):
     return text
 
 
-def _is_markdown_like(text):
-    normalized = _normalize_line(text)
-    if not normalized:
-        return False
-
-    if "|" in normalized and normalized.count("|") >= 2:
-        marker_count = sum(1 for ch in normalized if ch in "|-+:")
-        if marker_count >= normalized.count("|") and marker_count >= 2:
-            return True
-        if re.fullmatch(r"\|[-\s\|:]+\|", normalized):
-            return True
-
-    if re.search(r"^\s*`{1,3}.+`{1,3}\s*$", normalized):
-        return True
-    if re.fullmatch(r"\s*[`*_-]{3,}\s*", normalized):
-        return True
-    return False
-
-
 def _is_rotation_match(rotation, target_rotation, tolerance):
     if target_rotation is None or tolerance is None:
         return False
@@ -2042,7 +2023,6 @@ def _extract_page_lines(
     header_ratio,
     footer_ratio,
     preserve_newlines=False,
-    strip_markdown_lines=False,
     debug=False,
 ):
     page_data = page.get_text("dict", sort=True)
@@ -2128,17 +2108,6 @@ def _extract_page_lines(
                 raw_text = _normalize_line(raw_text)
             if not raw_text:
                 continue
-            if strip_markdown_lines and _is_markdown_like(raw_text):
-                if debug:
-                    _LOGGER.debug(
-                        "Skipped markdown-like line: source=%s page=%s line=%s text=%r",
-                        source,
-                        page_no,
-                        line_no,
-                        raw_text[:120],
-                    )
-                continue
-
             baseline_axis = axis
             baseline_value = _line_baseline(spans, baseline_axis)
             page_axis_size = float(page_rect.width) if baseline_axis == "x" else float(page_rect.height)
@@ -3295,7 +3264,6 @@ def _collect_watermark_line_filter(
     watermark_angle=_WATERMARK_ROTATION_DEGREE,
     watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
     strip_body_rotation=False,
-    remove_markdown_lines=False,
     debug=False,
 ):
     if not enabled:
@@ -3319,7 +3287,6 @@ def _collect_watermark_line_filter(
             header_ratio=header_ratio,
             footer_ratio=footer_ratio,
             preserve_newlines=False,
-            strip_markdown_lines=False,
             debug=debug,
         )
         watermark_result = _remove_watermark_lines(
@@ -3329,7 +3296,6 @@ def _collect_watermark_line_filter(
             source=source_text,
             page_no=page_no,
             strip_body_rotation=strip_body_rotation,
-            remove_markdown_lines=remove_markdown_lines,
             debug=debug,
         )
         removed_lines = watermark_result["removed_lines"]
@@ -3402,7 +3368,6 @@ def _is_watermark_line(
     watermark_angle,
     watermark_tolerance,
     strip_body_rotation=False,
-    remove_markdown_lines=False,
 ):
     raw_text = _normalize_line(line.get("raw") or "")
     if not raw_text:
@@ -3415,9 +3380,6 @@ def _is_watermark_line(
     ):
         return True, "watermark-rotation"
 
-    if remove_markdown_lines and _is_markdown_like(raw_text):
-        return True, "markdown"
-
     return False, None
 
 
@@ -3428,7 +3390,6 @@ def _remove_watermark_lines(
     source=None,
     page_no=None,
     strip_body_rotation=False,
-    remove_markdown_lines=False,
     debug=False,
 ):
     removed_lines = []
@@ -3442,7 +3403,6 @@ def _remove_watermark_lines(
             watermark_angle=watermark_angle,
             watermark_tolerance=watermark_tolerance,
             strip_body_rotation=strip_body_rotation,
-            remove_markdown_lines=remove_markdown_lines,
         )
 
         if should_remove:
@@ -3895,7 +3855,6 @@ def _extract_pages(
     max_pages=None,
     pages=None,
     preserve_newlines=False,
-    strip_markdown_lines=False,
     extract_tables=False,
     debug=False,
     table_debug=False,
@@ -3916,7 +3875,6 @@ def _extract_pages(
             header_ratio,
             footer_ratio,
             preserve_newlines=preserve_newlines,
-            strip_markdown_lines=strip_markdown_lines,
             debug=debug,
         )
         for line in lines:
@@ -4057,7 +4015,6 @@ def _write_image_only_page_pdf(
     source_path,
     page_no,
     output_path,
-    strip_markdown_lines=False,
     header_ratio=0.08,
     footer_ratio=0.08,
 ):
@@ -4072,32 +4029,6 @@ def _write_image_only_page_pdf(
             )
 
         page = doc[page_no - 1]
-        markdown_rects = []
-        if strip_markdown_lines:
-            lines = _extract_page_lines(
-                page,
-                page_no,
-                str(source_path),
-                header_ratio,
-                footer_ratio,
-                preserve_newlines=False,
-                strip_markdown_lines=False,
-                debug=False,
-            )
-            for line in lines:
-                raw_text = _normalize_line(line.get("raw") or "")
-                if not raw_text or not _is_markdown_like(raw_text):
-                    continue
-                bbox = line.get("bbox")
-                if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
-                    continue
-                try:
-                    x0, y0, x1, y1 = [float(v) for v in bbox]
-                except (TypeError, ValueError):
-                    continue
-                if x1 <= x0 or y1 <= y0:
-                    continue
-                markdown_rects.append(pymupdf.Rect(x0, y0, x1, y1))
         page_images = page.get_images(full=True)
         png_xref_to_stream = {}
         for item in page_images:
@@ -4155,7 +4086,6 @@ def _write_preview_cleaned_page_pdf(
     watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
     header_ratio=0.08,
     footer_ratio=0.08,
-    remove_markdown_lines=False,
     strip_body_rotation=False,
     debug=False,
 ):
@@ -4188,7 +4118,6 @@ def _write_preview_cleaned_page_pdf(
                 header_ratio=header_ratio,
                 footer_ratio=footer_ratio,
                 preserve_newlines=False,
-                strip_markdown_lines=False,
                 debug=debug,
             )
 
@@ -4199,7 +4128,6 @@ def _write_preview_cleaned_page_pdf(
                 source=source_text,
                 page_no=page_no,
                 strip_body_rotation=strip_body_rotation,
-                remove_markdown_lines=remove_markdown_lines,
                 debug=debug,
             )
 
@@ -4311,7 +4239,6 @@ def _write_reconstructed_page_pdf(
     header_ratio=0.08,
     footer_ratio=0.08,
     strip_body_rotation=False,
-    remove_markdown_lines=False,
     debug=False,
 ):
     page_no = int(page_no)
@@ -4346,7 +4273,6 @@ def _write_reconstructed_page_pdf(
             watermark_angle=watermark_angle,
             watermark_tolerance=watermark_tolerance,
             strip_body_rotation=strip_body_rotation,
-            remove_markdown_lines=remove_markdown_lines,
             debug=debug,
         )
         removed_line_numbers = watermark_filter["removed_line_numbers"]
@@ -4551,7 +4477,6 @@ def _write_reconstructed_pages_pdf(
     header_ratio=0.08,
     footer_ratio=0.08,
     strip_body_rotation=False,
-    remove_markdown_lines=False,
     debug=False,
 ):
     if not page_numbers:
@@ -4577,7 +4502,6 @@ def _write_reconstructed_pages_pdf(
                     header_ratio=header_ratio,
                     footer_ratio=footer_ratio,
                     strip_body_rotation=strip_body_rotation,
-                    remove_markdown_lines=remove_markdown_lines,
                     debug=debug,
                 )
 
@@ -4779,7 +4703,6 @@ def read_pdf(
     pages=None,
     preserve_newlines=False,
     extract_tables=False,
-    strip_markdown_lines=False,
     debug=False,
     table_debug=None,
     table_mode="auto",
@@ -4798,7 +4721,6 @@ def read_pdf(
                 max_pages=max_pages,
                 pages=pages,
                 preserve_newlines=preserve_newlines,
-                strip_markdown_lines=strip_markdown_lines,
                 extract_tables=extract_tables,
                 debug=debug,
                 table_debug=table_debug if table_debug is not None else debug,
@@ -4814,7 +4736,6 @@ def read_pdf(
                 max_pages=max_pages,
                 pages=pages,
                 preserve_newlines=preserve_newlines,
-                strip_markdown_lines=strip_markdown_lines,
                 extract_tables=extract_tables,
                 debug=debug,
                 table_debug=table_debug if table_debug is not None else debug,
@@ -5305,14 +5226,6 @@ def parse_args():
         help="Detect tables on each page with PyMuPDF table extractor.",
     )
     parser.add_argument(
-        "--strip-markdown-lines",
-        "--strip_markdown_lines",
-        "--strip-markdown",
-        dest="strip_markdown_lines",
-        action="store_true",
-        help="Skip markdown-like table/text-art lines before building sections and table structure.",
-    )
-    parser.add_argument(
         "--tables-markdown",
         nargs="?",
         const="",
@@ -5326,8 +5239,7 @@ def parse_args():
         type=int,
         default=None,
         help=(
-            "Render one page as an image-only PDF (flattened page image). "
-            "With --strip-markdown-lines, markdown-like text lines are removed before output."
+            "Render one page as an image-only PDF (flattened page image)."
         ),
     )
     parser.add_argument(
@@ -5364,11 +5276,6 @@ def parse_args():
         type=float,
         default=_WATERMARK_ROTATION_TOLERANCE,
         help="Angle tolerance used for watermark matching in --preview.",
-    )
-    parser.add_argument(
-        "--preview-strip-markdown",
-        action="store_true",
-        help="Also remove markdown-like lines in --preview.",
     )
     parser.add_argument(
         "--preview-strip-body-rotation",
@@ -5470,7 +5377,6 @@ def main():
                 header_ratio=args.header_ratio,
                 footer_ratio=args.footer_ratio,
                 strip_body_rotation=False,
-                remove_markdown_lines=False,
                 debug=args.debug or args.table_debug,
             )
         except Exception as exc:
@@ -5509,7 +5415,6 @@ def main():
                 watermark_tolerance=args.watermark_angle_tolerance,
                 header_ratio=args.header_ratio,
                 footer_ratio=args.footer_ratio,
-                remove_markdown_lines=args.preview_strip_markdown,
                 strip_body_rotation=args.preview_strip_body_rotation,
                 debug=args.debug or args.table_debug,
             )
@@ -5573,7 +5478,6 @@ def main():
                 args.file,
                 page_no,
                 output_path,
-                strip_markdown_lines=args.strip_markdown_lines,
                 header_ratio=args.header_ratio,
                 footer_ratio=args.footer_ratio,
             )
@@ -5633,7 +5537,6 @@ def main():
         pages=requested_pages,
         preserve_newlines=args.preserve_newlines,
         extract_tables=args.find_tables,
-        strip_markdown_lines=args.strip_markdown_lines,
         debug=args.debug,
         table_debug=args.debug or args.table_debug,
         table_mode=args.table_mode,
