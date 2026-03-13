@@ -3624,14 +3624,14 @@ def _write_reconstructed_page_pdf(
                         try:
                             shape.draw_rect(pymupdf.Rect(x0, y0, x1, y1))
                             has_geom = True
-                        except Exception as exc:
-                            if debug:
-                                _LOGGER.debug(
-                                    "Drawing[%s] shape.draw_rect failed: %s page=%s",
-                                    drawing_index,
-                                    exc,
-                                    page_no,
-                                )
+                            except Exception as exc:
+                                if debug:
+                                    _LOGGER.debug(
+                                        "Drawing[%s] shape.draw_rect failed: %s page=%s",
+                                        drawing_index,
+                                        exc,
+                                        page_no,
+                                    )
                         continue
 
                     if op in fill_ops:
@@ -3643,23 +3643,23 @@ def _write_reconstructed_page_pdf(
                                 op,
                                 page_no,
                             )
-                try:
-                    shape.finish(
-                        color=stroke_color,
-                        fill=fill_color,
-                        width=line_width,
-                        closePath=drawing.get("closePath", True),
-                        fill_opacity=fill_opacity,
-                        stroke_opacity=stroke_opacity,
-                        dashes=drawing.get("dashes"),
-                        lineCap=drawing.get("lineCap"),
-                        lineJoin=drawing.get("lineJoin"),
-                    )
-                    shape.commit()
-                    if debug:
-                        _LOGGER.debug(
-                            "Drawing[%s] shape.finish+commit success on op=%s",
-                            drawing_index,
+                        try:
+                            shape.finish(
+                                color=stroke_color,
+                                fill=fill_color,
+                                width=line_width,
+                                closePath=drawing.get("closePath", True),
+                                fill_opacity=fill_opacity,
+                                stroke_opacity=stroke_opacity,
+                                dashes=drawing.get("dashes"),
+                                lineCap=drawing.get("lineCap"),
+                                lineJoin=drawing.get("lineJoin"),
+                            )
+                            shape.commit()
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] shape.finish+commit success on op=%s",
+                                    drawing_index,
                                     op,
                                 )
                         except TypeError as exc:
@@ -3686,18 +3686,33 @@ def _write_reconstructed_page_pdf(
                                     f"{type(fallback_exc).__name__}: {fallback_exc}"
                                 )
                                 if debug:
-                                    _LOGGER.debug("Drawing[%s] %s", drawing_index, shape_disable_reason)
+                                    _LOGGER.debug(
+                                        "Drawing[%s] %s",
+                                        drawing_index,
+                                        shape_disable_reason,
+                                    )
                         except Exception as exc:
                             use_shape = False
                             shape_disable_reason = (
-                                f"shape.finish/commit failed on op {op}: {type(exc).__name__}: {exc}"
+                                f"shape.finish/commit failed on op {op}: "
+                                f"{type(exc).__name__}: {exc}"
                             )
                             if debug:
-                                _LOGGER.debug("Drawing[%s] %s", drawing_index, shape_disable_reason)
+                                _LOGGER.debug(
+                                    "Drawing[%s] %s",
+                                    drawing_index,
+                                    shape_disable_reason,
+                                )
                         break
 
                     if debug:
-                        _LOGGER.debug("Drawing[%s] unsupported Shape op=%r args=%r page=%s", drawing_index, op, args, page_no)
+                        _LOGGER.debug(
+                            "Drawing[%s] unsupported Shape op=%r args=%r page=%s",
+                            drawing_index,
+                            op,
+                            args,
+                            page_no,
+                        )
 
                 if use_shape:
                     if fill_key_present and fill_color is not None and not fill_op_executed:
