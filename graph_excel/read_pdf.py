@@ -306,14 +306,35 @@ def _collect_removal_rects(
             continue
 
         rotation = line.get("rotation")
+        location = line.get("location", "body")
+        rotation_match = _is_rotation_match(rotation, watermark_angle, watermark_tolerance)
+        is_markdown = _is_markdown_like(raw_text)
+        is_watermark_like = _looks_like_repeated_watermark(raw_text)
         should_remove = False
-        if remove_rotation_markdown and _is_rotation_match(rotation, watermark_angle, watermark_tolerance):
-            should_remove = True
+        removed_reason = None
 
-        if remove_markdown_lines and _is_markdown_like(raw_text):
+        if remove_rotation_markdown and rotation_match:
+            if location != "body":
+                should_remove = True
+                removed_reason = "watermark-rotation-header-footer"
+            elif is_watermark_like or is_markdown:
+                should_remove = True
+                removed_reason = "watermark-rotation-body"
+
+        if remove_markdown_lines and is_markdown:
             should_remove = True
+            removed_reason = removed_reason or "markdown"
 
         if not should_remove:
+            if debug and rotation_match:
+                _LOGGER.debug(
+                    "Skipping rotation-match line in preview: source=%s page=%s line=%s location=%s text=%r",
+                    source,
+                    page_no,
+                    line.get("line"),
+                    location,
+                    raw_text[:120],
+                )
             continue
 
         bbox = line.get("bbox")
@@ -327,6 +348,18 @@ def _collect_removal_rects(
 
         if x1 <= x0 or y1 <= y0:
             continue
+
+        if debug and removed_reason:
+            _LOGGER.debug(
+                "Preview watermark-removal rect: source=%s page=%s line=%s location=%s reason=%s rotation=%s rect=%s",
+                source,
+                page_no,
+                line.get("line"),
+                location,
+                removed_reason,
+                rotation,
+                f"{_round_float(x0)},{_round_float(y0)},{_round_float(x1)},{_round_float(y1)}",
+            )
 
         removal_rects.append(pymupdf.Rect(x0, y0, x1, y1))
 
