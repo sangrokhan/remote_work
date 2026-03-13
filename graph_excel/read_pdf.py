@@ -2404,36 +2404,18 @@ def _line_to_markdown(line_text, line_size, body_size):
     return cleaned
 
 
-def _line_to_payload(line, markdown_line, target_region, removed_reason, removed):
+def _line_to_payload(line, text, target_region, removed_reason, removed):
     position = line.get("position", {})
-    baseline = position.get("baseline", {})
-    font_size = _round_float(line.get("size"))
     return {
+        "page": line["page"],
+        "line_no": line["line"],
         "region": target_region,
+        "text": text,
+        "rotation": line["rotation"],
+        "x": position.get("x"),
+        "y": position.get("y"),
         "removed": removed,
         "removed_reason": removed_reason,
-        "line_no": line["line"],
-        "row_no": line.get("row_no"),
-        "text": line["raw"],
-        "markdown": markdown_line,
-        "rotation": line["rotation"],
-        "font_size": font_size,
-        "rotation_axis": line["rotation_axis"],
-        "rotation_ratio": baseline.get("ratio"),
-        "x": _round_float(position.get("x")),
-        "y": _round_float(position.get("y")),
-        "x_ratio": _round_float(position.get("x_ratio")),
-        "y_ratio": _round_float(position.get("y_ratio")),
-        "font_family": line.get("font_family"),
-        "size": font_size,
-        "span_count": line.get("span_count", 0),
-        "color": line.get("color"),
-        "bbox": line.get("bbox"),
-        "position": {
-            "baseline": baseline,
-        },
-        "page": line["page"],
-        "source": line.get("source"),
     }
 
 
@@ -4277,21 +4259,21 @@ def read_pdf(
                 "header": _sanitize_text(
                     "\n".join(
                         _safe_text_list(
-                            item["markdown"] for item in sections["header"]["items"] if item["removed"]
+                            item["text"] for item in sections["header"]["items"] if item["removed"]
                         )
                     )
                 ),
                 "footer": _sanitize_text(
                     "\n".join(
                         _safe_text_list(
-                            item["markdown"] for item in sections["footer"]["items"] if item["removed"]
+                            item["text"] for item in sections["footer"]["items"] if item["removed"]
                         )
                     )
                 ),
                 "watermark": _sanitize_text(
                     "\n".join(
                         _safe_text_list(
-                            item["markdown"] for item in sections["watermark"]["items"] if item["removed"]
+                            item["text"] for item in sections["watermark"]["items"] if item["removed"]
                         )
                     )
                 ),
