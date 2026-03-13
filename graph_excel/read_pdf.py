@@ -3485,8 +3485,8 @@ def _write_reconstructed_page_pdf(
                     continue
                 if item[0] in fill_ops:
                     has_fill_op = True
-                if isinstance(item[0], str):
-                    op_counts[item[0]] += 1
+                    if isinstance(item[0], str):
+                        op_counts[item[0]] += 1
 
             if debug:
                 _LOGGER.debug(
@@ -3643,24 +3643,23 @@ def _write_reconstructed_page_pdf(
                                 op,
                                 page_no,
                             )
-                        try:
-                            shape.finish(
-                                color=stroke_color,
-                                fill=fill_color,
-                                width=line_width,
-                                closePath=drawing.get("closePath", True),
-                                fill_opacity=fill_opacity,
-                                stroke_opacity=stroke_opacity,
-                                dashes=drawing.get("dashes"),
-                                lineCap=drawing.get("lineCap"),
-                                lineJoin=drawing.get("lineJoin"),
-                                miterLimit=drawing.get("miterLimit", 1),
-                            )
-                            shape.commit()
-                            if debug:
-                                _LOGGER.debug(
-                                    "Drawing[%s] shape.finish+commit success on op=%s",
-                                    drawing_index,
+                try:
+                    shape.finish(
+                        color=stroke_color,
+                        fill=fill_color,
+                        width=line_width,
+                        closePath=drawing.get("closePath", True),
+                        fill_opacity=fill_opacity,
+                        stroke_opacity=stroke_opacity,
+                        dashes=drawing.get("dashes"),
+                        lineCap=drawing.get("lineCap"),
+                        lineJoin=drawing.get("lineJoin"),
+                    )
+                    shape.commit()
+                    if debug:
+                        _LOGGER.debug(
+                            "Drawing[%s] shape.finish+commit success on op=%s",
+                            drawing_index,
                                     op,
                                 )
                         except TypeError as exc:
@@ -3719,7 +3718,6 @@ def _write_reconstructed_page_pdf(
                                 dashes=drawing.get("dashes"),
                                 lineCap=drawing.get("lineCap"),
                                 lineJoin=drawing.get("lineJoin"),
-                                miterLimit=drawing.get("miterLimit", 1),
                             )
                             shape.commit()
                             if debug:
