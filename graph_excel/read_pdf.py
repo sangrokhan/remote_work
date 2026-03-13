@@ -1,4 +1,5 @@
 import argparse
+import os
 import json
 import logging
 import math
@@ -42,11 +43,109 @@ _KOREAN_FONT_HINTS = (
     "/Library/Fonts/AppleGothic.ttf",
     "/Library/Fonts/AppleMyungjo.ttf",
     "C:/Windows/Fonts/malgun.ttf",
+    "C:/Windows/Fonts/Malgun.ttf",
+    "C:/Windows/Fonts/malgun.ttc",
+    "C:/Windows/Fonts/malgungothic.ttf",
+    "C:/Windows/Fonts/malgungothicb.ttf",
+    "C:/Windows/Fonts/malgungothicbd.ttf",
     "C:/Windows/Fonts/malgunbd.ttf",
     "C:/Windows/Fonts/malgunb.ttf",
     "C:/Windows/Fonts/NanumGothic.ttf",
+    "C:/Windows/Fonts/NanumMyeongjo.ttf",
+    "C:/Windows/Fonts/나눔고딕.ttf",
 )
 _RECONSTRUCTION_KOREAN_FONT = None
+
+
+def _get_registry_korean_font_candidates(font_markers):
+    if os.name != "nt":
+        return tuple()
+
+    try:
+        import winreg  # type: ignore
+    except Exception:
+        return tuple()
+
+    markers = tuple(_normalize_font_match_key(marker) for marker in font_markers)
+    marker_set = tuple(m for m in markers if m)
+    if not marker_set:
+        return tuple()
+
+    possible_roots = (
+        os.environ.get("WINDIR"),
+        os.environ.get("SYSTEMROOT"),
+        os.environ.get("windir"),
+        os.environ.get("systemroot"),
+    )
+
+    registry_root_candidates = (
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts",
+        "SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\Fonts",
+    )
+    root_dirs = []
+    for env_root in possible_roots:
+        if env_root:
+            root_dirs.append(Path(env_root) / "Fonts")
+    root_dirs.extend([Path("C:/Windows/Fonts"), Path("C:/WINNT/Fonts"), Path("/mnt/c/Windows/Fonts")])
+    root_dirs = [path for path in root_dirs if isinstance(path, Path) and path.is_dir()]
+    if not root_dirs:
+        return tuple()
+
+    found = []
+    for key_path in registry_root_candidates:
+        key = None
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+        except OSError:
+            continue
+        index = 0
+        try:
+            while True:
+                try:
+                    value_name, value_data, _ = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                index += 1
+
+                if not isinstance(value_data, str):
+                    continue
+                if not value_data:
+                    continue
+
+                target_value = _normalize_font_match_key(value_name) + _normalize_font_match_key(value_data)
+                if not any(marker in target_value for marker in marker_set):
+                    continue
+
+                data_path = Path(value_data)
+                candidate_paths = []
+                if data_path.is_absolute():
+                    candidate_paths.append(data_path)
+                else:
+                    for root_dir in root_dirs:
+                        candidate_paths.append(root_dir / value_data)
+
+                for candidate in candidate_paths:
+                    try:
+                        if candidate.is_file():
+                            found.append(str(candidate))
+                    except OSError:
+                        continue
+        finally:
+            try:
+                winreg.CloseKey(key)
+            except Exception:
+                pass
+
+    return tuple(found)
+
+
+def _normalize_font_match_key(value):
+    if value is None:
+        return ""
+
+    normalized = str(value).lower()
+    normalized = normalized.replace("-", "").replace("_", "")
+    return "".join(ch for ch in normalized if not ch.isspace())
 
 
 def _contains_korean(text):
@@ -69,13 +168,52 @@ def _contains_korean(text):
     return False
 
 
-def _get_reconstruct_fontfile():
+def _get_reconstruct_fontfile(fontfile_override=None):
     global _RECONSTRUCTION_KOREAN_FONT
+
+    if fontfile_override:
+        override_path = Path(fontfile_override)
+        if override_path.is_file():
+            return str(override_path)
+        _LOGGER.warning(
+            "Provided reconstruction fontfile does not exist or is not a file: %s",
+            fontfile_override,
+        )
 
     if _RECONSTRUCTION_KOREAN_FONT is not None:
         return _RECONSTRUCTION_KOREAN_FONT
 
     for font_path in _KOREAN_FONT_HINTS:
+        try:
+            if Path(font_path).is_file():
+                _RECONSTRUCTION_KOREAN_FONT = str(font_path)
+                return _RECONSTRUCTION_KOREAN_FONT
+        except OSError:
+            continue
+
+    for font_path in _get_registry_korean_font_candidates(font_name_markers=(
+        "noto",
+        "nanum",
+        "malgun",
+        "malgungothic",
+        "맑은고딕",
+        "나눔",
+        "applegothic",
+        "applegothicneoregular",
+        "batang",
+        "gulim",
+        "dotum",
+        "msung",
+        "msjh",
+        "msyhl",
+        "hei",
+        "microsoftyi",
+        "wqy",
+        "sourcehans",
+        "yoon",
+        "seoul",
+        "gothic",
+    )):
         try:
             if Path(font_path).is_file():
                 _RECONSTRUCTION_KOREAN_FONT = str(font_path)
@@ -89,16 +227,23 @@ def _get_reconstruct_fontfile():
         "/Library/Fonts",
         "/System/Library/Fonts",
         "C:/Windows/Fonts",
+        "C:/WINNT/Fonts",
+        "/mnt/c/Windows/Fonts",
+        "/mnt/c/WINNT/Fonts",
     )
-    font_name_markers = (
+    font_name_markers = tuple(
+        _normalize_font_match_key(marker) for marker in (
         "noto",
         "nanum",
         "malgun",
+        "malgungothic",
+        "맑은고딕",
         "applegothic",
         "applegothicneoregular",
         "batang",
         "gulim",
         "dotum",
+        "gulim",
         "msung",
         "msjh",
         "msyhl",
@@ -106,6 +251,10 @@ def _get_reconstruct_fontfile():
         "microsoftyi",
         "wqy",
         "sourcehans",
+        "yoon",
+        "seoul",
+        "gothic",
+        )
     )
     for root_path in search_roots:
         try:
@@ -118,7 +267,7 @@ def _get_reconstruct_fontfile():
         for ext in ("*.ttf", "*.ttc", "*.otf"):
             for path in root.rglob(ext):
                 try:
-                    path_str = str(path).lower()
+                    path_str = _normalize_font_match_key(path)
                 except OSError:
                     continue
                 if any(marker in path_str for marker in font_name_markers):
@@ -127,6 +276,21 @@ def _get_reconstruct_fontfile():
                         return _RECONSTRUCTION_KOREAN_FONT
                     except OSError:
                         continue
+            for path in root.rglob("*"):
+                try:
+                    if not path.is_file():
+                        continue
+                    if path.suffix.lower() not in {".ttf", ".ttc", ".otf"}:
+                        continue
+                except OSError:
+                    continue
+                try:
+                    name = _normalize_font_match_key(path)
+                except OSError:
+                    continue
+                if any(marker in name for marker in font_name_markers):
+                    _RECONSTRUCTION_KOREAN_FONT = str(path)
+                    return _RECONSTRUCTION_KOREAN_FONT
 
     _RECONSTRUCTION_KOREAN_FONT = ""
     return _RECONSTRUCTION_KOREAN_FONT
@@ -1468,8 +1632,14 @@ def _iter_text_dict_lines(raw_text):
             yield line_no, line
 
 
-def _ensure_page_font_resource(rendered_pdf, source_path, page_no, debug=False):
-    fontfile_for_korean = _get_reconstruct_fontfile()
+def _ensure_page_font_resource(
+    rendered_pdf,
+    source_path,
+    page_no,
+    korean_fontfile=None,
+    debug=False,
+):
+    fontfile_for_korean = _get_reconstruct_fontfile(fontfile_override=korean_fontfile)
     korean_fontname = None
     if not fontfile_for_korean:
         if debug:
@@ -3173,6 +3343,7 @@ def _write_reconstructed_page_pdf(
     watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
     header_ratio=0.08,
     footer_ratio=0.08,
+    korean_fontfile=None,
     debug=False,
 ):
     page_no = int(page_no)
@@ -3279,11 +3450,12 @@ def _write_reconstructed_page_pdf(
             width=0,
         )
 
-        fontfile_for_korean = _get_reconstruct_fontfile()
+        fontfile_for_korean = _get_reconstruct_fontfile(fontfile_override=korean_fontfile)
         korean_fontname = _ensure_page_font_resource(
             rendered_pdf=rendered_pdf,
             source_path=source_path,
             page_no=page_no,
+            korean_fontfile=korean_fontfile,
             debug=debug,
         )
 
@@ -3416,6 +3588,7 @@ def _write_reconstructed_pages_pdf(
     watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
     header_ratio=0.08,
     footer_ratio=0.08,
+    korean_fontfile=None,
     debug=False,
 ):
     if not page_numbers:
@@ -3441,6 +3614,7 @@ def _write_reconstructed_pages_pdf(
                     watermark_tolerance=watermark_tolerance,
                     header_ratio=header_ratio,
                     footer_ratio=footer_ratio,
+                    korean_fontfile=korean_fontfile,
                     debug=debug,
                 )
 
@@ -3999,6 +4173,12 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--reconstruction-fontfile",
+        default=None,
+        metavar="PATH",
+        help="Optional font file to use for Korean fallback during --reconstruction.",
+    )
+    parser.add_argument(
         "--table-mode",
         default="auto",
         choices=("auto", "default", "lines", "text"),
@@ -4043,6 +4223,8 @@ def main():
     if args.reconstruction:
         if args.output is None:
             raise SystemExit("--reconstruction requires --output.")
+        if args.reconstruction_fontfile and not Path(args.reconstruction_fontfile).is_file():
+            raise SystemExit(f"Invalid --reconstruction-fontfile path: {args.reconstruction_fontfile}")
 
         try:
             requested_pages = _parse_pages(args.pages)
@@ -4062,6 +4244,7 @@ def main():
                 watermark_tolerance=args.watermark_angle_tolerance,
                 header_ratio=args.header_ratio,
                 footer_ratio=args.footer_ratio,
+                korean_fontfile=args.reconstruction_fontfile,
                 debug=args.debug or args.table_debug,
             )
         except Exception as exc:
