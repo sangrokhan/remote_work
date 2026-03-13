@@ -148,6 +148,78 @@ def _normalize_font_match_key(value):
     return "".join(ch for ch in normalized if not ch.isspace())
 
 
+def _normalize_windows_drive_path(relative_path):
+    parts = [
+        part
+        for part in str(relative_path).replace("\\", "/").split("/")
+        if part
+    ]
+    if not parts:
+        return ""
+
+    head = parts[0].lower()
+    if head == "windows":
+        parts[0] = "Windows"
+        if len(parts) >= 2 and parts[1].lower() == "fonts":
+            parts[1] = "Fonts"
+    elif head == "winnt":
+        parts[0] = "WINNT"
+        if len(parts) >= 2 and parts[1].lower() == "fonts":
+            parts[1] = "Fonts"
+
+    return "/".join(parts)
+
+
+def _normalize_font_path_candidates(fontfile):
+    if not fontfile:
+        return []
+
+    raw = str(fontfile).strip()
+    if not raw:
+        return []
+
+    candidates = []
+    seen = set()
+
+    def add_candidate(value):
+        if not value:
+            return
+        text = str(value).strip()
+        if not text:
+            return
+        if text in seen:
+            return
+        seen.add(text)
+        candidates.append(text)
+
+    initial_variants = [
+        raw,
+        str(Path(raw)),
+        os.fspath(Path(raw).expanduser()),
+        os.path.normpath(raw),
+        os.path.normpath(str(Path(raw).expanduser())),
+    ]
+    for variant in initial_variants:
+        add_candidate(variant)
+
+    expanded = list(candidates)
+    for value in expanded:
+        add_candidate(value.replace("/", "\\"))
+        add_candidate(value.replace("\\", "/"))
+
+    if os.name != "nt":
+        drive_match = re.match(r"^([a-zA-Z]):[/\\\\](.*)$", raw)
+        if drive_match:
+            drive = drive_match.group(1).lower()
+            relative = drive_match.group(2).replace("\\", "/").lstrip("/")
+            add_candidate(f"/mnt/{drive}/{relative}")
+            normalized_relative = _normalize_windows_drive_path(relative)
+            if normalized_relative and normalized_relative != relative:
+                add_candidate(f"/mnt/{drive}/{normalized_relative}")
+
+    return candidates
+
+
 def _contains_korean(text):
     for ch in text:
         codepoint = ord(ch)
@@ -1641,15 +1713,6 @@ def _ensure_page_font_resource(
 ):
     fontfile_for_korean = _get_reconstruct_fontfile(fontfile_override=korean_fontfile)
     korean_fontname = None
-    if not fontfile_for_korean:
-        if debug:
-            _LOGGER.debug(
-                "No Korean fallback fontfile found; text may use Latin-only fonts: source=%s page=%s",
-                source_path,
-                page_no,
-            )
-        return None
-
     if not hasattr(rendered_pdf, "insert_font"):
         if debug:
             _LOGGER.debug(
@@ -1660,55 +1723,178 @@ def _ensure_page_font_resource(
             )
         return None
 
-    try:
-        korean_fontname = rendered_pdf.insert_font(
-            fontname="reconstruct_korean",
-            fontfile=fontfile_for_korean,
-        )
-        if debug:
-            _LOGGER.debug(
-                "Registered Korean fallback fontname=%s fontfile=%s source=%s page=%s",
-                korean_fontname,
-                fontfile_for_korean,
-                source_path,
-                page_no,
-            )
-        if not korean_fontname:
-            if debug:
-                _LOGGER.debug(
-                    "insert_font returned empty name for fallback fontfile=%s source=%s page=%s",
-                    fontfile_for_korean,
-                    source_path,
-                    page_no,
-                )
-    except TypeError:
-        try:
-            with open(fontfile_for_korean, "rb") as font_handle:
-                font_bytes = font_handle.read()
-            korean_fontname = rendered_pdf.insert_font(
-                fontname="reconstruct_korean",
-                fontbuffer=font_bytes,
-            )
-        except Exception as exc:
-            if debug:
-                _LOGGER.debug(
-                    "Failed to register fallback Korean font via buffer path=%s source=%s page=%s error=%s",
-                    fontfile_for_korean,
-                    source_path,
-                    page_no,
-                    exc,
-                )
-    except Exception as exc:
-        if debug:
-            _LOGGER.debug(
-                "Failed to register fallback Korean fontfile=%s source=%s page=%s error=%s",
-                fontfile_for_korean,
-                source_path,
-                page_no,
-                exc,
-            )
-    return korean_fontname
+    font_candidates = []
+    seen_candidates = set()
 
+    def add_font_candidate(value):
+        for candidate in _normalize_font_path_candidates(value):
+            try:
+                if candidate not in seen_candidates:
+                    font_candidates.append(candidate)
+                    seen_candidates.add(candidate)
+            except TypeError:
+                continue
+
+    if korean_fontfile:
+        add_font_candidate(korean_fontfile)
+    if fontfile_for_korean:
+        add_font_candidate(fontfile_for_korean)
+
+    # add explicit static hints and registry candidates as backup when override is missing or invalid
+    for candidate in _KOREAN_FONT_HINTS:
+        add_font_candidate(candidate)
+
+    for candidate in _get_registry_korean_font_candidates(
+        font_name_markers=(
+            "noto",
+            "nanum",
+            "malgun",
+            "malgungothic",
+            "맑은고딕",
+            "나눔",
+            "applegothic",
+            "applegothicneoregular",
+            "batang",
+            "gulim",
+            "dotum",
+            "msung",
+            "msjh",
+            "msyhl",
+            "hei",
+            "microsoftyi",
+            "wqy",
+            "sourcehans",
+            "yoon",
+            "seoul",
+            "gothic",
+        )
+    ):
+        add_font_candidate(candidate)
+
+    if not font_candidates:
+        if debug:
+            _LOGGER.debug(
+                "No Korean fallback fontfile found; text may use Latin-only fonts: source=%s page=%s",
+                source_path,
+                page_no,
+            )
+        return None
+
+    font_name = "reconstruct_korean"
+    for fontfile in font_candidates:
+        if not fontfile:
+            continue
+        try:
+            font_path = Path(fontfile)
+            if not font_path.is_file():
+                if debug:
+                    _LOGGER.debug(
+                        "Fallback font path is not a file: %s source=%s page=%s",
+                        fontfile,
+                        source_path,
+                        page_no,
+                    )
+                continue
+            font_bytes = None
+            candidate_used = None
+
+            # Try path-based insert first (faster path for normal installations)
+            try:
+                korean_fontname = rendered_pdf.insert_font(
+                    fontname=font_name,
+                    fontfile=str(font_path),
+                )
+                candidate_used = str(font_path)
+            except TypeError:
+                # older versions may not accept fontfile keyword
+                pass
+            except Exception as exc:
+                if debug:
+                    _LOGGER.debug(
+                        "Font insert with fontfile failed: candidate=%s source=%s page=%s error=%s",
+                        font_path,
+                        source_path,
+                        page_no,
+                        exc,
+                    )
+
+            if not korean_fontname:
+                try:
+                    if font_bytes is None:
+                        with open(font_path, "rb") as font_handle:
+                            font_bytes = font_handle.read()
+                    korean_fontname = rendered_pdf.insert_font(
+                        fontname=font_name,
+                        fontbuffer=font_bytes,
+                    )
+                    candidate_used = str(font_path)
+                except TypeError:
+                    pass
+                except Exception as exc:
+                    if debug:
+                        _LOGGER.debug(
+                            "Font insert with fontbuffer failed: candidate=%s source=%s page=%s error=%s",
+                            font_path,
+                            source_path,
+                            page_no,
+                            exc,
+                        )
+
+            if not korean_fontname:
+                try:
+                    if font_bytes is None:
+                        with open(font_path, "rb") as font_handle:
+                            font_bytes = font_handle.read()
+                    korean_fontname = rendered_pdf.insert_font(
+                        fontname=font_name,
+                        fontbuffer=font_bytes,
+                        set_simple=False,
+                    )
+                    candidate_used = str(font_path)
+                except TypeError:
+                    pass
+                except Exception as exc:
+                    if debug:
+                        _LOGGER.debug(
+                            "Font insert with fontbuffer(set_simple=False) failed: candidate=%s source=%s page=%s error=%s",
+                            font_path,
+                            source_path,
+                            page_no,
+                            exc,
+                        )
+
+            if korean_fontname:
+                if debug:
+                    _LOGGER.debug(
+                        "Registered Korean fallback fontname=%s fontfile=%s source=%s page=%s",
+                        korean_fontname,
+                        candidate_used,
+                        source_path,
+                        page_no,
+                    )
+                return korean_fontname
+        except OSError:
+            continue
+
+    if debug:
+        _LOGGER.debug(
+            "Failed to register fallback Korean font: attempted candidates=%s source=%s page=%s",
+            font_candidates,
+            source_path,
+            page_no,
+        )
+    if debug:
+        _LOGGER.debug(
+            "Fallback fontfile registration failed; using fallback fontname=%s for source=%s page=%s",
+            "helv",
+            source_path,
+            page_no,
+        )
+
+    # Return a safe baseline font as final fallback. `None` is not returned here so
+    # reconstruction drawing can proceed using a known latin font while still
+    # attempting Korean fallback registration when possible.
+    return "helv"
 
 
 
