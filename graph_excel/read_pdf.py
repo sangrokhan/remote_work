@@ -30,6 +30,106 @@ _BULLET_REPLACEMENTS = {
     "★": "-",
 }
 
+_KOREAN_FONT_HINTS = (
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJKkr-Regular.otf",
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumMyeongjo.ttf",
+    "/usr/share/fonts/truetype/arphic/uming.ttc",
+    "/System/Library/Fonts/Supplemental/AppleSDGothicNeo.ttc",
+    "/Library/Fonts/AppleGothic.ttf",
+    "/Library/Fonts/AppleMyungjo.ttf",
+    "C:/Windows/Fonts/malgun.ttf",
+    "C:/Windows/Fonts/malgunbd.ttf",
+    "C:/Windows/Fonts/malgunb.ttf",
+    "C:/Windows/Fonts/NanumGothic.ttf",
+)
+_RECONSTRUCTION_KOREAN_FONT = None
+
+
+def _contains_korean(text):
+    for ch in text:
+        codepoint = ord(ch)
+        if (
+            0x1100 <= codepoint <= 0x11FF
+            or 0x3130 <= codepoint <= 0x318F
+            or 0xAC00 <= codepoint <= 0xD7A3
+            or 0x2E80 <= codepoint <= 0x2FD5
+            or 0x2FF0 <= codepoint <= 0x2FFF
+            or 0x3000 <= codepoint <= 0x303F
+            or 0x31C0 <= codepoint <= 0x31EF
+            or 0xF900 <= codepoint <= 0xFAFF
+            or 0xFE30 <= codepoint <= 0xFE4F
+            or 0x20000 <= codepoint <= 0x2FA1F
+            or 0x2F800 <= codepoint <= 0x2FA1F
+        ):
+            return True
+    return False
+
+
+def _get_reconstruct_fontfile():
+    global _RECONSTRUCTION_KOREAN_FONT
+
+    if _RECONSTRUCTION_KOREAN_FONT is not None:
+        return _RECONSTRUCTION_KOREAN_FONT
+
+    for font_path in _KOREAN_FONT_HINTS:
+        try:
+            if Path(font_path).is_file():
+                _RECONSTRUCTION_KOREAN_FONT = str(font_path)
+                return _RECONSTRUCTION_KOREAN_FONT
+        except OSError:
+            continue
+
+    search_roots = (
+        "/usr/share/fonts",
+        "/usr/local/share/fonts",
+        "/Library/Fonts",
+        "/System/Library/Fonts",
+        "C:/Windows/Fonts",
+    )
+    font_name_markers = (
+        "noto",
+        "nanum",
+        "malgun",
+        "applegothic",
+        "applegothicneoregular",
+        "batang",
+        "gulim",
+        "dotum",
+        "msung",
+        "msjh",
+        "msyhl",
+        "hei",
+        "microsoftyi",
+        "wqy",
+        "sourcehans",
+    )
+    for root_path in search_roots:
+        try:
+            root = Path(root_path)
+            if not root.is_dir():
+                continue
+        except OSError:
+            continue
+
+        for ext in ("*.ttf", "*.ttc", "*.otf"):
+            for path in root.rglob(ext):
+                try:
+                    path_str = str(path).lower()
+                except OSError:
+                    continue
+                if any(marker in path_str for marker in font_name_markers):
+                    try:
+                        _RECONSTRUCTION_KOREAN_FONT = str(path)
+                        return _RECONSTRUCTION_KOREAN_FONT
+                    except OSError:
+                        continue
+
+    _RECONSTRUCTION_KOREAN_FONT = ""
+    return _RECONSTRUCTION_KOREAN_FONT
+
 
 def _normalize_bullets(text):
     if not text:
@@ -3358,6 +3458,253 @@ def _write_reconstructed_page_pdf(
             except (TypeError, ValueError):
                 return 0.0
 
+        def _render_drawing(drawing):
+            if not isinstance(drawing, dict):
+                return
+
+            stroke_color = _normalize_color(drawing.get("color"), default=(0.0, 0.0, 0.0))
+            fill_color_raw = drawing.get("fill")
+            fill_color = _normalize_color(fill_color_raw) if fill_color_raw is not None else None
+            line_width = drawing.get("linewidth", 1.0)
+            try:
+                line_width = float(line_width) if float(line_width) > 0 else 0.5
+            except (TypeError, ValueError):
+                line_width = 0.5
+
+            stroke_opacity = drawing.get("stroke_opacity", 1.0)
+            fill_opacity = drawing.get("fill_opacity", 1.0)
+            try:
+                stroke_opacity = float(stroke_opacity)
+            except (TypeError, ValueError):
+                stroke_opacity = 1.0
+            try:
+                fill_opacity = float(fill_opacity)
+            except (TypeError, ValueError):
+                fill_opacity = 1.0
+
+            items = drawing.get("items")
+            if not isinstance(items, list):
+                return
+
+            # Fast path: for filled drawing, use PyMuPDF Shape API when available
+            use_shape = fill_color is not None and hasattr(out_page, "new_shape")
+            if use_shape:
+                try:
+                    shape = out_page.new_shape()
+                except Exception:
+                    use_shape = False
+                    shape = None
+
+                if use_shape:
+                    current = None
+                    for item in items:
+                        if not item:
+                            continue
+                        op = item[0]
+                        args = item[1:]
+
+                        if op == "m":
+                            point = _to_point_from_args(args)
+                            if point is not None:
+                                shape.move_to(point[0], point[1])
+                                current = point
+                            continue
+
+                        if op == "l":
+                            point = _to_point_from_args(args)
+                            if current is not None and point is not None:
+                                shape.line_to(point[0], point[1])
+                                current = point
+                            continue
+
+                        if op == "c":
+                            p3 = _to_point_from_args(args[-2:]) if len(args) >= 2 else None
+                            if current is not None and p3 is not None:
+                                p1 = _to_point_from_args(args[0:2]) if len(args) >= 2 else current
+                                p2 = _to_point_from_args(args[2:4]) if len(args) >= 4 else current
+                                if p1 is not None and p2 is not None:
+                                    shape.curve_to(
+                                        p1[0], p1[1],
+                                        p2[0], p2[1],
+                                        p3[0], p3[1],
+                                    )
+                                    current = p3
+                                else:
+                                    shape.line_to(p3[0], p3[1])
+                                    current = p3
+                            elif p3 is not None:
+                                shape.line_to(p3[0], p3[1])
+                                current = p3
+                            continue
+
+                        if op in ("v", "y"):
+                            point = _to_point_from_args(args)
+                            if point is not None:
+                                if current is not None:
+                                    shape.line_to(point[0], point[1])
+                                current = point
+                            continue
+
+                        if op == "h":
+                            try:
+                                shape.close_path()
+                            except Exception:
+                                pass
+                            current = None
+                            continue
+
+                        if op == "re":
+                            rect_values = _to_rect(args)
+                            if rect_values is None:
+                                continue
+                            x0, y0, x1, y1 = rect_values
+                            if x1 == x0 or y1 == y0:
+                                continue
+                            try:
+                                shape.draw_rect(pymupdf.Rect(x0, y0, x1, y1))
+                            except Exception:
+                                continue
+                            current = None
+                            continue
+
+                        if op in ("f", "F", "f*", "b", "B", "b*"):
+                            try:
+                                shape.finish(
+                                    color=stroke_color,
+                                    fill=fill_color,
+                                    width=line_width,
+                                    closePath=drawing.get("closePath", True),
+                                    fill_opacity=fill_opacity,
+                                    stroke_opacity=stroke_opacity,
+                                    dashes=drawing.get("dashes"),
+                                    lineCap=drawing.get("lineCap"),
+                                    lineJoin=drawing.get("lineJoin"),
+                                    miterLimit=drawing.get("miterLimit", 1),
+                                )
+                                shape.commit()
+                            except TypeError:
+                                shape.finish(color=stroke_color, fill=fill_color, width=line_width)
+                                shape.commit()
+                            except Exception:
+                                use_shape = False
+                            break
+
+                    if use_shape:
+                        if hasattr(shape, "close"):
+                            try:
+                                shape.close()
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                shape.finish(
+                                    color=stroke_color,
+                                    fill=fill_color,
+                                    closePath=drawing.get("closePath", True),
+                                    width=line_width,
+                                    fill_opacity=fill_opacity,
+                                    stroke_opacity=stroke_opacity,
+                                    dashes=drawing.get("dashes"),
+                                    lineCap=drawing.get("lineCap"),
+                                    lineJoin=drawing.get("lineJoin"),
+                                    miterLimit=drawing.get("miterLimit", 1),
+                                )
+                                shape.commit()
+                            except Exception:
+                                pass
+                        return
+
+            # fallback: previous lightweight path (strokes/rects)
+            current = None
+            for item in items:
+                if not item:
+                    continue
+                op = item[0]
+                args = item[1:]
+
+                if op == "m":
+                    current = _to_point_from_args(args)
+                    continue
+
+                if op == "l":
+                    target = _to_point_from_args(args)
+                    if current is not None and target is not None:
+                        try:
+                            if target[0] != current[0] or target[1] != current[1]:
+                                out_page.draw_line(
+                                    pymupdf.Point(current[0], current[1]),
+                                    pymupdf.Point(target[0], target[1]),
+                                    color=stroke_color,
+                                    width=line_width,
+                                )
+                        except Exception:
+                            pass
+                    current = target
+                    continue
+
+                if op in ("v", "y"):
+                    current = _to_point_from_args(args)
+                    continue
+
+                if op == "h":
+                    current = None
+                    continue
+
+                if op == "c":
+                    target = _to_point_from_args(args)
+                    if current is not None and target is not None:
+                        try:
+                            out_page.draw_line(
+                                pymupdf.Point(current[0], current[1]),
+                                pymupdf.Point(target[0], target[1]),
+                                color=stroke_color,
+                                width=line_width,
+                            )
+                        except Exception:
+                            pass
+                    current = target
+                    continue
+
+                if op == "re" and len(args) == 4:
+                    rect_values = _to_rect(args)
+                    if not rect_values:
+                        continue
+                    x0, y0, x1, y1 = rect_values
+                    if x1 == x0 or y1 == y0:
+                        continue
+                    if fill_color is not None:
+                        try:
+                            out_page.draw_rect(
+                                pymupdf.Rect(x0, y0, x1, y1),
+                                color=stroke_color,
+                                width=line_width,
+                                fill=fill_color,
+                                fill_opacity=fill_opacity if fill_opacity else 1.0,
+                            )
+                        except TypeError:
+                            try:
+                                out_page.draw_rect(
+                                    pymupdf.Rect(x0, y0, x1, y1),
+                                    color=stroke_color,
+                                    width=line_width,
+                                    fill=fill_color,
+                                )
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            out_page.draw_rect(
+                                pymupdf.Rect(x0, y0, x1, y1),
+                                color=stroke_color,
+                                width=line_width,
+                                fill=None,
+                            )
+                        except Exception:
+                            pass
+                    continue
+
         raw_text = page.get_text("dict", sort=True)
         drawings = page.get_drawings()
         images = page.get_images(full=True)
@@ -3421,90 +3768,24 @@ def _write_reconstructed_page_pdf(
                     continue
 
         for drawing in drawings:
-            if not isinstance(drawing, dict):
-                continue
-
-            stroke_color = _normalize_color(drawing.get("color"), default=(0.0, 0.0, 0.0))
-            fill_color = _normalize_color(drawing.get("fill"), default=None)
-            line_width = drawing.get("linewidth", 1.0)
-            try:
-                line_width = float(line_width) if float(line_width) > 0 else 0.5
-            except (TypeError, ValueError):
-                line_width = 0.5
-
-            items = drawing.get("items")
-            if not isinstance(items, list):
-                continue
-
-            current = None
-            for item in items:
-                if not item:
-                    continue
-                op = item[0]
-                args = item[1:]
-
-                if op == "m":
-                    current = _to_point_from_args(args)
-                    continue
-
-                if op == "l":
-                    target = _to_point_from_args(args)
-                    if current is not None and target is not None:
-                        try:
-                            if target[0] != current[0] or target[1] != current[1]:
-                                out_page.draw_line(
-                                    pymupdf.Point(current[0], current[1]),
-                                    pymupdf.Point(target[0], target[1]),
-                                    color=stroke_color,
-                                    width=line_width,
-                                )
-                        except Exception:
-                            pass
-                    current = target
-                    continue
-
-                if op in ("v", "y"):
-                    current = _to_point_from_args(args)
-                    continue
-
-                if op == "h":
-                    current = None
-                    continue
-
-                if op == "c":
-                    target = _to_point_from_args(args)
-                    if current is not None and target is not None:
-                        try:
-                            out_page.draw_line(
-                                pymupdf.Point(current[0], current[1]),
-                                pymupdf.Point(target[0], target[1]),
-                                color=stroke_color,
-                                width=line_width,
-                            )
-                        except Exception:
-                            pass
-                    current = target
-                    continue
-
-                if op == "re" and len(args) == 4:
-                    rect_values = _to_rect(args)
-                    if not rect_values:
-                        continue
-                    x0, y0, x1, y1 = rect_values
-                    if x1 == x0 or y1 == y0:
-                        continue
-                    try:
-                        out_page.draw_rect(
-                            pymupdf.Rect(x0, y0, x1, y1),
-                            color=stroke_color,
-                            width=line_width,
-                            fill=fill_color,
-                        )
-                    except Exception:
-                        continue
-                    continue
+            _render_drawing(drawing)
 
         raw_blocks = raw_text.get("blocks") if isinstance(raw_text, dict) else []
+        fontfile_for_korean = _get_reconstruct_fontfile()
+        fontfile_supported = bool(fontfile_for_korean)
+        if debug and fontfile_for_korean:
+            _LOGGER.debug(
+                "Reconstruct using Korean fallback fontfile=%s for page=%s",
+                fontfile_for_korean,
+                page_no,
+            )
+        if debug and not fontfile_for_korean:
+            _LOGGER.debug(
+                "No Korean fallback fontfile found; text may be rendered with Latin-only fonts: source=%s page=%s",
+                source_path,
+                page_no,
+            )
+
         for block in raw_blocks:
             if not isinstance(block, dict) or block.get("type") != 0:
                 continue
@@ -3548,6 +3829,7 @@ def _write_reconstructed_page_pdf(
                     font = (span.get("font") or "helv").strip() or "helv"
                     rotate = _to_rotation(span.get("dir"))
                     inserted = False
+                    use_fontfile = fontfile_supported and _contains_korean(text)
 
                     for font_name in (font, "helv"):
                         for angle in (rotate, 0.0):
@@ -3561,6 +3843,28 @@ def _write_reconstructed_page_pdf(
                                     rotate=angle,
                                 )
                                 inserted = True
+                                break
+                            except Exception:
+                                continue
+                        if inserted:
+                            break
+
+                    if not inserted and use_fontfile:
+                        for angle in (rotate, 0.0):
+                            try:
+                                out_page.insert_text(
+                                    point,
+                                    text,
+                                    fontfile=fontfile_for_korean,
+                                    fontsize=size,
+                                    color=color,
+                                    rotate=angle,
+                                )
+                                inserted = True
+                                break
+                            except TypeError:
+                                fontfile_supported = False
+                                use_fontfile = False
                                 break
                             except Exception:
                                 continue
