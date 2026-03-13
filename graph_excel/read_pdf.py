@@ -57,7 +57,12 @@ _KOREAN_FONT_HINTS = (
 _RECONSTRUCTION_KOREAN_FONT = None
 
 
-def _get_registry_korean_font_candidates(font_markers):
+def _get_registry_korean_font_candidates(font_markers=None, font_name_markers=None):
+    if font_markers is None and font_name_markers is not None:
+        font_markers = font_name_markers
+    if font_markers is None:
+        return tuple()
+
     if os.name != "nt":
         return tuple()
 
