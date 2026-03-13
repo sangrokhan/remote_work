@@ -3362,6 +3362,11 @@ def _write_reconstructed_page_pdf(
     source_path,
     page_no,
     output_path,
+    remove_watermark=False,
+    watermark_patterns=None,
+    watermark_ratio=0.6,
+    header_ratio=0.08,
+    footer_ratio=0.08,
     debug=False,
 ):
     page_no = int(page_no)
@@ -3376,6 +3381,120 @@ def _write_reconstructed_page_pdf(
 
         page = doc[page_no - 1]
         source_text = str(source_path)
+        watermark_line_bboxes = []
+        watermark_skip_stats = {
+            "enabled": bool(remove_watermark),
+            "total_lines": 0,
+            "watermark_lines": 0,
+            "watermark_line_ratio": 0.0,
+            "watermark_rotation": 0,
+            "watermark_bbox_count": 0,
+            "span_skip_count": 0,
+            "span_total_count": 0,
+        }
+
+        if remove_watermark:
+            try:
+                target_lines = _extract_page_lines(
+                    page,
+                    page_no,
+                    source_text,
+                    header_ratio,
+                    footer_ratio,
+                    preserve_newlines=False,
+                    strip_markdown_lines=False,
+                    debug=debug,
+                )
+                watermark_skip_stats["total_lines"] = len(target_lines)
+
+                watermark_line_numbers = {
+                    line.get("line")
+                    for line in target_lines
+                    if line.get("is_watermark_rotation")
+                }
+                watermark_skip_stats["watermark_rotation"] = len(watermark_line_numbers)
+
+                for line in target_lines:
+                    if line.get("line") not in watermark_line_numbers:
+                        continue
+                    line_bbox = line.get("bbox")
+                    if isinstance(line_bbox, (list, tuple)) and len(line_bbox) == 4:
+                        try:
+                            x0, y0, x1, y1 = [float(v) for v in line_bbox]
+                            if x1 > x0 and y1 > y0:
+                                watermark_line_bboxes.append((x0, y0, x1, y1))
+                                watermark_skip_stats["watermark_bbox_count"] += 1
+                        except (TypeError, ValueError):
+                            pass
+                    for span in line.get("spans", []) or []:
+                        span_bbox = span.get("bbox")
+                        if not (isinstance(span_bbox, (list, tuple)) and len(span_bbox) == 4):
+                            continue
+                        try:
+                            sx0, sy0, sx1, sy1 = [float(v) for v in span_bbox]
+                            if sx1 > sx0 and sy1 > sy0:
+                                watermark_line_bboxes.append((sx0, sy0, sx1, sy1))
+                                watermark_skip_stats["watermark_bbox_count"] += 1
+                        except (TypeError, ValueError):
+                            continue
+
+                watermark_skip_stats["watermark_lines"] = len(watermark_line_numbers)
+                if watermark_skip_stats["watermark_lines"] and watermark_skip_stats["total_lines"]:
+                    watermark_skip_stats["watermark_line_ratio"] = round(
+                        watermark_skip_stats["watermark_lines"] / float(watermark_skip_stats["total_lines"]),
+                        4,
+                    )
+
+                if debug:
+                    _LOGGER.debug(
+                        "Reconstruct watermark config: source=%s page=%s enabled=%s rotation=%s header_ratio=%s footer_ratio=%s pattern_args=%s ratio=%s",
+                        source_text,
+                        page_no,
+                        watermark_skip_stats["enabled"],
+                        _WATERMARK_ROTATION_DEGREE,
+                        _round_float(header_ratio),
+                        _round_float(footer_ratio),
+                        watermark_patterns,
+                        _round_float(watermark_ratio),
+                    )
+                    _LOGGER.debug(
+                        "Reconstruct watermark summary: source=%s page=%s total_lines=%s watermark_lines=%s ratio=%s rotation=%s bbox=%s",
+                        source_text,
+                        page_no,
+                        watermark_skip_stats["total_lines"],
+                        watermark_skip_stats["watermark_lines"],
+                        watermark_skip_stats["watermark_line_ratio"],
+                        watermark_skip_stats["watermark_rotation"],
+                        watermark_skip_stats["watermark_bbox_count"],
+                    )
+            except Exception as exc:
+                if debug:
+                    _LOGGER.debug(
+                        "Reconstruct watermark setup failed: source=%s page=%s fallback=insert-all error=%s",
+                        source_text,
+                        page_no,
+                        exc,
+                    )
+                watermark_line_bboxes = []
+
+        def _in_watermark_bbox(target_bbox):
+            if not watermark_line_bboxes:
+                return False
+            if not (isinstance(target_bbox, (list, tuple)) or isinstance(target_bbox, pymupdf.Rect)):
+                return False
+            try:
+                sx0, sy0, sx1, sy1 = [float(v) for v in target_bbox]
+            except (TypeError, ValueError):
+                return False
+            if sx1 <= sx0 or sy1 <= sy0:
+                return False
+
+            for x0, y0, x1, y1 in watermark_line_bboxes:
+                overlap_ratio, union_ratio = _bbox_overlap_ratio((sx0, sy0, sx1, sy1), (x0, y0, x1, y1))
+                if overlap_ratio >= 0.45 or union_ratio >= 0.45:
+                    return True
+            return False
+
 
         def _normalize_color(color_value, default=(0.0, 0.0, 0.0)):
             if color_value is None:
@@ -4466,18 +4585,40 @@ def _write_reconstructed_page_pdf(
                         continue
 
                     origin = span.get("origin")
-                    if origin is None:
-                        bbox = span.get("bbox")
-                        if not (
-                            isinstance(bbox, (list, tuple))
-                            and len(bbox) == 4
-                        ):
-                            continue
+                    bbox = span.get("bbox")
+                    origin_x1y1 = None
+                    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
                         try:
                             x0, y0, x1, y1 = [float(v) for v in bbox]
-                            origin = (x0, y1)
+                            origin_x1y1 = (x0, y1)
+                            watermark_skip_stats["span_total_count"] += 1
+                            if _in_watermark_bbox((x0, y0, x1, y1)):
+                                watermark_skip_stats["span_skip_count"] += 1
+                                if debug:
+                                    _LOGGER.debug(
+                                        "Reconstruct skip watermark span: source=%s page=%s text=%r",
+                                        source_text,
+                                        page_no,
+                                        text[:120],
+                                    )
+                                continue
                         except (TypeError, ValueError):
+                            origin_x1y1 = None
+
+                    if origin is None:
+                        if origin_x1y1 is None:
+                            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                                continue
+                            try:
+                                x0, y0, x1, y1 = [float(v) for v in bbox]
+                            except (TypeError, ValueError):
+                                continue
+                            if x1 <= x0 or y1 <= y0:
+                                continue
+                            origin_x1y1 = (x0, y1)
+                        if origin_x1y1 is None:
                             continue
+                        origin = origin_x1y1
 
                     point = _to_point(origin)
                     if point is None:
@@ -4530,6 +4671,16 @@ def _write_reconstructed_page_pdf(
                             text[:120],
                         )
 
+        if debug:
+            _LOGGER.debug(
+                "Reconstruct watermark apply summary: source=%s page=%s enabled=%s span_total=%s span_skipped=%s",
+                source_text,
+                page_no,
+                watermark_skip_stats["enabled"],
+                watermark_skip_stats["span_total_count"],
+                watermark_skip_stats["span_skip_count"],
+            )
+
         rendered_pdf.save(output_path, deflate=True, garbage=4)
         rendered_pdf.close()
 
@@ -4550,6 +4701,54 @@ def _reconstruct_output_path(source_path, page_no):
     )
     tmp.close()
     return tmp.name
+
+
+def _write_reconstructed_pages_pdf(
+    source_path,
+    page_numbers,
+    output_path,
+    remove_watermark=False,
+    watermark_patterns=None,
+    watermark_ratio=0.6,
+    header_ratio=0.08,
+    footer_ratio=0.08,
+    debug=False,
+):
+    if not page_numbers:
+        raise ValueError("No pages specified for reconstruction.")
+
+    target_pages = [int(page_no) for page_no in page_numbers]
+
+    with pymupdf.open() as rendered_pdf:
+        temp_paths = []
+        try:
+            for page_no in target_pages:
+                temp_path = _reconstruct_output_path(source_path, page_no)
+                temp_paths.append(temp_path)
+                _write_reconstructed_page_pdf(
+                    source_path,
+                    page_no,
+                    temp_path,
+                    remove_watermark=remove_watermark,
+                    watermark_patterns=watermark_patterns,
+                    watermark_ratio=watermark_ratio,
+                    header_ratio=header_ratio,
+                    footer_ratio=footer_ratio,
+                    debug=debug,
+                )
+
+                with pymupdf.open(temp_path) as page_pdf:
+                    rendered_pdf.insert_pdf(page_pdf, from_page=0, to_page=0)
+        finally:
+            for temp_path in temp_paths:
+                try:
+                    Path(temp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        rendered_pdf.save(output_path, deflate=True, garbage=4)
+
+    return str(Path(output_path))
 
 
 def _safe_text_list(values):
@@ -5338,17 +5537,16 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--reconstruct-page",
-        type=int,
-        default=None,
-        help=(
-            "Reconstruct one page from get_text/get_drawings/get_images and save as a PDF."
-        ),
-    )
-    parser.add_argument(
         "--reconstruct-output",
         default=None,
-        help="Output path for --reconstruct-page. If omitted, a temporary file is created.",
+        help="Reconstruct selected pages (from --pages) and save as a PDF. If omitted, a temporary file is created.",
+    )
+    parser.add_argument(
+        "--remove-watermark",
+        action="store_true",
+        help=(
+            "When used with --reconstruct-output, remove watermark-like text using only rotated text (default 55°)."
+        ),
     )
     parser.add_argument(
         "--table-mode",
@@ -5405,6 +5603,41 @@ def main():
         level=logging.DEBUG if args.debug or args.table_debug else logging.WARNING,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+
+    if args.reconstruct_output is not None:
+        try:
+            requested_pages = _parse_pages(args.pages)
+        except ValueError as exc:
+            raise SystemExit(f"Invalid --pages argument: {exc}")
+
+        if not requested_pages:
+            raise SystemExit("--reconstruct-output requires --pages.")
+        if args.image_only_page is not None:
+            raise SystemExit("--reconstruct-output cannot be combined with --image-only-page.")
+        if args.preview_page is not None:
+            raise SystemExit("--reconstruct-output cannot be combined with --preview-page.")
+
+        output_path = args.reconstruct_output
+        if not output_path:
+            output_path = _reconstruct_output_path(args.file, requested_pages[0])
+
+        try:
+            created_path = _write_reconstructed_pages_pdf(
+                args.file,
+                requested_pages,
+                output_path,
+                remove_watermark=args.remove_watermark,
+                watermark_patterns=args.watermark_patterns,
+                watermark_ratio=args.watermark_ratio,
+                header_ratio=args.header_ratio,
+                footer_ratio=args.footer_ratio,
+                debug=args.debug or args.table_debug,
+            )
+        except Exception as exc:
+            raise SystemExit(f"Failed to create reconstructed page PDF: {exc}")
+
+        print(f"Reconstructed page PDF saved to: {created_path}")
+        return
 
     if args.preview_page is not None:
         try:
@@ -5481,38 +5714,6 @@ def main():
                     _write_tables_markdown(preview_records, preview_tables_md)
                     print(f"Preview tables markdown -> {preview_tables_md}")
 
-        return
-
-    if args.reconstruct_page is not None:
-        try:
-            page_no = int(args.reconstruct_page)
-        except (TypeError, ValueError):
-            raise SystemExit("--reconstruct-page must be an integer.")
-
-        if args.pages is not None:
-            raise SystemExit("--reconstruct-page cannot be combined with --pages.")
-        if args.image_only_page is not None:
-            raise SystemExit("--reconstruct-page cannot be combined with --image-only-page.")
-        if args.preview_page is not None:
-            raise SystemExit("--reconstruct-page cannot be combined with --preview-page.")
-        if page_no < 1:
-            raise SystemExit("--reconstruct-page must be >= 1.")
-
-        output_path = args.reconstruct_output
-        if not output_path:
-            output_path = _reconstruct_output_path(args.file, page_no)
-
-        try:
-            created_path = _write_reconstructed_page_pdf(
-                args.file,
-                page_no,
-                output_path,
-                debug=args.debug or args.table_debug,
-            )
-        except Exception as exc:
-            raise SystemExit(f"Failed to create reconstructed page PDF: {exc}")
-
-        print(f"Reconstructed page PDF saved to: {created_path}")
         return
 
     if args.image_only_page is not None:
