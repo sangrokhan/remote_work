@@ -3440,20 +3440,32 @@ def _write_reconstructed_page_pdf(
             except (TypeError, ValueError):
                 return 0.0
 
-        def _render_drawing(drawing):
+        def _render_drawing(drawing, drawing_index=None):
             if not isinstance(drawing, dict):
+                if debug:
+                    _LOGGER.debug(
+                        "Drawing[%s] skip: not dict type=%s page=%s",
+                        drawing_index,
+                        type(drawing),
+                        page_no,
+                    )
+                return
+
+            items = drawing.get("items")
+            if not isinstance(items, list):
+                if debug:
+                    _LOGGER.debug("Drawing[%s] skip: items missing page=%s", drawing_index, page_no)
                 return
 
             fill_key_present = "fill" in drawing
-            stroke_color = _normalize_color(drawing.get("color"), default=(0.0, 0.0, 0.0))
             fill_color_raw = drawing.get("fill")
             fill_color = _normalize_color(fill_color_raw) if fill_color_raw is not None else None
+            stroke_color = _normalize_color(drawing.get("color"), default=(0.0, 0.0, 0.0))
             line_width = drawing.get("linewidth", 1.0)
             try:
                 line_width = float(line_width) if float(line_width) > 0 else 0.5
             except (TypeError, ValueError):
                 line_width = 0.5
-
             stroke_opacity = drawing.get("stroke_opacity", 1.0)
             fill_opacity = drawing.get("fill_opacity", 1.0)
             try:
@@ -3465,175 +3477,302 @@ def _write_reconstructed_page_pdf(
             except (TypeError, ValueError):
                 fill_opacity = 1.0
 
-            items = drawing.get("items")
-            if not isinstance(items, list):
-                return
+            fill_ops = ("f", "F", "f*", "b", "B", "b*")
+            op_counts = Counter()
+            has_fill_op = False
+            for item in items:
+                if not item or not isinstance(item, (list, tuple)) or not item:
+                    continue
+                if item[0] in fill_ops:
+                    has_fill_op = True
+                if isinstance(item[0], str):
+                    op_counts[item[0]] += 1
 
-            # Fast path: use PyMuPDF Shape API when available.
+            if debug:
+                _LOGGER.debug(
+                    "Drawing[%s] start page=%s fill_key=%s raw_fill=%r norm_fill=%r stroke=%r linewidth=%s fill_op=%s ops=%s closePath=%s",
+                    drawing_index,
+                    page_no,
+                    fill_key_present,
+                    fill_color_raw,
+                    fill_color,
+                    stroke_color,
+                    _round_float(line_width),
+                    fill_opacity,
+                    " ".join(f"{k}:{op_counts[k]}" for k in sorted(op_counts.keys())),
+                    drawing.get("closePath"),
+                )
+                if fill_key_present and fill_color is None:
+                    _LOGGER.debug(
+                        "Drawing[%s] fill value normalization failed: raw_fill=%r page=%s",
+                        drawing_index,
+                        fill_color_raw,
+                        page_no,
+                    )
+
             use_shape = hasattr(out_page, "new_shape")
+            shape_disable_reason = None
+            shape = None
             if use_shape:
                 try:
                     shape = out_page.new_shape()
-                except Exception:
+                except Exception as exc:
                     use_shape = False
-                    shape = None
+                    shape_disable_reason = f"new_shape failed: {type(exc).__name__}: {exc}"
+            else:
+                shape_disable_reason = "new_shape unavailable"
 
-                if use_shape:
-                    has_fill_op = False
-                    current = None
-                    for item in items:
-                        if not item:
+            if not use_shape and debug:
+                _LOGGER.debug(
+                    "Drawing[%s] Shape API disabled: %s page=%s",
+                    drawing_index,
+                    shape_disable_reason,
+                    page_no,
+                )
+
+            if use_shape:
+                if debug:
+                    _LOGGER.debug("Drawing[%s] use Shape API page=%s", drawing_index, page_no)
+
+                current = None
+                has_geom = False
+                fill_op_executed = False
+                for item in items:
+                    if not item:
+                        continue
+                    op = item[0]
+                    args = item[1:]
+
+                    if op == "m":
+                        point = _to_point_from_args(args)
+                        if point is not None:
+                            shape.move_to(point[0], point[1])
+                            current = point
+                            has_geom = True
+                        continue
+
+                    if op == "l":
+                        point = _to_point_from_args(args)
+                        if current is not None and point is not None:
+                            shape.line_to(point[0], point[1])
+                            current = point
+                            has_geom = True
+                        continue
+
+                    if op == "c":
+                        p3 = _to_point_from_args(args[-2:]) if len(args) >= 2 else None
+                        if p3 is None:
                             continue
-                        op = item[0]
-                        args = item[1:]
+                        p1 = _to_point_from_args(args[0:2]) if len(args) >= 2 else current
+                        p2 = _to_point_from_args(args[2:4]) if len(args) >= 4 else current
+                        if current is not None and p1 is not None and p2 is not None:
+                            shape.curve_to(
+                                p1[0], p1[1],
+                                p2[0], p2[1],
+                                p3[0], p3[1],
+                            )
+                        else:
+                            shape.line_to(p3[0], p3[1])
+                        current = p3
+                        has_geom = True
+                        continue
 
-                        if op == "m":
-                            point = _to_point_from_args(args)
-                            if point is not None:
-                                shape.move_to(point[0], point[1])
-                                current = point
-                            continue
-
-                        if op == "l":
-                            point = _to_point_from_args(args)
-                            if current is not None and point is not None:
+                    if op in ("v", "y"):
+                        point = _to_point_from_args(args)
+                        if point is not None:
+                            if current is not None:
                                 shape.line_to(point[0], point[1])
-                                current = point
-                            continue
+                            current = point
+                            has_geom = True
+                        continue
 
-                        if op == "c":
-                            p3 = _to_point_from_args(args[-2:]) if len(args) >= 2 else None
-                            if current is not None and p3 is not None:
-                                p1 = _to_point_from_args(args[0:2]) if len(args) >= 2 else current
-                                p2 = _to_point_from_args(args[2:4]) if len(args) >= 4 else current
-                                if p1 is not None and p2 is not None:
-                                    shape.curve_to(
-                                        p1[0], p1[1],
-                                        p2[0], p2[1],
-                                        p3[0], p3[1],
-                                    )
-                                    current = p3
-                                else:
-                                    shape.line_to(p3[0], p3[1])
-                                    current = p3
-                            elif p3 is not None:
-                                shape.line_to(p3[0], p3[1])
-                                current = p3
-                            continue
-
-                        if op in ("v", "y"):
-                            point = _to_point_from_args(args)
-                            if point is not None:
-                                if current is not None:
-                                    shape.line_to(point[0], point[1])
-                                current = point
-                            continue
-
-                        if op == "h":
-                            try:
-                                shape.close_path()
-                            except Exception:
-                                pass
-                            current = None
-                            continue
-
-                        if op == "re":
-                            rect_values = _to_rect(args)
-                            if rect_values is None:
-                                continue
-                            x0, y0, x1, y1 = rect_values
-                            if x1 == x0 or y1 == y0:
-                                continue
-                            try:
-                                shape.draw_rect(pymupdf.Rect(x0, y0, x1, y1))
-                            except Exception:
-                                continue
-                            current = None
-                            continue
-
-                        if op in ("f", "F", "f*", "b", "B", "b*"):
-                            has_fill_op = True
-                            try:
-                                shape.finish(
-                                    color=stroke_color,
-                                    fill=fill_color,
-                                    width=line_width,
-                                    closePath=drawing.get("closePath", True),
-                                    fill_opacity=fill_opacity,
-                                    stroke_opacity=stroke_opacity,
-                                    dashes=drawing.get("dashes"),
-                                    lineCap=drawing.get("lineCap"),
-                                    lineJoin=drawing.get("lineJoin"),
-                                    miterLimit=drawing.get("miterLimit", 1),
-                                )
-                                shape.commit()
-                            except TypeError:
-                                shape.finish(color=stroke_color, fill=fill_color, width=line_width)
-                                shape.commit()
-                            except Exception:
-                                use_shape = False
-                            break
-
-                    if use_shape:
-                        if fill_color is not None and not has_fill_op:
+                    if op == "h":
+                        try:
+                            shape.close_path()
+                        except Exception as exc:
                             if debug:
                                 _LOGGER.debug(
-                                    "Drawing has fill key=%s fill=%s but no fill operator; applying fill on commit: page=%s fill_color=%r",
-                                    fill_key_present,
-                                    fill_color,
+                                    "Drawing[%s] shape.close_path failed: %s page=%s",
+                                    drawing_index,
+                                    exc,
                                     page_no,
-                                    fill_color,
+                                )
+                        current = None
+                        continue
+
+                    if op == "re":
+                        rect_values = _to_rect(args)
+                        if rect_values is None:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] skip invalid rect args=%r page=%s",
+                                    drawing_index,
+                                    args,
+                                    page_no,
+                                )
+                            continue
+                        x0, y0, x1, y1 = rect_values
+                        if x1 == x0 or y1 == y0:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] skip degenerate rect page=%s rect=%r",
+                                    drawing_index,
+                                    page_no,
+                                    rect_values,
+                                )
+                            continue
+                        try:
+                            shape.draw_rect(pymupdf.Rect(x0, y0, x1, y1))
+                            has_geom = True
+                        except Exception as exc:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] shape.draw_rect failed: %s page=%s",
+                                    drawing_index,
+                                    exc,
+                                    page_no,
+                                )
+                        continue
+
+                    if op in fill_ops:
+                        fill_op_executed = True
+                        if debug:
+                            _LOGGER.debug(
+                                "Drawing[%s] fill operator encountered: op=%s page=%s",
+                                drawing_index,
+                                op,
+                                page_no,
+                            )
+                        try:
+                            shape.finish(
+                                color=stroke_color,
+                                fill=fill_color,
+                                width=line_width,
+                                closePath=drawing.get("closePath", True),
+                                fill_opacity=fill_opacity,
+                                stroke_opacity=stroke_opacity,
+                                dashes=drawing.get("dashes"),
+                                lineCap=drawing.get("lineCap"),
+                                lineJoin=drawing.get("lineJoin"),
+                                miterLimit=drawing.get("miterLimit", 1),
+                            )
+                            shape.commit()
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] shape.finish+commit success on op=%s",
+                                    drawing_index,
+                                    op,
+                                )
+                        except TypeError as exc:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] shape.finish TypeError on op=%s: %s",
+                                    drawing_index,
+                                    op,
+                                    exc,
                                 )
                             try:
-                                shape.finish(
-                                    color=stroke_color,
-                                    fill=fill_color,
-                                    width=line_width,
-                                    closePath=drawing.get("closePath", True),
-                                    fill_opacity=fill_opacity,
-                                    stroke_opacity=stroke_opacity,
-                                    dashes=drawing.get("dashes"),
-                                    lineCap=drawing.get("lineCap"),
-                                    lineJoin=drawing.get("lineJoin"),
-                                    miterLimit=drawing.get("miterLimit", 1),
-                                )
-                                shape.commit()
-                            except TypeError:
                                 shape.finish(color=stroke_color, fill=fill_color, width=line_width)
                                 shape.commit()
-                            except Exception:
-                                pass
-                        if hasattr(shape, "close"):
-                            try:
-                                shape.close()
-                            except Exception:
-                                pass
-                        else:
-                            try:
-                                shape.finish(
-                                    color=stroke_color,
-                                    fill=fill_color,
-                                    closePath=drawing.get("closePath", True),
-                                    width=line_width,
-                                    fill_opacity=fill_opacity,
-                                    stroke_opacity=stroke_opacity,
-                                    dashes=drawing.get("dashes"),
-                                    lineCap=drawing.get("lineCap"),
-                                    lineJoin=drawing.get("lineJoin"),
-                                    miterLimit=drawing.get("miterLimit", 1),
+                                if debug:
+                                    _LOGGER.debug(
+                                        "Drawing[%s] shape.finish TypeError fallback args success on op=%s",
+                                        drawing_index,
+                                        op,
+                                    )
+                            except Exception as fallback_exc:
+                                use_shape = False
+                                shape_disable_reason = (
+                                    f"shape.finish fallback failed on op {op}: "
+                                    f"{type(fallback_exc).__name__}: {fallback_exc}"
                                 )
+                                if debug:
+                                    _LOGGER.debug("Drawing[%s] %s", drawing_index, shape_disable_reason)
+                        except Exception as exc:
+                            use_shape = False
+                            shape_disable_reason = (
+                                f"shape.finish/commit failed on op {op}: {type(exc).__name__}: {exc}"
+                            )
+                            if debug:
+                                _LOGGER.debug("Drawing[%s] %s", drawing_index, shape_disable_reason)
+                        break
+
+                    if debug:
+                        _LOGGER.debug("Drawing[%s] unsupported Shape op=%r args=%r page=%s", drawing_index, op, args, page_no)
+
+                if use_shape:
+                    if fill_key_present and fill_color is not None and not fill_op_executed:
+                        if debug:
+                            _LOGGER.debug(
+                                "Drawing[%s] fill key present but no fill op; trying fallback fill commit page=%s",
+                                drawing_index,
+                                page_no,
+                            )
+                        try:
+                            shape.finish(
+                                color=stroke_color,
+                                fill=fill_color,
+                                width=line_width,
+                                closePath=drawing.get("closePath", True),
+                                fill_opacity=fill_opacity,
+                                stroke_opacity=stroke_opacity,
+                                dashes=drawing.get("dashes"),
+                                lineCap=drawing.get("lineCap"),
+                                lineJoin=drawing.get("lineJoin"),
+                                miterLimit=drawing.get("miterLimit", 1),
+                            )
+                            shape.commit()
+                            if debug:
+                                _LOGGER.debug("Drawing[%s] fill-on-commit success", drawing_index)
+                        except Exception as exc:
+                            use_shape = False
+                            shape_disable_reason = (
+                                f"fill-on-commit failed: {type(exc).__name__}: {exc}"
+                            )
+                            if debug:
+                                _LOGGER.debug("Drawing[%s] %s", drawing_index, shape_disable_reason)
+
+                    if use_shape:
+                        try:
+                            if hasattr(shape, "close"):
+                                shape.close()
+                            else:
                                 shape.commit()
-                            except Exception:
-                                pass
+                        except Exception as exc:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] shape final close/commit failed: %s page=%s",
+                                    drawing_index,
+                                    exc,
+                                    page_no,
+                                )
+                        if debug:
+                            _LOGGER.debug(
+                                "Drawing[%s] shape renderer done has_fill_op=%s has_geom=%s has_fill_key=%s",
+                                drawing_index,
+                                fill_op_executed,
+                                has_geom,
+                                fill_key_present,
+                            )
                         return
 
-            # fallback: previous lightweight path (strokes/rects)
+            if debug:
+                _LOGGER.debug(
+                    "Drawing[%s] fallback renderer start: reason=%s page=%s",
+                    drawing_index,
+                    shape_disable_reason or "shape branch returned with fallback",
+                    page_no,
+                )
+
             current = None
+            fallback_ops = Counter()
             for item in items:
                 if not item:
                     continue
                 op = item[0]
                 args = item[1:]
+                if isinstance(op, str):
+                    fallback_ops[op] += 1
 
                 if op == "m":
                     current = _to_point_from_args(args)
@@ -3650,8 +3789,14 @@ def _write_reconstructed_page_pdf(
                                     color=stroke_color,
                                     width=line_width,
                                 )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] fallback draw_line failed: %s page=%s",
+                                    drawing_index,
+                                    exc,
+                                    page_no,
+                                )
                     current = target
                     continue
 
@@ -3673,50 +3818,97 @@ def _write_reconstructed_page_pdf(
                                 color=stroke_color,
                                 width=line_width,
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] fallback draw_line(curve fallback) failed: %s page=%s",
+                                    drawing_index,
+                                    exc,
+                                    page_no,
+                                )
                     current = target
                     continue
 
-                if op == "re" and len(args) == 4:
+                if op == "re":
                     rect_values = _to_rect(args)
                     if not rect_values:
+                        if debug:
+                            _LOGGER.debug(
+                                "Drawing[%s] fallback invalid rect args=%r page=%s",
+                                drawing_index,
+                                args,
+                                page_no,
+                            )
                         continue
                     x0, y0, x1, y1 = rect_values
                     if x1 == x0 or y1 == y0:
+                        if debug:
+                            _LOGGER.debug(
+                                "Drawing[%s] fallback skip degenerate rect page=%s rect=%r",
+                                drawing_index,
+                                page_no,
+                                rect_values,
+                            )
                         continue
-                    if fill_color is not None:
+                    try:
+                        out_page.draw_rect(
+                            pymupdf.Rect(x0, y0, x1, y1),
+                            color=stroke_color,
+                            width=line_width,
+                            fill=fill_color,
+                            fill_opacity=fill_opacity if fill_opacity else 1.0,
+                        )
+                    except TypeError:
                         try:
                             out_page.draw_rect(
                                 pymupdf.Rect(x0, y0, x1, y1),
                                 color=stroke_color,
                                 width=line_width,
                                 fill=fill_color,
-                                fill_opacity=fill_opacity if fill_opacity else 1.0,
                             )
-                        except TypeError:
-                            try:
-                                out_page.draw_rect(
-                                    pymupdf.Rect(x0, y0, x1, y1),
-                                    color=stroke_color,
-                                    width=line_width,
-                                    fill=fill_color,
+                        except Exception as exc:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] fallback draw_rect failed: %s page=%s",
+                                    drawing_index,
+                                    exc,
+                                    page_no,
                                 )
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            out_page.draw_rect(
-                                pymupdf.Rect(x0, y0, x1, y1),
-                                color=stroke_color,
-                                width=line_width,
-                                fill=None,
+                    except Exception as exc:
+                        if debug:
+                            _LOGGER.debug(
+                                "Drawing[%s] fallback draw_rect failed: %s page=%s",
+                                drawing_index,
+                                exc,
+                                page_no,
                             )
-                        except Exception:
-                            pass
                     continue
+
+                if op in fill_ops:
+                    if debug:
+                        _LOGGER.debug(
+                            "Drawing[%s] fallback encountered fill op=%s but fallback path does not apply fill",
+                            drawing_index,
+                            op,
+                        )
+                    continue
+
+                if debug:
+                    _LOGGER.debug(
+                        "Drawing[%s] fallback unsupported op=%r args=%r page=%s",
+                        drawing_index,
+                        op,
+                        args,
+                        page_no,
+                    )
+
+            if debug:
+                _LOGGER.debug(
+                    "Drawing[%s] fallback completed page=%s ops=%s",
+                    drawing_index,
+                    page_no,
+                    " ".join(f"{k}:{fallback_ops[k]}" for k in sorted(fallback_ops.keys())),
+                )
 
         raw_text = page.get_text("dict", sort=True)
         drawings = page.get_drawings()
@@ -3725,10 +3917,15 @@ def _write_reconstructed_page_pdf(
         if debug:
             fill_with_color = 0
             fill_op_missing = 0
+            draw_fill_ops = Counter()
             for drawing in drawings:
                 if not isinstance(drawing, dict):
                     continue
-                drawing_fill = _normalize_color(drawing.get("fill"), default=None) if drawing.get("fill") is not None else None
+                drawing_fill = (
+                    _normalize_color(drawing.get("fill"), default=None)
+                    if drawing.get("fill") is not None
+                    else None
+                )
                 if drawing_fill is not None:
                     fill_with_color += 1
                     items = drawing.get("items") or []
@@ -3739,9 +3936,14 @@ def _write_reconstructed_page_pdf(
                         for item in items
                     ):
                         fill_op_missing += 1
+                    for item in items:
+                        if not item or not isinstance(item, (list, tuple)):
+                            continue
+                        if isinstance(item[0], str):
+                            draw_fill_ops[item[0]] += 1
 
             _LOGGER.debug(
-                "Reconstruct source=%s page=%s extracted_text_blocks=%s drawings=%s images=%s fill_with_color=%s fill_ops_missing=%s",
+                "Reconstruct source=%s page=%s extracted_text_blocks=%s drawings=%s images=%s draw_fill=%s fill_op_missing=%s fill_ops=%s",
                 source_text,
                 page_no,
                 len((raw_text or {}).get("blocks", [])) if isinstance(raw_text, dict) else "n/a",
@@ -3749,6 +3951,7 @@ def _write_reconstructed_page_pdf(
                 len(images),
                 fill_with_color,
                 fill_op_missing,
+                " ".join(f"{k}:{draw_fill_ops[k]}" for k in sorted(draw_fill_ops.keys())),
             )
 
         rendered_pdf = pymupdf.open()
@@ -3857,8 +4060,8 @@ def _write_reconstructed_page_pdf(
                 except Exception:
                     continue
 
-        for drawing in drawings:
-            _render_drawing(drawing)
+        for drawing_index, drawing in enumerate(drawings):
+            _render_drawing(drawing, drawing_index=drawing_index)
 
         raw_blocks = raw_text.get("blocks") if isinstance(raw_text, dict) else []
         if debug and fontfile_for_korean:
