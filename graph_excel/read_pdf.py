@@ -1404,7 +1404,7 @@ def _draw_raw_spans_on_page(out_page, spans, source, page_no, debug=False):
 
         if not inserted and debug:
             _LOGGER.debug(
-                "Preview text span insert failed: source=%s page=%s font=%r size=%s rotation=%s text=%r",
+                        "Text span insert failed: source=%s page=%s font=%r size=%s rotation=%s text=%r",
                 source,
                 page_no,
                 font,
@@ -2517,7 +2517,7 @@ def _remove_watermark_lines(
             )
             if debug and source is not None and page_no is not None:
                 _LOGGER.debug(
-                    "Preview removed element: source=%s page=%s line=%s location=%s reason=%s rotation=%s text=%r",
+                    "Removed watermark candidate: source=%s page=%s line=%s location=%s reason=%s rotation=%s text=%r",
                     source,
                     page_no,
                     line.get("line"),
@@ -3159,155 +3159,6 @@ def _write_image_only_page_pdf(
     return str(Path(output_path))
 
 
-def _write_preview_cleaned_page_pdf(
-    source_path,
-    pages,
-    output_path,
-    watermark_angle=_WATERMARK_ROTATION_DEGREE,
-    watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
-    header_ratio=0.08,
-    footer_ratio=0.08,
-    strip_body_rotation=False,
-    debug=False,
-):
-    if pages is None:
-        raise ValueError("No pages specified for preview.")
-    page_numbers = [int(page_no) for page_no in pages]
-    if not page_numbers:
-        raise ValueError("No pages specified for preview.")
-    if any(page_no < 1 for page_no in page_numbers):
-        raise ValueError(f"Page number must be >=1: {page_numbers}")
-
-    page_numbers = list(dict.fromkeys(page_numbers))
-    if not page_numbers:
-        raise ValueError("No pages specified for preview.")
-
-    with pymupdf.open(source_path) as doc:
-        rendered_pdf = pymupdf.open()
-        for page_no in page_numbers:
-            if page_no > doc.page_count:
-                raise ValueError(
-                    f"Page number out of range: {page_no} (total: {doc.page_count})"
-                )
-
-            page = doc[page_no - 1]
-            source_text = str(source_path)
-            raw_lines = _extract_page_lines(
-                page=page,
-                page_no=page_no,
-                source=source_text,
-                header_ratio=header_ratio,
-                footer_ratio=footer_ratio,
-                preserve_newlines=False,
-                debug=debug,
-            )
-
-            watermark_result = _remove_watermark_lines(
-                raw_lines,
-                watermark_angle=watermark_angle,
-                watermark_tolerance=watermark_tolerance,
-                source=source_text,
-                page_no=page_no,
-                strip_body_rotation=strip_body_rotation,
-                debug=debug,
-            )
-
-            removed_lines = watermark_result["removed_lines"]
-            removed_line_numbers = watermark_result["removed_line_numbers"]
-            removed_count = watermark_result["removed_count"]
-
-            if debug:
-                _LOGGER.debug(
-                    "Preview rebuild summary: source=%s page=%s kept_lines=%s removed_lines=%s",
-                    source_text,
-                    page_no,
-                    watermark_result["kept_count"],
-                    removed_count,
-                )
-
-            out_page = rendered_pdf.new_page(
-                width=page.rect.width, height=page.rect.height
-            )
-            for item in page.get_images(full=True):
-                if not item:
-                    continue
-                xref = item[0]
-                try:
-                    image_info = doc.extract_image(int(xref))
-                except Exception:
-                    continue
-
-                image_bytes = image_info.get("image")
-                if not isinstance(image_bytes, (bytes, bytearray)):
-                    continue
-
-                try:
-                    rects = page.get_image_rects(xref)
-                except Exception:
-                    continue
-                if not rects:
-                    continue
-
-                for rect in rects:
-                    if rect is None:
-                        continue
-                    try:
-                        out_page.insert_image(rect, stream=image_bytes)
-                    except Exception:
-                        continue
-
-            for drawing in page.get_drawings():
-                for x0, y0, x1, y1, linewidth, color in _extract_shape_lines_from_drawing(
-                    drawing
-                ):
-                    if x1 <= x0 or y1 <= y0:
-                        continue
-                    line_width = linewidth if linewidth and linewidth > 0 else 0.5
-                    try:
-                        out_page.draw_line(
-                            pymupdf.Point(x0, y0),
-                            pymupdf.Point(x1, y1),
-                            color=_to_rgb_color(color, default=(0.0, 0.0, 0.0)),
-                            width=float(line_width),
-                        )
-                    except Exception:
-                        continue
-
-            raw_payload = page.get_text("dict", sort=True)
-            raw_blocks = raw_payload.get("blocks") if isinstance(raw_payload, dict) else []
-            raw_line_no = 0
-            for block in raw_blocks:
-                if not isinstance(block, dict) or block.get("type") != 0:
-                    continue
-                for line in block.get("lines", []) or []:
-                    if not isinstance(line, dict):
-                        continue
-                    raw_line_no += 1
-                    if raw_line_no in removed_line_numbers:
-                        continue
-                    _draw_raw_spans_on_page(
-                        out_page,
-                        line.get("spans", []),
-                        source_text,
-                        page_no,
-                        debug=debug,
-                    )
-
-            if removed_count:
-                if removed_lines and debug:
-                    _LOGGER.debug(
-                        "Preview removed line numbers: source=%s page=%s lines=%s",
-                        source_text,
-                        page_no,
-                        ", ".join(str(item.get("line_no")) for item in removed_lines),
-                    )
-
-        rendered_pdf.save(output_path, deflate=True, garbage=4)
-        rendered_pdf.close()
-
-    return str(Path(output_path))
-
-
 def _write_reconstructed_page_pdf(
     source_path,
     page_no,
@@ -3563,7 +3414,17 @@ def _write_reconstructed_pages_pdf(
     if not page_numbers:
         raise ValueError("No pages specified for reconstruction.")
 
-    target_pages = [int(page_no) for page_no in page_numbers]
+    target_pages = []
+    seen_pages = set()
+    for raw_page_no in page_numbers:
+        page_no = int(raw_page_no)
+        if page_no in seen_pages:
+            continue
+        seen_pages.add(page_no)
+        target_pages.append(page_no)
+
+    if not target_pages:
+        raise ValueError("No unique pages specified for reconstruction.")
 
     with pymupdf.open() as rendered_pdf:
         temp_paths = []
@@ -4126,13 +3987,6 @@ def parse_args():
         help="(legacy) Kept for backward compatibility; currently ignored for image-only extraction.",
     )
     parser.add_argument(
-        "--preview",
-        action="store_true",
-        help=(
-            "Render selected pages (from --pages) by removing watermark-rotation text."
-        ),
-    )
-    parser.add_argument(
         "--reconstruction",
         action="store_true",
         help="Reconstruct selected pages from --pages into a single PDF.",
@@ -4141,21 +3995,13 @@ def parse_args():
         "--watermark-angle",
         type=float,
         default=_WATERMARK_ROTATION_DEGREE,
-        help="Target text rotation (degrees) treated as watermark in --preview.",
+        help="Target text rotation (degrees) treated as watermark when using --reconstruction.",
     )
     parser.add_argument(
         "--watermark-angle-tolerance",
         type=float,
         default=_WATERMARK_ROTATION_TOLERANCE,
-        help="Angle tolerance used for watermark matching in --preview.",
-    )
-    parser.add_argument(
-        "--preview-strip-body-rotation",
-        action="store_true",
-        help=(
-            "Also remove rotation-matching lines in all regions in --preview. "
-            "Without this flag, only body-region rotation matches are removed."
-        ),
+        help="Angle tolerance used for watermark matching with --reconstruction.",
     )
     parser.add_argument(
         "--remove-watermark",
@@ -4203,8 +4049,6 @@ def main():
     )
 
     if args.reconstruction:
-        if args.preview:
-            raise SystemExit("--reconstruction cannot be combined with --preview.")
         if args.image_only_page is not None:
             raise SystemExit("--reconstruction cannot be combined with --image-only-page.")
         if args.output is None:
@@ -4237,76 +4081,6 @@ def main():
             raise SystemExit(f"Failed to create reconstructed page PDF: {exc}")
 
         print(f"Reconstructed page PDF saved to: {created_path}")
-        return
-
-    if args.preview:
-        if args.image_only_page is not None:
-            raise SystemExit("--preview cannot be combined with --image-only-page.")
-        if args.reconstruction:
-            raise SystemExit("--preview cannot be combined with --reconstruction.")
-        if args.output is None:
-            raise SystemExit("--preview requires --output.")
-
-        try:
-            requested_pages = _parse_pages(args.pages)
-        except ValueError as exc:
-            raise SystemExit(f"Invalid --pages argument: {exc}")
-
-        if not requested_pages:
-            raise SystemExit("--preview requires --pages.")
-
-        if args.watermark_angle is None:
-            raise SystemExit("--watermark-angle is required.")
-        if args.watermark_angle_tolerance is None:
-            raise SystemExit("--watermark-angle-tolerance is required.")
-
-        try:
-            created_path = _write_preview_cleaned_page_pdf(
-                args.file,
-                requested_pages,
-                args.output,
-                watermark_angle=args.watermark_angle,
-                watermark_tolerance=args.watermark_angle_tolerance,
-                header_ratio=args.header_ratio,
-                footer_ratio=args.footer_ratio,
-                strip_body_rotation=args.preview_strip_body_rotation,
-                debug=args.debug or args.table_debug,
-            )
-        except Exception as exc:
-            raise SystemExit(f"Failed to create preview cleaned page PDF: {exc}")
-
-        print(f"Preview cleaned page PDF saved to: {created_path}")
-
-        if args.find_tables:
-            preview_records = read_pdf(
-                created_path,
-                strip_watermarks=False,
-                strip_headers=False,
-                strip_footers=False,
-                patterns=[],
-                ratio_threshold=args.watermark_ratio,
-                header_ratio=args.header_ratio,
-                footer_ratio=args.footer_ratio,
-                pages=list(range(1, len(requested_pages) + 1)),
-                preserve_newlines=args.preserve_newlines,
-                extract_tables=True,
-                debug=args.debug,
-                table_debug=args.debug or args.table_debug,
-                table_mode=args.table_mode,
-            )
-            total_tables = sum(record.get("table_count", 0) for record in preview_records)
-            print(f"Detected tables (preview): {total_tables}")
-
-            if args.tables_markdown is not None:
-                preview_tables_md = (
-                    str(Path(created_path).with_name(f"{Path(created_path).stem}_tables.md"))
-                    if args.tables_markdown == ""
-                    else args.tables_markdown
-                )
-                if preview_tables_md:
-                    _write_tables_markdown(preview_records, preview_tables_md)
-                    print(f"Preview tables markdown -> {preview_tables_md}")
-
         return
 
     if args.image_only_page is not None:
