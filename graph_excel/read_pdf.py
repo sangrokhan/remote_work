@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import re
+import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -1379,7 +1380,14 @@ def _span_insert_point(span):
     return (x0, y1)
 
 
-def _draw_raw_spans_on_page(out_page, spans, source, page_no, debug=False):
+def _draw_raw_spans_on_page(
+    out_page,
+    spans,
+    source,
+    page_no,
+    debug=False,
+    korean_fontname=None,
+):
     for span in spans or []:
         if not isinstance(span, dict):
             continue
@@ -1398,9 +1406,25 @@ def _draw_raw_spans_on_page(out_page, spans, source, page_no, debug=False):
         color = _to_rgb_color(span.get("color"), default=(0.0, 0.0, 0.0))
         rotation = _span_tilt_angle(span)
         font = (span.get("font") or "helv").strip() or "helv"
+        text_has_korean = _contains_korean(text)
 
         inserted = False
-        for font_name in (font, "helv", "sans-serif"):
+        font_candidates = [font]
+        if text_has_korean and korean_fontname:
+            font_candidates.append(korean_fontname)
+        font_candidates.extend(("helv", "sans-serif"))
+
+        seen = set()
+        deduped = []
+        for candidate in font_candidates:
+            if not candidate:
+                continue
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            deduped.append(candidate)
+
+        for font_name in deduped:
             for rotate_value in (rotation, 0.0):
                 try:
                     out_page.insert_text(
@@ -1420,10 +1444,11 @@ def _draw_raw_spans_on_page(out_page, spans, source, page_no, debug=False):
 
         if not inserted and debug:
             _LOGGER.debug(
-                        "Text span insert failed: source=%s page=%s font=%r size=%s rotation=%s text=%r",
+                "Text span insert failed: source=%s page=%s font=%r has_korean=%s size=%s rotation=%s text=%r",
                 source,
                 page_no,
                 font,
+                text_has_korean,
                 size,
                 _round_float(rotation),
                 text[:120],
@@ -1478,6 +1503,14 @@ def _ensure_page_font_resource(rendered_pdf, source_path, page_no, debug=False):
                 source_path,
                 page_no,
             )
+        if not korean_fontname:
+            if debug:
+                _LOGGER.debug(
+                    "insert_font returned empty name for fallback fontfile=%s source=%s page=%s",
+                    fontfile_for_korean,
+                    source_path,
+                    page_no,
+                )
     except TypeError:
         try:
             with open(fontfile_for_korean, "rb") as font_handle:
@@ -2966,6 +2999,7 @@ def _extract_pages(
     table_debug=False,
     table_mode="auto",
     capture_raw_pages=False,
+    raw_text_mode="rawdict",
 ):
     extracted = []
     raw_pages = []
@@ -3002,6 +3036,7 @@ def _extract_pages(
                     page_no=page_no,
                     source=source,
                     debug=debug,
+                    raw_text_mode=raw_text_mode,
                 )
             )
         extracted.append((page_no, lines, tables, []))
@@ -3041,7 +3076,7 @@ def _to_json_value(value):
     return str(value)
 
 
-def _extract_page_raw_payload(page, page_no, source, debug=False):
+def _extract_page_raw_payload(page, page_no, source, debug=False, raw_text_mode="rawdict"):
     payload = {
         "type": "raw-page",
         "page": page_no,
@@ -3068,7 +3103,6 @@ def _extract_page_raw_payload(page, page_no, source, debug=False):
     text_modes = (
         ("text", "text"),
         ("text_dict", "dict"),
-        ("text_rawdict", "rawdict"),
         ("text_words", "words"),
     )
     for key, mode in text_modes:
@@ -3084,6 +3118,29 @@ def _extract_page_raw_payload(page, page_no, source, debug=False):
                     exc,
                 )
             payload[key] = {"error": str(exc)}
+
+    try:
+        if raw_text_mode == "rawjson":
+            rawjson_text = page.get_text("rawjson")
+            try:
+                payload["text_rawjson"] = _to_json_value(json.loads(rawjson_text))
+            except Exception:
+                payload["text_rawjson"] = _to_json_value(rawjson_text)
+        else:
+            payload["text_rawdict"] = _to_json_value(page.get_text("rawdict"))
+    except Exception as exc:
+        if debug:
+            _LOGGER.debug(
+                "Failed to extract raw text mode=%s: source=%s page=%s error=%s",
+                raw_text_mode,
+                source,
+                page_no,
+                exc,
+            )
+        if raw_text_mode == "rawjson":
+            payload["text_rawjson"] = {"error": str(exc)}
+        else:
+            payload["text_rawdict"] = {"error": str(exc)}
 
     for key, getter in (
         ("links", lambda: page.get_links()),
@@ -3288,6 +3345,7 @@ def _write_reconstructed_page_pdf(
 
         rendered_spans = 0
         skipped_lines = 0
+        page_has_korean = False
         for raw_line_no, line in _iter_text_dict_lines(raw_text):
             if raw_line_no in removed_line_numbers:
                 skipped_lines += 1
@@ -3295,6 +3353,12 @@ def _write_reconstructed_page_pdf(
             spans = line.get("spans", [])
             if not spans:
                 continue
+            if not page_has_korean:
+                page_has_korean = any(
+                    _contains_korean((span.get("text") or ""))
+                    for span in spans
+                    if isinstance(span, dict)
+                )
             if isinstance(spans, list):
                 rendered_spans += len(spans)
             _draw_raw_spans_on_page(
@@ -3302,7 +3366,16 @@ def _write_reconstructed_page_pdf(
                 spans=line.get("spans", []),
                 source=source_text,
                 page_no=page_no,
+                korean_fontname=korean_fontname,
                 debug=debug,
+            )
+
+        if page_has_korean and not korean_fontname:
+            _LOGGER.warning(
+                "Korean text detected but no registered Korean fallback fontname for page=%s source=%s. "
+                "Reconstruction may render as missing glyph boxes (dots).",
+                page_no,
+                source_text,
             )
 
         watermark_skip_stats["line_skip_count"] = skipped_lines
@@ -3573,7 +3646,11 @@ def read_pdf(
     table_debug=None,
     table_mode="auto",
     return_raw_pages=False,
+    raw_text_mode="rawdict",
 ):
+    if raw_text_mode not in {"rawdict", "rawjson"}:
+        raw_text_mode = "rawdict"
+
     path = Path(path)
 
     with pymupdf.open(path) as doc:
@@ -3591,6 +3668,7 @@ def read_pdf(
                 table_debug=table_debug if table_debug is not None else debug,
                 table_mode=table_mode,
                 capture_raw_pages=True,
+                raw_text_mode=raw_text_mode,
             )
         else:
             pages_with_lines = _extract_pages(
@@ -3605,6 +3683,7 @@ def read_pdf(
                 debug=debug,
                 table_debug=table_debug if table_debug is not None else debug,
                 table_mode=table_mode,
+                raw_text_mode=raw_text_mode,
             )
             raw_pages = None
 
@@ -3776,15 +3855,19 @@ def write_rawdict_pages(raw_pages, output_path):
         for payload in raw_pages:
             if not isinstance(payload, dict):
                 continue
+            out_payload = {
+                "page": payload.get("page"),
+                "source": payload.get("source"),
+                "rotation": payload.get("rotation"),
+                "rect": payload.get("rect"),
+            }
+            if "text_rawdict" in payload:
+                out_payload["text_rawdict"] = payload.get("text_rawdict")
+            if "text_rawjson" in payload:
+                out_payload["text_rawjson"] = payload.get("text_rawjson")
             f.write(
                 json.dumps(
-                    {
-                        "page": payload.get("page"),
-                        "source": payload.get("source"),
-                        "rotation": payload.get("rotation"),
-                        "rect": payload.get("rect"),
-                        "text_rawdict": payload.get("text_rawdict"),
-                    },
+                    out_payload,
                     ensure_ascii=False,
                 )
             )
@@ -3930,8 +4013,8 @@ def parse_args():
         "--raw",
         nargs=1,
         default=None,
-        metavar="rawdict",
-        help="Write page.get_text('rawdict') output as JSONL. Must pass `rawdict`.",
+        metavar="rawdict|rawjson",
+        help="Write page.get_text('rawdict') or page.get_text('rawjson') output as JSONL. Must pass `rawdict` or `rawjson`.",
     )
     parser.add_argument(
         "--debug",
@@ -3952,6 +4035,10 @@ def main():
         level=logging.DEBUG if args.debug or args.table_debug else logging.WARNING,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     if args.reconstruction:
         if args.output is None:
@@ -3997,10 +4084,10 @@ def main():
     )
     request_raw = args.raw is not None
     raw_mode = args.raw[0].lower() if request_raw and isinstance(args.raw[0], str) else None
-    if request_raw and raw_mode != "rawdict":
-        raise SystemExit("--raw requires value `rawdict`.")
+    if request_raw and raw_mode not in {"rawdict", "rawjson"}:
+        raise SystemExit("--raw requires value `rawdict` or `rawjson`.")
 
-    raw_page_output = "raw.jsonl" if request_raw else None
+    raw_page_output = "raw_rawjson.jsonl" if raw_mode == "rawjson" else "raw.jsonl"
     result = read_pdf(
         args.file,
         strip_watermarks=args.strip_watermarks,
@@ -4018,6 +4105,7 @@ def main():
         table_debug=args.debug or args.table_debug,
         table_mode=args.table_mode,
         return_raw_pages=request_raw,
+        raw_text_mode=raw_mode,
     )
     if request_raw:
         records, raw_pages = result
@@ -4028,7 +4116,7 @@ def main():
         write_jsonl_pages(records, output)
         print(f"Extracted {len(records)} pages -> {output}")
         if request_raw:
-            print(f"Raw page rawdict -> {raw_page_output}")
+            print(f"Raw page output ({raw_mode}) -> {raw_page_output}")
     else:
         write_jsonl(records, output)
         total_lines = sum(
@@ -4044,7 +4132,7 @@ def main():
         )
         print(summary)
         if request_raw:
-            print(f"Raw page rawdict -> {raw_page_output}")
+            print(f"Raw page output ({raw_mode}) -> {raw_page_output}")
         if request_tables_markdown:
             print(f"Tables markdown -> {tables_markdown_output}")
 
