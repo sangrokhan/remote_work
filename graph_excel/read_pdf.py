@@ -16,6 +16,8 @@ _SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 _LOGGER = logging.getLogger("read_pdf")
 
 _SUPPORTED_ROTATIONS = {0, 90, 180, 270}
+_WATERMARK_ROTATION_DEGREE = 55
+_WATERMARK_ROTATION_TOLERANCE = 2.5
 _BULLET_REPLACEMENTS = {
     "•": "-",
     "◦": "-",
@@ -277,6 +279,11 @@ def _rotation_axis(rotation):
     if normalized in (90, 270):
         return "x"
     return "y"
+
+
+def _is_watermark_rotation(rotation):
+    value = int(rotation or 0) % 360
+    return abs((value - _WATERMARK_ROTATION_DEGREE + 180) % 360 - 180) <= _WATERMARK_ROTATION_TOLERANCE
 
 
 def _classify_region(page_rect, bbox, rotation, header_ratio, footer_ratio):
@@ -599,6 +606,9 @@ def _collect_span_cells(lines, bbox=None):
 
     spans = []
     for line in lines:
+        if line.get("is_watermark_rotation"):
+            continue
+
         location = line.get("location", "body")
         if location == "watermark":
             continue
@@ -1807,6 +1817,7 @@ def _extract_page_lines(
                     "bbox": line_bbox,
                     "location": location,
                     "rotation": line_rotation,
+                    "is_watermark_rotation": _is_watermark_rotation(line_rotation),
                     "rotation_axis": baseline_axis,
                     "page": page_no,
                     "line": line_no,
@@ -2244,6 +2255,24 @@ def _build_sections(lines, body_size, repeated_watermarks, compiled_patterns, st
                 sections[target_region]["items"].append(payload)
                 continue
 
+        if strip_watermarks and line.get("is_watermark_rotation"):
+            target_region = "watermark"
+            removed_reason = "watermark-rotation"
+            is_removed = True
+            removed["watermark"] += 1
+            _LOGGER.warning(
+                "Removed by watermark-rotation: source=%s page=%s line=%s rotation=%s location=%s snippet=%s",
+                line.get("source"),
+                line.get("page"),
+                line.get("line"),
+                line.get("rotation"),
+                line.get("location"),
+                _surrounding_snippet(raw, max(0, len(raw) // 2)),
+            )
+            payload = _line_to_payload(line, markdown, target_region, removed_reason, True)
+            sections[target_region]["items"].append(payload)
+            continue
+
         repeated_key = _normalize_line(raw).casefold()
         if strip_watermarks and repeated_key in repeated_watermarks:
             target_region = "watermark"
@@ -2326,6 +2355,7 @@ def _extract_pages(
         )
         for line in lines:
             line["source"] = source
+        table_lines = [line for line in lines if not line.get("is_watermark_rotation")]
         shape_lines = _extract_page_drawings(
             page,
             page_no,
@@ -2340,7 +2370,7 @@ def _extract_pages(
                 page,
                 page_no,
                 source,
-                lines=lines,
+                lines=table_lines,
                 shape_lines=shape_lines,
                 debug=table_debug,
                 table_mode=table_mode,
