@@ -3422,12 +3422,51 @@ def _write_reconstructed_page_pdf(
         def _to_rect(value):
             if not isinstance(value, (list, tuple)):
                 return None
+            if len(value) == 1 and isinstance(value[0], (list, tuple)):
+                inner = value[0]
+                if len(inner) == 4:
+                    try:
+                        return (
+                            float(inner[0]),
+                            float(inner[1]),
+                            float(inner[2]),
+                            float(inner[3]),
+                        )
+                    except (TypeError, ValueError):
+                        return None
             if len(value) != 4:
                 return None
             try:
                 return float(value[0]), float(value[1]), float(value[2]), float(value[3])
             except (TypeError, ValueError):
                 return None
+
+        def _debug_rect_probe(values):
+            if values is None:
+                return "None"
+            if not isinstance(values, (list, tuple)):
+                return f"type={type(values).__name__} repr={values!r}"
+            if len(values) == 1 and isinstance(values[0], (list, tuple)):
+                return f"nested-len={len(values[0])} repr={list(values[0])!r}"
+            return f"len={len(values)} repr={list(values)!r}"
+
+        def _debug_args(values, max_items=8):
+            if values is None:
+                return "None"
+            if not isinstance(values, (list, tuple)):
+                return f"type={type(values).__name__} repr={values!r}"
+            preview = list(values[:max_items])
+            if len(values) > max_items:
+                return f"len={len(values)} head={preview!r}..."
+            return f"len={len(values)} repr={preview!r}"
+
+        def _normalize_op(op):
+            if isinstance(op, (bytes, bytearray)):
+                try:
+                    return op.decode("utf-8")
+                except Exception:
+                    return str(op)
+            return op
 
         def _to_rotation(direction):
             if not direction or len(direction) != 2:
@@ -3480,17 +3519,44 @@ def _write_reconstructed_page_pdf(
             fill_ops = ("f", "F", "f*", "b", "B", "b*")
             op_counts = Counter()
             has_fill_op = False
-            for item in items:
+            raw_op_types = Counter()
+            non_fill_op_counts = Counter()
+            for item_idx, item in enumerate(items):
                 if not item or not isinstance(item, (list, tuple)) or not item:
+                    if debug and item is not None:
+                        _LOGGER.debug(
+                            "Drawing[%s] item=%s empty-or-invalid at pre-scan page=%s",
+                            drawing_index,
+                            item_idx,
+                            page_no,
+                        )
                     continue
-                if item[0] in fill_ops:
+
+                raw_op = item[0]
+                op = _normalize_op(raw_op)
+                raw_op_types[type(raw_op).__name__] += 1
+                op_key = op if isinstance(op, str) else str(op)
+                op_counts[op_key] += 1
+                if op not in fill_ops:
+                    non_fill_op_counts[op_key] += 1
+
+                if op in fill_ops:
                     has_fill_op = True
-                    if isinstance(item[0], str):
-                        op_counts[item[0]] += 1
+
+                if debug and item_idx < 80:
+                    _LOGGER.debug(
+                        "Drawing[%s] item=%s precheck raw_op=%r norm_op=%r arg=%s page=%s",
+                        drawing_index,
+                        item_idx,
+                        raw_op,
+                        op,
+                        _debug_args(item[1:]),
+                        page_no,
+                    )
 
             if debug:
                 _LOGGER.debug(
-                    "Drawing[%s] start page=%s fill_key=%s raw_fill=%r norm_fill=%r stroke=%r linewidth=%s fill_op=%s ops=%s closePath=%s",
+                    "Drawing[%s] start page=%s fill_key=%s raw_fill=%r norm_fill=%r stroke=%r linewidth=%s fill_op=%s non_fill_ops=%s raw_op_types=%s closePath=%s",
                     drawing_index,
                     page_no,
                     fill_key_present,
@@ -3500,6 +3566,8 @@ def _write_reconstructed_page_pdf(
                     _round_float(line_width),
                     fill_opacity,
                     " ".join(f"{k}:{op_counts[k]}" for k in sorted(op_counts.keys())),
+                    " ".join(f"{k}:{non_fill_op_counts[k]}" for k in sorted(non_fill_op_counts.keys())),
+                    " ".join(f"{k}:{raw_op_types[k]}" for k in sorted(raw_op_types.keys())),
                     drawing.get("closePath"),
                 )
                 if fill_key_present and fill_color is None:
@@ -3537,16 +3605,30 @@ def _write_reconstructed_page_pdf(
                 current = None
                 has_geom = False
                 fill_op_executed = False
-                for item in items:
+                shape_cmds = 0
+                for item_idx, item in enumerate(items):
                     if not item:
+                        if debug:
+                            _LOGGER.debug(
+                                "Drawing[%s] shape item=%s empty skip page=%s",
+                                drawing_index,
+                                item_idx,
+                                page_no,
+                            )
                         continue
-                    op = item[0]
-                    if isinstance(op, (bytes, bytearray)):
-                        try:
-                            op = op.decode("utf-8")
-                        except Exception:
-                            op = str(op)
+                    raw_op = item[0]
+                    op = _normalize_op(raw_op)
                     args = item[1:]
+                    if debug:
+                        _LOGGER.debug(
+                            "Drawing[%s] shape item=%s raw_op=%r norm_op=%r arg=%s page=%s",
+                            drawing_index,
+                            item_idx,
+                            raw_op,
+                            op,
+                            _debug_args(args),
+                            page_no,
+                        )
 
                     if op == "m":
                         point = _to_point_from_args(args)
@@ -3554,6 +3636,15 @@ def _write_reconstructed_page_pdf(
                             shape.move_to(point[0], point[1])
                             current = point
                             has_geom = True
+                            shape_cmds += 1
+                        else:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] skip move invalid point args=%s page=%s",
+                                    drawing_index,
+                                    _debug_args(args),
+                                    page_no,
+                                )
                         continue
 
                     if op == "l":
@@ -3562,11 +3653,28 @@ def _write_reconstructed_page_pdf(
                             shape.line_to(point[0], point[1])
                             current = point
                             has_geom = True
+                            shape_cmds += 1
+                        else:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] skip line current=%s point=%s page=%s",
+                                    drawing_index,
+                                    current,
+                                    point,
+                                    page_no,
+                                )
                         continue
 
                     if op == "c":
                         p3 = _to_point_from_args(args[-2:]) if len(args) >= 2 else None
                         if p3 is None:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] curve skip: invalid end point args=%s page=%s",
+                                    drawing_index,
+                                    _debug_args(args),
+                                    page_no,
+                                )
                             continue
                         p1 = _to_point_from_args(args[0:2]) if len(args) >= 2 else current
                         p2 = _to_point_from_args(args[2:4]) if len(args) >= 4 else current
@@ -3580,6 +3688,7 @@ def _write_reconstructed_page_pdf(
                             shape.line_to(p3[0], p3[1])
                         current = p3
                         has_geom = True
+                        shape_cmds += 1
                         continue
 
                     if op in ("v", "y"):
@@ -3589,6 +3698,15 @@ def _write_reconstructed_page_pdf(
                                 shape.line_to(point[0], point[1])
                             current = point
                             has_geom = True
+                            shape_cmds += 1
+                        else:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] curve fallback skip: invalid point args=%s page=%s",
+                                    drawing_index,
+                                    _debug_args(args),
+                                    page_no,
+                                )
                         continue
 
                     if op == "h":
@@ -3602,6 +3720,14 @@ def _write_reconstructed_page_pdf(
                                     exc,
                                     page_no,
                                 )
+                        else:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] shape.close_path success current=%s page=%s",
+                                    drawing_index,
+                                    current,
+                                    page_no,
+                                )
                         current = None
                         continue
 
@@ -3613,6 +3739,13 @@ def _write_reconstructed_page_pdf(
                                     "Drawing[%s] skip invalid rect args=%r page=%s",
                                     drawing_index,
                                     args,
+                                    page_no,
+                                )
+                                _LOGGER.debug(
+                                    "Drawing[%s] rect decode=%s normalized_try=%r page=%s",
+                                    drawing_index,
+                                    _debug_rect_probe(args),
+                                    _to_rect(args),
                                     page_no,
                                 )
                             continue
@@ -3629,6 +3762,7 @@ def _write_reconstructed_page_pdf(
                         try:
                             shape.draw_rect(pymupdf.Rect(x0, y0, x1, y1))
                             has_geom = True
+                            shape_cmds += 1
                         except Exception as exc:
                             if debug:
                                 _LOGGER.debug(
@@ -3649,6 +3783,20 @@ def _write_reconstructed_page_pdf(
                                 page_no,
                             )
                         try:
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] shape.finish kwargs color=%r fill=%r width=%r closePath=%s fill_opacity=%r stroke_opacity=%r dashes=%r lineCap=%r lineJoin=%r",
+                                    drawing_index,
+                                    stroke_color,
+                                    fill_color,
+                                    _round_float(line_width),
+                                    drawing.get("closePath", True),
+                                    fill_opacity,
+                                    stroke_opacity,
+                                    drawing.get("dashes"),
+                                    drawing.get("lineCap"),
+                                    drawing.get("lineJoin"),
+                                )
                             shape.finish(
                                 color=stroke_color,
                                 fill=fill_color,
@@ -3710,7 +3858,7 @@ def _write_reconstructed_page_pdf(
                                 )
                         break
 
-                    if debug:
+                    if op not in fill_ops and debug:
                         _LOGGER.debug(
                             "Drawing[%s] unsupported Shape op=%r args=%r page=%s",
                             drawing_index,
@@ -3720,6 +3868,15 @@ def _write_reconstructed_page_pdf(
                         )
 
                 if use_shape:
+                    if debug:
+                        _LOGGER.debug(
+                            "Drawing[%s] shape loop summary has_fill_op=%s has_geom=%s cmds=%s shape_disabled=%s",
+                            drawing_index,
+                            fill_op_executed,
+                            has_geom,
+                            shape_cmds,
+                            shape_disable_reason,
+                        )
                     if fill_key_present and fill_color is not None and not fill_op_executed:
                         if debug:
                             _LOGGER.debug(
@@ -3772,7 +3929,7 @@ def _write_reconstructed_page_pdf(
                                 has_geom,
                                 fill_key_present,
                             )
-                        return
+                    return
 
             if debug:
                 _LOGGER.debug(
@@ -3784,20 +3941,53 @@ def _write_reconstructed_page_pdf(
 
             current = None
             fallback_ops = Counter()
-            for item in items:
+            for item_idx, item in enumerate(items):
                 if not item:
+                    if debug:
+                        _LOGGER.debug(
+                            "Drawing[%s] fallback item=%s empty skip page=%s",
+                            drawing_index,
+                            item_idx,
+                            page_no,
+                        )
                     continue
-                op = item[0]
+                raw_op = item[0]
+                op = _normalize_op(raw_op)
                 args = item[1:]
                 if isinstance(op, str):
                     fallback_ops[op] += 1
+                if debug and item_idx < 120:
+                    _LOGGER.debug(
+                        "Drawing[%s] fallback item=%s raw_op=%r norm_op=%r args=%s page=%s",
+                        drawing_index,
+                        item_idx,
+                        raw_op,
+                        op,
+                        _debug_args(args),
+                        page_no,
+                    )
 
                 if op == "m":
                     current = _to_point_from_args(args)
+                    if debug:
+                        _LOGGER.debug(
+                            "Drawing[%s] fallback move point=%r page=%s",
+                            drawing_index,
+                            current,
+                            page_no,
+                        )
                     continue
 
                 if op == "l":
                     target = _to_point_from_args(args)
+                    if debug and target is None:
+                        _LOGGER.debug(
+                            "Drawing[%s] fallback line invalid target args=%s current=%s page=%s",
+                            drawing_index,
+                            _debug_args(args),
+                            current,
+                            page_no,
+                        )
                     if current is not None and target is not None:
                         try:
                             if target[0] != current[0] or target[1] != current[1]:
@@ -3829,6 +4019,14 @@ def _write_reconstructed_page_pdf(
                 if op == "c":
                     target = _to_point_from_args(args)
                     if current is not None and target is not None:
+                        if debug:
+                            _LOGGER.debug(
+                                "Drawing[%s] fallback curve fallback target=%r current=%r page=%s",
+                                drawing_index,
+                                target,
+                                current,
+                                page_no,
+                            )
                         try:
                             out_page.draw_line(
                                 pymupdf.Point(current[0], current[1]),
@@ -3857,6 +4055,13 @@ def _write_reconstructed_page_pdf(
                                 args,
                                 page_no,
                             )
+                            _LOGGER.debug(
+                                "Drawing[%s] fallback rect decode=%s normalized_try=%r page=%s",
+                                drawing_index,
+                                _debug_rect_probe(args),
+                                _to_rect(args),
+                                page_no,
+                            )
                         continue
                     x0, y0, x1, y1 = rect_values
                     if x1 == x0 or y1 == y0:
@@ -3868,6 +4073,15 @@ def _write_reconstructed_page_pdf(
                                 rect_values,
                             )
                         continue
+                    if debug:
+                        _LOGGER.debug(
+                            "Drawing[%s] fallback draw_rect call fill=%r fill_opacity=%r line_width=%r stroke=%r args=%s",
+                            drawing_index,
+                            fill_color,
+                            fill_opacity,
+                            line_width,
+                            _debug_args(args),
+                        )
                     try:
                         out_page.draw_rect(
                             pymupdf.Rect(x0, y0, x1, y1),
