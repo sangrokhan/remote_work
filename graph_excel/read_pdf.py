@@ -793,7 +793,18 @@ def _to_rect_from_re(args):
         return None
 
     first = args[0]
+    if isinstance(first, pymupdf.Rect):
+        return [float(first.x0), float(first.y0), float(first.x1), float(first.y1)]
+
     if isinstance(first, (list, tuple)) and len(first) == 4:
+        try:
+            return [float(first[0]), float(first[1]), float(first[2]), float(first[3])]
+        except (TypeError, ValueError):
+            return None
+
+    if len(args) == 2 and isinstance(args[1], (int, float)) and isinstance(
+        first, (list, tuple)
+    ) and len(first) == 4:
         try:
             return [float(first[0]), float(first[1]), float(first[2]), float(first[3])]
         except (TypeError, ValueError):
@@ -3422,6 +3433,14 @@ def _write_reconstructed_page_pdf(
         def _to_rect(value):
             if not isinstance(value, (list, tuple)):
                 return None
+            first = value[0] if value else None
+            if len(value) == 1 and isinstance(first, pymupdf.Rect):
+                return (
+                    float(first.x0),
+                    float(first.y0),
+                    float(first.x1),
+                    float(first.y1),
+                )
             if len(value) == 1 and isinstance(value[0], (list, tuple)):
                 inner = value[0]
                 if len(inner) == 4:
@@ -3434,6 +3453,13 @@ def _write_reconstructed_page_pdf(
                         )
                     except (TypeError, ValueError):
                         return None
+            if len(value) == 2 and isinstance(first, pymupdf.Rect):
+                return (
+                    float(first.x0),
+                    float(first.y0),
+                    float(first.x1),
+                    float(first.y1),
+                )
             if len(value) != 4:
                 return None
             try:
