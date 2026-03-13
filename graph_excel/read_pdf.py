@@ -653,6 +653,41 @@ def _to_point(value):
         return None
 
 
+def _to_rgb_color(value, default=(0.0, 0.0, 0.0)):
+    if value is None:
+        return default
+
+    if isinstance(value, (list, tuple)):
+        if len(value) >= 3:
+            try:
+                rgb = [float(component) for component in value[:3]]
+            except (TypeError, ValueError):
+                return default
+            return tuple(max(0.0, min(1.0, component)) for component in rgb)
+        return default
+
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+
+    if 0.0 <= v <= 1.0:
+        return (v, v, v)
+
+    if v < 0:
+        return default
+
+    iv = int(v)
+    if iv <= 0xFFFFFF:
+        return (
+            ((iv >> 16) & 0xFF) / 255.0,
+            ((iv >> 8) & 0xFF) / 255.0,
+            (iv & 0xFF) / 255.0,
+        )
+
+    return default
+
+
 def _to_rect_from_re(args):
     if not args:
         return None
@@ -2991,31 +3026,216 @@ def _write_preview_cleaned_page_pdf(
             )
 
         page = doc[page_no - 1]
-        removal_rects = _collect_removal_rects(
+        source_text = str(source_path)
+        raw_lines = _extract_page_lines(
             page=page,
             page_no=page_no,
-            source=str(source_path),
+            source=source_text,
             header_ratio=header_ratio,
             footer_ratio=footer_ratio,
-            watermark_angle=watermark_angle,
-            watermark_tolerance=watermark_tolerance,
-            remove_rotation_markdown=True,
-            strip_body_rotation=strip_body_rotation,
-            remove_markdown_lines=remove_markdown_lines,
+            preserve_newlines=False,
+            strip_markdown_lines=False,
             debug=debug,
         )
 
+        kept_lines = []
+        removed_count = 0
+        for line in raw_lines:
+            raw_text = _normalize_line(line.get("raw") or "")
+            if not raw_text:
+                continue
+
+            rotation = line.get("rotation")
+            location = line.get("location", "body")
+            rotation_match = _is_rotation_match(
+                rotation,
+                watermark_angle,
+                watermark_tolerance,
+            )
+            is_markdown = _is_markdown_like(raw_text)
+            should_remove = False
+            removed_reason = None
+
+            if rotation_match and (location == "body" or strip_body_rotation):
+                should_remove = True
+                removed_reason = "watermark-rotation"
+            if remove_markdown_lines and is_markdown:
+                should_remove = True
+                removed_reason = "markdown"
+
+            if should_remove:
+                removed_count += 1
+                if debug:
+                    _LOGGER.debug(
+                        "Preview removed element: source=%s page=%s line=%s location=%s reason=%s rotation=%s text=%r",
+                        source_text,
+                        page_no,
+                        line.get("line"),
+                        location,
+                        removed_reason,
+                        rotation,
+                        raw_text[:120],
+                    )
+                continue
+
+            kept_lines.append(line)
+
+        if debug:
+            _LOGGER.debug(
+                "Preview rebuild summary: source=%s page=%s kept_lines=%s removed_lines=%s",
+                source_text,
+                page_no,
+                len(kept_lines),
+                removed_count,
+            )
+
         rendered_pdf = pymupdf.open()
         out_page = rendered_pdf.new_page(width=page.rect.width, height=page.rect.height)
-        out_page.show_pdf_page(out_page.rect, doc, page_no - 1)
 
-        for rect in removal_rects:
+        for item in _extract_page_drawings(
+            page,
+            page_no,
+            source_text,
+            debug=debug,
+            header_ratio=header_ratio,
+            footer_ratio=footer_ratio,
+        ):
             try:
-                out_page.add_redact_annot(rect)
+                x0 = float(item.get("x0"))
+                y0 = float(item.get("y0"))
+                x1 = float(item.get("x1"))
+                y1 = float(item.get("y1"))
+            except (TypeError, ValueError):
+                continue
+            if x1 == x0 and y1 == y0:
+                continue
+            color = _to_rgb_color(item.get("color"))
+            linewidth = _coerce_number(item.get("linewidth"), 1.0) or 1.0
+            try:
+                out_page.draw_line(
+                    (x0, y0),
+                    (x1, y1),
+                    color=color,
+                    width=linewidth,
+                )
             except Exception:
                 continue
-        if removal_rects:
-            out_page.apply_redactions()
+
+        try:
+            image_list = page.get_images(full=True)
+        except Exception:
+            image_list = []
+
+        png_xref_to_stream = {}
+        for image in image_list:
+            if not image or len(image) < 1:
+                continue
+            xref = image[0]
+            if xref in png_xref_to_stream:
+                continue
+            try:
+                image_info = page.parent.extract_image(int(xref))
+            except Exception:
+                continue
+
+            if (image_info.get("ext") or "").lower() != "png":
+                continue
+
+            image_bytes = image_info.get("image")
+            if not isinstance(image_bytes, (bytes, bytearray)):
+                continue
+            png_xref_to_stream[xref] = bytes(image_bytes)
+
+        for xref, image_bytes in png_xref_to_stream.items():
+            try:
+                rects = page.get_image_rects(xref)
+            except Exception:
+                continue
+            if not rects:
+                continue
+            for rect in rects:
+                if rect is None:
+                    continue
+                try:
+                    out_page.insert_image(rect, stream=image_bytes)
+                except Exception:
+                    continue
+
+        for line in kept_lines:
+            line_rotation = _coerce_number(line.get("rotation"), 0.0) or 0.0
+            spans = line.get("spans") or []
+            default_font = line.get("font_family") or "helv"
+            default_size = _coerce_number(line.get("size"), 11.0) or 11.0
+            default_color = _to_rgb_color(line.get("color"), (0.0, 0.0, 0.0))
+
+            if not spans:
+                bbox = line.get("bbox")
+                if not (
+                    isinstance(bbox, (list, tuple))
+                    and len(bbox) == 4
+                ):
+                    continue
+                try:
+                    x0, y0, x1, y1 = [float(v) for v in bbox]
+                except (TypeError, ValueError):
+                    continue
+                if y1 <= y0:
+                    continue
+                text = _sanitize_text(line.get("raw") or "")
+                if not text:
+                    continue
+                point = (x0, y1)
+                for font_name in (default_font, "helv", "times-roman", "courier"):
+                    try:
+                        out_page.insert_text(
+                            point,
+                            text,
+                            fontsize=default_size,
+                            fontname=font_name,
+                            color=default_color,
+                            rotate=round(line_rotation),
+                            overlay=True,
+                        )
+                        break
+                    except Exception:
+                        continue
+                continue
+
+            for span in spans:
+                span_text = _sanitize_text(span.get("text") or "")
+                if not span_text:
+                    continue
+                span_bbox = span.get("bbox")
+                if not (
+                    isinstance(span_bbox, (list, tuple))
+                    and len(span_bbox) == 4
+                ):
+                    continue
+                try:
+                    x0, y0, x1, y1 = [float(v) for v in span_bbox]
+                except (TypeError, ValueError):
+                    continue
+                if y1 <= y0:
+                    continue
+
+                size = _coerce_number(span.get("size"), default_size) or default_size
+                font_name = span.get("font") or default_font
+                color = _to_rgb_color(span.get("color"), default_color)
+                point = (x0, y1)
+                for fallback in (font_name, "helv", "times-roman", "courier"):
+                    try:
+                        out_page.insert_text(
+                            point,
+                            span_text,
+                            fontsize=size,
+                            fontname=fallback,
+                            color=color,
+                            rotate=round(line_rotation),
+                            overlay=True,
+                        )
+                        break
+                    except Exception:
+                        continue
 
         rendered_pdf.save(output_path, deflate=True, garbage=4)
         rendered_pdf.close()
