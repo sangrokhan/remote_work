@@ -3809,32 +3809,71 @@ def _write_reconstructed_page_pdf(
                                 op,
                                 page_no,
                             )
+                        close_path_raw = drawing.get("closePath", True)
+                        if isinstance(close_path_raw, (int, float)):
+                            close_path = bool(close_path_raw)
+                        elif isinstance(close_path_raw, bool):
+                            close_path = close_path_raw
+                        else:
+                            close_path = True if close_path_raw is None else bool(close_path_raw)
+
+                        line_cap_raw = drawing.get("lineCap")
+                        if isinstance(line_cap_raw, bool):
+                            line_cap = int(line_cap_raw)
+                        elif isinstance(line_cap_raw, (int, float)):
+                            line_cap = int(line_cap_raw)
+                        else:
+                            line_cap = None
+
+                        line_join_raw = drawing.get("lineJoin")
+                        if isinstance(line_join_raw, bool):
+                            line_join = int(line_join_raw)
+                        elif isinstance(line_join_raw, (int, float)):
+                            line_join = int(line_join_raw)
+                        else:
+                            line_join = None
+
+                        dashes = drawing.get("dashes")
+                        if dashes is not None:
+                            if isinstance(dashes, (list, tuple)):
+                                try:
+                                    dashes = [float(v) for v in dashes]
+                                except (TypeError, ValueError):
+                                    dashes = None
+                            else:
+                                dashes = None
+
+                        shape_finish_kwargs = {
+                            "color": stroke_color,
+                            "fill": fill_color,
+                            "width": line_width,
+                            "closePath": close_path,
+                            "fill_opacity": fill_opacity,
+                            "stroke_opacity": stroke_opacity,
+                        }
+                        if dashes is not None:
+                            shape_finish_kwargs["dashes"] = dashes
+                        if line_cap is not None:
+                            shape_finish_kwargs["lineCap"] = line_cap
+                        if line_join is not None:
+                            shape_finish_kwargs["lineJoin"] = line_join
+
                         try:
                             if debug:
                                 _LOGGER.debug(
-                                    "Drawing[%s] shape.finish kwargs color=%r fill=%r width=%r closePath=%s fill_opacity=%r stroke_opacity=%r dashes=%r lineCap=%r lineJoin=%r",
+                                    "Drawing[%s] shape.finish kwargs color=%r fill=%r width=%r closePath=%r fill_opacity=%r stroke_opacity=%r dashes=%r lineCap=%r lineJoin=%r",
                                     drawing_index,
                                     stroke_color,
                                     fill_color,
                                     _round_float(line_width),
-                                    drawing.get("closePath", True),
+                                    close_path,
                                     fill_opacity,
                                     stroke_opacity,
-                                    drawing.get("dashes"),
-                                    drawing.get("lineCap"),
-                                    drawing.get("lineJoin"),
+                                    dashes,
+                                    line_cap,
+                                    line_join,
                                 )
-                            shape.finish(
-                                color=stroke_color,
-                                fill=fill_color,
-                                width=line_width,
-                                closePath=drawing.get("closePath", True),
-                                fill_opacity=fill_opacity,
-                                stroke_opacity=stroke_opacity,
-                                dashes=drawing.get("dashes"),
-                                lineCap=drawing.get("lineCap"),
-                                lineJoin=drawing.get("lineJoin"),
-                            )
+                            shape.finish(**shape_finish_kwargs)
                             shape.commit()
                             if debug:
                                 _LOGGER.debug(
@@ -3883,7 +3922,7 @@ def _write_reconstructed_page_pdf(
                                     drawing_index,
                                     shape_disable_reason,
                                 )
-                        break
+                    break
 
                     if op not in fill_ops and debug:
                         _LOGGER.debug(
@@ -3911,18 +3950,72 @@ def _write_reconstructed_page_pdf(
                                 drawing_index,
                                 page_no,
                             )
+                        close_path_raw = drawing.get("closePath", True)
+                        if isinstance(close_path_raw, (int, float)):
+                            close_path = bool(close_path_raw)
+                        elif isinstance(close_path_raw, bool):
+                            close_path = close_path_raw
+                        elif close_path_raw is None:
+                            close_path = True
+                        else:
+                            close_path = True
+
+                        line_cap_raw = drawing.get("lineCap")
+                        if isinstance(line_cap_raw, bool):
+                            line_cap = int(line_cap_raw)
+                        elif isinstance(line_cap_raw, (int, float)):
+                            line_cap = int(line_cap_raw)
+                        else:
+                            line_cap = None
+
+                        line_join_raw = drawing.get("lineJoin")
+                        if isinstance(line_join_raw, bool):
+                            line_join = int(line_join_raw)
+                        elif isinstance(line_join_raw, (int, float)):
+                            line_join = int(line_join_raw)
+                        else:
+                            line_join = None
+
+                        dashes = drawing.get("dashes")
+                        if dashes is not None:
+                            if isinstance(dashes, (list, tuple)):
+                                try:
+                                    dashes = [float(v) for v in dashes]
+                                except (TypeError, ValueError):
+                                    dashes = None
+                            else:
+                                dashes = None
+
                         try:
-                            shape.finish(
-                                color=stroke_color,
-                                fill=fill_color,
-                                width=line_width,
-                                closePath=drawing.get("closePath", True),
-                                fill_opacity=fill_opacity,
-                                stroke_opacity=stroke_opacity,
-                                dashes=drawing.get("dashes"),
-                                lineCap=drawing.get("lineCap"),
-                                lineJoin=drawing.get("lineJoin"),
-                            )
+                            if debug:
+                                _LOGGER.debug(
+                                    "Drawing[%s] fill-on-commit kwargs color=%r fill=%r width=%r closePath=%r fill_opacity=%r stroke_opacity=%r dashes=%r lineCap=%r lineJoin=%r",
+                                    drawing_index,
+                                    stroke_color,
+                                    fill_color,
+                                    _round_float(line_width),
+                                    close_path,
+                                    fill_opacity,
+                                    stroke_opacity,
+                                    dashes,
+                                    line_cap,
+                                    line_join,
+                                )
+                            shape_finish_kwargs = {
+                                "color": stroke_color,
+                                "fill": fill_color,
+                                "width": line_width,
+                                "closePath": close_path,
+                                "fill_opacity": fill_opacity,
+                                "stroke_opacity": stroke_opacity,
+                            }
+                            if dashes is not None:
+                                shape_finish_kwargs["dashes"] = dashes
+                            if line_cap is not None:
+                                shape_finish_kwargs["lineCap"] = line_cap
+                            if line_join is not None:
+                                shape_finish_kwargs["lineJoin"] = line_join
+                            shape.finish(**shape_finish_kwargs)
                             shape.commit()
                             if debug:
                                 _LOGGER.debug("Drawing[%s] fill-on-commit success", drawing_index)
