@@ -4907,213 +4907,6 @@ def write_jsonl_pages(records, output_path):
             f.write("\n")
 
 
-def write_raw_line_log(records, output_path):
-    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
-        global_line_no = 1
-        for record in records:
-            page_no = record.get("page")
-
-            for region_name in ("header", "body", "footer", "watermark"):
-                for item in record.get("regions", {}).get(region_name, []):
-                    payload = {
-                        "type": "line",
-                        "page": page_no,
-                        "region": item.get("region") or region_name,
-                        "line_no": item.get("line_no"),
-                        "row_no": item.get("row_no"),
-                        "global_line_no": global_line_no,
-                        "removed": item.get("removed"),
-                        "removed_reason": item.get("removed_reason"),
-                        "rotation": item.get("rotation"),
-                        "font_size": item.get("font_size"),
-                        "x": item.get("x"),
-                        "y": item.get("y"),
-                        "x_ratio": item.get("x_ratio"),
-                        "y_ratio": item.get("y_ratio"),
-                        "text": item.get("text"),
-                    }
-                    f.write(json.dumps(payload, ensure_ascii=False))
-                    f.write("\n")
-                    global_line_no += 1
-
-            payload = {
-                "type": "table-detection-summary",
-                "page": page_no,
-                "region": "table-detection",
-                "global_line_no": global_line_no,
-                "shape_line_count": len(record.get("shape_lines") or []),
-                "table_count": record.get("table_count", 0),
-            }
-            f.write(json.dumps(payload, ensure_ascii=False))
-            f.write("\n")
-            global_line_no += 1
-
-            for table in record.get("tables", []):
-                normalized = _normalize_table_record(table)
-                payload = {
-                    "type": "table",
-                    "page": page_no,
-                    "table_no": normalized.get("table_no"),
-                    "start_page": normalized.get("start_page"),
-                    "end_page": normalized.get("end_page"),
-                    "pages": normalized.get("pages"),
-                    "region": "table",
-                    "global_line_no": global_line_no,
-                    "rotation": normalized.get("rotation"),
-                    "x": normalized.get("x"),
-                    "y": normalized.get("y"),
-                    "bbox": normalized.get("bbox"),
-                    "rows": normalized.get("rows"),
-                    "cols": normalized.get("cols"),
-                    "infer_method": normalized.get("infer_method"),
-                    "text": normalized.get("text"),
-                }
-                f.write(json.dumps(payload, ensure_ascii=False))
-                f.write("\n")
-                global_line_no += 1
-
-                for line in normalized.get("row_lines", []) or []:
-                    f.write(
-                        json.dumps(
-                            {
-                                "type": "table-line",
-                                "page": page_no,
-                                "table_no": normalized.get("table_no"),
-                                "line_kind": "row",
-                                "orientation": "horizontal",
-                                "global_line_no": global_line_no,
-                                "x0": line.get("x0"),
-                                "y0": line.get("y0"),
-                                "x1": line.get("x1"),
-                                "y1": line.get("y1"),
-                            },
-                            ensure_ascii=False,
-                        )
-                    )
-                    f.write("\n")
-                    global_line_no += 1
-
-                for line in normalized.get("vertical_lines", []) or []:
-                    f.write(
-                        json.dumps(
-                            {
-                                "type": "table-line",
-                                "page": page_no,
-                                "table_no": normalized.get("table_no"),
-                                "line_kind": "column",
-                                "orientation": "vertical",
-                                "global_line_no": global_line_no,
-                                "x0": line.get("x0"),
-                                "y0": line.get("y0"),
-                                "x1": line.get("x1"),
-                                "y1": line.get("y1"),
-                            },
-                            ensure_ascii=False,
-                        )
-                    )
-                    f.write("\n")
-                    global_line_no += 1
-
-            for line in record.get("shape_lines", []) or []:
-                if line.get("type") != "shape-line":
-                    continue
-                payload = {
-                    "type": "shape-line",
-                    "page": page_no,
-                    "region": line.get("region", "shape"),
-                    "global_line_no": global_line_no,
-                    "orientation": line.get("orientation"),
-                    "x0": line.get("x0"),
-                    "y0": line.get("y0"),
-                    "x1": line.get("x1"),
-                    "y1": line.get("y1"),
-                    "x": line.get("x"),
-                    "y": line.get("y"),
-                    "length": line.get("length"),
-                    "linewidth": line.get("linewidth"),
-                    "color": line.get("color"),
-                }
-                f.write(json.dumps(payload, ensure_ascii=False))
-                f.write("\n")
-                global_line_no += 1
-
-
-def write_raw_components(pages_with_lines, output_path):
-    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
-        for page_no, lines, tables, shape_lines in pages_with_lines:
-            for line in lines:
-                payload = {
-                    "type": "raw-line",
-                    "page": page_no,
-                    "line_no": line.get("line"),
-                    "row_no": line.get("row_no"),
-                    "region": line.get("location"),
-                    "rotation": line.get("rotation"),
-                    "rotation_axis": line.get("rotation_axis"),
-                    "font_family": line.get("font_family"),
-                    "font_size": line.get("size"),
-                    "x": (line.get("position", {}) or {}).get("x"),
-                    "y": (line.get("position", {}) or {}).get("y"),
-                    "x_ratio": (line.get("position", {}) or {}).get("x_ratio"),
-                    "y_ratio": (line.get("position", {}) or {}).get("y_ratio"),
-                    "bbox": line.get("bbox"),
-                    "text": line.get("raw"),
-                    "markdown": line.get("markdown"),
-                    "spans": line.get("spans", []),
-                    "source": line.get("source"),
-                }
-                f.write(json.dumps(payload, ensure_ascii=False))
-                f.write("\n")
-
-            for table in tables:
-                payload = {
-                    "type": "raw-table",
-                    "page": page_no,
-                    "table_no": table.get("table_no"),
-                    "source": table.get("source"),
-                    "rotation": table.get("rotation"),
-                    "bbox": table.get("bbox"),
-                    "infer_method": table.get("infer_method"),
-                    "rows": table.get("row_count"),
-                    "cols": table.get("col_count"),
-                    "text": table.get("text"),
-                    "row_lines": table.get("row_lines", []),
-                    "vertical_lines": table.get("vertical_lines", []),
-                    "components": table.get("components", {}),
-                }
-                f.write(json.dumps(payload, ensure_ascii=False))
-                f.write("\n")
-
-            for line in shape_lines:
-                if line.get("type") != "shape-line":
-                    continue
-                payload = {
-                    "type": "raw-shape-line",
-                    "page": page_no,
-                    "rotation": lines[0].get("rotation", 0) if lines else 0,
-                    "x0": line.get("x0"),
-                    "y0": line.get("y0"),
-                    "x1": line.get("x1"),
-                    "y1": line.get("y1"),
-                    "x": line.get("x"),
-                    "y": line.get("y"),
-                    "length": line.get("length"),
-                    "orientation": line.get("orientation"),
-                    "linewidth": line.get("linewidth"),
-                    "color": line.get("color"),
-                    "region": line.get("region", "shape"),
-                }
-                f.write(json.dumps(payload, ensure_ascii=False))
-                f.write("\n")
-
-
-def write_raw_pages(raw_pages, output_path):
-    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
-        for payload in raw_pages:
-            f.write(json.dumps(payload, ensure_ascii=False))
-            f.write("\n")
-
-
 def write_rawdict_pages(raw_pages, output_path):
     with open(output_path, "w", encoding="utf-8", errors="replace") as f:
         for payload in raw_pages:
@@ -5304,29 +5097,10 @@ def parse_args():
         help="Emit table detection diagnostics to log.",
     )
     parser.add_argument(
-        "--raw-line-log",
+        "--raw",
+        nargs=1,
         default=None,
-        help="Write raw line extraction records to this file.",
-    )
-    parser.add_argument(
-        "--raw-components",
-        nargs="?",
-        const="",
-        default=None,
-        help=(
-            "Write full raw page components (lines + shape lines + tables) to JSONL."
-            " Optional path can be provided."
-        ),
-    )
-    parser.add_argument(
-        "--raw-page",
-        nargs="?",
-        const="",
-        default=None,
-        help=(
-            "Write pure PyMuPDF page objects (get_text/get_drawings/get_links) for selected pages."
-            " Optional path can be provided. Pass `rawdict` to output only page.get_text('rawdict') content."
-        ),
+        help="Write page.get_text('rawdict') output as JSONL. Must pass `rawdict`.",
     )
     parser.add_argument(
         "--debug",
@@ -5499,30 +5273,20 @@ def main():
         if request_tables_markdown and args.tables_markdown == ""
         else args.tables_markdown
     )
-    request_raw_components = args.raw_components is not None
-    raw_components_output = (
-        str(
-            Path(output).with_name(
-                f"{Path(output).stem}_raw_components.jsonl"
-            )
-        )
-        if request_raw_components and args.raw_components == ""
-        else args.raw_components
-    )
-    request_raw_page = args.raw_page is not None
+    request_raw = args.raw is not None
+    raw_mode = args.raw[0] if request_raw else None
     request_rawdict_page = (
-        request_raw_page
-        and isinstance(args.raw_page, str)
-        and args.raw_page.lower() == "rawdict"
+        request_raw
+        and isinstance(raw_mode, str)
+        and raw_mode.lower() == "rawdict"
     )
+    if request_raw and not request_rawdict_page:
+        raise SystemExit("--raw requires value `rawdict` (other values are not supported).")
+
     raw_page_output = (
         "raw.jsonl"
-        if request_rawdict_page
-        else str(
-            Path(output).with_name(f"{Path(output).stem}_raw_page.jsonl")
-        )
-        if request_raw_page and args.raw_page == ""
-        else args.raw_page
+        if request_raw
+        else None
     )
     result = read_pdf(
         args.file,
@@ -5540,38 +5304,21 @@ def main():
         debug=args.debug,
         table_debug=args.debug or args.table_debug,
         table_mode=args.table_mode,
-        return_pages_with_lines=request_raw_components,
-        return_raw_pages=request_raw_page,
+        return_pages_with_lines=False,
+        return_raw_pages=request_raw,
     )
-    if request_raw_components and request_raw_page:
-        records, pages_with_lines, raw_pages = result
-    elif request_raw_components:
-        records, pages_with_lines = result
-        raw_pages = None
-    elif request_raw_page:
+    if request_raw:
         records, raw_pages = result
     else:
         records = result
-    if args.raw_line_log:
-        write_raw_line_log(records, args.raw_line_log)
-    if request_raw_components and raw_components_output:
-        write_raw_components(pages_with_lines, raw_components_output)
-    if request_raw_page and raw_page_output:
-        if request_rawdict_page:
-            write_rawdict_pages(raw_pages or [], raw_page_output)
-        else:
-            write_raw_pages(raw_pages or [], raw_page_output)
+    if request_raw and raw_page_output:
+        write_rawdict_pages(raw_pages or [], raw_page_output)
     if args.legacy_page_jsonl:
         write_jsonl_pages(records, output)
-        if request_raw_components or request_raw_page:
+        if request_raw:
             print(f"Extracted {len(records)} pages -> {output}")
-            if request_raw_components:
-                print(f"Raw components -> {raw_components_output}")
-            if request_raw_page:
-                if request_rawdict_page:
-                    print(f"Raw page rawdict -> {raw_page_output}")
-                else:
-                    print(f"Raw page objects -> {raw_page_output}")
+            if request_raw:
+                print(f"Raw page rawdict -> {raw_page_output}")
         else:
             print(f"Extracted {len(records)} pages -> {output}")
     else:
@@ -5584,17 +5331,12 @@ def main():
         total_tables = sum(record.get("table_count", 0) for record in records)
         if request_tables_markdown and tables_markdown_output:
             _write_tables_markdown(records, tables_markdown_output)
-        if request_raw_components or request_raw_page:
+        if request_raw:
             print(
                 f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
             )
-            if request_raw_components:
-                print(f"Raw components -> {raw_components_output}")
-            if request_raw_page:
-                if request_rawdict_page:
-                    print(f"Raw page rawdict -> {raw_page_output}")
-                else:
-                    print(f"Raw page objects -> {raw_page_output}")
+            if request_raw:
+                print(f"Raw page rawdict -> {raw_page_output}")
             if request_tables_markdown:
                 print(f"Tables markdown -> {tables_markdown_output}")
         else:
