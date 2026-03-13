@@ -2639,6 +2639,57 @@ def _write_tables_markdown(records, output_path):
     return output_path
 
 
+def _remove_watermark_rows_from_table(table, repeated_watermarks):
+    if not repeated_watermarks:
+        return table
+
+    rows = table.get("rows_text") or []
+    if not rows:
+        return table
+
+    cleaned_rows = []
+    for row in rows:
+        if row is None:
+            continue
+
+        raw_row = str(row)
+        cells = [part.strip() for part in raw_row.split(" | ")]
+        kept_cells = []
+        for cell in cells:
+            normalized_cell = _normalize_line(cell).casefold()
+            if not normalized_cell:
+                continue
+            if normalized_cell in repeated_watermarks:
+                continue
+            if len(cells) == 1 and any(
+                watermark in normalized_cell for watermark in repeated_watermarks
+            ):
+                continue
+            kept_cells.append(cell.strip())
+
+        if not kept_cells:
+            continue
+
+        cleaned_rows.append(" | ".join(kept_cells))
+
+    if len(cleaned_rows) == len(rows):
+        return table
+
+    if not cleaned_rows:
+        return None
+
+    updated_table = dict(table)
+    updated_table["rows_text"] = cleaned_rows
+    updated_table["text"] = "\n".join(cleaned_rows)
+    updated_table["row_count"] = len(cleaned_rows)
+    updated_table["col_count"] = max(
+        (len(row.split(" | ")) for row in cleaned_rows),
+        default=0,
+    )
+
+    return updated_table
+
+
 def read_pdf(
     path,
     strip_watermarks=True,
@@ -2699,11 +2750,6 @@ def read_pdf(
     if extract_tables:
         tables = _merge_cross_page_tables(tables)
 
-    table_by_page = {}
-    for table in tables:
-        page_key = table.get("page")
-        table_by_page.setdefault(page_key, []).append(table)
-
     compiled_patterns = _compile_patterns(patterns or [])
     extracted_lines = [lines for _, lines, _, _ in pages_with_lines]
     repeated_watermarks = set()
@@ -2712,6 +2758,19 @@ def read_pdf(
             extracted_lines,
             ratio_threshold=ratio_threshold,
         )
+
+    if repeated_watermarks:
+        filtered = []
+        for table in tables:
+            cleaned = _remove_watermark_rows_from_table(table, repeated_watermarks)
+            if cleaned is not None:
+                filtered.append(cleaned)
+        tables = filtered
+
+    table_by_page = {}
+    for table in tables:
+        page_key = table.get("page")
+        table_by_page.setdefault(page_key, []).append(table)
 
     records = []
     for page_no, lines, _, shape_lines in pages_with_lines:

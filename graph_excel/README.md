@@ -68,6 +68,7 @@ python read_pdf.py <path-to-file.pdf> --legacy-page-jsonl
 When `--find-tables` is used in default mode, table records are emitted with `"type":"table"` in JSONL.
 `--tables-markdown` exports each detected table to markdown blocks with sequential names (`Table 1`, `Table 2`, ...).
 `--image-only-page` creates a single-page PDF that keeps only embedded PNG image objects from the selected source page (no text/vector/table objects kept in the output), useful for verifying image-based tables quickly.
+When watermark removal is enabled (`--strip-watermarks`, default on), rows that match repeated watermark signatures are removed from table rows during post-processing.
 Cross-page tables are merged automatically when the continuation table appears on the next page, shares column count and overlapping geometry, and sits at page boundaries; duplicated header rows are removed during merge.
 If `--pages` is set, it overrides `--max-pages`.
 `--preserve-newlines` keeps original whitespace/newline characters in each extracted line text instead of collapsing them.
