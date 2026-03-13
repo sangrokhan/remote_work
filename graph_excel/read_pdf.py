@@ -1728,7 +1728,7 @@ def _ensure_page_font_resource(
     if not hasattr(rendered_pdf, "insert_font"):
         if debug:
             _LOGGER.debug(
-                "rendered_pdf.insert_font missing; cannot register fallback Korean fontfile=%s source=%s page=%s",
+                "Rendered target has no insert_font; cannot register fallback Korean fontfile=%s source=%s page=%s",
                 fontfile_for_korean,
                 source_path,
                 page_no,
@@ -3705,7 +3705,7 @@ def _write_reconstructed_page_pdf(
 
         fontfile_for_korean = _get_reconstruct_fontfile(fontfile_override=korean_fontfile)
         korean_fontname = _ensure_page_font_resource(
-            rendered_pdf=rendered_pdf,
+            rendered_pdf=out_page,
             source_path=source_path,
             page_no=page_no,
             korean_fontfile=korean_fontfile,
