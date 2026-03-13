@@ -151,17 +151,62 @@ def _normalize_line(line):
 
 
 def _looks_like_repeated_watermark(line):
-    if not line:
+    normalized = _normalize_line(line)
+    if not normalized:
         return False
-    if len(line) > 120:
-        return False
-
-    alpha_chars = [ch for ch in line if ch.isalpha()]
-    if len(alpha_chars) < 4:
+    if len(normalized) > 120:
         return False
 
-    upper_ratio = sum(ch.isupper() for ch in alpha_chars) / len(alpha_chars)
-    return upper_ratio >= 0.7
+    if len(normalized) < 4:
+        return False
+
+    alpha_or_digit = [ch for ch in normalized if ch.isalpha() or ch.isdigit()]
+    if len(alpha_or_digit) < 4:
+        return False
+
+    if len(normalized.split()) > 8:
+        return False
+
+    return True
+
+
+def _collect_repeated_watermark_lines(
+    doc,
+    source,
+    header_ratio,
+    footer_ratio,
+    ratio_threshold,
+    exclude_locations=("header", "footer"),
+    debug=False,
+):
+    all_lines = []
+    page_count = int(doc.page_count or 0)
+    for page_no in range(1, page_count + 1):
+        try:
+            lines = _extract_page_lines(
+                doc[page_no - 1],
+                page_no,
+                source,
+                header_ratio,
+                footer_ratio,
+                preserve_newlines=False,
+                strip_markdown_lines=False,
+                debug=debug,
+            )
+        except Exception:
+            continue
+        for line in lines:
+            line["source"] = source
+        all_lines.append(lines)
+
+    if not all_lines:
+        return set()
+
+    return _collect_repeated_lines(
+        all_lines,
+        ratio_threshold=ratio_threshold,
+        exclude_locations=exclude_locations,
+    )
 
 
 def _collect_repeated_lines(pages, ratio_threshold, exclude_locations=("header", "footer")):
@@ -285,6 +330,7 @@ def _collect_removal_rects(
     watermark_angle,
     watermark_tolerance,
     remove_rotation_markdown=True,
+    strip_body_rotation=False,
     remove_markdown_lines=False,
     debug=False,
 ):
@@ -300,26 +346,33 @@ def _collect_removal_rects(
     )
 
     removal_rects = []
+    stats = {
+        "checked_lines": 0,
+        "rotation_matches": 0,
+        "markdown_matches": 0,
+        "removed": 0,
+    }
+
     for line in lines:
         raw_text = _normalize_line(line.get("raw") or "")
         if not raw_text:
             continue
+        stats["checked_lines"] += 1
 
         rotation = line.get("rotation")
         location = line.get("location", "body")
         rotation_match = _is_rotation_match(rotation, watermark_angle, watermark_tolerance)
         is_markdown = _is_markdown_like(raw_text)
-        is_watermark_like = _looks_like_repeated_watermark(raw_text)
         should_remove = False
         removed_reason = None
 
         if remove_rotation_markdown and rotation_match:
-            if location != "body":
+            stats["rotation_matches"] += 1
+            if strip_body_rotation or location != "body":
                 should_remove = True
-                removed_reason = "watermark-rotation-header-footer"
-            elif is_watermark_like or is_markdown:
-                should_remove = True
-                removed_reason = "watermark-rotation-body"
+                removed_reason = (
+                    "watermark-rotation-body" if location == "body" else "watermark-rotation-header-footer"
+                )
 
         if remove_markdown_lines and is_markdown:
             should_remove = True
@@ -328,11 +381,12 @@ def _collect_removal_rects(
         if not should_remove:
             if debug and rotation_match:
                 _LOGGER.debug(
-                    "Skipping rotation-match line in preview: source=%s page=%s line=%s location=%s text=%r",
+                    "Skipping rotation-match line in preview: source=%s page=%s line=%s location=%s markdown_like=%s text=%r",
                     source,
                     page_no,
                     line.get("line"),
                     location,
+                    is_markdown,
                     raw_text[:120],
                 )
             continue
@@ -362,6 +416,19 @@ def _collect_removal_rects(
             )
 
         removal_rects.append(pymupdf.Rect(x0, y0, x1, y1))
+        stats["removed"] += 1
+
+    if debug:
+        _LOGGER.debug(
+            "Preview removal summary: source=%s page=%s checked=%s rotation_matches=%s removed=%s markdown_like=%s markdown_option=%s",
+            source,
+            page_no,
+            stats["checked_lines"],
+            stats["rotation_matches"],
+            stats["removed"],
+            stats["markdown_matches"],
+            remove_markdown_lines,
+        )
 
     return removal_rects
 
@@ -2896,7 +2963,9 @@ def _write_preview_cleaned_page_pdf(
     watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
     header_ratio=0.08,
     footer_ratio=0.08,
+    watermark_ratio=0.6,
     remove_markdown_lines=False,
+    strip_body_rotation=False,
     debug=False,
 ):
     page_no = int(page_no)
@@ -2919,6 +2988,7 @@ def _write_preview_cleaned_page_pdf(
             watermark_angle=watermark_angle,
             watermark_tolerance=watermark_tolerance,
             remove_rotation_markdown=True,
+            strip_body_rotation=strip_body_rotation,
             remove_markdown_lines=remove_markdown_lines,
             debug=debug,
         )
@@ -3680,7 +3750,7 @@ def parse_args():
         default=None,
         help=(
             "Render one single page after removing watermark-rotation text and print/save the cleaned PDF "
-            "(default rotation=55°)."
+            "(default rotation=55°). Body lines are removed when they repeat across pages."
         ),
     )
     parser.add_argument(
@@ -3704,6 +3774,11 @@ def parse_args():
         "--preview-strip-markdown",
         action="store_true",
         help="Also remove markdown-like lines in --preview-page.",
+    )
+    parser.add_argument(
+        "--preview-strip-body-rotation",
+        action="store_true",
+        help="Also remove all rotation-matching lines in body in --preview-page.",
     )
     parser.add_argument(
         "--table-mode",
@@ -3792,9 +3867,11 @@ def main():
                 preview_output_path,
                 watermark_angle=args.watermark_angle,
                 watermark_tolerance=args.watermark_angle_tolerance,
+                watermark_ratio=args.watermark_ratio,
                 header_ratio=args.header_ratio,
                 footer_ratio=args.footer_ratio,
                 remove_markdown_lines=args.preview_strip_markdown,
+                strip_body_rotation=True,
                 debug=args.debug or args.table_debug,
             )
         except Exception as exc:
