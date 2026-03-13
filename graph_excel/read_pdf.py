@@ -368,11 +368,10 @@ def _collect_removal_rects(
 
         if remove_rotation_markdown and rotation_match:
             stats["rotation_matches"] += 1
-            if strip_body_rotation or location != "body":
+            remove_all_rotation = bool(strip_body_rotation)
+            if location == "body" or remove_all_rotation:
                 should_remove = True
-                removed_reason = (
-                    "watermark-rotation-body" if location == "body" else "watermark-rotation-header-footer"
-                )
+                removed_reason = "watermark-rotation-body" if location == "body" else "watermark-rotation-header-footer"
 
         if remove_markdown_lines and is_markdown:
             should_remove = True
@@ -391,31 +390,45 @@ def _collect_removal_rects(
                 )
             continue
 
-        bbox = line.get("bbox")
-        if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
-            continue
+        span_rects = []
+        for span in line.get("spans") or []:
+            span_bbox = span.get("bbox")
+            if not (isinstance(span_bbox, (list, tuple)) and len(span_bbox) == 4):
+                continue
+            try:
+                sx0, sy0, sx1, sy1 = [float(v) for v in span_bbox]
+            except (TypeError, ValueError):
+                continue
+            if sx1 <= sx0 or sy1 <= sy0:
+                continue
+            span_rects.append(pymupdf.Rect(sx0, sy0, sx1, sy1))
 
-        try:
-            x0, y0, x1, y1 = [float(v) for v in bbox]
-        except (TypeError, ValueError):
-            continue
+        if not span_rects:
+            bbox = line.get("bbox")
+            if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
+                continue
+            try:
+                x0, y0, x1, y1 = [float(v) for v in bbox]
+            except (TypeError, ValueError):
+                continue
+            if x1 <= x0 or y1 <= y0:
+                continue
+            span_rects.append(pymupdf.Rect(x0, y0, x1, y1))
 
-        if x1 <= x0 or y1 <= y0:
-            continue
+        for rect in span_rects:
+            if debug and removed_reason:
+                _LOGGER.debug(
+                    "Preview watermark-removal rect: source=%s page=%s line=%s location=%s reason=%s rotation=%s rect=%s",
+                    source,
+                    page_no,
+                    line.get("line"),
+                    location,
+                    removed_reason,
+                    rotation,
+                    f"{_round_float(rect.x0)},{_round_float(rect.y0)},{_round_float(rect.x1)},{_round_float(rect.y1)}",
+                )
+            removal_rects.append(rect)
 
-        if debug and removed_reason:
-            _LOGGER.debug(
-                "Preview watermark-removal rect: source=%s page=%s line=%s location=%s reason=%s rotation=%s rect=%s",
-                source,
-                page_no,
-                line.get("line"),
-                location,
-                removed_reason,
-                rotation,
-                f"{_round_float(x0)},{_round_float(y0)},{_round_float(x1)},{_round_float(y1)}",
-            )
-
-        removal_rects.append(pymupdf.Rect(x0, y0, x1, y1))
         stats["removed"] += 1
 
     if debug:
@@ -2963,7 +2976,6 @@ def _write_preview_cleaned_page_pdf(
     watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
     header_ratio=0.08,
     footer_ratio=0.08,
-    watermark_ratio=0.6,
     remove_markdown_lines=False,
     strip_body_rotation=False,
     debug=False,
@@ -2999,7 +3011,7 @@ def _write_preview_cleaned_page_pdf(
 
         for rect in removal_rects:
             try:
-                out_page.add_redact_annot(rect, fill=(1, 1, 1))
+                out_page.add_redact_annot(rect)
             except Exception:
                 continue
         if removal_rects:
@@ -3750,7 +3762,7 @@ def parse_args():
         default=None,
         help=(
             "Render one single page after removing watermark-rotation text and print/save the cleaned PDF "
-            "(default rotation=55°). Body lines are removed when they repeat across pages."
+            "(default rotation=55°)."
         ),
     )
     parser.add_argument(
@@ -3778,7 +3790,7 @@ def parse_args():
     parser.add_argument(
         "--preview-strip-body-rotation",
         action="store_true",
-        help="Also remove all rotation-matching lines in body in --preview-page.",
+        help="Also remove rotation-matching lines in non-body regions in --preview-page.",
     )
     parser.add_argument(
         "--table-mode",
@@ -3867,11 +3879,10 @@ def main():
                 preview_output_path,
                 watermark_angle=args.watermark_angle,
                 watermark_tolerance=args.watermark_angle_tolerance,
-                watermark_ratio=args.watermark_ratio,
                 header_ratio=args.header_ratio,
                 footer_ratio=args.footer_ratio,
                 remove_markdown_lines=args.preview_strip_markdown,
-                strip_body_rotation=True,
+                strip_body_rotation=args.preview_strip_body_rotation,
                 debug=args.debug or args.table_debug,
             )
         except Exception as exc:
