@@ -213,6 +213,22 @@ def _coerce_page_numbers(doc, requested_pages, max_pages):
     return list(range(1, end_page + 1))
 
 
+def _dedupe_pages(page_numbers):
+    if not page_numbers:
+        return []
+
+    deduped = []
+    seen = set()
+    for raw_page_no in page_numbers:
+        page_no = int(raw_page_no)
+        if page_no in seen:
+            continue
+        seen.add(page_no)
+        deduped.append(page_no)
+
+    return deduped
+
+
 def _surrounding_snippet(text, position, radius=40):
     start = max(0, position - radius)
     end = min(len(text), position + radius + 1)
@@ -2360,7 +2376,6 @@ def _collect_watermark_line_filter(
     footer_ratio,
     watermark_angle=_WATERMARK_ROTATION_DEGREE,
     watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
-    strip_body_rotation=False,
     debug=False,
 ):
     if not enabled:
@@ -2392,7 +2407,6 @@ def _collect_watermark_line_filter(
             watermark_tolerance=watermark_tolerance,
             source=source_text,
             page_no=page_no,
-            strip_body_rotation=strip_body_rotation,
             debug=debug,
         )
         removed_lines = watermark_result["removed_lines"]
@@ -2464,7 +2478,6 @@ def _is_watermark_line(
     line,
     watermark_angle,
     watermark_tolerance,
-    strip_body_rotation=False,
 ):
     raw_text = _normalize_line(line.get("raw") or "")
     if not raw_text:
@@ -2472,9 +2485,7 @@ def _is_watermark_line(
 
     rotation = line.get("rotation")
     location = line.get("location", "body")
-    if _is_rotation_match(rotation, watermark_angle, watermark_tolerance) and (
-        location == "body" or strip_body_rotation
-    ):
+    if _is_rotation_match(rotation, watermark_angle, watermark_tolerance) and location == "body":
         return True, "watermark-rotation"
 
     return False, None
@@ -2486,7 +2497,6 @@ def _remove_watermark_lines(
     watermark_tolerance,
     source=None,
     page_no=None,
-    strip_body_rotation=False,
     debug=False,
 ):
     removed_lines = []
@@ -2499,7 +2509,6 @@ def _remove_watermark_lines(
             line=line,
             watermark_angle=watermark_angle,
             watermark_tolerance=watermark_tolerance,
-            strip_body_rotation=strip_body_rotation,
         )
 
         if should_remove:
@@ -3098,79 +3107,15 @@ def _extract_page_raw_payload(page, page_no, source, debug=False):
     return payload
 
 
-def _write_image_only_page_pdf(
-    source_path,
-    page_no,
-    output_path,
-    header_ratio=0.08,
-    footer_ratio=0.08,
-):
-    page_no = int(page_no)
-    if page_no < 1:
-        raise ValueError(f"Page number must be >=1: {page_no}")
-
-    with pymupdf.open(source_path) as doc:
-        if page_no > doc.page_count:
-            raise ValueError(
-                f"Page number out of range: {page_no} (total: {doc.page_count})"
-            )
-
-        page = doc[page_no - 1]
-        page_images = page.get_images(full=True)
-        png_xref_to_stream = {}
-        for item in page_images:
-            if not item:
-                continue
-            xref = item[0]
-            if xref in png_xref_to_stream:
-                continue
-
-            try:
-                image_info = doc.extract_image(int(xref))
-            except Exception:
-                continue
-
-            if (image_info.get("ext") or "").lower() != "png":
-                continue
-
-            image_bytes = image_info.get("image")
-            if not isinstance(image_bytes, (bytes, bytearray)):
-                continue
-            png_xref_to_stream[xref] = bytes(image_bytes)
-
-        rendered_pdf = pymupdf.open()
-        out_page = rendered_pdf.new_page(width=page.rect.width, height=page.rect.height)
-        for xref, image_bytes in png_xref_to_stream.items():
-            try:
-                rects = page.get_image_rects(xref)
-            except Exception:
-                continue
-
-            if not rects:
-                continue
-            for rect in rects:
-                if rect is None:
-                    continue
-                out_page.insert_image(rect, stream=image_bytes)
-
-        rendered_pdf.save(output_path, deflate=True, garbage=4)
-        rendered_pdf.close()
-
-    return str(Path(output_path))
-
-
 def _write_reconstructed_page_pdf(
     source_path,
     page_no,
     output_path,
     remove_watermark=False,
-    watermark_patterns=None,
-    watermark_ratio=0.6,
     watermark_angle=_WATERMARK_ROTATION_DEGREE,
     watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
     header_ratio=0.08,
     footer_ratio=0.08,
-    strip_body_rotation=False,
     debug=False,
 ):
     page_no = int(page_no)
@@ -3204,7 +3149,6 @@ def _write_reconstructed_page_pdf(
             footer_ratio=footer_ratio,
             watermark_angle=watermark_angle,
             watermark_tolerance=watermark_tolerance,
-            strip_body_rotation=strip_body_rotation,
             debug=debug,
         )
         removed_line_numbers = watermark_filter["removed_line_numbers"]
@@ -3381,13 +3325,6 @@ def _write_reconstructed_page_pdf(
     return str(Path(output_path))
 
 
-def _image_only_output_path(source_path, page_no):
-    prefix = f"{Path(source_path).stem}_page{page_no}_"
-    tmp = tempfile.NamedTemporaryFile(prefix=prefix, suffix="_image_only.pdf", delete=False)
-    tmp.close()
-    return tmp.name
-
-
 def _reconstruct_output_path(source_path, page_no):
     prefix = f"{Path(source_path).stem}_page{page_no}_"
     tmp = tempfile.NamedTemporaryFile(
@@ -3402,26 +3339,16 @@ def _write_reconstructed_pages_pdf(
     page_numbers,
     output_path,
     remove_watermark=False,
-    watermark_patterns=None,
-    watermark_ratio=0.6,
     watermark_angle=_WATERMARK_ROTATION_DEGREE,
     watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
     header_ratio=0.08,
     footer_ratio=0.08,
-    strip_body_rotation=False,
     debug=False,
 ):
     if not page_numbers:
         raise ValueError("No pages specified for reconstruction.")
 
-    target_pages = []
-    seen_pages = set()
-    for raw_page_no in page_numbers:
-        page_no = int(raw_page_no)
-        if page_no in seen_pages:
-            continue
-        seen_pages.add(page_no)
-        target_pages.append(page_no)
+    target_pages = _dedupe_pages(page_numbers)
 
     if not target_pages:
         raise ValueError("No unique pages specified for reconstruction.")
@@ -3437,13 +3364,10 @@ def _write_reconstructed_pages_pdf(
                     page_no,
                     temp_path,
                     remove_watermark=remove_watermark,
-                    watermark_patterns=watermark_patterns,
-                    watermark_ratio=watermark_ratio,
                     watermark_angle=watermark_angle,
                     watermark_tolerance=watermark_tolerance,
                     header_ratio=header_ratio,
                     footer_ratio=footer_ratio,
-                    strip_body_rotation=strip_body_rotation,
                     debug=debug,
                 )
 
@@ -3968,25 +3892,6 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--image-only-page",
-        type=int,
-        default=None,
-        help=(
-            "Render one page as an image-only PDF (flattened page image)."
-        ),
-    )
-    parser.add_argument(
-        "--image-only-output",
-        default=None,
-        help="Output path for --image-only-page. If omitted, a temporary file is created.",
-    )
-    parser.add_argument(
-        "--image-only-dpi",
-        type=int,
-        default=180,
-        help="(legacy) Kept for backward compatibility; currently ignored for image-only extraction.",
-    )
-    parser.add_argument(
         "--reconstruction",
         action="store_true",
         help="Reconstruct selected pages from --pages into a single PDF.",
@@ -4049,8 +3954,6 @@ def main():
     )
 
     if args.reconstruction:
-        if args.image_only_page is not None:
-            raise SystemExit("--reconstruction cannot be combined with --image-only-page.")
         if args.output is None:
             raise SystemExit("--reconstruction requires --output.")
 
@@ -4068,49 +3971,16 @@ def main():
                 requested_pages,
                 args.output,
                 remove_watermark=args.remove_watermark,
-                watermark_patterns=args.watermark_patterns,
-                watermark_ratio=args.watermark_ratio,
                 watermark_angle=args.watermark_angle,
                 watermark_tolerance=args.watermark_angle_tolerance,
                 header_ratio=args.header_ratio,
                 footer_ratio=args.footer_ratio,
-                strip_body_rotation=False,
                 debug=args.debug or args.table_debug,
             )
         except Exception as exc:
             raise SystemExit(f"Failed to create reconstructed page PDF: {exc}")
 
         print(f"Reconstructed page PDF saved to: {created_path}")
-        return
-
-    if args.image_only_page is not None:
-        try:
-            page_no = int(args.image_only_page)
-        except (TypeError, ValueError):
-            raise SystemExit("--image-only-page must be an integer.")
-
-        if args.pages is not None:
-            raise SystemExit("--image-only-page cannot be combined with --pages.")
-
-        if page_no < 1:
-            raise SystemExit("--image-only-page must be >= 1.")
-
-        output_path = args.image_only_output
-        if not output_path:
-            output_path = _image_only_output_path(args.file, page_no)
-
-        try:
-            created_path = _write_image_only_page_pdf(
-                args.file,
-                page_no,
-                output_path,
-                header_ratio=args.header_ratio,
-                footer_ratio=args.footer_ratio,
-            )
-        except Exception as exc:
-            raise SystemExit(f"Failed to create image-only page PDF: {exc}")
-
-        print(f"Image-only page PDF saved to: {created_path}")
         return
 
     try:
