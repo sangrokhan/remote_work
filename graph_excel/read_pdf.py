@@ -2337,6 +2337,30 @@ def _line_to_payload(line, markdown_line, target_region, removed_reason, removed
     }
 
 
+def _is_preview_watermark_line(
+    line,
+    watermark_angle,
+    watermark_tolerance,
+    strip_body_rotation=False,
+    remove_markdown_lines=False,
+):
+    raw_text = _normalize_line(line.get("raw") or "")
+    if not raw_text:
+        return False, "empty-text"
+
+    rotation = line.get("rotation")
+    location = line.get("location", "body")
+    if _is_rotation_match(rotation, watermark_angle, watermark_tolerance) and (
+        location == "body" or strip_body_rotation
+    ):
+        return True, "watermark-rotation"
+
+    if remove_markdown_lines and _is_markdown_like(raw_text):
+        return True, "markdown"
+
+    return False, None
+
+
 def _summarize_items(items):
     if not items:
         return {
@@ -3041,42 +3065,28 @@ def _write_preview_cleaned_page_pdf(
         kept_lines = []
         removed_count = 0
         for line in raw_lines:
-            raw_text = _normalize_line(line.get("raw") or "")
-            if not raw_text:
-                continue
-
-            rotation = line.get("rotation")
-            location = line.get("location", "body")
-            rotation_match = _is_rotation_match(
-                rotation,
-                watermark_angle,
-                watermark_tolerance,
+            should_remove, removed_reason = _is_preview_watermark_line(
+                line=line,
+                watermark_angle=watermark_angle,
+                watermark_tolerance=watermark_tolerance,
+                strip_body_rotation=strip_body_rotation,
+                remove_markdown_lines=remove_markdown_lines,
             )
-            is_markdown = _is_markdown_like(raw_text)
-            should_remove = False
-            removed_reason = None
-
-            if rotation_match and (location == "body" or strip_body_rotation):
-                should_remove = True
-                removed_reason = "watermark-rotation"
-            if remove_markdown_lines and is_markdown:
-                should_remove = True
-                removed_reason = "markdown"
-
+            if should_remove and debug:
+                _LOGGER.debug(
+                    "Preview removed element: source=%s page=%s line=%s location=%s reason=%s rotation=%s text=%r",
+                    source_text,
+                    page_no,
+                    line.get("line"),
+                    line.get("location"),
+                    removed_reason,
+                    line.get("rotation"),
+                    _normalize_line(line.get("raw") or "")[:120],
+                )
             if should_remove:
                 removed_count += 1
-                if debug:
-                    _LOGGER.debug(
-                        "Preview removed element: source=%s page=%s line=%s location=%s reason=%s rotation=%s text=%r",
-                        source_text,
-                        page_no,
-                        line.get("line"),
-                        location,
-                        removed_reason,
-                        rotation,
-                        raw_text[:120],
-                    )
                 continue
+
 
             kept_lines.append(line)
 
@@ -4010,7 +4020,10 @@ def parse_args():
     parser.add_argument(
         "--preview-strip-body-rotation",
         action="store_true",
-        help="Also remove rotation-matching lines in non-body regions in --preview-page.",
+        help=(
+            "Also remove rotation-matching lines in all regions in --preview-page. "
+            "Without this flag, only body-region rotation matches are removed."
+        ),
     )
     parser.add_argument(
         "--table-mode",
