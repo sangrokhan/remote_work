@@ -126,7 +126,19 @@ def _get_registry_korean_font_candidates(font_markers):
 
                 for candidate in candidate_paths:
                     try:
+                        candidate_key = _normalize_font_match_key(candidate)
+                        matched_markers = [
+                            marker for marker in marker_set
+                            if marker and marker in candidate_key
+                        ]
                         if candidate.is_file():
+                            if _LOGGER.isEnabledFor(logging.DEBUG):
+                                _LOGGER.debug(
+                                    "Registry font candidate match: value_name=%r markers=%s path=%s",
+                                    value_name,
+                                    sorted(matched_markers),
+                                    candidate,
+                                )
                             found.append(str(candidate))
                     except OSError:
                         continue
@@ -220,7 +232,10 @@ def _get_reconstruct_fontfile(fontfile_override=None):
 
     if fontfile_override:
         override_path = Path(fontfile_override)
-        if override_path.is_file():
+        override_exists = override_path.is_file()
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug("Override fontfile check: path=%s exists=%s", fontfile_override, override_exists)
+        if override_exists:
             return str(override_path)
         _LOGGER.warning(
             "Provided reconstruction fontfile does not exist or is not a file: %s",
@@ -232,7 +247,10 @@ def _get_reconstruct_fontfile(fontfile_override=None):
 
     for font_path in _KOREAN_FONT_HINTS:
         try:
-            if Path(font_path).is_file():
+            exists = Path(font_path).is_file()
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug("Korean font hint check: path=%s exists=%s", font_path, exists)
+            if exists:
                 _RECONSTRUCTION_KOREAN_FONT = str(font_path)
                 return _RECONSTRUCTION_KOREAN_FONT
         except OSError:
@@ -262,7 +280,10 @@ def _get_reconstruct_fontfile(fontfile_override=None):
         "gothic",
     )):
         try:
-            if Path(font_path).is_file():
+            is_file = Path(font_path).is_file()
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug("Registry-provided Korean font check: path=%s exists=%s", font_path, is_file)
+            if is_file:
                 _RECONSTRUCTION_KOREAN_FONT = str(font_path)
                 return _RECONSTRUCTION_KOREAN_FONT
         except OSError:
@@ -317,7 +338,15 @@ def _get_reconstruct_fontfile(fontfile_override=None):
                     path_str = _normalize_font_match_key(path)
                 except OSError:
                     continue
-                if any(marker in path_str for marker in font_name_markers):
+                matched_markers = [marker for marker in font_name_markers if marker in path_str]
+                if matched_markers:
+                    if _LOGGER.isEnabledFor(logging.DEBUG):
+                        _LOGGER.debug(
+                            "Korean font marker match in %s: markers=%s path=%s",
+                            root_path,
+                            sorted(matched_markers),
+                            path,
+                        )
                     try:
                         _RECONSTRUCTION_KOREAN_FONT = str(path)
                         return _RECONSTRUCTION_KOREAN_FONT
@@ -335,7 +364,15 @@ def _get_reconstruct_fontfile(fontfile_override=None):
                     name = _normalize_font_match_key(path)
                 except OSError:
                     continue
-                if any(marker in name for marker in font_name_markers):
+                matched_markers = [marker for marker in font_name_markers if marker in name]
+                if matched_markers:
+                    if _LOGGER.isEnabledFor(logging.DEBUG):
+                        _LOGGER.debug(
+                            "Korean font filename fallback match in %s: markers=%s path=%s",
+                            root_path,
+                            sorted(matched_markers),
+                            path,
+                        )
                     _RECONSTRUCTION_KOREAN_FONT = str(path)
                     return _RECONSTRUCTION_KOREAN_FONT
 
@@ -1746,6 +1783,15 @@ def _ensure_page_font_resource(
     ):
         add_font_candidate(candidate)
 
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        _LOGGER.debug(
+            "Resolved Korean fontfile candidates: source=%s page=%s count=%s candidates=%s",
+            source_path,
+            page_no,
+            len(font_candidates),
+            font_candidates,
+        )
+
     if not font_candidates:
         if debug:
             _LOGGER.debug(
@@ -1756,12 +1802,22 @@ def _ensure_page_font_resource(
         return None
 
     font_name = "reconstruct_korean"
+    last_failure = None
     for fontfile in font_candidates:
         if not fontfile:
             continue
         try:
             font_path = Path(fontfile)
-            if not font_path.is_file():
+            candidate_exists = font_path.is_file()
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "Korean font candidate check: path=%s exists=%s source=%s page=%s",
+                    font_path,
+                    candidate_exists,
+                    source_path,
+                    page_no,
+                )
+            if not candidate_exists:
                 if debug:
                     _LOGGER.debug(
                         "Fallback font path is not a file: %s source=%s page=%s",
@@ -1780,10 +1836,21 @@ def _ensure_page_font_resource(
                     fontfile=str(font_path),
                 )
                 candidate_used = str(font_path)
+                if _LOGGER.isEnabledFor(logging.DEBUG):
+                    _LOGGER.debug(
+                        "Font insert(fontfile) succeeded: candidate=%s returned=%r",
+                        candidate_used,
+                        korean_fontname,
+                    )
             except TypeError:
                 # older versions may not accept fontfile keyword
-                pass
+                if _LOGGER.isEnabledFor(logging.DEBUG):
+                    _LOGGER.debug(
+                        "Font insert(fontfile) unsupported signature, trying fontbuffer: candidate=%s",
+                        font_path,
+                    )
             except Exception as exc:
+                last_failure = ("fontfile", str(font_path), str(exc))
                 if debug:
                     _LOGGER.debug(
                         "Font insert with fontfile failed: candidate=%s source=%s page=%s error=%s",
@@ -1814,6 +1881,13 @@ def _ensure_page_font_resource(
                             page_no,
                             exc,
                         )
+                else:
+                    if _LOGGER.isEnabledFor(logging.DEBUG):
+                        _LOGGER.debug(
+                            "Font insert(fontbuffer) succeeded: candidate=%s returned=%r",
+                            font_path,
+                            korean_fontname,
+                        )
 
             if not korean_fontname:
                 try:
@@ -1837,6 +1911,13 @@ def _ensure_page_font_resource(
                             page_no,
                             exc,
                         )
+                else:
+                    if _LOGGER.isEnabledFor(logging.DEBUG):
+                        _LOGGER.debug(
+                            "Font insert(fontbuffer,set_simple=False) succeeded: candidate=%s returned=%r",
+                            font_path,
+                            korean_fontname,
+                        )
 
             if korean_fontname:
                 if debug:
@@ -1848,8 +1929,12 @@ def _ensure_page_font_resource(
                         page_no,
                     )
                 return korean_fontname
+            last_failure = ("not_registered", str(font_path), "all attempts returned empty fontname")
         except OSError:
+            last_failure = ("os_error", str(fontfile), "path check/read error")
             continue
+        except Exception as exc:
+            last_failure = ("unknown", str(fontfile), str(exc))
 
     if debug:
         _LOGGER.debug(
@@ -1858,6 +1943,13 @@ def _ensure_page_font_resource(
             source_path,
             page_no,
         )
+        if last_failure:
+            _LOGGER.debug(
+                "Last font registration failure detail: method=%s path=%s error=%s",
+                last_failure[0],
+                last_failure[1],
+                last_failure[2],
+            )
     if debug:
         _LOGGER.debug(
             "Fallback fontfile registration failed; using fallback fontname=%s for source=%s page=%s",
