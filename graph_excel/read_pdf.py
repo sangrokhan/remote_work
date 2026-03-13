@@ -756,299 +756,6 @@ def _merge_numeric(values, tolerance):
     return merged
 
 
-def _collect_span_cells(lines, bbox=None):
-    filter_bbox = None
-    if (
-        isinstance(bbox, (list, tuple))
-        and len(bbox) == 4
-        and all(v is not None for v in bbox)
-    ):
-        try:
-            filter_bbox = [float(v) for v in bbox]
-            if filter_bbox[0] == filter_bbox[2] or filter_bbox[1] == filter_bbox[3]:
-                filter_bbox = None
-        except (TypeError, ValueError):
-            filter_bbox = None
-
-    if filter_bbox is not None:
-        fx0, fy0, fx1, fy1 = filter_bbox
-
-    if not lines:
-        return []
-
-    spans = []
-    for line in lines:
-        if line.get("is_watermark_rotation"):
-            continue
-
-        location = line.get("location", "body")
-        if location == "watermark":
-            continue
-
-        for span in line.get("spans", []) or []:
-            raw = _normalize_line((span.get("text") or "").strip())
-            if not raw:
-                continue
-
-            span_bbox = span.get("bbox")
-            if not isinstance(span_bbox, (list, tuple)) or len(span_bbox) != 4:
-                continue
-
-            try:
-                x0, y0, x1, y1 = [float(v) for v in span_bbox]
-            except (TypeError, ValueError):
-                continue
-            if x0 == x1 or y0 == y1:
-                continue
-            if filter_bbox is not None and (
-                x1 < fx0
-                or x0 > fx1
-                or y1 < fy0
-                or y0 > fy1
-            ):
-                continue
-
-            spans.append(
-                {
-                    "text": raw,
-                    "bbox": [x0, y0, x1, y1],
-                    "x0": x0,
-                    "x1": x1,
-                    "y0": y0,
-                    "y1": y1,
-                    "cx": (x0 + x1) / 2.0,
-                    "cy": (y0 + y1) / 2.0,
-                    "line_no": line.get("line"),
-                }
-            )
-    return spans
-
-
-def _build_text_grid_table(
-    lines,
-    page_rect,
-    page_no,
-    source,
-    rotation=0,
-    debug=False,
-    bbox=None,
-    min_rows=2,
-    min_row_candidates=2,
-    min_support_ratio=0.25,
-    infer_method="text-grid",
-    override_row_lines=None,
-    override_vertical_lines=None,
-):
-    spans = _collect_span_cells(lines, bbox=bbox)
-    if not spans:
-        return []
-
-    row_tolerance = max(2.5, _estimate_row_tolerance(lines))
-    rows = []
-    for span in sorted(spans, key=lambda item: item["cy"]):
-        if rows and abs(span["cy"] - rows[-1]["cy"]) <= row_tolerance:
-            row = rows[-1]
-            row["items"].append(span)
-            row["count"] += 1
-            row["cy"] = (row["cy"] * (row["count"] - 1) + span["cy"]) / row["count"]
-            row["y0"] = min(row["y0"], span["y0"])
-            row["y1"] = max(row["y1"], span["y1"])
-        else:
-            rows.append(
-                {
-                    "cy": span["cy"],
-                    "count": 1,
-                    "items": [span],
-                    "y0": span["y0"],
-                    "y1": span["y1"],
-                }
-            )
-
-    if len(rows) < min_rows:
-        if debug:
-            _LOGGER.debug(
-                "%s inference skipped: too few row clusters. source=%s page=%s rows=%s",
-                infer_method,
-                source,
-                page_no,
-                len(rows),
-            )
-        return []
-
-    row_candidates = [row for row in rows if len(row["items"]) >= 2]
-    if len(row_candidates) < min_row_candidates:
-        if debug:
-            _LOGGER.debug(
-                "%s inference skipped: too few multi-cell rows. source=%s page=%s candidate_rows=%s",
-                infer_method,
-                source,
-                page_no,
-                len(row_candidates),
-            )
-        return []
-
-    column_count_stats = Counter(len(row["items"]) for row in row_candidates)
-    dominant_col_count, _ = column_count_stats.most_common(1)[0]
-    if dominant_col_count < 2:
-        return []
-
-    support_threshold = max(2, dominant_col_count - 1)
-    required_support = max(
-        2,
-        min(len(row_candidates), max(2, math.ceil(len(row_candidates) * min_support_ratio))),
-    )
-    support_rows = [
-        row for row in row_candidates
-        if len(row["items"]) >= support_threshold
-    ]
-    if len(support_rows) < required_support:
-        if debug:
-            _LOGGER.debug(
-                "%s inference skipped: unstable row consistency. source=%s page=%s support_rows=%s required=%s",
-                infer_method,
-                source,
-                page_no,
-                len(support_rows),
-                required_support,
-            )
-        return []
-
-    column_points = [[] for _ in range(dominant_col_count + 1)]
-    selected_rows = []
-    for row in support_rows:
-        cells = sorted(row["items"], key=lambda item: item["x0"])
-        cells = cells[:dominant_col_count]
-        if len(cells) < dominant_col_count:
-            continue
-
-        column_points[0].append(cells[0]["x0"])
-        for idx in range(1, dominant_col_count):
-            boundary = (cells[idx - 1]["x1"] + cells[idx]["x0"]) / 2.0
-            column_points[idx].append(boundary)
-        column_points[dominant_col_count].append(cells[dominant_col_count - 1]["x1"])
-        selected_rows.append(
-            {
-                "y0": row["y0"],
-                "y1": row["y1"],
-                "items": cells,
-            }
-        )
-
-    if len(selected_rows) < 2:
-        return []
-
-    merged_columns = [
-        _merge_numeric(points, max(2.0, row_tolerance * 0.75))
-        for points in column_points
-    ]
-    merged_columns = [points for points in merged_columns if points]
-    if not merged_columns:
-        return []
-
-    x_positions = sorted(
-        x
-        for points in merged_columns
-        for x in points
-    )
-    if not x_positions:
-        return []
-
-    tx0 = min(x_positions)
-    tx1 = max(x_positions)
-
-    y_values = []
-    for row in selected_rows:
-        y_values.append(row["y0"])
-        y_values.append(row["y1"])
-
-    ty0 = min(y_values)
-    ty1 = max(y_values)
-    if tx1 <= tx0 or ty1 <= ty0:
-        return []
-
-    row_boundaries = _merge_numeric(
-        y_values,
-        max(1.5, row_tolerance * 0.75),
-    )
-    if not row_boundaries:
-        return []
-
-    if override_row_lines and len(override_row_lines) >= 2:
-        row_lines = list(override_row_lines)
-    else:
-        row_lines = [
-            {
-                "orientation": "horizontal",
-                "x0": _round_float(tx0),
-                "y0": _round_float(y),
-                "x1": _round_float(tx1),
-                "y1": _round_float(y),
-            }
-            for y in row_boundaries
-        ]
-
-    vertical_positions = _merge_numeric(
-        x_positions,
-        max(2.0, row_tolerance * 0.75),
-    )
-    if not vertical_positions:
-        return []
-
-    if override_vertical_lines and len(override_vertical_lines) >= 2:
-        vertical_lines = list(override_vertical_lines)
-    else:
-        vertical_lines = [
-            {
-                "orientation": "vertical",
-                "x0": _round_float(x),
-                "y0": _round_float(ty0),
-                "x1": _round_float(x),
-                "y1": _round_float(ty1),
-            }
-            for x in vertical_positions
-        ]
-
-    row_texts = []
-    for row in selected_rows:
-        cells = sorted(row["items"], key=lambda item: item["x0"])
-        row_texts.append(" | ".join(_sanitize_text(cell.get("text", "")) for cell in cells[:dominant_col_count]))
-
-    if not row_texts:
-        return []
-
-    return [
-        {
-            "page": page_no,
-            "start_page": page_no,
-            "table_no": 1,
-            "bbox": [tx0, ty0, tx1, ty1],
-            "row_count": len(selected_rows),
-            "col_count": dominant_col_count,
-            "rotation": int(rotation or 0),
-            "rows_text": row_texts,
-            "x": _round_float((tx0 + tx1) / 2.0),
-            "y": _round_float((ty0 + ty1) / 2.0),
-            "page_width": float(page_rect.width) if page_rect else None,
-            "page_height": float(page_rect.height) if page_rect else None,
-            "text": "\n".join(row_texts),
-            "row_lines": row_lines,
-            "vertical_lines": vertical_lines,
-            "components": {
-                "bbox": [tx0, ty0, tx1, ty1],
-                "row_lines": row_lines,
-                "vertical_lines": vertical_lines,
-            },
-            "source": source,
-            "infer_method": infer_method,
-            "score": len(selected_rows) * dominant_col_count,
-            "debug": {
-                "candidate_rows": len(row_candidates),
-                "selected_rows": len(selected_rows),
-                "dominant_col_count": dominant_col_count,
-            },
-        }
-    ]
-
 
 def _extract_page_drawings(
     page,
@@ -1153,471 +860,6 @@ def _cell_bbox(cell):
         return None
 
 
-def _merge_positions(values, tolerance):
-    if not values:
-        return []
-
-    sorted_values = sorted(values)
-    merged = [sorted_values[0]]
-    for value in sorted_values[1:]:
-        if value <= merged[-1] + tolerance:
-            continue
-        merged.append(value)
-    return merged
-
-
-def _infer_table_components(table, row_count=None, col_count=None):
-    cells = _cell_value(table, "cells", []) or []
-    table_bbox = _cell_value(table, "bbox")
-    if not (
-        isinstance(table_bbox, (list, tuple))
-        and len(table_bbox) == 4
-        and all(v is not None for v in table_bbox)
-    ):
-        return {"bbox": [], "row_lines": [], "vertical_lines": []}
-
-    try:
-        tx0, ty0, tx1, ty1 = [float(v) for v in table_bbox]
-    except (TypeError, ValueError):
-        return {"bbox": [], "row_lines": [], "vertical_lines": []}
-
-    table_row_count = (
-        _coerce_number(row_count)
-        or _coerce_number(_cell_value(table, "row_count"))
-        or _coerce_number(_cell_value(table, "rows"))
-        or 0.0
-    )
-    table_col_count = (
-        _coerce_number(col_count)
-        or _coerce_number(_cell_value(table, "col_count"))
-        or _coerce_number(_cell_value(table, "cols"))
-        or 0.0
-    )
-
-    raw_y_starts = []
-    raw_y_ends = []
-    raw_x_starts = []
-    raw_x_ends = []
-    row_cells = []
-    col_cells = []
-
-    for cell in cells:
-        row = _cell_value(
-            cell,
-            "row",
-            _cell_value(
-                cell,
-                "row_idx",
-                _cell_value(cell, "row_i", _cell_value(cell, "r", None)),
-            ),
-        )
-        col = _cell_value(
-            cell,
-            "col",
-            _cell_value(
-                cell,
-                "col_idx",
-                _cell_value(cell, "col_i", _cell_value(cell, "c", None)),
-            ),
-        )
-
-        bbox = _cell_bbox(cell)
-        if bbox is None:
-            continue
-
-        c_x0, c_y0, c_x1, c_y1 = bbox
-        raw_y_starts.append(c_y0)
-        raw_y_ends.append(c_y1)
-        raw_x_starts.append(c_x0)
-        raw_x_ends.append(c_x1)
-
-        if row is not None:
-            row_cells.append((row, c_y0, c_y1))
-        if col is not None:
-            col_cells.append((col, c_x0, c_x1))
-
-    row_heights = [float(end - start) for start, end in zip(raw_y_starts, raw_y_ends)]
-    col_widths = [float(end - start) for start, end in zip(raw_x_starts, raw_x_ends)]
-    row_tol = max(0.75, (sorted(row_heights)[len(row_heights) // 2] * 0.25)) if row_heights else 1.5
-    col_tol = max(0.75, (sorted(col_widths)[len(col_widths) // 2] * 0.25)) if col_widths else 1.5
-
-    y_positions = []
-    x_positions = []
-
-    if row_cells:
-        y_values = []
-        for _, top, bottom in row_cells:
-            y_values.extend([top, bottom])
-        y_positions = _merge_positions(y_values, row_tol)
-
-    if col_cells:
-        x_values = []
-        for _, left, right in col_cells:
-            x_values.extend([left, right])
-        x_positions = _merge_positions(x_values, col_tol)
-
-    if not y_positions and raw_y_starts:
-        y_positions = _merge_positions(raw_y_starts + raw_y_ends, row_tol)
-
-    if not x_positions and raw_x_starts:
-        x_positions = _merge_positions(raw_x_starts + raw_x_ends, col_tol)
-
-    if not y_positions and table_row_count > 0:
-        if table_row_count > 0 and table_row_count == int(table_row_count):
-            row_step = (ty1 - ty0) / table_row_count
-            y_positions = [ty0 + row_step * i for i in range(int(table_row_count) + 1)]
-
-    if not x_positions and table_col_count > 0:
-        if table_col_count > 0 and table_col_count == int(table_col_count):
-            col_step = (tx1 - tx0) / table_col_count
-            x_positions = [tx0 + col_step * i for i in range(int(table_col_count) + 1)]
-
-    if not y_positions:
-        y_positions = [ty0, ty1]
-    if not x_positions:
-        x_positions = [tx0, tx1]
-
-    y_positions = _merge_positions(sorted(set(_coerce_number(v, 0.0) for v in y_positions)), row_tol)
-    x_positions = _merge_positions(sorted(set(_coerce_number(v, 0.0) for v in x_positions)), col_tol)
-    if ty0 not in y_positions:
-        y_positions.insert(0, ty0)
-    if ty1 not in y_positions:
-        y_positions.append(ty1)
-    if tx0 not in x_positions:
-        x_positions.insert(0, tx0)
-    if tx1 not in x_positions:
-        x_positions.append(tx1)
-
-    row_lines = [
-        {
-            "orientation": "horizontal",
-            "x0": _round_float(tx0),
-            "y0": _round_float(y),
-            "x1": _round_float(tx1),
-            "y1": _round_float(y),
-        }
-        for y in y_positions
-    ]
-
-    vertical_lines = [
-        {
-            "orientation": "vertical",
-            "x0": _round_float(x),
-            "y0": _round_float(ty0),
-            "x1": _round_float(x),
-            "y1": _round_float(ty1),
-        }
-        for x in x_positions
-    ]
-
-    return {
-        "bbox": [tx0, ty0, tx1, ty1],
-        "row_lines": row_lines,
-        "vertical_lines": vertical_lines,
-    }
-
-
-def _rows_from_cells(cells):
-    if not cells:
-        return []
-
-    rows = []
-    for cell in cells:
-        cell_row = _cell_value(
-            cell,
-            "row",
-            _cell_value(cell, "row_idx", _cell_value(cell, "row_i", _cell_value(cell, "r", None))),
-        )
-        cell_col = _cell_value(
-            cell,
-            "col",
-            _cell_value(cell, "col_idx", _cell_value(cell, "col_i", _cell_value(cell, "c", None))),
-        )
-        if cell_row is None or cell_col is None:
-            continue
-
-        try:
-            row_index = int(cell_row)
-            col_index = int(cell_col)
-        except (TypeError, ValueError):
-            continue
-
-        while len(rows) <= row_index:
-            rows.append([])
-        row_cells = rows[row_index]
-        while len(row_cells) <= col_index:
-            row_cells.append("")
-
-        row_cells[col_index] = _sanitize_text(
-            _cell_value(
-                cell,
-                "text",
-                _cell_value(cell, "content", _cell_value(cell, "text_content", "")),
-            )
-        )
-
-    return rows
-
-
-def _extract_text_from_cell_clip(page, clip):
-    if page is None or not clip:
-        return ""
-
-    try:
-        x0, y0, x1, y1 = [float(v) for v in clip]
-    except (TypeError, ValueError):
-        return ""
-
-    if x1 <= x0 or y1 <= y0:
-        return ""
-
-    try:
-        rect = pymupdf.Rect(x0, y0, x1, y1)
-    except Exception:
-        return ""
-
-    try:
-        cell_text = page.get_text("text", clip=rect)
-    except Exception:
-        cell_text = ""
-
-    normalized = _normalize_line(cell_text or "")
-    if normalized:
-        return normalized
-
-    try:
-        words = page.get_text("words", clip=rect)
-    except Exception:
-        return ""
-
-    if not words:
-        return ""
-
-    rows = []
-    line_tokens = []
-    current_y = None
-    line_tolerance = 1.2
-    for word in sorted(words, key=lambda item: (_coerce_number(item[1], 0.0), _coerce_number(item[0], 0.0))):
-        if len(word) < 5:
-            continue
-
-        try:
-            x0w, y0w, _, _, value = word[:5]
-        except Exception:
-            continue
-
-        text = _normalize_line(_sanitize_text(value))
-        if not text:
-            continue
-
-        try:
-            y0w = float(y0w)
-            x0w = float(x0w)
-        except (TypeError, ValueError):
-            continue
-
-        if current_y is None or abs(y0w - current_y) > line_tolerance:
-            if line_tokens:
-                rows.append(" ".join(token for _, token in sorted(line_tokens, key=lambda item: item[0])))
-            line_tokens = [(x0w, text)]
-            current_y = y0w
-        else:
-            line_tokens.append((x0w, text))
-
-    if line_tokens:
-        rows.append(" ".join(token for _, token in sorted(line_tokens, key=lambda item: item[0])))
-
-    return _normalize_line(" ".join(rows))
-
-
-def _reextract_table_rows(page, table, row_count=None, col_count=None):
-    components = _infer_table_components(table, row_count=row_count, col_count=col_count)
-    row_lines = components.get("row_lines") or []
-    vertical_lines = components.get("vertical_lines") or []
-    if len(row_lines) < 2 or len(vertical_lines) < 2:
-        return [], components
-
-    row_positions = []
-    for line in row_lines:
-        if not isinstance(line, dict):
-            continue
-        y0 = _coerce_number(line.get("y0"))
-        y1 = _coerce_number(line.get("y1"))
-        if y0 is None or y1 is None:
-            continue
-        row_positions.append(min(y0, y1))
-
-    col_positions = []
-    for line in vertical_lines:
-        if not isinstance(line, dict):
-            continue
-        x0 = _coerce_number(line.get("x0"))
-        x1 = _coerce_number(line.get("x1"))
-        if x0 is None or x1 is None:
-            continue
-        col_positions.append(min(x0, x1))
-
-    row_positions = _merge_positions(sorted(set(row_positions)), 1.0)
-    col_positions = _merge_positions(sorted(set(col_positions)), 1.0)
-    if len(row_positions) < 2 or len(col_positions) < 2:
-        return [], components
-
-    if row_count:
-        target_rows = int(max(row_count, 0))
-        if target_rows >= 1 and len(row_positions) > target_rows + 1:
-            row_positions = row_positions[: target_rows + 1]
-
-    if col_count:
-        target_cols = int(max(col_count, 0))
-        if target_cols >= 1 and len(col_positions) > target_cols + 1:
-            col_positions = col_positions[: target_cols + 1]
-
-    rows = []
-    for row_index in range(len(row_positions) - 1):
-        y0 = row_positions[row_index]
-        y1 = row_positions[row_index + 1]
-        if y1 <= y0:
-            continue
-
-        row_cells = []
-        for col_index in range(len(col_positions) - 1):
-            x0 = col_positions[col_index]
-            x1 = col_positions[col_index + 1]
-            if x1 <= x0:
-                row_cells.append("")
-                continue
-
-            cell_text = _extract_text_from_cell_clip(page, (x0, y0, x1, y1))
-            row_cells.append(cell_text)
-
-        if any(cell for cell in row_cells):
-            rows.append(row_cells)
-
-    return rows, components
-
-
-def _build_shape_grid_table(shape_lines, lines, page_rect, page_no, source, rotation=0, debug=False):
-    shape_lines = [line for line in (shape_lines or []) if line.get("type") == "shape-line"]
-    if not shape_lines or not lines:
-        return []
-
-    spans = _collect_span_cells(lines)
-    if not spans:
-        return []
-
-    tx0 = min(span["x0"] for span in spans)
-    ty0 = min(span["y0"] for span in spans)
-    tx1 = max(span["x1"] for span in spans)
-    ty1 = max(span["y1"] for span in spans)
-    pad = 30.0
-    span_bbox = (tx0 - pad, ty0 - pad, tx1 + pad, ty1 + pad)
-
-    page_width = float(page_rect.width) if page_rect else (tx1 - tx0 if tx1 > tx0 else 0.0)
-    page_height = float(page_rect.height) if page_rect else (ty1 - ty0 if ty1 > ty0 else 0.0)
-    line_min_len = max(5.0, min(page_width, page_height) * 0.02 or 0.0)
-
-    horizontal = []
-    vertical = []
-    for line in shape_lines:
-        x0 = line.get("x0")
-        y0 = line.get("y0")
-        x1 = line.get("x1")
-        y1 = line.get("y1")
-        if not all(v is not None for v in (x0, y0, x1, y1)):
-            continue
-        try:
-            x0 = float(x0)
-            y0 = float(y0)
-            x1 = float(x1)
-            y1 = float(y1)
-        except (TypeError, ValueError):
-            continue
-
-        length = _segment_length(x0, y0, x1, y1)
-        if length < line_min_len:
-            continue
-
-        orientation = line.get("orientation")
-        intersects_text = not (
-            max(x0, x1) < span_bbox[0]
-            or min(x0, x1) > span_bbox[2]
-            or max(y0, y1) < span_bbox[1]
-            or min(y0, y1) > span_bbox[3]
-        )
-        if not intersects_text:
-            continue
-
-        if orientation == "horizontal" or abs(y1 - y0) < 3.0:
-            horizontal.append({"y": (y0 + y1) / 2.0, "x0": min(x0, x1), "x1": max(x0, x1)})
-        elif orientation == "vertical" or abs(x1 - x0) < 3.0:
-            vertical.append({"x": (x0 + x1) / 2.0, "y0": min(y0, y1), "y1": max(y0, y1)})
-
-    if len(horizontal) < 2 or len(vertical) < 2:
-        return []
-
-    tol = max(2.0, _estimate_row_tolerance(lines))
-    h_positions = _merge_numeric([entry["y"] for entry in horizontal], tol)
-    v_positions = _merge_numeric([entry["x"] for entry in vertical], tol)
-
-    if len(h_positions) < 2 or len(v_positions) < 2:
-        return []
-
-    # keep only drawing lines near the extracted text bounding area
-    h_positions = [
-        pos for pos in h_positions if ty0 - pad <= pos <= ty1 + pad
-    ]
-    v_positions = [
-        pos for pos in v_positions if tx0 - pad <= pos <= tx1 + pad
-    ]
-    if len(h_positions) < 2 or len(v_positions) < 2:
-        return []
-
-    cand_x0 = min(v_positions)
-    cand_x1 = max(v_positions)
-    cand_y0 = min(h_positions)
-    cand_y1 = max(h_positions)
-    if cand_x1 <= cand_x0 or cand_y1 <= cand_y0:
-        return []
-
-    shape_row_lines = [
-        {"orientation": "horizontal", "x0": cand_x0, "y0": y, "x1": cand_x1, "y1": y}
-        for y in h_positions
-    ]
-    shape_vertical_lines = [
-        {"orientation": "vertical", "x0": x, "y0": cand_y0, "x1": x, "y1": cand_y1}
-        for x in v_positions
-    ]
-
-    tables = _build_text_grid_table(
-        lines,
-        page_rect,
-        page_no,
-        source,
-        rotation=rotation,
-        debug=debug,
-        bbox=(cand_x0, cand_y0, cand_x1, cand_y1),
-        min_rows=2,
-        min_row_candidates=2,
-        min_support_ratio=0.2,
-        infer_method="shape-grid",
-        override_row_lines=shape_row_lines,
-        override_vertical_lines=shape_vertical_lines,
-    )
-    if not tables:
-        return []
-
-    result = []
-    for table in tables:
-        if table.get("bbox") is None:
-            table["bbox"] = [cand_x0, cand_y0, cand_x1, cand_y1]
-        table["source"] = source
-        table["components"] = table.get("components", {})
-        table["components"].setdefault("bbox", table.get("bbox"))
-        table["components"]["row_lines"] = table.get("row_lines", [])
-        table["components"]["vertical_lines"] = table.get("vertical_lines", [])
-        result.append(table)
-
-    return result
 
 
 def _extract_page_tables(
@@ -1625,7 +867,6 @@ def _extract_page_tables(
     page_no,
     source,
     lines=None,
-    shape_lines=None,
     debug=False,
     table_mode="auto",
 ):
@@ -1705,40 +946,9 @@ def _extract_page_tables(
         selected_label = fallback_label
 
     if not selected or not getattr(selected, "tables", None):
-        inferred = []
-        inferred.extend(
-            _build_shape_grid_table(
-                shape_lines=shape_lines or [],
-                lines=lines or [],
-                page_rect=getattr(page, "rect", None),
-                page_no=page_no,
-                source=source,
-                rotation=page.rotation,
-                debug=debug,
-            )
-        )
-        if not inferred:
-            inferred = _build_text_grid_table(
-                lines=lines or [],
-                page_rect=getattr(page, "rect", None),
-                page_no=page_no,
-                source=source,
-                rotation=page.rotation,
-                debug=debug,
-            )
-        if inferred:
-            if debug:
-                _LOGGER.debug(
-                    "Text-grid fallback created %s table(s): source=%s page=%s",
-                    len(inferred),
-                    source,
-                    page_no,
-                )
-            return inferred
-
         if debug:
             _LOGGER.info(
-                "No tables found on page after strategies: source=%s page=%s",
+                "No tables found with PyMuPDF find_tables: source=%s page=%s",
                 source,
                 page_no,
             )
@@ -1810,7 +1020,7 @@ def _extract_page_tables(
                 )
 
         if not rows and cells:
-            rows = _rows_from_cells(cells)
+            rows = []
 
         if not rows:
             # no table content recovered from detector
@@ -1822,17 +1032,18 @@ def _extract_page_tables(
             if isinstance(row, (list, tuple)):
                 table_cols = max(table_cols, len(row))
 
-        components = None
-        re_rows, components = _reextract_table_rows(
-            page,
-            table,
-            row_count=table_rows,
-            col_count=table_cols,
-        )
-        if re_rows:
-            rows = re_rows
-        else:
-            components = None
+        x0, y0, x1, y1 = [float(v) for v in bbox]
+        components = {
+            "bbox": [x0, y0, x1, y1],
+            "row_lines": [
+                {"orientation": "horizontal", "x0": x0, "y0": y0, "x1": x1, "y1": y0},
+                {"orientation": "horizontal", "x0": x0, "y0": y1, "x1": x1, "y1": y1},
+            ],
+            "vertical_lines": [
+                {"orientation": "vertical", "x0": x0, "y0": y0, "x1": x0, "y1": y1},
+                {"orientation": "vertical", "x0": x1, "y0": y0, "x1": x1, "y1": y1},
+            ],
+        }
 
         row_count = 0
         col_count = 0
@@ -1853,10 +1064,12 @@ def _extract_page_tables(
                 )
             continue
 
-        if components is None:
-            components = _infer_table_components(table, row_count=row_count, col_count=col_count)
-        elif row_count != table_rows or col_count != table_cols:
-            components = _infer_table_components(table, row_count=row_count, col_count=col_count)
+        if row_count != table_rows or col_count != table_cols:
+            components = {
+                "bbox": [x0, y0, x1, y1],
+                "row_lines": components.get("row_lines", []),
+                "vertical_lines": components.get("vertical_lines", []),
+            }
         if debug:
             _LOGGER.debug(
                 "Table %s on page %s row_count=%s col_count=%s",
@@ -1874,7 +1087,6 @@ def _extract_page_tables(
                 len(components.get("vertical_lines", [])),
             )
 
-        x0, y0, x1, y1 = [float(v) for v in bbox]
         table_items.append(
             {
                 "page": page_no,
@@ -1903,117 +1115,6 @@ def _extract_page_tables(
             )
 
     return table_items
-
-
-def _table_row_signature(row):
-    return re.sub(r"\s+", " ", (row or "").strip().lower())
-
-
-def _bbox_overlap_ratio(a_bbox, b_bbox):
-    ax0, ay0, ax1, ay1 = a_bbox
-    bx0, by0, bx1, by1 = b_bbox
-
-    x_overlap = max(0.0, min(ax1, bx1) - max(ax0, bx0))
-    y_overlap = max(0.0, min(ay1, by1) - max(ay0, by0))
-    if x_overlap <= 0 or y_overlap <= 0:
-        return 0.0, 0.0
-
-    a_area = max(0.0, (ax1 - ax0) * (ay1 - ay0))
-    b_area = max(0.0, (bx1 - bx0) * (by1 - by0))
-    if a_area <= 0 or b_area <= 0:
-        return 0.0, 0.0
-
-    overlap_area = x_overlap * y_overlap
-    return overlap_area / min(a_area, b_area), overlap_area / (a_area + b_area - overlap_area)
-
-
-def _is_cross_page_split(prev_table, next_table):
-    prev_height = prev_table.get("page_height") or 0.0
-    next_height = next_table.get("page_height") or 0.0
-    if prev_height <= 0.0 or next_height <= 0.0:
-        return False
-
-    prev_ratio_from_bottom = 1.0 - (prev_table.get("bbox", [0, 0, 0, 0])[3] / prev_height)
-    next_ratio_from_top = next_table.get("bbox", [0, 0, 0, 0])[1] / next_height
-
-    # table continues near page boundary (bottom of prev and top of next)
-    return prev_ratio_from_bottom <= 0.35 and next_ratio_from_top <= 0.35
-
-
-def _merge_cross_page_tables(tables):
-    if len(tables) <= 1:
-        return tables
-
-    sorted_tables = sorted(
-        tables,
-        key=lambda item: (item.get("page", 0), item.get("bbox", [0, 0, 0, 0])[1], item.get("table_no", 0)),
-    )
-    merged = []
-    current = None
-
-    for table in sorted_tables:
-        if current is None:
-            current = dict(table)
-            current["current_end_page"] = current.get("page")
-            current["pages"] = [current.get("start_page", current.get("page"))]
-            continue
-
-        same_col = current.get("col_count") == table.get("col_count")
-        same_rotation = current.get("rotation") == table.get("rotation")
-        current_end_page = current.get("current_end_page", current.get("page", 0))
-        adjacent_page = table.get("page", 0) == current_end_page + 1
-        if not (same_col and same_rotation and adjacent_page):
-            merged.append(current)
-            current = dict(table)
-            current["current_end_page"] = current.get("page")
-            current["pages"] = [current.get("start_page", current.get("page"))]
-            continue
-
-        overlap_ratio, _ = _bbox_overlap_ratio(current.get("bbox", [0, 0, 0, 0]), table.get("bbox", [0, 0, 0, 0]))
-        if overlap_ratio < 0.1 or not _is_cross_page_split(current, table):
-            merged.append(current)
-            current = dict(table)
-            current["pages"] = [current.get("start_page", current.get("page"))]
-            continue
-
-        current_rows = list(current.get("rows_text", []))
-        next_rows = list(table.get("rows_text", []))
-        if current_rows and next_rows:
-            header_signature = _table_row_signature(current_rows[0])
-            next_first = _table_row_signature(next_rows[0])
-            if header_signature and next_first and header_signature == next_first:
-                next_rows = next_rows[1:]
-
-        current_rows.extend(next_rows)
-        current["rows_text"] = current_rows
-        current["text"] = "\n".join(current_rows)
-        current["row_count"] = len(current_rows)
-        current["row_lines"] = list(current.get("row_lines", [])) + list(table.get("row_lines", []))
-        current["vertical_lines"] = list(current.get("vertical_lines", [])) + list(table.get("vertical_lines", []))
-        current["components"] = {
-            "bbox": current.get("components", {}).get("bbox"),
-            "row_lines": list(current.get("row_lines", [])),
-            "vertical_lines": list(current.get("vertical_lines", [])),
-        }
-        current["page_end"] = table.get("page")
-        current["current_end_page"] = table.get("page")
-        if "pages" not in current:
-            current["pages"] = [current.get("start_page", current.get("page", 0))]
-        current["pages"].append(table.get("page"))
-        current["pages"] = sorted(set(current["pages"]))
-
-        continue
-
-    if current is not None:
-        merged.append(current)
-
-    # keep page field as the first page
-    for item in merged:
-        item["page"] = item.get("start_page", item.get("page"))
-        if "current_end_page" in item:
-            item["page_end"] = max(item.get("start_page", item.get("page", 0)), item.get("current_end_page", item.get("page", 0)))
-            del item["current_end_page"]
-    return merged
 
 
 def _extract_page_lines(
@@ -2460,6 +1561,85 @@ def _shorten_shape_args(values, max_items=8):
     return f"len={len(values)} repr={preview!r}"
 
 
+def _shape_line_style(drawing):
+    close_path_raw = drawing.get("closePath", True)
+    if isinstance(close_path_raw, (int, float)):
+        close_path = bool(close_path_raw)
+    elif isinstance(close_path_raw, bool):
+        close_path = close_path_raw
+    elif close_path_raw is None:
+        close_path = True
+    else:
+        close_path = bool(close_path_raw)
+
+    line_cap_raw = drawing.get("lineCap")
+    if isinstance(line_cap_raw, bool):
+        line_cap = int(line_cap_raw)
+    elif isinstance(line_cap_raw, (int, float)):
+        line_cap = int(line_cap_raw)
+    else:
+        line_cap = None
+
+    line_join_raw = drawing.get("lineJoin")
+    if isinstance(line_join_raw, bool):
+        line_join = int(line_join_raw)
+    elif isinstance(line_join_raw, (int, float)):
+        line_join = int(line_join_raw)
+    else:
+        line_join = None
+
+    dashes = drawing.get("dashes")
+    if dashes is not None:
+        if isinstance(dashes, (list, tuple)):
+            try:
+                dashes = [float(value) for value in dashes]
+            except (TypeError, ValueError):
+                dashes = None
+        else:
+            dashes = None
+
+    return {
+        "closePath": close_path,
+        "lineCap": line_cap,
+        "lineJoin": line_join,
+        "dashes": dashes,
+    }
+
+
+def _shape_finish_kwargs(
+    fill_color,
+    stroke_color,
+    line_width,
+    stroke_opacity,
+    fill_opacity,
+    shape_style,
+    fill_only_op=False,
+    include_fill_when_none=False,
+):
+    stroke_style = {
+        "closePath": shape_style.get("closePath", True),
+    }
+
+    if fill_color is not None or include_fill_when_none:
+        stroke_style["fill"] = fill_color
+        stroke_style["fill_opacity"] = fill_opacity
+
+    if not fill_only_op:
+        stroke_style["color"] = stroke_color
+        stroke_style["width"] = line_width
+        stroke_style["stroke_opacity"] = stroke_opacity
+        if shape_style.get("dashes") is not None:
+            stroke_style["dashes"] = shape_style["dashes"]
+        if shape_style.get("lineCap") is not None:
+            stroke_style["lineCap"] = shape_style["lineCap"]
+        if shape_style.get("lineJoin") is not None:
+            stroke_style["lineJoin"] = shape_style["lineJoin"]
+    else:
+        stroke_style["width"] = 0
+
+    return stroke_style
+
+
 def _render_shape_drawing(out_page, drawing, page_no, drawing_index=None, debug=False):
     if not isinstance(drawing, dict):
         if debug:
@@ -2777,58 +1957,16 @@ def _render_shape_drawing(out_page, drawing, page_no, drawing_index=None, debug=
                         page_no,
                     )
                 fill_only_op = op in ("f", "F", "f*")
-                close_path_raw = drawing.get("closePath", True)
-                if isinstance(close_path_raw, (int, float)):
-                    close_path = bool(close_path_raw)
-                elif isinstance(close_path_raw, bool):
-                    close_path = close_path_raw
-                else:
-                    close_path = True if close_path_raw is None else bool(close_path_raw)
-
-                line_cap_raw = drawing.get("lineCap")
-                if isinstance(line_cap_raw, bool):
-                    line_cap = int(line_cap_raw)
-                elif isinstance(line_cap_raw, (int, float)):
-                    line_cap = int(line_cap_raw)
-                else:
-                    line_cap = None
-
-                line_join_raw = drawing.get("lineJoin")
-                if isinstance(line_join_raw, bool):
-                    line_join = int(line_join_raw)
-                elif isinstance(line_join_raw, (int, float)):
-                    line_join = int(line_join_raw)
-                else:
-                    line_join = None
-
-                dashes = drawing.get("dashes")
-                if dashes is not None:
-                    if isinstance(dashes, (list, tuple)):
-                        try:
-                            dashes = [float(v) for v in dashes]
-                        except (TypeError, ValueError):
-                            dashes = None
-                    else:
-                        dashes = None
-
-                shape_finish_kwargs = {
-                    "closePath": close_path,
-                }
-                if fill_color is not None:
-                    shape_finish_kwargs["fill"] = fill_color
-                    shape_finish_kwargs["fill_opacity"] = fill_opacity
-                if not fill_only_op:
-                    shape_finish_kwargs["color"] = stroke_color
-                    shape_finish_kwargs["width"] = line_width
-                    shape_finish_kwargs["stroke_opacity"] = stroke_opacity
-                    if dashes is not None:
-                        shape_finish_kwargs["dashes"] = dashes
-                    if line_cap is not None:
-                        shape_finish_kwargs["lineCap"] = line_cap
-                    if line_join is not None:
-                        shape_finish_kwargs["lineJoin"] = line_join
-                else:
-                    shape_finish_kwargs["width"] = 0
+                shape_style = _shape_line_style(drawing)
+                shape_finish_kwargs = _shape_finish_kwargs(
+                    fill_color=fill_color,
+                    stroke_color=stroke_color,
+                    line_width=line_width,
+                    stroke_opacity=stroke_opacity,
+                    fill_opacity=fill_opacity,
+                    shape_style=shape_style,
+                    fill_only_op=fill_only_op,
+                )
 
                 try:
                     if debug:
@@ -2838,12 +1976,12 @@ def _render_shape_drawing(out_page, drawing, page_no, drawing_index=None, debug=
                             stroke_color,
                             fill_color,
                             _round_float(shape_finish_kwargs.get("width")),
-                            close_path,
+                            shape_style.get("closePath"),
                             fill_opacity,
                             stroke_opacity,
-                            dashes if not fill_only_op else None,
-                            line_cap if not fill_only_op else None,
-                            line_join if not fill_only_op else None,
+                            shape_style.get("dashes") if not fill_only_op else None,
+                            shape_style.get("lineCap") if not fill_only_op else None,
+                            shape_style.get("lineJoin") if not fill_only_op else None,
                         )
                     shape.finish(**shape_finish_kwargs)
                     shape.commit()
@@ -2864,28 +2002,18 @@ def _render_shape_drawing(out_page, drawing, page_no, drawing_index=None, debug=
                     try:
                         fallback_shape_kwargs = {
                             "width": 0,
-                            "closePath": close_path,
+                            "closePath": shape_style.get("closePath", True),
                         }
-                        if fill_only_op:
-                            if fill_color is not None:
-                                fallback_shape_kwargs["fill"] = fill_color
-                                fallback_shape_kwargs["fill_opacity"] = fill_opacity
-                        else:
-                            fallback_shape_kwargs.update(
-                                {
-                                    "color": stroke_color,
-                                    "fill": fill_color,
-                                    "width": line_width,
-                                    "fill_opacity": fill_opacity,
-                                    "stroke_opacity": stroke_opacity,
-                                }
-                            )
-                            if dashes is not None:
-                                fallback_shape_kwargs["dashes"] = dashes
-                            if line_cap is not None:
-                                fallback_shape_kwargs["lineCap"] = line_cap
-                            if line_join is not None:
-                                fallback_shape_kwargs["lineJoin"] = line_join
+                        fallback_shape_kwargs = _shape_finish_kwargs(
+                            fill_color=fill_color,
+                            stroke_color=stroke_color,
+                            line_width=line_width,
+                            stroke_opacity=stroke_opacity,
+                            fill_opacity=fill_opacity,
+                            shape_style=shape_style,
+                            fill_only_op=fill_only_op,
+                            include_fill_when_none=not fill_only_op,
+                        )
                         shape.finish(**fallback_shape_kwargs)
                         shape.commit()
                         if debug:
@@ -2946,42 +2074,7 @@ def _render_shape_drawing(out_page, drawing, page_no, drawing_index=None, debug=
                         drawing_index,
                         page_no,
                     )
-                close_path_raw = drawing.get("closePath", True)
-                if isinstance(close_path_raw, (int, float)):
-                    close_path = bool(close_path_raw)
-                elif isinstance(close_path_raw, bool):
-                    close_path = close_path_raw
-                elif close_path_raw is None:
-                    close_path = True
-                else:
-                    close_path = True
-
-                line_cap_raw = drawing.get("lineCap")
-                if isinstance(line_cap_raw, bool):
-                    line_cap = int(line_cap_raw)
-                elif isinstance(line_cap_raw, (int, float)):
-                    line_cap = int(line_cap_raw)
-                else:
-                    line_cap = None
-
-                line_join_raw = drawing.get("lineJoin")
-                if isinstance(line_join_raw, bool):
-                    line_join = int(line_join_raw)
-                elif isinstance(line_join_raw, (int, float)):
-                    line_join = int(line_join_raw)
-                else:
-                    line_join = None
-
-                dashes = drawing.get("dashes")
-                if dashes is not None:
-                    if isinstance(dashes, (list, tuple)):
-                        try:
-                            dashes = [float(v) for v in dashes]
-                        except (TypeError, ValueError):
-                            dashes = None
-                    else:
-                        dashes = None
-
+                shape_style = _shape_line_style(drawing)
                 try:
                     if debug:
                         _LOGGER.debug(
@@ -2990,19 +2083,23 @@ def _render_shape_drawing(out_page, drawing, page_no, drawing_index=None, debug=
                             stroke_color,
                             fill_color,
                             _round_float(line_width),
-                            close_path,
+                            shape_style.get("closePath"),
                             fill_opacity,
                             stroke_opacity,
-                            dashes,
-                            line_cap,
-                            line_join,
+                            shape_style.get("dashes"),
+                            shape_style.get("lineCap"),
+                            shape_style.get("lineJoin"),
                         )
-                    shape_finish_kwargs = {
-                        "fill": fill_color,
-                        "width": 0,
-                        "closePath": close_path,
-                        "fill_opacity": fill_opacity,
-                    }
+                    shape_finish_kwargs = _shape_finish_kwargs(
+                        fill_color=fill_color,
+                        stroke_color=stroke_color,
+                        line_width=line_width,
+                        stroke_opacity=stroke_opacity,
+                        fill_opacity=fill_opacity,
+                        shape_style=shape_style,
+                        fill_only_op=True,
+                        include_fill_when_none=True,
+                    )
                     shape.finish(**shape_finish_kwargs)
                     shape.commit()
                     if debug:
@@ -3879,23 +2976,13 @@ def _extract_pages(
         )
         for line in lines:
             line["source"] = source
-        table_lines = [line for line in lines if not line.get("is_watermark_rotation")]
-        shape_lines = _extract_page_drawings(
-            page,
-            page_no,
-            source,
-            debug=table_debug or debug,
-            header_ratio=header_ratio,
-            footer_ratio=footer_ratio,
-        )
         tables = []
         if extract_tables:
             tables = _extract_page_tables(
                 page,
                 page_no,
                 source,
-                lines=table_lines,
-                shape_lines=shape_lines,
+                lines=lines,
                 debug=table_debug,
                 table_mode=table_mode,
             )
@@ -3908,7 +2995,7 @@ def _extract_pages(
                     debug=debug,
                 )
             )
-        extracted.append((page_no, lines, tables, shape_lines))
+        extracted.append((page_no, lines, tables, []))
 
     if capture_raw_pages:
         return extracted, raw_pages
@@ -4065,12 +3152,6 @@ def _write_image_only_page_pdf(
                 if rect is None:
                     continue
                 out_page.insert_image(rect, stream=image_bytes)
-
-        for rect in markdown_rects:
-            try:
-                out_page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), width=0)
-            except Exception:
-                continue
 
         rendered_pdf.save(output_path, deflate=True, garbage=4)
         rendered_pdf.close()
@@ -4706,13 +3787,12 @@ def read_pdf(
     debug=False,
     table_debug=None,
     table_mode="auto",
-    return_pages_with_lines=False,
     return_raw_pages=False,
 ):
     path = Path(path)
 
     with pymupdf.open(path) as doc:
-        if return_pages_with_lines or return_raw_pages:
+        if return_raw_pages:
             pages_with_lines, raw_pages = _extract_pages(
                 doc,
                 str(path),
@@ -4725,7 +3805,7 @@ def read_pdf(
                 debug=debug,
                 table_debug=table_debug if table_debug is not None else debug,
                 table_mode=table_mode,
-                capture_raw_pages=return_raw_pages,
+                capture_raw_pages=True,
             )
         else:
             pages_with_lines = _extract_pages(
@@ -4748,7 +3828,8 @@ def read_pdf(
         tables.extend(page_tables)
 
     if extract_tables:
-        tables = _merge_cross_page_tables(tables)
+        # keep native PyMuPDF find_tables outputs only (no heuristic table merge/post-processing)
+        pass
 
     compiled_patterns = _compile_patterns(patterns or [])
     extracted_lines = [lines for _, lines, _, _ in pages_with_lines]
@@ -4839,8 +3920,6 @@ def read_pdf(
             }
         )
 
-    if return_pages_with_lines:
-        return records, pages_with_lines
     if return_raw_pages:
         return records, raw_pages
 
@@ -5100,6 +4179,7 @@ def parse_args():
         "--raw",
         nargs=1,
         default=None,
+        metavar="rawdict",
         help="Write page.get_text('rawdict') output as JSONL. Must pass `rawdict`.",
     )
     parser.add_argument(
@@ -5213,8 +4293,6 @@ def main():
                 debug=args.debug,
                 table_debug=args.debug or args.table_debug,
                 table_mode=args.table_mode,
-                return_pages_with_lines=False,
-                return_raw_pages=False,
             )
             total_tables = sum(record.get("table_count", 0) for record in preview_records)
             print(f"Detected tables (preview): {total_tables}")
@@ -5274,20 +4352,11 @@ def main():
         else args.tables_markdown
     )
     request_raw = args.raw is not None
-    raw_mode = args.raw[0] if request_raw else None
-    request_rawdict_page = (
-        request_raw
-        and isinstance(raw_mode, str)
-        and raw_mode.lower() == "rawdict"
-    )
-    if request_raw and not request_rawdict_page:
-        raise SystemExit("--raw requires value `rawdict` (other values are not supported).")
+    raw_mode = args.raw[0].lower() if request_raw and isinstance(args.raw[0], str) else None
+    if request_raw and raw_mode != "rawdict":
+        raise SystemExit("--raw requires value `rawdict`.")
 
-    raw_page_output = (
-        "raw.jsonl"
-        if request_raw
-        else None
-    )
+    raw_page_output = "raw.jsonl" if request_raw else None
     result = read_pdf(
         args.file,
         strip_watermarks=args.strip_watermarks,
@@ -5304,23 +4373,18 @@ def main():
         debug=args.debug,
         table_debug=args.debug or args.table_debug,
         table_mode=args.table_mode,
-        return_pages_with_lines=False,
         return_raw_pages=request_raw,
     )
     if request_raw:
         records, raw_pages = result
+        write_rawdict_pages(raw_pages or [], raw_page_output)
     else:
         records = result
-    if request_raw and raw_page_output:
-        write_rawdict_pages(raw_pages or [], raw_page_output)
     if args.legacy_page_jsonl:
         write_jsonl_pages(records, output)
+        print(f"Extracted {len(records)} pages -> {output}")
         if request_raw:
-            print(f"Extracted {len(records)} pages -> {output}")
-            if request_raw:
-                print(f"Raw page rawdict -> {raw_page_output}")
-        else:
-            print(f"Extracted {len(records)} pages -> {output}")
+            print(f"Raw page rawdict -> {raw_page_output}")
     else:
         write_jsonl(records, output)
         total_lines = sum(
@@ -5331,18 +4395,14 @@ def main():
         total_tables = sum(record.get("table_count", 0) for record in records)
         if request_tables_markdown and tables_markdown_output:
             _write_tables_markdown(records, tables_markdown_output)
+        summary = (
+            f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
+        )
+        print(summary)
         if request_raw:
-            print(
-                f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}"
-            )
-            if request_raw:
-                print(f"Raw page rawdict -> {raw_page_output}")
-            if request_tables_markdown:
-                print(f"Tables markdown -> {tables_markdown_output}")
-        else:
-            print(f"Extracted {len(records)} pages, {total_lines} text lines, {total_tables} tables -> {output}")
-            if request_tables_markdown:
-                print(f"Tables markdown -> {tables_markdown_output}")
+            print(f"Raw page rawdict -> {raw_page_output}")
+        if request_tables_markdown:
+            print(f"Tables markdown -> {tables_markdown_output}")
 
 
 if __name__ == "__main__":
