@@ -3545,6 +3545,7 @@ def _write_reconstructed_page_pdf(
             fill_ops = ("f", "F", "f*", "b", "B", "b*")
             op_counts = Counter()
             has_fill_op = False
+            has_stroke_fill_op = False
             raw_op_types = Counter()
             non_fill_op_counts = Counter()
             for item_idx, item in enumerate(items):
@@ -3568,6 +3569,8 @@ def _write_reconstructed_page_pdf(
 
                 if op in fill_ops:
                     has_fill_op = True
+                    if op in ("b", "B", "b*"):
+                        has_stroke_fill_op = True
 
                 if debug and item_idx < 80:
                     _LOGGER.debug(
@@ -3809,6 +3812,7 @@ def _write_reconstructed_page_pdf(
                                 op,
                                 page_no,
                             )
+                        fill_only_op = op in ("f", "F", "f*")
                         close_path_raw = drawing.get("closePath", True)
                         if isinstance(close_path_raw, (int, float)):
                             close_path = bool(close_path_raw)
@@ -3844,19 +3848,23 @@ def _write_reconstructed_page_pdf(
                                 dashes = None
 
                         shape_finish_kwargs = {
-                            "color": stroke_color,
-                            "fill": fill_color,
-                            "width": line_width,
                             "closePath": close_path,
-                            "fill_opacity": fill_opacity,
-                            "stroke_opacity": stroke_opacity,
                         }
-                        if dashes is not None:
-                            shape_finish_kwargs["dashes"] = dashes
-                        if line_cap is not None:
-                            shape_finish_kwargs["lineCap"] = line_cap
-                        if line_join is not None:
-                            shape_finish_kwargs["lineJoin"] = line_join
+                        if fill_color is not None:
+                            shape_finish_kwargs["fill"] = fill_color
+                            shape_finish_kwargs["fill_opacity"] = fill_opacity
+                        if not fill_only_op:
+                            shape_finish_kwargs["color"] = stroke_color
+                            shape_finish_kwargs["width"] = line_width
+                            shape_finish_kwargs["stroke_opacity"] = stroke_opacity
+                            if dashes is not None:
+                                shape_finish_kwargs["dashes"] = dashes
+                            if line_cap is not None:
+                                shape_finish_kwargs["lineCap"] = line_cap
+                            if line_join is not None:
+                                shape_finish_kwargs["lineJoin"] = line_join
+                        else:
+                            shape_finish_kwargs["width"] = 0
 
                         try:
                             if debug:
@@ -3865,13 +3873,13 @@ def _write_reconstructed_page_pdf(
                                     drawing_index,
                                     stroke_color,
                                     fill_color,
-                                    _round_float(line_width),
+                                    _round_float(shape_finish_kwargs.get("width")),
                                     close_path,
                                     fill_opacity,
                                     stroke_opacity,
-                                    dashes,
-                                    line_cap,
-                                    line_join,
+                                    dashes if not fill_only_op else None,
+                                    line_cap if not fill_only_op else None,
+                                    line_join if not fill_only_op else None,
                                 )
                             shape.finish(**shape_finish_kwargs)
                             shape.commit()
@@ -3890,7 +3898,31 @@ def _write_reconstructed_page_pdf(
                                     exc,
                                 )
                             try:
-                                shape.finish(color=stroke_color, fill=fill_color, width=line_width)
+                                fallback_shape_kwargs = {
+                                    "width": 0,
+                                    "closePath": close_path,
+                                }
+                                if fill_only_op:
+                                    if fill_color is not None:
+                                        fallback_shape_kwargs["fill"] = fill_color
+                                        fallback_shape_kwargs["fill_opacity"] = fill_opacity
+                                else:
+                                    fallback_shape_kwargs.update(
+                                        {
+                                            "color": stroke_color,
+                                            "fill": fill_color,
+                                            "width": line_width,
+                                            "fill_opacity": fill_opacity,
+                                            "stroke_opacity": stroke_opacity,
+                                        }
+                                    )
+                                    if dashes is not None:
+                                        fallback_shape_kwargs["dashes"] = dashes
+                                    if line_cap is not None:
+                                        fallback_shape_kwargs["lineCap"] = line_cap
+                                    if line_join is not None:
+                                        fallback_shape_kwargs["lineJoin"] = line_join
+                                shape.finish(**fallback_shape_kwargs)
                                 shape.commit()
                                 if debug:
                                     _LOGGER.debug(
@@ -4002,19 +4034,11 @@ def _write_reconstructed_page_pdf(
                                     line_join,
                                 )
                             shape_finish_kwargs = {
-                                "color": stroke_color,
                                 "fill": fill_color,
-                                "width": line_width,
+                                "width": 0,
                                 "closePath": close_path,
                                 "fill_opacity": fill_opacity,
-                                "stroke_opacity": stroke_opacity,
                             }
-                            if dashes is not None:
-                                shape_finish_kwargs["dashes"] = dashes
-                            if line_cap is not None:
-                                shape_finish_kwargs["lineCap"] = line_cap
-                            if line_join is not None:
-                                shape_finish_kwargs["lineJoin"] = line_join
                             shape.finish(**shape_finish_kwargs)
                             shape.commit()
                             if debug:
@@ -4203,21 +4227,23 @@ def _write_reconstructed_page_pdf(
                             stroke_color,
                             _debug_args(args),
                         )
+                    fallback_draw_rect_kwargs = {
+                        "fill": fill_color,
+                        "fill_opacity": fill_opacity if fill_opacity else 1.0,
+                    }
+                    if fill_color is None or has_stroke_fill_op:
+                        fallback_draw_rect_kwargs["color"] = stroke_color
+                        fallback_draw_rect_kwargs["width"] = line_width
                     try:
                         out_page.draw_rect(
                             pymupdf.Rect(x0, y0, x1, y1),
-                            color=stroke_color,
-                            width=line_width,
-                            fill=fill_color,
-                            fill_opacity=fill_opacity if fill_opacity else 1.0,
+                            **fallback_draw_rect_kwargs,
                         )
                     except TypeError:
                         try:
                             out_page.draw_rect(
                                 pymupdf.Rect(x0, y0, x1, y1),
-                                color=stroke_color,
-                                width=line_width,
-                                fill=fill_color,
+                                **fallback_draw_rect_kwargs,
                             )
                         except Exception as exc:
                             if debug:
