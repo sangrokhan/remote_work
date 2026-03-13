@@ -1130,6 +1130,174 @@ def _cell_bbox(cell):
         return None
 
 
+def _extract_table_items_from_detector(
+    page,
+    page_no,
+    source,
+    tables,
+    strategy_label=None,
+    debug=False,
+):
+    if not tables or not getattr(tables, "tables", None):
+        return []
+
+    table_items = []
+    for table_index, table in enumerate(tables.tables, start=1):
+        bbox = getattr(table, "bbox", None)
+        if not bbox:
+            _LOGGER.warning(
+                "Table %s on page %s has no bbox and was skipped: source=%s",
+                table_index,
+                page_no,
+                source,
+            )
+            continue
+
+        if debug:
+            _LOGGER.debug(
+                "Table parse: source=%s page=%s table=%s strategy=%s",
+                source,
+                page_no,
+                table_index,
+                strategy_label,
+            )
+
+        rows = []
+        cells = getattr(table, "cells", None) or []
+        try:
+            rows = table.extract()
+        except Exception:
+            if debug:
+                _LOGGER.warning(
+                    "table.extract() failed, falling back to cell text: source=%s page=%s table=%s",
+                    source,
+                    page_no,
+                    table_index,
+                    exc_info=True,
+                )
+                rows = []
+            for cell in cells:
+                row = getattr(cell, "row", None)
+                col = getattr(cell, "col", None)
+                if row is None or col is None:
+                    continue
+                while len(rows) <= row:
+                    rows.append([])
+                row_cells = rows[row]
+                while len(row_cells) <= col:
+                    row_cells.append("")
+                row_cells[col] = _sanitize_text(
+                    getattr(cell, "text", "") or getattr(cell, "content", "") or ""
+                )
+
+        if not rows and cells:
+            rows = []
+
+        if not rows:
+            # no table content recovered from detector
+            continue
+
+        table_rows = len(rows)
+        table_cols = 0
+        row_texts = []
+        for row in rows:
+            if not isinstance(row, (list, tuple)):
+                continue
+            table_cols = max(table_cols, len(row))
+            row_texts.append(" | ".join(_sanitize_text(cell or "") for cell in row))
+
+        row_count = len(row_texts)
+        if row_count == 0:
+            if debug:
+                _LOGGER.debug(
+                    "No readable rows after table re-extraction: source=%s page=%s table=%s",
+                    source,
+                    page_no,
+                    table_index,
+                )
+            continue
+
+        x0, y0, x1, y1 = [float(v) for v in bbox]
+        components = {
+            "bbox": [x0, y0, x1, y1],
+            "row_lines": [
+                {"orientation": "horizontal", "x0": x0, "y0": y0, "x1": x1, "y1": y0},
+                {"orientation": "horizontal", "x0": x0, "y0": y1, "x1": x1, "y1": y1},
+            ],
+            "vertical_lines": [
+                {"orientation": "vertical", "x0": x0, "y0": y0, "x1": x0, "y1": y1},
+                {"orientation": "vertical", "x0": x1, "y0": y0, "x1": x1, "y1": y1},
+            ],
+        }
+
+        if row_count != table_rows:
+            components = {
+                "bbox": [x0, y0, x1, y1],
+                "row_lines": components.get("row_lines", []),
+                "vertical_lines": components.get("vertical_lines", []),
+            }
+
+        if debug:
+            _LOGGER.debug(
+                "Table %s on page %s row_count=%s col_count=%s",
+                table_index,
+                page_no,
+                row_count,
+                table_cols,
+            )
+            _LOGGER.debug(
+                "Table %s geometry: source=%s page=%s row_lines=%s col_lines=%s",
+                table_index,
+                source,
+                page_no,
+                len(components.get("row_lines", [])),
+                len(components.get("vertical_lines", [])),
+            )
+
+        table_items.append(
+            {
+                "page": page_no,
+                "start_page": page_no,
+                "table_no": table_index,
+                "bbox": [x0, y0, x1, y1],
+                "row_count": row_count,
+                "col_count": table_cols,
+                "rotation": int(page.rotation or 0),
+                "rows_text": row_texts,
+                "x": _round_float((x0 + x1) / 2.0),
+                "y": _round_float((y0 + y1) / 2.0),
+                "page_width": float(page.rect.width),
+                "page_height": float(page.rect.height),
+                "text": "\n".join(row_texts),
+                "row_lines": list(components.get("row_lines", [])),
+                "vertical_lines": list(components.get("vertical_lines", [])),
+                "components": {
+                    "bbox": components.get("bbox"),
+                    "row_lines": list(components.get("row_lines", [])),
+                    "vertical_lines": list(components.get("vertical_lines", [])),
+                },
+                "infer_method": "find-tables",
+                "source": source,
+            }
+        )
+
+    return table_items
+
+
+def _table_items_score(table_items):
+    if not table_items:
+        return 0
+
+    score = 0
+    for item in table_items:
+        rows = item.get("row_count", 0) or 0
+        cols = item.get("col_count", 0) or 0
+        rows_text = item.get("rows_text") or []
+        score += rows * max(cols, 1)
+        score += min(len(rows_text), rows) * 0.2
+
+    return score
+
 
 
 def _extract_page_tables(
@@ -1149,18 +1317,24 @@ def _extract_page_tables(
         _LOGGER.warning("Page has no table detection API: source=%s page=%s", source, page_no)
         return []
 
-    strategies = [("default", {})]
-    if table_mode in ("auto", "lines"):
-        strategies.append(("lines", {"vertical_strategy": "lines", "horizontal_strategy": "lines"}))
-    if table_mode in ("auto", "text"):
-        strategies.append(("text", {"vertical_strategy": "text", "horizontal_strategy": "text"}))
-    if table_mode not in ("auto", "default", "lines", "text"):
+    if table_mode == "default":
+        strategies = [("default", {})]
+    elif table_mode == "lines":
+        strategies = [("lines", {"vertical_strategy": "lines", "horizontal_strategy": "lines"})]
+    elif table_mode == "text":
+        strategies = [("text", {"vertical_strategy": "text", "horizontal_strategy": "text"})]
+    elif table_mode != "auto":
         table_mode = "auto"
 
-    selected = None
+    if table_mode == "auto":
+        strategies = [("default", {})]
+        strategies.append(("lines", {"vertical_strategy": "lines", "horizontal_strategy": "lines"}))
+        strategies.append(("text", {"vertical_strategy": "text", "horizontal_strategy": "text"}))
+
+    selected_items = []
     selected_label = None
-    fallback_selected = None
-    fallback_label = None
+    selected_score = -1
+
     for label, options in strategies:
         try:
             tables = page.find_tables(**options)
@@ -1197,25 +1371,88 @@ def _extract_page_tables(
                 label,
                 options,
             )
-        if count:
-            selected = tables
-            selected_label = label
-            break
 
-        if fallback_selected is None:
-            fallback_selected = tables
-            fallback_label = label
+        if count == 0:
+            if table_mode != "auto":
+                selected_items = []
+                selected_label = label
+                break
+            continue
+
+        parsed = _extract_table_items_from_detector(
+            page=page,
+            page_no=page_no,
+            source=source,
+            tables=tables,
+            strategy_label=label,
+            debug=debug,
+        )
+        parsed_count = len(parsed)
+        parsed_score = _table_items_score(parsed)
+        if debug:
+            _LOGGER.debug(
+                "Parsed tables from strategy: source=%s page=%s strategy=%s parsed_count=%s score=%s",
+                source,
+                page_no,
+                label,
+                parsed_count,
+                parsed_score,
+            )
 
         if table_mode != "auto":
-            selected = tables
+            selected_items = parsed
             selected_label = label
             break
 
-    if selected is None:
-        selected = fallback_selected
-        selected_label = fallback_label
+        if parsed_score > 0 and (selected_score < 0 or parsed_score > selected_score):
+            selected_items = parsed
+            selected_label = label
+            selected_score = parsed_score
 
-    if not selected or not getattr(selected, "tables", None):
+    if table_mode == "auto" and not selected_items:
+        # fallback: choose the first strategy that returned any raw table when parse produced no usable rows
+        for label, options in strategies:
+            try:
+                tables = page.find_tables(**options)
+            except TypeError:
+                if debug:
+                    _LOGGER.debug(
+                        "find_tables options unsupported in fallback: source=%s page=%s strategy=%s options=%s",
+                        source,
+                        page_no,
+                        label,
+                        options,
+                    )
+                continue
+            except Exception:
+                if debug:
+                    _LOGGER.warning(
+                        "find_tables() failed in fallback: source=%s page=%s strategy=%s options=%s",
+                        source,
+                        page_no,
+                        label,
+                        options,
+                        exc_info=True,
+                    )
+                continue
+
+            rows = getattr(tables, "tables", None)
+            count = len(rows or [])
+            if count <= 0:
+                continue
+
+            selected_items = _extract_table_items_from_detector(
+                page=page,
+                page_no=page_no,
+                source=source,
+                tables=tables,
+                strategy_label=label,
+                debug=debug,
+            )
+            selected_label = label
+            break
+
+    if not selected_items:
         if debug:
             _LOGGER.info(
                 "No tables found with PyMuPDF find_tables: source=%s page=%s",
@@ -1229,162 +1466,17 @@ def _extract_page_tables(
             "Detected tables on page: source=%s page=%s count=%s",
             source,
             page_no,
-            len(selected.tables),
+            len(selected_items),
         )
     elif debug:
         _LOGGER.debug(
             "Using tables strategy %s on page=%s table_count=%s",
             selected_label,
             page_no,
-            len(selected.tables),
+            len(selected_items),
         )
 
-    table_items = []
-    for table_index, table in enumerate(selected.tables, start=1):
-        bbox = getattr(table, "bbox", None)
-        if not bbox:
-            _LOGGER.warning(
-                "Table %s on page %s has no bbox and was skipped: source=%s",
-                table_index,
-                page_no,
-                source,
-            )
-            continue
-
-        if debug:
-            _LOGGER.debug(
-                "Table parse: source=%s page=%s table=%s strategy=%s",
-                source,
-                page_no,
-                table_index,
-                selected_label,
-            )
-
-        rows = []
-        cells = getattr(table, "cells", None) or []
-
-        try:
-            rows = table.extract()
-        except Exception:
-            if debug:
-                _LOGGER.warning(
-                    "table.extract() failed, falling back to cell text: source=%s page=%s table=%s",
-                    source,
-                    page_no,
-                    table_index,
-                    exc_info=True,
-                )
-                rows = []
-            for cell in cells:
-                row = getattr(cell, "row", None)
-                col = getattr(cell, "col", None)
-                if row is None or col is None:
-                    continue
-                while len(rows) <= row:
-                    rows.append([])
-                row_cells = rows[row]
-                while len(row_cells) <= col:
-                    row_cells.append("")
-                row_cells[col] = _sanitize_text(
-                    getattr(cell, "text", "") or getattr(cell, "content", "") or ""
-                )
-
-        if not rows and cells:
-            rows = []
-
-        if not rows:
-            # no table content recovered from detector
-            continue
-
-        table_rows = len(rows)
-        table_cols = 0
-        for row in rows:
-            if isinstance(row, (list, tuple)):
-                table_cols = max(table_cols, len(row))
-
-        x0, y0, x1, y1 = [float(v) for v in bbox]
-        components = {
-            "bbox": [x0, y0, x1, y1],
-            "row_lines": [
-                {"orientation": "horizontal", "x0": x0, "y0": y0, "x1": x1, "y1": y0},
-                {"orientation": "horizontal", "x0": x0, "y0": y1, "x1": x1, "y1": y1},
-            ],
-            "vertical_lines": [
-                {"orientation": "vertical", "x0": x0, "y0": y0, "x1": x0, "y1": y1},
-                {"orientation": "vertical", "x0": x1, "y0": y0, "x1": x1, "y1": y1},
-            ],
-        }
-
-        row_count = 0
-        col_count = 0
-        row_texts = []
-        for row in rows:
-            if not isinstance(row, (list, tuple)):
-                continue
-            row_count += 1
-            col_count = max(col_count, len(row))
-            row_texts.append(" | ".join(_sanitize_text(cell or "") for cell in row))
-        if row_count == 0:
-            if debug:
-                _LOGGER.debug(
-                    "No readable rows after table re-extraction: source=%s page=%s table=%s",
-                    source,
-                    page_no,
-                    table_index,
-                )
-            continue
-
-        if row_count != table_rows or col_count != table_cols:
-            components = {
-                "bbox": [x0, y0, x1, y1],
-                "row_lines": components.get("row_lines", []),
-                "vertical_lines": components.get("vertical_lines", []),
-            }
-        if debug:
-            _LOGGER.debug(
-                "Table %s on page %s row_count=%s col_count=%s",
-                table_index,
-                page_no,
-                row_count,
-                col_count,
-            )
-            _LOGGER.debug(
-                "Table %s geometry: source=%s page=%s row_lines=%s col_lines=%s",
-                table_index,
-                source,
-                page_no,
-                len(components.get("row_lines", [])),
-                len(components.get("vertical_lines", [])),
-            )
-
-        table_items.append(
-            {
-                "page": page_no,
-                "start_page": page_no,
-                "table_no": table_index,
-                "bbox": [x0, y0, x1, y1],
-                "row_count": row_count,
-                "col_count": col_count,
-                "rotation": int(page.rotation or 0),
-                "rows_text": row_texts,
-                "x": _round_float((x0 + x1) / 2.0),
-                "y": _round_float((y0 + y1) / 2.0),
-                "page_width": float(page.rect.width),
-                "page_height": float(page.rect.height),
-                "text": "\n".join(row_texts),
-                "row_lines": list(components.get("row_lines", [])),
-                "vertical_lines": list(components.get("vertical_lines", [])),
-                    "components": {
-                        "bbox": components.get("bbox"),
-                        "row_lines": list(components.get("row_lines", [])),
-                        "vertical_lines": list(components.get("vertical_lines", [])),
-                    },
-                    "infer_method": "find-tables",
-                    "source": source,
-                }
-            )
-
-    return table_items
+    return selected_items
 
 
 def _extract_page_lines(
