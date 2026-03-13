@@ -2505,6 +2505,131 @@ def _draw_raw_spans_on_page(out_page, spans, source, page_no, debug=False):
             )
 
 
+def _iter_text_dict_lines(raw_text):
+    raw_blocks = raw_text.get("blocks") if isinstance(raw_text, dict) else []
+    line_no = 0
+    for block in raw_blocks:
+        if not isinstance(block, dict) or block.get("type") != 0:
+            continue
+        for line in block.get("lines", []) or []:
+            if not isinstance(line, dict):
+                continue
+            line_no += 1
+            yield line_no, line
+
+
+def _collect_watermark_line_filter(
+    page,
+    page_no,
+    source_text,
+    enabled,
+    header_ratio,
+    footer_ratio,
+    watermark_angle=_WATERMARK_ROTATION_DEGREE,
+    watermark_tolerance=_WATERMARK_ROTATION_TOLERANCE,
+    strip_body_rotation=False,
+    remove_markdown_lines=False,
+    debug=False,
+):
+    if not enabled:
+        return {
+            "enabled": False,
+            "removed_line_numbers": set(),
+            "total_lines": 0,
+            "watermark_lines": 0,
+            "watermark_line_ratio": 0.0,
+            "watermark_rotation": 0,
+            "removed_count": 0,
+            "kept_count": 0,
+            "removed_lines": [],
+        }
+
+    try:
+        target_lines = _extract_page_lines(
+            page=page,
+            page_no=page_no,
+            source=source_text,
+            header_ratio=header_ratio,
+            footer_ratio=footer_ratio,
+            preserve_newlines=False,
+            strip_markdown_lines=False,
+            debug=debug,
+        )
+        watermark_result = _remove_watermark_lines(
+            target_lines,
+            watermark_angle=watermark_angle,
+            watermark_tolerance=watermark_tolerance,
+            source=source_text,
+            page_no=page_no,
+            strip_body_rotation=strip_body_rotation,
+            remove_markdown_lines=remove_markdown_lines,
+            debug=debug,
+        )
+        removed_lines = watermark_result["removed_lines"]
+        removed_line_numbers = watermark_result["removed_line_numbers"]
+        watermark_lines = watermark_result["removed_count"]
+        total_lines = len(target_lines)
+        watermark_line_ratio = (
+            round(watermark_lines / float(total_lines), 4) if watermark_lines and total_lines else 0.0
+        )
+        watermark_rotation = len(
+            [item for item in removed_lines if item.get("reason") == "watermark-rotation"]
+        )
+
+        if debug:
+            _LOGGER.debug(
+                "Watermark line filter config: source=%s page=%s enabled=%s rotation=%s tolerance=%s header_ratio=%s footer_ratio=%s",
+                source_text,
+                page_no,
+                True,
+                _round_float(watermark_angle),
+                _round_float(watermark_tolerance),
+                _round_float(header_ratio),
+                _round_float(footer_ratio),
+            )
+            _LOGGER.debug(
+                "Watermark line filter summary: source=%s page=%s total_lines=%s watermark_lines=%s ratio=%s rotation=%s",
+                source_text,
+                page_no,
+                total_lines,
+                watermark_lines,
+                watermark_line_ratio,
+                watermark_rotation,
+            )
+
+        return {
+            "enabled": True,
+            "removed_line_numbers": removed_line_numbers,
+            "total_lines": total_lines,
+            "watermark_lines": watermark_lines,
+            "watermark_line_ratio": watermark_line_ratio,
+            "watermark_rotation": watermark_rotation,
+            "removed_count": watermark_result["removed_count"],
+            "kept_count": watermark_result["kept_count"],
+            "removed_lines": removed_lines,
+        }
+    except Exception:
+        if debug:
+            _LOGGER.debug(
+                "Watermark line filter setup failed: source=%s page=%s fallback=insert-all",
+                source_text,
+                page_no,
+                exc_info=True,
+            )
+
+        return {
+            "enabled": True,
+            "removed_line_numbers": set(),
+            "total_lines": 0,
+            "watermark_lines": 0,
+            "watermark_line_ratio": 0.0,
+            "watermark_rotation": 0,
+            "removed_count": 0,
+            "kept_count": 0,
+            "removed_lines": [],
+        }
+
+
 def _is_watermark_line(
     line,
     watermark_angle,
@@ -3434,126 +3559,34 @@ def _write_reconstructed_page_pdf(
 
         page = doc[page_no - 1]
         source_text = str(source_path)
-        watermark_line_bboxes = []
         watermark_skip_stats = {
             "enabled": bool(remove_watermark),
             "total_lines": 0,
             "watermark_lines": 0,
             "watermark_line_ratio": 0.0,
             "watermark_rotation": 0,
-            "watermark_bbox_count": 0,
-            "span_skip_count": 0,
             "span_total_count": 0,
+            "line_skip_count": 0,
         }
 
-        if remove_watermark:
-            try:
-                target_lines = _extract_page_lines(
-                    page,
-                    page_no,
-                    source_text,
-                    header_ratio,
-                    footer_ratio,
-                    preserve_newlines=False,
-                    strip_markdown_lines=False,
-                    debug=debug,
-                )
-                watermark_skip_stats["total_lines"] = len(target_lines)
-                watermark_result = _remove_watermark_lines(
-                    target_lines,
-                    watermark_angle=watermark_angle,
-                    watermark_tolerance=watermark_tolerance,
-                    source=source_text,
-                    page_no=page_no,
-                    strip_body_rotation=strip_body_rotation,
-                    remove_markdown_lines=remove_markdown_lines,
-                    debug=debug,
-                )
-                removed_line_numbers = watermark_result["removed_line_numbers"]
-                removed_lines = watermark_result["removed_lines"]
-                watermark_skip_stats["watermark_lines"] = watermark_result["removed_count"]
-                watermark_skip_stats["watermark_rotation"] = len(
-                    [item for item in removed_lines if item.get("reason") == "watermark-rotation"]
-                )
-
-                for line in target_lines:
-                    if line.get("line") not in removed_line_numbers:
-                        continue
-                    line_bbox = line.get("bbox")
-                    if isinstance(line_bbox, (list, tuple)) and len(line_bbox) == 4:
-                        try:
-                            x0, y0, x1, y1 = [float(v) for v in line_bbox]
-                            if x1 > x0 and y1 > y0:
-                                watermark_line_bboxes.append((x0, y0, x1, y1))
-                                watermark_skip_stats["watermark_bbox_count"] += 1
-                        except (TypeError, ValueError):
-                            pass
-                    for span in line.get("spans", []) or []:
-                        span_bbox = span.get("bbox")
-                        if not (isinstance(span_bbox, (list, tuple)) and len(span_bbox) == 4):
-                            continue
-                        try:
-                            sx0, sy0, sx1, sy1 = [float(v) for v in span_bbox]
-                            if sx1 > sx0 and sy1 > sy0:
-                                watermark_line_bboxes.append((sx0, sy0, sx1, sy1))
-                                watermark_skip_stats["watermark_bbox_count"] += 1
-                        except (TypeError, ValueError):
-                            continue
-
-                if watermark_skip_stats["watermark_lines"] and watermark_skip_stats["total_lines"]:
-                    watermark_skip_stats["watermark_line_ratio"] = round(
-                        watermark_skip_stats["watermark_lines"] / float(watermark_skip_stats["total_lines"]),
-                        4,
-                    )
-
-                if debug:
-                    _LOGGER.debug(
-                        "Reconstruct watermark config: source=%s page=%s enabled=%s rotation=%s tolerance=%s header_ratio=%s footer_ratio=%s",
-                        source_text,
-                        page_no,
-                        watermark_skip_stats["enabled"],
-                        _round_float(watermark_angle),
-                        _round_float(watermark_tolerance),
-                        _round_float(header_ratio),
-                        _round_float(footer_ratio),
-                    )
-                    _LOGGER.debug(
-                        "Reconstruct watermark summary: source=%s page=%s total_lines=%s watermark_lines=%s ratio=%s rotation=%s bbox=%s",
-                        source_text,
-                        page_no,
-                        watermark_skip_stats["total_lines"],
-                        watermark_skip_stats["watermark_lines"],
-                        watermark_skip_stats["watermark_line_ratio"],
-                        watermark_skip_stats["watermark_rotation"],
-                        watermark_skip_stats["watermark_bbox_count"],
-                    )
-            except Exception as exc:
-                if debug:
-                    _LOGGER.debug(
-                        "Reconstruct watermark setup failed: source=%s page=%s fallback=insert-all error=%s",
-                        source_text,
-                        page_no,
-                        exc,
-                    )
-                watermark_line_bboxes = []
-
-        def _in_watermark_bbox(target_bbox):
-            if not watermark_line_bboxes:
-                return False
-            if not (isinstance(target_bbox, (list, tuple)) or isinstance(target_bbox, pymupdf.Rect)):
-                return False
-            try:
-                sx0, sy0, sx1, sy1 = [float(v) for v in target_bbox]
-            except (TypeError, ValueError):
-                return False
-            if sx1 <= sx0 or sy1 <= sy0:
-                return False
-
-            for x0, y0, x1, y1 in watermark_line_bboxes:
-                overlap_ratio, union_ratio = _bbox_overlap_ratio((sx0, sy0, sx1, sy1), (x0, y0, x1, y1))
-                if overlap_ratio >= 0.45 or union_ratio >= 0.45:
-                    return True
-            return False
+        watermark_filter = _collect_watermark_line_filter(
+            page=page,
+            page_no=page_no,
+            source_text=source_text,
+            enabled=remove_watermark,
+            header_ratio=header_ratio,
+            footer_ratio=footer_ratio,
+            watermark_angle=watermark_angle,
+            watermark_tolerance=watermark_tolerance,
+            strip_body_rotation=strip_body_rotation,
+            remove_markdown_lines=remove_markdown_lines,
+            debug=debug,
+        )
+        removed_line_numbers = watermark_filter["removed_line_numbers"]
+        watermark_skip_stats["total_lines"] = watermark_filter["total_lines"]
+        watermark_skip_stats["watermark_lines"] = watermark_filter["watermark_lines"]
+        watermark_skip_stats["watermark_line_ratio"] = watermark_filter["watermark_line_ratio"]
+        watermark_skip_stats["watermark_rotation"] = watermark_filter["watermark_rotation"]
 
 
         def _normalize_color(color_value, default=(0.0, 0.0, 0.0)):
@@ -4621,7 +4654,6 @@ def _write_reconstructed_page_pdf(
         for drawing_index, drawing in enumerate(drawings):
             _render_drawing(drawing, drawing_index=drawing_index)
 
-        raw_blocks = raw_text.get("blocks") if isinstance(raw_text, dict) else []
         if debug and fontfile_for_korean:
             _LOGGER.debug(
                 "Reconstruct with Korean fallback fontfile=%s for page=%s (fontname=%r)",
@@ -4630,66 +4662,54 @@ def _write_reconstructed_page_pdf(
                 korean_fontname,
             )
 
-        for block in raw_blocks:
-            if not isinstance(block, dict) or block.get("type") != 0:
+        for raw_line_no, line in _iter_text_dict_lines(raw_text):
+            if raw_line_no in removed_line_numbers:
+                watermark_skip_stats["line_skip_count"] += 1
                 continue
-            for line in block.get("lines", []) or []:
-                if not isinstance(line, dict):
+            for span in line.get("spans", []) or []:
+                if not isinstance(span, dict):
                     continue
-                for span in line.get("spans", []) or []:
-                    if not isinstance(span, dict):
-                        continue
 
-                    text = (span.get("text") or "").replace("\xa0", " ")
-                    if not text:
-                        continue
+                text = (span.get("text") or "").replace("\xa0", " ")
+                if not text:
+                    continue
 
-                    origin = span.get("origin")
-                    bbox = span.get("bbox")
-                    origin_x1y1 = None
-                    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                origin = span.get("origin")
+                origin_x1y1 = None
+                bbox = span.get("bbox")
+                if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                    try:
+                        x0, y0, x1, y1 = [float(v) for v in bbox]
+                        origin_x1y1 = (x0, y1)
+                        watermark_skip_stats["span_total_count"] += 1
+                    except (TypeError, ValueError):
+                        origin_x1y1 = None
+
+                if origin is None:
+                    if origin_x1y1 is None:
+                        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                            continue
                         try:
                             x0, y0, x1, y1 = [float(v) for v in bbox]
-                            origin_x1y1 = (x0, y1)
-                            watermark_skip_stats["span_total_count"] += 1
-                            if _in_watermark_bbox((x0, y0, x1, y1)):
-                                watermark_skip_stats["span_skip_count"] += 1
-                                if debug:
-                                    _LOGGER.debug(
-                                        "Reconstruct skip watermark span: source=%s page=%s text=%r",
-                                        source_text,
-                                        page_no,
-                                        text[:120],
-                                    )
-                                continue
                         except (TypeError, ValueError):
-                            origin_x1y1 = None
-
-                    if origin is None:
-                        if origin_x1y1 is None:
-                            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-                                continue
-                            try:
-                                x0, y0, x1, y1 = [float(v) for v in bbox]
-                            except (TypeError, ValueError):
-                                continue
-                            if x1 <= x0 or y1 <= y0:
-                                continue
-                            origin_x1y1 = (x0, y1)
-                        if origin_x1y1 is None:
                             continue
-                        origin = origin_x1y1
-
-                    point = _to_point(origin)
-                    if point is None:
+                        if x1 <= x0 or y1 <= y0:
+                            continue
+                        origin_x1y1 = (x0, y1)
+                    if origin_x1y1 is None:
                         continue
-                    size = span.get("size")
-                    try:
-                        size = float(size)
-                    except (TypeError, ValueError):
-                        size = 11.0
-                    if size <= 0:
-                        size = 11.0
+                    origin = origin_x1y1
+
+                point = _to_point(origin)
+                if point is None:
+                    continue
+                size = span.get("size")
+                try:
+                    size = float(size)
+                except (TypeError, ValueError):
+                    size = 11.0
+                if size <= 0:
+                    size = 11.0
 
                     color = _normalize_color(span.get("color"), default=(0.0, 0.0, 0.0))
                     font = (span.get("font") or "helv").strip() or "helv"
@@ -4733,12 +4753,13 @@ def _write_reconstructed_page_pdf(
 
         if debug:
             _LOGGER.debug(
-                "Reconstruct watermark apply summary: source=%s page=%s enabled=%s span_total=%s span_skipped=%s",
+                "Reconstruct watermark apply summary: source=%s page=%s enabled=%s lines_total=%s lines_skipped=%s spans_rendered=%s",
                 source_text,
                 page_no,
                 watermark_skip_stats["enabled"],
+                watermark_skip_stats["total_lines"],
+                watermark_skip_stats["line_skip_count"],
                 watermark_skip_stats["span_total_count"],
-                watermark_skip_stats["span_skip_count"],
             )
 
         rendered_pdf.save(output_path, deflate=True, garbage=4)
