@@ -143,6 +143,10 @@ def _is_bullet_line(line: str) -> bool:
     return bool(re.match(r"^(?:[-*•]|[0-9]+[.)])\s+", line))
 
 
+def _ends_sentence(line: str) -> bool:
+    return bool(re.search(r"[.!?;:。！？]$" , str(line or "").strip()))
+
+
 def _normalize_cell_lines(cell: str) -> List[str]:
     raw_lines = [part.strip() for part in str(cell or "").splitlines()]
     lines = _remove_watermark_fragment_lines(raw_lines)
@@ -166,6 +170,8 @@ def _normalize_cell_lines(cell: str) -> List[str]:
         if logical_lines and _is_bullet_line(logical_lines[-1]) and not buffer:
             logical_lines[-1] = f"{logical_lines[-1]} {line}".strip()
             continue
+        if buffer and _ends_sentence(buffer[-1]):
+            _flush_buffer()
         buffer.append(line)
 
     _flush_buffer()
