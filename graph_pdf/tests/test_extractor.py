@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pdfplumber
 
-from extractor import extract_pdf_to_outputs
+from extractor import _normalize_cell_lines, extract_pdf_to_outputs
 from verify import _extract_markdown_tables
 from sample_fixture import load_demo_fixture
 from sample_generator import create_demo_pdf
@@ -86,6 +86,22 @@ class TableExtractionFormattingTests(unittest.TestCase):
             markdown,
         )
         self.assertIn("| Docs | READY | Finalize<br>- sample<br>- archive |", markdown)
+
+    def test_punctuation_ends_logical_cell_line(self) -> None:
+        cell = (
+            "First sentence ends here.\n"
+            "Second sentence starts here.\n"
+            "Wrapped continuation without punctuation\n"
+            "still belongs together"
+        )
+        self.assertEqual(
+            [
+                "First sentence ends here.",
+                "Second sentence starts here.",
+                "Wrapped continuation without punctuation still belongs together",
+            ],
+            _normalize_cell_lines(cell),
+        )
 
     def test_spanning_stage_table_merges_into_one_block(self) -> None:
         markdown = self._extract_markdown()
