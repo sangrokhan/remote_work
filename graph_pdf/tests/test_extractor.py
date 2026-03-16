@@ -333,11 +333,11 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertTrue(payload["tables"][0]["horizontal_segments"])
         self.assertTrue(payload["tables"][0]["vertical_segments"])
         self.assertEqual(
-            {"x0", "x1", "top", "bottom"},
+            {"x0", "x1", "top", "bottom", "in_body_bounds"},
             set(payload["tables"][0]["horizontal_segments"][0].keys()),
         )
         self.assertEqual(
-            {"x0", "x1", "top", "bottom"},
+            {"x0", "x1", "top", "bottom", "in_body_bounds"},
             set(payload["tables"][0]["vertical_segments"][0].keys()),
         )
         self.assertTrue(payload["tables"][0]["horizontal_groups"])
@@ -372,6 +372,14 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(3, len(payload["pages"]))
         self.assertEqual(2, payload["pages"][0]["table_count"])
         self.assertEqual(6, payload["pages"][0]["tables"][0]["row_count"])
+        edge_debug_file = result["debug_edges_file"]
+        self.assertIsNotNone(edge_debug_file)
+        edge_payload = json.loads(edge_debug_file.read_text(encoding="utf-8"))
+        self.assertEqual(3, len(edge_payload["pages"]))
+        self.assertIn("all_horizontal_edges", edge_payload["pages"][0])
+        self.assertIn("selected_horizontal_edges", edge_payload["pages"][0])
+        self.assertIn("all_vertical_edges", edge_payload["pages"][0])
+        self.assertIn("selected_vertical_edges", edge_payload["pages"][0])
 
     def test_stage_table_repeats_header_after_page_break(self) -> None:
         pdf_path = self._build_pdf()

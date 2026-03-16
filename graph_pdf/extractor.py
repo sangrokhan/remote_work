@@ -100,16 +100,30 @@ def _cluster_axis_values(values: Sequence[float], tolerance: float = 1.0) -> Lis
     return clusters
 
 
-def _round_segment(edge: dict) -> dict:
-    return {
+def _round_segment(
+    edge: dict,
+    body_top: float | None = None,
+    body_bottom: float | None = None,
+) -> dict:
+    payload = {
         "x0": round(float(edge["x0"]), 2),
         "x1": round(float(edge["x1"]), 2),
         "top": round(float(edge["top"]), 2),
         "bottom": round(float(edge["bottom"]), 2),
     }
+    if body_top is not None and body_bottom is not None:
+        payload["in_body_bounds"] = (
+            float(edge["bottom"]) > body_top and float(edge["top"]) < body_bottom
+        )
+    return payload
 
 
-def _merge_horizontal_band_segments(segments: Sequence[dict], tolerance: float = 1.0) -> List[dict]:
+def _merge_horizontal_band_segments(
+    segments: Sequence[dict],
+    tolerance: float = 1.0,
+    body_top: float | None = None,
+    body_bottom: float | None = None,
+) -> List[dict]:
     merged: List[dict] = []
     for edge in sorted(segments, key=lambda item: (float(item["x0"]), float(item["x1"]))):
         if not merged:
@@ -121,10 +135,15 @@ def _merge_horizontal_band_segments(segments: Sequence[dict], tolerance: float =
             previous["bottom"] = max(float(previous["bottom"]), float(edge["bottom"]))
             continue
         merged.append(dict(edge))
-    return [_round_segment(edge) for edge in merged]
+    return [_round_segment(edge, body_top=body_top, body_bottom=body_bottom) for edge in merged]
 
 
-def _merge_vertical_band_segments(segments: Sequence[dict], tolerance: float = 1.0) -> List[dict]:
+def _merge_vertical_band_segments(
+    segments: Sequence[dict],
+    tolerance: float = 1.0,
+    body_top: float | None = None,
+    body_bottom: float | None = None,
+) -> List[dict]:
     merged: List[dict] = []
     for edge in sorted(segments, key=lambda item: (float(item["top"]), float(item["bottom"]))):
         if not merged:
@@ -136,7 +155,7 @@ def _merge_vertical_band_segments(segments: Sequence[dict], tolerance: float = 1
             previous["x1"] = max(float(previous["x1"]), float(edge["x1"]))
             continue
         merged.append(dict(edge))
-    return [_round_segment(edge) for edge in merged]
+    return [_round_segment(edge, body_top=body_top, body_bottom=body_bottom) for edge in merged]
 
 
 def _build_segment_groups(
@@ -144,6 +163,8 @@ def _build_segment_groups(
     axis_key: str,
     merge_fn,
     tolerance: float = 1.0,
+    body_top: float | None = None,
+    body_bottom: float | None = None,
 ) -> List[dict]:
     clusters = _cluster_axis_values([float(edge[axis_key]) for edge in segments], tolerance=tolerance)
     groups: List[dict] = []
@@ -157,8 +178,16 @@ def _build_segment_groups(
         groups.append(
             {
                 "axis": round(axis, 2),
-                "segments": [_round_segment(edge) for edge in members],
-                "merged_segments": merge_fn(members, tolerance=tolerance),
+                "segments": [
+                    _round_segment(edge, body_top=body_top, body_bottom=body_bottom)
+                    for edge in members
+                ],
+                "merged_segments": merge_fn(
+                    members,
+                    tolerance=tolerance,
+                    body_top=body_top,
+                    body_bottom=body_bottom,
+                ),
             }
         )
     return groups
@@ -203,12 +232,16 @@ def _collect_table_drawing_debug(
             axis_key="top",
             merge_fn=_merge_horizontal_band_segments,
             tolerance=1.0,
+            body_top=body_top,
+            body_bottom=body_bottom,
         )
         vertical_groups = _build_segment_groups(
             vertical_edges,
             axis_key="x0",
             merge_fn=_merge_vertical_band_segments,
             tolerance=1.0,
+            body_top=body_top,
+            body_bottom=body_bottom,
         )
         tables.append(
             {
@@ -220,19 +253,13 @@ def _collect_table_drawing_debug(
                 "vertical_lines": [round(value, 2) for value in vertical_positions],
                 "horizontal_segments": [
                     {
-                        "x0": round(float(edge["x0"]), 2),
-                        "x1": round(float(edge["x1"]), 2),
-                        "top": round(float(edge["top"]), 2),
-                        "bottom": round(float(edge["bottom"]), 2),
+                        **_round_segment(edge, body_top=body_top, body_bottom=body_bottom),
                     }
                     for edge in horizontal_edges
                 ],
                 "vertical_segments": [
                     {
-                        "x0": round(float(edge["x0"]), 2),
-                        "x1": round(float(edge["x1"]), 2),
-                        "top": round(float(edge["top"]), 2),
-                        "bottom": round(float(edge["bottom"]), 2),
+                        **_round_segment(edge, body_top=body_top, body_bottom=body_bottom),
                     }
                     for edge in vertical_edges
                 ],
@@ -249,6 +276,57 @@ def _collect_table_drawing_debug(
         "table_count": len(tables),
         "tables": tables,
     }
+
+
+def _collect_page_edge_debug(
+    page: "pdfplumber.page.Page",
+    page_no: int,
+    header_margin: float = 90.0,
+    footer_margin: float = 40.0,
+) -> dict:
+    body_top, body_bottom = _detect_body_bounds(
+        page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+    )
+    groups = _table_regions(page)
+    selected_horizontal_edges = []
+    selected_vertical_edges = []
+    for x0, x1, lines in groups:
+        top = min(float(edge["top"]) for edge in lines)
+        bottom = max(float(edge["top"]) for edge in lines)
+        selected_horizontal_edges.extend(lines)
+        selected_vertical_edges.extend(
+            edge
+            for edge in page.vertical_edges
+            if float(edge["x0"]) >= x0 - 2.0
+            and float(edge["x0"]) <= x1 + 2.0
+            and float(edge["bottom"]) >= top
+            and float(edge["top"]) <= bottom
+        )
+
+    return {
+        "page": page_no,
+        "body_bounds": [round(body_top, 2), round(body_bottom, 2)],
+        "all_horizontal_edges": [
+            _round_segment(edge, body_top=body_top, body_bottom=body_bottom)
+            for edge in page.horizontal_edges
+        ],
+        "selected_horizontal_edges": [
+            _round_segment(edge, body_top=body_top, body_bottom=body_bottom)
+            for edge in selected_horizontal_edges
+        ],
+        "all_vertical_edges": [
+            _round_segment(edge, body_top=body_top, body_bottom=body_bottom)
+            for edge in page.vertical_edges
+        ],
+        "selected_vertical_edges": [
+            _round_segment(edge, body_top=body_top, body_bottom=body_bottom)
+            for edge in selected_vertical_edges
+        ],
+    }
+
+
 def _repair_watermark_bleed(text: str) -> str:
     # Some rotated/conflicting watermark text can leak as a trailing single letter.
     text = re.sub(r"\s+[A-Za-z]$", "", text)
@@ -940,6 +1018,7 @@ def extract_pdf_to_outputs(
     output_text = []
     output_tables = []
     table_debug_pages: List[dict] = []
+    edge_debug_pages: List[dict] = []
     rotated_debug: List[dict] = []
     selected_pages = set(int(page_no) for page_no in (pages or []))
 
@@ -961,6 +1040,14 @@ def extract_pdf_to_outputs(
             if debug:
                 table_debug_pages.append(
                     _collect_table_drawing_debug(
+                        page,
+                        page_no=page_idx,
+                        header_margin=header_margin,
+                        footer_margin=footer_margin,
+                    )
+                )
+                edge_debug_pages.append(
+                    _collect_page_edge_debug(
                         page,
                         page_no=page_idx,
                         header_margin=header_margin,
@@ -1035,6 +1122,7 @@ def extract_pdf_to_outputs(
     summary_file.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     debug_file: Optional[Path] = None
+    debug_edges_file: Optional[Path] = None
     if debug:
         debug_file = out_md_dir / f"{stem}_debug.json"
         debug_payload = {
@@ -1042,6 +1130,12 @@ def extract_pdf_to_outputs(
             "pages": table_debug_pages,
         }
         debug_file.write_text(json.dumps(debug_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        debug_edges_file = out_md_dir / f"{stem}_edges_debug.json"
+        debug_edges_payload = {
+            "pdf": str(pdf_path),
+            "pages": edge_debug_pages,
+        }
+        debug_edges_file.write_text(json.dumps(debug_edges_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     debug_watermark_file: Optional[Path] = None
     if debug_watermark:
@@ -1055,6 +1149,7 @@ def extract_pdf_to_outputs(
         "md_file": md_file,
         "table_md_file": table_md_file,
         "debug_file": debug_file,
+        "debug_edges_file": debug_edges_file,
         "debug_watermark_file": debug_watermark_file,
         "image_files": image_files,
         "summary": summary,
