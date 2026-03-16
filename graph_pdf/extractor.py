@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 import pdfplumber
+from pypdf import PdfReader
 
 TableRows = List[List[str]]
 TableChunk = Tuple[TableRows, Tuple[float, float, float, float]]
@@ -447,6 +448,22 @@ def _append_output_table(output_tables: List[str], page_no: int, table_no: int, 
         output_tables.append(f"### Page {page_no} table {table_no}\n{table_text}")
 
 
+def _extract_embedded_images(pdf_path: Path, out_image_dir: Path, stem: str) -> List[Path]:
+    out_image_dir.mkdir(parents=True, exist_ok=True)
+
+    image_files: List[Path] = []
+    reader = PdfReader(str(pdf_path))
+    for page_idx, page in enumerate(reader.pages, start=1):
+        for image_idx, image_file in enumerate(page.images, start=1):
+            image_name = Path(image_file.name or f"image_{image_idx}").name
+            suffix = Path(image_name).suffix or ".bin"
+            out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_image_{image_idx:02d}{suffix}"
+            out_path.write_bytes(image_file.data)
+            image_files.append(out_path)
+
+    return image_files
+
+
 def extract_pdf_to_outputs(
     pdf_path: Path,
     out_md_dir: Path,
@@ -456,11 +473,9 @@ def extract_pdf_to_outputs(
     footer_margin: float = 40,
 ) -> dict:
     out_md_dir.mkdir(parents=True, exist_ok=True)
-    out_image_dir.mkdir(parents=True, exist_ok=True)
 
     output_text = []
     output_tables = []
-    image_files: List[Path] = []
 
     pending_table: Optional[TableRows] = None
     pending_page: Optional[int] = None
@@ -493,12 +508,6 @@ def extract_pdf_to_outputs(
                     pending_table = table_rows
                     pending_page = page_idx
 
-            # Save a full-page raster image. This is useful for multimodal indexing pipelines.
-            image = page.to_image(resolution=170)
-            image_file = out_image_dir / f"{stem}_page_{page_idx:02d}.png"
-            image.save(str(image_file), format="png")
-            image_files.append(image_file)
-
         _flush_pending()
 
     markdown = "\n\n".join(output_text)
@@ -511,6 +520,8 @@ def extract_pdf_to_outputs(
 
     pure_text = "\n\n".join(output_text)
     md_file.write_text(pure_text, encoding="utf-8")
+
+    image_files = _extract_embedded_images(pdf_path=pdf_path, out_image_dir=out_image_dir, stem=stem)
 
     summary = {
         "pdf": str(pdf_path),
