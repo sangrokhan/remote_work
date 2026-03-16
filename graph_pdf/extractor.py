@@ -115,6 +115,9 @@ def _clean_cell_line(line: str) -> str:
     cleaned = str(line or "").strip()
     cleaned = re.sub(r"\bCONFIDENTIAL\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    tokens = cleaned.split()
+    if len(tokens) >= 2 and tokens[-1].upper() == "I":
+        cleaned = " ".join(tokens[:-1]).strip()
     return cleaned
 
 
@@ -235,8 +238,7 @@ def _is_continuation_chunk(prev_rows: TableRows, curr_rows: TableRows) -> bool:
 
 def _table_regions(
     page: pdfplumber.page.PageObject,
-    x_tolerance: float = 5.0,
-    y_tolerance: float = 52.0,
+    y_tolerance: float = 65.0,
     min_lines: int = 3,
 ) -> List[tuple]:
     candidates = []
@@ -249,11 +251,6 @@ def _table_regions(
 
         placed = False
         for region in candidates:
-            same_x0 = abs(region["x0"] - edge["x0"]) < x_tolerance
-            same_x1 = abs(region["x1"] - edge["x1"]) < x_tolerance
-            if not same_x0 or not same_x1:
-                continue
-
             same_band = (
                 edge["top"] < region["y_max"] + y_tolerance
                 and edge["top"] > region["y_min"] - y_tolerance
@@ -264,6 +261,8 @@ def _table_regions(
             region["lines"].append(edge)
             region["y_min"] = min(region["y_min"], edge["top"])
             region["y_max"] = max(region["y_max"], edge["top"])
+            region["x0"] = min(region["x0"], edge["x0"])
+            region["x1"] = max(region["x1"], edge["x1"])
             placed = True
             break
 

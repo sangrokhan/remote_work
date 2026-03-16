@@ -52,7 +52,7 @@ ITEM_ROWS: Tuple[TableRow, ...] = (
         "$8",
     ),
     (
-        "Dock",
+        "Docking station compatibility review package for extended desktop deployment approval",
         "3",
         "$45\n- includes\n- 2 ports",
     ),
@@ -160,7 +160,7 @@ COMPACT_ROWS: Tuple[TableRow, ...] = (
     (
         "Docs",
         "READY",
-        "Finalize archival checklist for downstream handoff review before publishing\n- sample\n- archive",
+        "Finalize\n- sample\n- archive",
     ),
     ("QA", "TODO", "Confirm\n- edge case\n- fallback"),
     ("Ops", "OK", "Archive path\n- cleanup\n- index refresh"),
@@ -328,6 +328,8 @@ class DemoPdfBuilder:
             footer_right[1].format(page_no=self.page_no),
         )
 
+        self._draw_watermark(self.width / 2, self.height / 2, size=44)
+
         self.cursor_y = self.body_top
 
     def _ensure_space(self, height_needed: float) -> None:
@@ -439,11 +441,6 @@ class DemoPdfBuilder:
 
             table_top = self.cursor_y
             table_bottom = table_top - (used)
-
-            if first_chunk and with_watermark:
-                # Place watermark slightly above the table block to validate
-                # watermark presence without corrupting cell extraction.
-                self._draw_watermark(self.margin_x + body_width / 2, table_top + 18, size=44)
 
             self._render_table(
                 x=self.margin_x,
