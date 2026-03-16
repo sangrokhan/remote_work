@@ -90,6 +90,80 @@ def _merge_numeric_positions(values: Sequence[float], tolerance: float = 1.0) ->
     return merged
 
 
+def _cluster_axis_values(values: Sequence[float], tolerance: float = 1.0) -> List[List[float]]:
+    clusters: List[List[float]] = []
+    for value in sorted(float(v) for v in values):
+        if not clusters or abs(value - clusters[-1][-1]) > tolerance:
+            clusters.append([value])
+            continue
+        clusters[-1].append(value)
+    return clusters
+
+
+def _round_segment(edge: dict) -> dict:
+    return {
+        "x0": round(float(edge["x0"]), 2),
+        "x1": round(float(edge["x1"]), 2),
+        "top": round(float(edge["top"]), 2),
+        "bottom": round(float(edge["bottom"]), 2),
+    }
+
+
+def _merge_horizontal_band_segments(segments: Sequence[dict], tolerance: float = 1.0) -> List[dict]:
+    merged: List[dict] = []
+    for edge in sorted(segments, key=lambda item: (float(item["x0"]), float(item["x1"]))):
+        if not merged:
+            merged.append(dict(edge))
+            continue
+        previous = merged[-1]
+        if float(edge["x0"]) - float(previous["x1"]) <= tolerance:
+            previous["x1"] = max(float(previous["x1"]), float(edge["x1"]))
+            previous["bottom"] = max(float(previous["bottom"]), float(edge["bottom"]))
+            continue
+        merged.append(dict(edge))
+    return [_round_segment(edge) for edge in merged]
+
+
+def _merge_vertical_band_segments(segments: Sequence[dict], tolerance: float = 1.0) -> List[dict]:
+    merged: List[dict] = []
+    for edge in sorted(segments, key=lambda item: (float(item["top"]), float(item["bottom"]))):
+        if not merged:
+            merged.append(dict(edge))
+            continue
+        previous = merged[-1]
+        if float(edge["top"]) - float(previous["bottom"]) <= tolerance:
+            previous["bottom"] = max(float(previous["bottom"]), float(edge["bottom"]))
+            previous["x1"] = max(float(previous["x1"]), float(edge["x1"]))
+            continue
+        merged.append(dict(edge))
+    return [_round_segment(edge) for edge in merged]
+
+
+def _build_segment_groups(
+    segments: Sequence[dict],
+    axis_key: str,
+    merge_fn,
+    tolerance: float = 1.0,
+) -> List[dict]:
+    clusters = _cluster_axis_values([float(edge[axis_key]) for edge in segments], tolerance=tolerance)
+    groups: List[dict] = []
+    for cluster in clusters:
+        axis = sum(cluster) / len(cluster)
+        members = [
+            edge
+            for edge in segments
+            if any(abs(float(edge[axis_key]) - value) <= tolerance for value in cluster)
+        ]
+        groups.append(
+            {
+                "axis": round(axis, 2),
+                "segments": [_round_segment(edge) for edge in members],
+                "merged_segments": merge_fn(members, tolerance=tolerance),
+            }
+        )
+    return groups
+
+
 def _collect_table_drawing_debug(
     page: "pdfplumber.page.Page",
     page_no: int,
@@ -124,6 +198,18 @@ def _collect_table_drawing_debug(
         vertical_positions = _merge_numeric_positions(
             [x0, x1, *(float(edge["x0"]) for edge in vertical_edges)]
         )
+        horizontal_groups = _build_segment_groups(
+            horizontal_edges,
+            axis_key="top",
+            merge_fn=_merge_horizontal_band_segments,
+            tolerance=1.0,
+        )
+        vertical_groups = _build_segment_groups(
+            vertical_edges,
+            axis_key="x0",
+            merge_fn=_merge_vertical_band_segments,
+            tolerance=1.0,
+        )
         tables.append(
             {
                 "index": index,
@@ -150,6 +236,8 @@ def _collect_table_drawing_debug(
                     }
                     for edge in vertical_edges
                 ],
+                "horizontal_groups": horizontal_groups,
+                "vertical_groups": vertical_groups,
                 "horizontal_count": len(horizontal_positions),
                 "vertical_count": len(vertical_positions),
             }
