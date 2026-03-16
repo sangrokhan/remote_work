@@ -106,6 +106,12 @@ def _collect_table_drawing_debug(
     for index, (x0, x1, lines) in enumerate(groups, start=1):
         top = min(float(edge["top"]) for edge in lines)
         bottom = max(float(edge["top"]) for edge in lines)
+        horizontal_edges = [
+            edge
+            for edge in lines
+            if float(edge["top"]) >= body_top
+            and float(edge["bottom"]) <= body_bottom
+        ]
         vertical_edges = [
             edge
             for edge in page.vertical_edges
@@ -114,7 +120,7 @@ def _collect_table_drawing_debug(
             and float(edge["bottom"]) >= top
             and float(edge["top"]) <= bottom
         ]
-        horizontal_positions = _merge_numeric_positions([float(edge["top"]) for edge in lines])
+        horizontal_positions = _merge_numeric_positions([float(edge["top"]) for edge in horizontal_edges])
         vertical_positions = _merge_numeric_positions(
             [x0, x1, *(float(edge["x0"]) for edge in vertical_edges)]
         )
@@ -126,6 +132,24 @@ def _collect_table_drawing_debug(
                 "col_count": max(0, len(vertical_positions) - 1),
                 "horizontal_lines": [round(value, 2) for value in horizontal_positions],
                 "vertical_lines": [round(value, 2) for value in vertical_positions],
+                "horizontal_segments": [
+                    {
+                        "x0": round(float(edge["x0"]), 2),
+                        "x1": round(float(edge["x1"]), 2),
+                        "top": round(float(edge["top"]), 2),
+                        "bottom": round(float(edge["bottom"]), 2),
+                    }
+                    for edge in horizontal_edges
+                ],
+                "vertical_segments": [
+                    {
+                        "x0": round(float(edge["x0"]), 2),
+                        "x1": round(float(edge["x1"]), 2),
+                        "top": round(float(edge["top"]), 2),
+                        "bottom": round(float(edge["bottom"]), 2),
+                    }
+                    for edge in vertical_edges
+                ],
                 "horizontal_count": len(horizontal_positions),
                 "vertical_count": len(vertical_positions),
             }
