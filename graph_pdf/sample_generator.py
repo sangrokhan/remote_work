@@ -444,6 +444,7 @@ class DemoPdfBuilder:
             self.canvas.drawString(col_x[0] + 6, y_top - 14, header[1] if len(header) > 1 else "")
             self.canvas.drawString(col_x[1] + 6, y_top - 14, header[2] if len(header) > 2 else "")
             y -= header_h
+            self.canvas.line(x, y, x + body_width, y)
 
         # Horizontal lines (including header/body split and bottom line).
         table_start = y
