@@ -16,15 +16,39 @@ def _draw_header_and_footer(
 ) -> None:
     c.setFillColor(colors.black)
     c.setFont("Helvetica", 10)
-    c.drawString(36, height - 28, "Graph PDF Demo Header: sample source")
-    c.drawString(36, height - 44, "Prepared for table + text extraction tests")
-    c.drawRightString(width - 36, height - 28, f"Page {page_no} / 2")
-    c.drawRightString(width - 36, height - 44, "Header line 2: extraction boundary checks")
+    header_left_lines = (
+        "Graph PDF Demo Header: sample source",
+        "Prepared for table + text extraction tests",
+        "Header checks: line 3 validates layout alignment",
+    )
+    header_right_lines = (
+        f"Page {page_no} / 2",
+        "Header line 2: extraction boundary checks",
+        "Header line 3: left/right split text blocks",
+    )
+    c.drawString(36, height - 28, header_left_lines[0])
+    c.drawString(36, height - 44, header_left_lines[1])
+    c.drawString(36, height - 60, header_left_lines[2])
+    c.drawRightString(width - 36, height - 28, header_right_lines[0])
+    c.drawRightString(width - 36, height - 44, header_right_lines[1])
+    c.drawRightString(width - 36, height - 60, header_right_lines[2])
 
-    c.drawString(36, 36, "Graph PDF Demo Footer / Left")
-    c.drawString(36, 22, "Footer details: keep header/footer clean")
-    c.drawRightString(width - 36, 36, "Footer line 2: generated data")
-    c.drawRightString(width - 36, 22, f"Page {page_no} end")
+    footer_left_lines = (
+        "Graph PDF Demo Footer / Left",
+        "Footer details: keep header/footer clean",
+        "Footer note: ignore this for body extraction",
+    )
+    footer_right_lines = (
+        "Footer line 1: generated data",
+        f"Footer page marker: {page_no}",
+        "Footer line 3: right-side metadata block",
+    )
+    c.drawString(36, 40, footer_left_lines[0])
+    c.drawString(36, 28, footer_left_lines[1])
+    c.drawString(36, 16, footer_left_lines[2])
+    c.drawRightString(width - 36, 40, footer_right_lines[0])
+    c.drawRightString(width - 36, 28, footer_right_lines[1])
+    c.drawRightString(width - 36, 16, footer_right_lines[2])
 
 
 def _draw_watermark(c: canvas.Canvas, width: float, height: float) -> None:
@@ -102,6 +126,7 @@ def _draw_table(
     column_positions: Sequence[int] = (140, 260),
     table_width_tail: float = 130.0,
     include_header: bool = True,
+    include_outer_vertical: bool = False,
 ) -> None:
     """
     Draw a table that has top/bottom/inner lines but no outer vertical borders.
@@ -120,9 +145,12 @@ def _draw_table(
         y = y0 - row * row_height
         c.line(x0, y, x0 + table_width, y)
 
-    # Inner vertical lines only; no line at x0 and x0+table_width
+    # Vertical lines.
     for col_x in column_positions:
         c.line(x0 + col_x, y0, x0 + col_x, y0 - total_height)
+    if include_outer_vertical:
+        c.line(x0, y0, x0, y0 - total_height)
+        c.line(x0 + table_width, y0, x0 + table_width, y0 - total_height)
 
     if include_header and header:
         c.setFont("Helvetica-Bold", 9)
@@ -300,6 +328,7 @@ def create_demo_pdf(path: Path) -> None:
         row_height=46,
         column_positions=(110, 240),
         table_width_tail=170.0,
+        include_outer_vertical=True,
     )
 
     c.showPage()
@@ -334,6 +363,7 @@ def create_demo_pdf(path: Path) -> None:
         column_positions=(110, 240),
         table_width_tail=170.0,
         include_header=False,
+        include_outer_vertical=True,
     )
 
     # A compact table near bottom keeps another size variant.
