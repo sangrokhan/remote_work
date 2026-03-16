@@ -338,6 +338,7 @@ class DemoPdfBuilder:
         split_pages: bool = True,
         include_outer_vertical: bool = False,
         with_watermark: bool = False,
+        merge_first_col: bool = False,
     ) -> None:
         if not rows:
             return
@@ -420,6 +421,7 @@ class DemoPdfBuilder:
                 include_header=first_chunk and include_header,
                 header_font_size=header_font_size,
                 row_font_size=row_font_size,
+                merge_first_col=merge_first_col,
             )
 
             self.cursor_y = table_bottom
@@ -442,6 +444,7 @@ class DemoPdfBuilder:
         row_heights: Sequence[float],
         include_outer_vertical: bool,
         include_header: bool,
+        merge_first_col: bool,
         header_font_size: float,
         row_font_size: float,
     ) -> None:
@@ -450,6 +453,62 @@ class DemoPdfBuilder:
 
         header_h = 20.0 if include_header else 0.0
         table_h = header_h + sum(row_heights)
+        row_tops = [0.0]
+        for row_h in row_heights:
+            row_tops.append(row_tops[-1] + row_h)
+
+        # Highlight merged first-column spans to make the visual grouping explicit.
+        # A merged span starts with a non-empty first column and continues while the
+        # first-column cell remains empty.
+        if merge_first_col and rows:
+            span_starts: List[int] = []
+            span_ends: List[int] = []
+            i = 0
+            while i < len(rows):
+                if str(rows[i][0]).strip():
+                    start = i
+                    end = i
+                    j = i + 1
+                    while j < len(rows) and not str(rows[j][0]).strip():
+                        end = j
+                        j += 1
+                    if end > start:
+                        span_starts.append(start)
+                        span_ends.append(end)
+                    i = j
+                else:
+                    i += 1
+
+            if span_starts:
+                self.canvas.saveState()
+                fill_color = colors.HexColor("#eceff6")
+                border_color = colors.HexColor("#7c8799")
+                self.canvas.setFillColor(fill_color)
+                self.canvas.setStrokeColor(border_color)
+                self.canvas.setLineWidth(0.7)
+                body_top = y_top - header_h
+                for start, end in zip(span_starts, span_ends):
+                    y_span_top = body_top - row_tops[start]
+                    y_span_bottom = body_top - row_tops[end + 1]
+                    group_height = y_span_top - y_span_bottom
+
+                    self.canvas.rect(
+                        x,
+                        y_span_bottom,
+                        col_x[0] - x,
+                        group_height,
+                        fill=1,
+                        stroke=0,
+                    )
+
+                    # Keep a clear boundary for merged spans to distinguish it from
+                    # ordinary blank-cell rows in monochrome extraction passes.
+                    self.canvas.setStrokeColor(border_color)
+                    self.canvas.line(x, y_span_top, col_x[0], y_span_top)
+                    self.canvas.line(x, y_span_bottom, col_x[0], y_span_bottom)
+                    self.canvas.line(x, y_span_top, x, y_span_bottom)
+                    self.canvas.line(col_x[0], y_span_top, col_x[0], y_span_bottom)
+                self.canvas.restoreState()
 
         y = y_top
         self.canvas.line(x, y_top, x + body_width, y_top)
@@ -553,6 +612,7 @@ def create_demo_pdf(path: Path) -> None:
         split_pages=True,
         include_outer_vertical=False,
         with_watermark=False,
+        merge_first_col=True,
     )
     builder.add_gap(24.0)
 

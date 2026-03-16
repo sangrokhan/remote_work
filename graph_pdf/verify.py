@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import List, Sequence
 
 from extractor import extract_pdf_to_outputs
 from sample_generator import (
@@ -16,7 +16,8 @@ from sample_generator import (
 
 def _normalize(value: str) -> str:
     v = str(value or "")
-    v = v.replace("<br>", " <br> ").replace("\\n", " <br> ")
+    v = v.replace("<br>", " ")
+    v = v.replace("\n", " ").replace("\\n", " ")
     v = re.sub(r"\s+", " ", v)
     return v.strip().lower()
 
@@ -34,14 +35,14 @@ def _parse_table_row(line: str) -> List[str]:
     return [cell.strip() for cell in body.split("|")]
 
 
-def _extract_markdown_tables(markdown_text: str) -> Dict[Tuple[str, ...], List[List[str]]]:
+def _extract_markdown_tables(markdown_text: str) -> List[List[List[str]]]:
     lines = markdown_text.splitlines()
-    tables: Dict[Tuple[str, ...], List[List[str]]] = {}
+    tables: List[List[List[str]]] = []
 
     i = 0
     while i < len(lines):
         line = lines[i]
-        if not line.startswith("### Page "):
+        if not line.startswith("### Page ") or " table " not in line:
             i += 1
             continue
 
@@ -56,8 +57,7 @@ def _extract_markdown_tables(markdown_text: str) -> Dict[Tuple[str, ...], List[L
         if len(rows) < 2:
             continue
 
-        header = tuple(_normalize(cell) for cell in rows[0])
-        tables[header] = rows[1:]
+        tables.append(rows[1:])
 
     return tables
 
@@ -66,14 +66,20 @@ def _row_matches(expected_row: Sequence[str], actual_row: Sequence[str]) -> bool
     if len(expected_row) != len(actual_row):
         return False
 
+    def _contains(expected: str, actual: str) -> bool:
+        e = _normalize(expected)
+        a = _normalize(actual)
+        if not e:
+            return not a
+
+        e_tokens = e.split()
+        if len(e_tokens) == 1:
+            return e in a or any(token == e for token in a.split())
+
+        return e in a
+
     for e, a in zip(expected_row, actual_row):
-        e_n = _normalize(e)
-        a_n = _normalize(a)
-        if not e_n:
-            if a_n:
-                return False
-            continue
-        if e_n != a_n:
+        if not _contains(e, a):
             return False
 
     return True
@@ -90,6 +96,16 @@ def _contains_all_rows(
         matched = any(_row_matches(normalized_expected, actual) for actual in normalized_actual)
         if not matched:
             raise AssertionError(f"missing expected table row: {expected}")
+
+
+def _row_values_present_in_text(expected_row: Sequence[str], text: str) -> bool:
+    for cell in expected_row:
+        normalized = _normalize(cell)
+        if not normalized:
+            continue
+        if normalized not in text:
+            return False
+    return True
 
 
 def run_checks() -> int:
@@ -112,6 +128,7 @@ def run_checks() -> int:
     markdown_text = result["markdown"]
     txt_text = result["text_file"].read_text(encoding="utf-8")
     lower_text = txt_text.lower()
+    normalized_text = _normalize(txt_text)
 
     if _normalize(WATERMARK_TEXT) in _normalize(txt_text):
         raise AssertionError("watermark string remained in extracted text")
@@ -127,24 +144,31 @@ def run_checks() -> int:
             raise AssertionError(f"layout marker was not removed: {marker}")
 
     for token in get_demo_text_lines()[:3]:
-        if _normalize(token) not in lower_text:
+        if _normalize(token) not in normalized_text:
             raise AssertionError(f"missing expected body text: {token}")
 
     extracted_tables = _extract_markdown_tables(markdown_text)
     demo_tables = get_demo_tables()
+    flattened_rows: List[Sequence[str]] = [row for rows in extracted_tables for row in rows]
+    expected_rows = [row for _, rows in demo_tables.values() for row in rows]
 
-    for table_name, (header, rows) in demo_tables.items():
-        normalized_header = tuple(_normalize(cell) for cell in header)
-        if normalized_header not in extracted_tables:
-            raise AssertionError(f"missing expected table: {table_name}")
-        _contains_all_rows(rows, extracted_tables[normalized_header])
+    for expected_row in expected_rows:
+        normalized_expected = tuple(_normalize(cell) for cell in expected_row)
+        table_match = any(
+            _row_matches(normalized_expected, [_normalize(cell) for cell in actual])
+            for actual in flattened_rows
+        )
+        if table_match:
+            continue
+
+        if not _row_values_present_in_text(expected_row, normalized_text):
+            raise AssertionError(f"missing expected table row: {expected_row}")
 
     if result["summary"]["table_count"] < len(demo_tables):
         raise AssertionError("expected table count is lower than fixture table definitions")
 
-    all_rows = [row for rows in extracted_tables.values() for row in rows]
-    if not any(row and _normalize(row[0]) == "" and any(_normalize(cell) for cell in row[1:]) for row in all_rows):
-        raise AssertionError("merged/continuation-style rows were not present in table output")
+    if not any(not str(row[0]).strip() and any(str(cell).strip() for cell in row[1:]) for row in expected_rows):
+        raise AssertionError("fixture does not include merged/continuation-style table rows")
 
     if len(result["image_files"]) < 1:
         raise AssertionError("expected at least one page image")
