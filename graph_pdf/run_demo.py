@@ -24,6 +24,7 @@ def main() -> None:
     print("[demo] PDF:", pdf_path)
     print("[demo] text output:", result["text_file"])
     print("[demo] markdown output:", result["md_file"])
+    print("[demo] table markdown output:", result["table_md_file"])
     print("[demo] summary:", result["summary"])
 
 

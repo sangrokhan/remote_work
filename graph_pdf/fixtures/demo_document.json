@@ -88,7 +88,8 @@
       "rows": [
         ["Docs", "READY", "Finalize\n- sample\n- archive"],
         ["QA", "TODO", "Confirm\n- edge case\n- fallback"],
-        ["Ops", "OK", "Archive path\n- cleanup\n- index refresh"]
+        ["Ops", "OK", "Archive path\n- cleanup\n- index refresh"],
+        ["Support", "REVIEW", "Escalation owner confirmed.\nRegional fallback documented.\nLaunch blackout window approved."]
       ]
     }
   ],

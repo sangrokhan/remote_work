@@ -114,6 +114,7 @@ def run_checks() -> int:
     )
 
     markdown_text = result["markdown"]
+    table_markdown = result["table_markdown"]
     txt_text = result["text_file"].read_text(encoding="utf-8")
     lower_text = txt_text.lower()
     normalized_text = _normalize(txt_text)
@@ -141,7 +142,10 @@ def run_checks() -> int:
         if _normalize(token) not in normalized_text:
             raise AssertionError(f"missing expected body text: {token}")
 
-    extracted_tables = _extract_markdown_tables(markdown_text)
+    if re.search(r"^### Page \d+ table \d+$", markdown_text, flags=re.MULTILINE):
+        raise AssertionError("body markdown still contains embedded table blocks")
+
+    extracted_tables = _extract_markdown_tables(table_markdown)
     demo_tables = {
         table["id"]: (table["columns"], table["rows"])
         for table in fixture["tables"]

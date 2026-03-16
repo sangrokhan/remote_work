@@ -85,22 +85,49 @@ def _extract_body_text(
     page: "pdfplumber.page.Page",
     header_margin: float,
     footer_margin: float,
+    excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
 ) -> str:
-    body_bbox = (0, footer_margin, page.width, page.height - header_margin)
-    body_page = _filter_page_for_extraction(page).crop(body_bbox)
-    raw = body_page.extract_text(x_tolerance=1.5, y_tolerance=2) or ""
-    lines = []
-    for line in raw.splitlines():
-        fixed = _repair_watermark_bleed(line.strip())
-        if not fixed:
+    body_top = footer_margin
+    body_bottom = page.height - header_margin
+    body_page = _filter_page_for_extraction(page)
+
+    def _clean_lines(raw: str) -> List[str]:
+        lines = []
+        for line in (raw or "").splitlines():
+            fixed = _repair_watermark_bleed(line.strip())
+            if not fixed:
+                continue
+            if _is_layout_artifact(fixed):
+                continue
+            if _is_watermark_line(fixed):
+                continue
+            if re.fullmatch(r"^[A-Za-z]$", fixed):
+                continue
+            lines.append(fixed)
+        return lines
+
+    excluded = []
+    for x0, top, x1, bottom in excluded_bboxes:
+        if bottom <= body_top or top >= body_bottom:
             continue
-        if _is_layout_artifact(fixed):
+        excluded.append((max(body_top, top), min(body_bottom, bottom)))
+    excluded.sort()
+
+    slices: List[Tuple[float, float]] = []
+    cursor = body_top
+    for top, bottom in excluded:
+        if top > cursor:
+            slices.append((cursor, top))
+        cursor = max(cursor, bottom)
+    if cursor < body_bottom:
+        slices.append((cursor, body_bottom))
+
+    lines: List[str] = []
+    for top, bottom in slices:
+        if bottom - top < 4:
             continue
-        if _is_watermark_line(fixed):
-            continue
-        if re.fullmatch(r"^[A-Za-z]$", fixed):
-            continue
-        lines.append(fixed)
+        raw = body_page.crop((0, top, page.width, bottom)).extract_text(x_tolerance=1.5, y_tolerance=2) or ""
+        lines.extend(_clean_lines(raw))
 
     return "\n".join(lines)
 
@@ -573,6 +600,22 @@ def _append_output_table(output_tables: List[str], page_no: int, table_no: int, 
         output_tables.append(f"### Page {page_no} table {table_no}\n{table_text}")
 
 
+def _body_excluded_bboxes(
+    pending_table: Optional[TableRows],
+    tables: Sequence[TableChunk],
+    body_top: float,
+) -> List[Tuple[float, float, float, float]]:
+    excluded = [bbox for _rows, bbox in tables]
+    if not pending_table or not tables:
+        return excluded
+
+    first_rows, first_bbox = tables[0]
+    if len(pending_table[0]) == 3 and first_rows and all(len(row) == 2 for row in first_rows):
+        x0, _top, x1, bottom = first_bbox
+        excluded[0] = (x0, body_top, x1, bottom)
+    return excluded
+
+
 def _extract_embedded_images(pdf_path: Path, out_image_dir: Path, stem: str) -> List[Path]:
     out_image_dir.mkdir(parents=True, exist_ok=True)
 
@@ -615,10 +658,16 @@ def extract_pdf_to_outputs(
     with pdfplumber.open(str(pdf_path)) as pdf:
         for page_idx, page in enumerate(pdf.pages, start=1):
             tables = _extract_tables(page)
+            full_page_text = _extract_body_text(
+                page,
+                header_margin=header_margin,
+                footer_margin=footer_margin,
+            )
             page_text = _extract_body_text(
                 page,
                 header_margin=header_margin,
                 footer_margin=footer_margin,
+                excluded_bboxes=_body_excluded_bboxes(pending_table, tables, footer_margin),
             )
             if page_text.strip():
                 output_text.append(f"### Page {page_idx}\n{page_text}")
@@ -628,7 +677,7 @@ def extract_pdf_to_outputs(
                     merged_missing_first = _maybe_merge_missing_first_column_chunk(
                         pending_table,
                         table_rows,
-                        page_text,
+                        full_page_text,
                     )
                     if merged_missing_first is not None:
                         pending_table = merged_missing_first
@@ -646,13 +695,14 @@ def extract_pdf_to_outputs(
         _flush_pending()
 
     markdown = "\n\n".join(output_text)
-    if output_tables:
-        markdown = markdown + "\n\n" + "\n\n".join(output_tables)
+    table_markdown = "\n\n".join(output_tables)
 
     text_file = out_md_dir / f"{stem}.txt"
     md_file = out_md_dir / f"{stem}.md"
+    table_md_file = out_md_dir / f"{stem}_table.md"
     text_file.write_text(markdown, encoding="utf-8")
     md_file.write_text(markdown, encoding="utf-8")
+    table_md_file.write_text(table_markdown, encoding="utf-8")
 
     image_files = _extract_embedded_images(pdf_path=pdf_path, out_image_dir=out_image_dir, stem=stem)
 
@@ -660,6 +710,7 @@ def extract_pdf_to_outputs(
         "pdf": str(pdf_path),
         "text_file": str(text_file),
         "md_file": str(md_file),
+        "table_md_file": str(table_md_file),
         "images": [str(p) for p in image_files],
         "table_count": len(output_tables),
     }
@@ -668,8 +719,10 @@ def extract_pdf_to_outputs(
 
     return {
         "markdown": markdown,
+        "table_markdown": table_markdown,
         "text_file": text_file,
         "md_file": md_file,
+        "table_md_file": table_md_file,
         "image_files": image_files,
         "summary": summary,
     }
