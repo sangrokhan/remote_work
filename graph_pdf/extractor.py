@@ -163,6 +163,9 @@ def _normalize_cell_lines(cell: str) -> List[str]:
             _flush_buffer()
             logical_lines.append(line)
             continue
+        if logical_lines and _is_bullet_line(logical_lines[-1]) and not buffer:
+            logical_lines[-1] = f"{logical_lines[-1]} {line}".strip()
+            continue
         buffer.append(line)
 
     _flush_buffer()
@@ -297,12 +300,29 @@ def _table_regions(
                 }
             )
 
-    # Keep table-shaped groups.
-    return [
+    groups = [
         (group["x0"], group["x1"], group["lines"])
         for group in candidates
         if len(group["lines"]) >= min_lines
     ]
+
+    merged_groups: List[tuple] = []
+    idx = 0
+    while idx < len(groups):
+        x0, x1, lines = groups[idx]
+        if idx + 1 < len(groups):
+            next_x0, next_x1, next_lines = groups[idx + 1]
+            gap = min(edge["top"] for edge in next_lines) - max(edge["top"] for edge in lines)
+            same_width = abs(x0 - next_x0) <= 2 and abs(x1 - next_x1) <= 2
+            header_fragment = len(lines) <= 4
+            if same_width and header_fragment and gap <= 160:
+                merged_groups.append((min(x0, next_x0), max(x1, next_x1), [*lines, *next_lines]))
+                idx += 2
+                continue
+        merged_groups.append(groups[idx])
+        idx += 1
+
+    return merged_groups
 
 
 def _extract_tables_from_crop(
@@ -455,12 +475,27 @@ def _merge_split_rows(rows: TableRows) -> TableRows:
     merged: TableRows = [list(rows[0])]
     for row in rows[1:]:
         non_empty = [idx for idx, cell in enumerate(row) if _normalize_text(cell)]
-        if len(non_empty) == 1 and non_empty[0] > 0 and len(merged) > 1:
-            idx = non_empty[0]
+        if len(merged) > 1 and row and not _normalize_text(row[0]):
             previous = merged[-1]
-            joiner = "\n" if previous[idx].strip() else ""
-            previous[idx] = f"{previous[idx]}{joiner}{row[idx]}".strip()
-            continue
+            previous_second = _normalize_text(previous[1]) if len(previous) > 1 else ""
+            current_second = _normalize_text(row[1]) if len(row) > 1 else ""
+
+            if len(non_empty) == 1 and non_empty[0] > 0:
+                idx = non_empty[0]
+                joiner = "\n" if previous[idx].strip() else ""
+                previous[idx] = f"{previous[idx]}{joiner}{row[idx]}".strip()
+                continue
+
+            if (
+                len(non_empty) >= 2
+                and 1 in non_empty
+                and 2 in non_empty
+                and previous_second
+                and current_second == previous_second
+            ):
+                joiner = "\n" if previous[2].strip() else ""
+                previous[2] = f"{previous[2]}{joiner}{row[2]}".strip()
+                continue
         merged.append(list(row))
     return merged
 

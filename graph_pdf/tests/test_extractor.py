@@ -7,6 +7,8 @@ from pathlib import Path
 import pdfplumber
 
 from extractor import extract_pdf_to_outputs
+from verify import _extract_markdown_tables
+from sample_fixture import load_demo_fixture
 from sample_generator import create_demo_pdf
 
 
@@ -35,6 +37,16 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
     def _extract_markdown(self) -> str:
         return self._extract_result()["markdown"]
+
+    def test_fixture_roundtrip_matches_expected_tables(self) -> None:
+        fixture = load_demo_fixture()
+        markdown = self._extract_markdown()
+        extracted_tables = _extract_markdown_tables(markdown)
+        extracted_by_index = {idx: rows for idx, rows in enumerate(extracted_tables)}
+
+        for idx, table in enumerate(fixture["tables"]):
+            self.assertIn(idx, extracted_by_index)
+            self.assertEqual(table["rows"], extracted_by_index[idx], table["id"])
 
     def _table_blocks(self, markdown: str) -> list[str]:
         blocks: list[str] = []
@@ -120,15 +132,16 @@ class TableExtractionFormattingTests(unittest.TestCase):
             texts = [(page.extract_text() or "") for page in pdf.pages]
 
         joined = "\n".join(texts)
-        self.assertGreaterEqual(len(texts), 4)
+        self.assertEqual(3, len(texts))
         self.assertIn("Legal", joined)
+        self.assertIn("consent language review", texts[1].lower())
         self.assertIn("policy exception register", texts[2].lower())
-        self.assertIn("sign-off archive retention", texts[3].lower())
+        self.assertIn("sign-off archive retention", texts[2].lower())
 
     def test_demo_pdf_has_confidential_watermark_on_every_page(self) -> None:
         pdf_path = self._build_pdf()
         with pdfplumber.open(str(pdf_path)) as pdf:
-            self.assertGreaterEqual(len(pdf.pages), 4)
+            self.assertEqual(len(pdf.pages), 3)
             for page in pdf.pages:
                 watermark_chars = [
                     char

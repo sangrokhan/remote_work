@@ -8,213 +8,42 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
-
-WATERMARK_TEXT = "CONFIDENTIAL"
-HEADER_LEFT = (
-    "Graph PDF Demo Header: sample source",
-    "Prepared for table + text extraction tests",
-)
-HEADER_RIGHT = (
-    "Page {page_no}",
-    "Header checks: layout boundary review",
-)
-FOOTER_LEFT = (
-    "Graph PDF Demo Footer / Left",
-    "Footer details: keep header/footer clean",
-)
-FOOTER_RIGHT = (
-    "Footer line 1: generated data",
-    "Footer page marker: {page_no}",
-)
+from sample_fixture import load_demo_fixture
 
 LineItem = Tuple[str, int]
 TableRow = Tuple[str, str, str]
 
-ITEM_ROWS: Tuple[TableRow, ...] = (
-    (
-        "Laptop\n- line 1",
-        "12",
-        "$120",
-    ),
-    (
-        "Keyboard\n- line 1\n- line 2",
-        "8",
-        "$32",
-    ),
-    (
-        "Monitor",
-        "5\n- line A\n- line B",
-        "$260",
-    ),
-    (
-        "Mouse",
-        "18\n- optical\n- silent click",
-        "$8",
-    ),
-    (
-        "Docking station compatibility review package for extended desktop deployment approval",
-        "3",
-        "$45\n- includes\n- 2 ports",
-    ),
-)
-
-STAGE_ROWS: Tuple[TableRow, ...] = (
-    (
-        "Phase A",
-        "Discovery",
-        "Kickoff scope lock\n- gather baseline\n- define risks\n- align dependencies",
-    ),
-    (
-        "",
-        "Design",
-        "UX skeleton review\n- navigation\n- component map\n- spacing audit",
-    ),
-    (
-        "",
-        "Frontend",
-        "Prototype pass\n- mobile spec\n- accessibility path\n- responsive breakpoints",
-    ),
-    (
-        "",
-        "Backend",
-        "Core API design\n- auth contract\n- payload schema\n- endpoint ownership",
-    ),
-    (
-        "",
-        "QA",
-        "Quality validation\n- smoke\n- integration matrix\n- rollback checks",
-    ),
-    (
-        "",
-        "Docs",
-        "Scenario matrix draft\n- migration\n- release notes\n- stakeholder sync",
-    ),
-    (
-        "",
-        "Release Notes",
-        "Publish cadence plan\n- draft audience\n- review windows\n- archive distribution",
-    ),
-    (
-        "Phase B",
-        "Operations",
-        "Runbook draft\n- infra checklist\n- alert thresholds\n- on-call routing",
-    ),
-    (
-        "",
-        "Security",
-        "Threat model\n- token handling\n- permission matrix\n- incident runbook",
-    ),
-    (
-        "",
-        "Release",
-        "Scenario matrix\n- smoke\n- negative cases\n- release windows",
-    ),
-    (
-        "",
-        "Platform",
-        "Support playbooks\n- upgrade path\n- dependency freeze\n- fallback scripts",
-    ),
-    (
-        "",
-        "Observability",
-        "Dashboard rollout\n- metric taxonomy\n- error alert policy\n- tracing contracts",
-    ),
-    (
-        "",
-        "Performance",
-        "Scale and profiling pass\n- load profile\n- memory pressure\n- queue saturation targets",
-    ),
-    (
-        "",
-        "Compliance",
-        "Policy sweep\n- controls list\n- retention rules\n- audit trails",
-    ),
-    (
-        "Phase C",
-        "Documentation",
-        "Publish handoff pack\n- API docs\n- release playbook\n- migration path",
-    ),
-    (
-        "",
-        "Legal",
-        "Terms and compliance checks\n- consent language\n- governance review\n- retention policy\n- policy exception register\n- cross-border review queue\n- signature archive retention\n- sign-off archive retention",
-    ),
-    (
-        "",
-        "Accessibility",
-        "Review deep pass\n- contrast baseline\n- keyboard order\n- narration labels",
-    ),
-    (
-        "",
-        "Operations",
-        "Post-launch tasks\n- monitor alerts\n- close checklist\n- confirm rollback route",
-    ),
-    (
-        "",
-        "Finance",
-        "Invoice trail\n- line item reconciliation\n- grant tracking\n- budget burn alerts",
-    ),
-)
-
-COMPACT_ROWS: Tuple[TableRow, ...] = (
-    (
-        "Docs",
-        "READY",
-        "Finalize\n- sample\n- archive",
-    ),
-    ("QA", "TODO", "Confirm\n- edge case\n- fallback"),
-    ("Ops", "OK", "Archive path\n- cleanup\n- index refresh"),
-)
-
-DEMO_TABLES: Dict[str, Tuple[Tuple[str, str, str], Tuple[TableRow, ...]]] = {
-    "item": (("Item", "Qty", "Price"), ITEM_ROWS),
-    "stage": (("Stage", "Team", "Notes"), STAGE_ROWS),
-    "area": (("Area", "Status", "Action"), COMPACT_ROWS),
-}
-
-DEMO_BODY_LINES: Tuple[str, ...] = (
-    "Chapter 1: Deep Structure Verification",
-    "This section starts a body flow with multiple lines and clear indentation to test ordered extraction.",
-    "- 1st level bullet: layout and spacing checks",
-    "- nested detail: line 2 confirms indentation",
-    "- deeper detail: line 3 confirms paragraph wrap and line breaks",
-    "The extraction should remove header/footer and watermark while preserving indented body content.",
-    "- level 1: body copy, one of many lines",
-    "- level 2: second nested line",
-    "- level 3: third line to test depth",
-    "Body text here is cleaned for ingestion by GraphRAG or similar index pipelines.",
-)
-
-DEMO_AFTER_TABLE_LINES: Tuple[str, ...] = (
-    "The first table must fit entirely inside body bounds and end before the footer region.",
-    "After table, body lines must continue and never overlap following elements.",
-)
-
-DEMO_SPAN_TABLE_TAIL_LINES: Tuple[str, ...] = (
-    "Page 2 continues the flow if table rows spill over from the first table page.",
-    "This paragraph is intentionally after the spanning table so table continuation remains earlier on the next page.",
-    "- 1st-level continuation bullet",
-)
-
-DEMO_FOOTER_LINES: Tuple[str, ...] = (
-    "Appendix chapter line for verification:",
-    "- 1st level appendix bullet",
-    "- 2nd level appendix bullet",
-    "Final lines ensure normal paragraph flow does not overlap completed tables.",
-)
+def _fixture_tables() -> Dict[str, Tuple[Tuple[str, str, str], Tuple[TableRow, ...]]]:
+    fixture = load_demo_fixture()
+    return {
+        table["id"]: (
+            tuple(table["columns"]),
+            tuple(tuple(str(cell) for cell in row) for row in table["rows"]),
+        )
+        for table in fixture["tables"]
+    }
 
 
 def get_demo_tables() -> Dict[str, Tuple[Tuple[str, str, str], Tuple[TableRow, ...]]]:
-    return DEMO_TABLES
+    return _fixture_tables()
 
 
 def get_demo_text_lines() -> Tuple[str, ...]:
-    return (
-        *DEMO_BODY_LINES,
-        *DEMO_AFTER_TABLE_LINES,
-        *DEMO_SPAN_TABLE_TAIL_LINES,
-        *DEMO_FOOTER_LINES,
-    )
+    body = load_demo_fixture()["body"]
+    return tuple(body["intro"] + body["after_item_table"] + body["after_stage_table"] + body["footer_lines"])
+
+
+def _fixture_layout() -> dict:
+    fixture = load_demo_fixture()
+    return {
+        "watermark_text": fixture["watermark_text"],
+        "header_left": tuple(fixture["header_left"]),
+        "header_right": tuple(fixture["header_right"]),
+        "footer_left": tuple(fixture["footer_left"]),
+        "footer_right": tuple(fixture["footer_right"]),
+        "body": fixture["body"],
+        "tables": _fixture_tables(),
+    }
 
 
 def _split_cell_lines(text: str) -> List[str]:
@@ -268,6 +97,7 @@ def _estimate_row_heights(rows: Sequence[TableRow], col_widths: Sequence[float],
 
 class DemoPdfBuilder:
     def __init__(self, output_path: Path) -> None:
+        self.fixture = _fixture_layout()
         self.path = output_path
         self.width, self.height = letter
         self.margin_x = 36
@@ -289,12 +119,8 @@ class DemoPdfBuilder:
         self.canvas.setFillColor(colors.black)
         self.canvas.setFont("Helvetica", 10)
 
-        header_left = (
-            *HEADER_LEFT,
-        )
-        header_right = (
-            *HEADER_RIGHT,
-        )
+        header_left = self.fixture["header_left"]
+        header_right = self.fixture["header_right"]
 
         self.canvas.drawString(self.margin_x, self.height - 26, header_left[0])
         self.canvas.drawString(self.margin_x, self.height - 42, header_left[1])
@@ -309,12 +135,8 @@ class DemoPdfBuilder:
             header_right[1],
         )
 
-        footer_left = (
-            *FOOTER_LEFT,
-        )
-        footer_right = (
-            *FOOTER_RIGHT,
-        )
+        footer_left = self.fixture["footer_left"]
+        footer_right = self.fixture["footer_right"]
         self.canvas.drawString(self.margin_x, self.left_footer_y + 14, footer_left[0])
         self.canvas.drawString(self.margin_x, self.left_footer_y, footer_left[1])
         self.canvas.drawRightString(
@@ -344,7 +166,7 @@ class DemoPdfBuilder:
         self.canvas.setFont("Helvetica-Bold", size)
         self.canvas.translate(x, y)
         self.canvas.rotate(55)
-        self.canvas.drawCentredString(0, 0, WATERMARK_TEXT)
+        self.canvas.drawCentredString(0, 0, self.fixture["watermark_text"])
         self.canvas.restoreState()
 
     def add_body_text(self, lines: Sequence[LineItem | str], line_height: float = 14.0) -> None:
@@ -378,7 +200,6 @@ class DemoPdfBuilder:
         include_outer_vertical: bool = False,
         with_watermark: bool = False,
         merge_first_col: bool = False,
-        merged_first_col_spans: Sequence[Tuple[int, int]] | None = None,
     ) -> None:
         if not rows:
             return
@@ -390,58 +211,129 @@ class DemoPdfBuilder:
         column_weights = [0.28, 0.2, 0.52]
         col_widths = [w * body_width for w in column_weights]
         col_x = [self.margin_x + col_widths[0], self.margin_x + col_widths[0] + col_widths[1]]
-
-        row_heights = _estimate_row_heights(
-            rows=rows,
-            col_widths=col_widths,
-            font_size=row_font_size,
-        )
         header_height = 20.0
+        line_h = row_font_size + 1.2
 
-        chunk_start = 0
-        first_chunk = True
+        prepared_rows = []
+        current_group_id = -1
+        for source_idx, row in enumerate(rows):
+            if merge_first_col and str(row[0]).strip():
+                current_group_id += 1
 
-        while chunk_start < len(rows):
-            first_chunk_rows = len(rows) - chunk_start
-            available = self.cursor_y - self.body_bottom
+            cell_lines = [
+                _layout_cell_lines(cell, max(col_width - 8.0, 24.0), "Helvetica", row_font_size)
+                for cell, col_width in zip(row, col_widths)
+            ]
+            line_count = max(len(lines) for lines in cell_lines)
+            prepared_rows.append(
+                {
+                    "source_idx": source_idx,
+                    "cells": [str(cell or "") for cell in row],
+                    "cell_lines": cell_lines,
+                    "line_count": line_count,
+                    "height": max(24.0, line_count * (row_font_size + 2.0) + 4.0),
+                    "group_id": current_group_id if merge_first_col and current_group_id >= 0 else None,
+                }
+            )
 
-            if available < 25:
+        idx = 0
+        while idx < len(prepared_rows):
+            if self.cursor_y - self.body_bottom < header_height + 24.0:
                 self._start_new_page()
-                available = self.cursor_y - self.body_bottom
 
-            rows_for_chunk: List[Tuple[int, float]] = []
-            used = header_height if first_chunk and include_header else 0.0
+            available = self.cursor_y - self.body_bottom
+            used = header_height if include_header else 0.0
+            chunk_rows = []
+            chunk_heights = []
+            chunk_group_ids = []
 
-            idx = chunk_start
-            while idx < len(rows):
-                row_h = row_heights[idx]
-                if used + row_h <= available:
-                    rows_for_chunk.append((idx, row_h))
-                    used += row_h
+            while idx < len(prepared_rows):
+                row_data = prepared_rows[idx]
+                row_height = float(row_data["height"])
+                remaining = available - used
+                if row_height <= remaining:
+                    chunk_rows.append(tuple(row_data["cells"]))
+                    chunk_heights.append(row_height)
+                    chunk_group_ids.append(row_data["group_id"])
+                    used += row_height
                     idx += 1
                     continue
 
-                if idx == chunk_start:
-                    # force at least one row in a new page fragment
-                    if first_chunk and include_header:
-                        self._start_new_page()
-                        available = self.cursor_y - self.body_bottom
-                        first_chunk = False
-                        used = 0.0
-                        continue
+                if not split_pages:
                     break
+
+                can_split_row = int(row_data["line_count"]) >= 6 or row_height >= 80.0
+                if not can_split_row:
+                    break
+
+                max_lines_fit = int((remaining - 4.0) // (row_font_size + 2.0))
+                if max_lines_fit <= 0:
+                    break
+
+                total_lines = max(int(row_data["line_count"]), 1)
+                if max_lines_fit >= total_lines:
+                    chunk_rows.append(tuple(row_data["cells"]))
+                    chunk_heights.append(row_height)
+                    chunk_group_ids.append(row_data["group_id"])
+                    used += row_height
+                    idx += 1
+                    continue
+
+                top_cells: List[str] = []
+                bottom_cells: List[str] = []
+                for col_idx, lines in enumerate(row_data["cell_lines"]):
+                    top_part = lines[:max_lines_fit]
+                    bottom_part = lines[max_lines_fit:]
+                    if col_idx == 0 and merge_first_col:
+                        bottom_cells.append("")
+                    elif col_idx == 1:
+                        bottom_cells.append(row_data["cells"][col_idx] if bottom_part else "")
+                    else:
+                        bottom_cells.append("\n".join(bottom_part).strip())
+                    top_cells.append("\n".join(top_part).strip())
+
+                chunk_rows.append(tuple(top_cells))
+                chunk_heights.append(max(24.0, max_lines_fit * (row_font_size + 2.0) + 4.0))
+                chunk_group_ids.append(row_data["group_id"])
+
+                prepared_rows[idx] = {
+                    **row_data,
+                    "cells": bottom_cells,
+                    "cell_lines": [
+                        _layout_cell_lines(cell, max(col_width - 8.0, 24.0), "Helvetica", row_font_size)
+                        for cell, col_width in zip(bottom_cells, col_widths)
+                    ],
+                }
+                prepared_rows[idx]["line_count"] = max(len(lines) for lines in prepared_rows[idx]["cell_lines"])
+                prepared_rows[idx]["height"] = max(
+                    24.0,
+                    prepared_rows[idx]["line_count"] * (row_font_size + 2.0) + 4.0,
+                )
                 break
 
-            if not rows_for_chunk:
+            if not chunk_rows:
                 self._start_new_page()
                 continue
 
-            chunk_end = rows_for_chunk[-1][0] + 1
-            chunk_rows = rows[chunk_start:chunk_end]
-            chunk_heights = [rows_for_chunk[i][1] for i in range(len(chunk_rows))]
+            merged_spans: List[Tuple[int, int]] = []
+            if merge_first_col and chunk_group_ids:
+                run_start = 0
+                while run_start < len(chunk_group_ids):
+                    gid = chunk_group_ids[run_start]
+                    run_end = run_start
+                    while run_end + 1 < len(chunk_group_ids) and chunk_group_ids[run_end + 1] == gid:
+                        run_end += 1
+                    if gid is not None:
+                        prev_gid = chunk_group_ids[run_start - 1] if run_start > 0 else None
+                        next_gid = chunk_group_ids[run_end + 1] if run_end + 1 < len(chunk_group_ids) else (
+                            prepared_rows[idx]["group_id"] if idx < len(prepared_rows) else None
+                        )
+                        if run_end > run_start or prev_gid == gid or next_gid == gid:
+                            merged_spans.append((run_start, run_end))
+                    run_start = run_end + 1
 
             table_top = self.cursor_y
-            table_bottom = table_top - (used)
+            table_bottom = table_top - used
 
             self._render_table(
                 x=self.margin_x,
@@ -449,23 +341,19 @@ class DemoPdfBuilder:
                 col_x=col_x,
                 col_widths=col_widths,
                 body_width=body_width,
-                header=header if first_chunk and include_header else (),
+                header=header if include_header else (),
                 rows=chunk_rows,
                 row_heights=chunk_heights,
                 include_outer_vertical=include_outer_vertical,
-                include_header=first_chunk and include_header,
+                include_header=include_header,
                 header_font_size=header_font_size,
                 row_font_size=row_font_size,
                 merge_first_col=merge_first_col,
-                merged_first_col_spans=merged_first_col_spans,
+                merged_first_col_spans=merged_spans or None,
             )
-
             self.cursor_y = table_bottom
-
-            chunk_start = chunk_end
-            if chunk_start < len(rows):
+            if idx < len(prepared_rows):
                 self._start_new_page()
-                first_chunk = False
 
     def _render_table(
         self,
@@ -609,53 +497,6 @@ class DemoPdfBuilder:
 
             row_cursor -= row_h
 
-    def add_stage_demo_table(self) -> None:
-        stage_header = ("Stage", "Team", "Notes")
-        stage_rows = list(DEMO_TABLES["stage"][1])
-
-        page_one_rows = stage_rows[0:2]
-        page_two_rows = stage_rows[2:7] + stage_rows[7:11]
-        legal_prefix = (
-            "Terms and compliance checks\n- consent language\n- governance review\n- retention policy\n- policy exception register"
-        )
-        legal_suffix = (
-            "- cross-border review queue\n- signature archive retention\n- sign-off archive retention"
-        )
-        page_three_rows = [
-            stage_rows[11],
-            stage_rows[12],
-            stage_rows[13],
-            stage_rows[14],
-            ("", "Legal", legal_prefix),
-        ]
-        page_four_rows = [
-            ("", "", legal_suffix),
-            stage_rows[16],
-            stage_rows[17],
-            stage_rows[18],
-        ]
-
-        fragments = (
-            (page_one_rows, ((0, 1),)),
-            (page_two_rows, ((0, 4), (5, 8))),
-            (page_three_rows, ((0, 2), (3, 4))),
-            (page_four_rows, ((0, 3),)),
-        )
-
-        for idx, (rows, spans) in enumerate(fragments):
-            if idx > 0:
-                self._start_new_page()
-            self._draw_table_block(
-                header=stage_header,
-                rows=rows,
-                include_header=True,
-                split_pages=False,
-                include_outer_vertical=False,
-                with_watermark=False,
-                merge_first_col=True,
-                merged_first_col_spans=spans,
-            )
-
     def save(self) -> None:
         self.canvas.save()
 
@@ -663,19 +504,25 @@ class DemoPdfBuilder:
 def create_demo_pdf(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     builder = DemoPdfBuilder(path)
+    body = builder.fixture["body"]
+    tables = builder.fixture["tables"]
+    intro_lines = tuple(body["intro"])
+    after_item_table = tuple(body["after_item_table"])
+    after_stage_table = tuple(body["after_stage_table"])
+    footer_lines = tuple(body["footer_lines"])
 
     builder.add_body_text(
         (
-            *DEMO_BODY_LINES[:3],
+            *intro_lines[:3],
             ("  - nested detail: line 2 confirms indentation", 12),
             ("    - deeper detail: line 3 confirms paragraph wrap and line breaks", 24),
-            *DEMO_BODY_LINES[5:],
+            *intro_lines[5:],
         )
     )
 
     builder._draw_table_block(
-        header=("Item", "Qty", "Price"),
-        rows=DEMO_TABLES["item"][1],
+        header=tables["item"][0],
+        rows=tables["item"][1],
         include_header=True,
         split_pages=False,
         include_outer_vertical=False,
@@ -683,24 +530,30 @@ def create_demo_pdf(path: Path) -> None:
     )
     builder.add_gap(24.0)
 
-    builder.add_body_text(
-        DEMO_AFTER_TABLE_LINES
-    )
-    builder.add_gap(120.0)
+    builder.add_body_text(after_item_table)
+    builder.add_gap(100.0)
 
-    builder.add_stage_demo_table()
+    builder._draw_table_block(
+        header=tables["stage"][0],
+        rows=tables["stage"][1],
+        include_header=True,
+        split_pages=True,
+        include_outer_vertical=False,
+        with_watermark=False,
+        merge_first_col=True,
+    )
     builder.add_gap(24.0)
 
     builder.add_body_text(
         (
-            *DEMO_SPAN_TABLE_TAIL_LINES[:2],
-            (DEMO_SPAN_TABLE_TAIL_LINES[2], 12),
+            *after_stage_table[:2],
+            (after_stage_table[2], 12),
         )
     )
 
     builder._draw_table_block(
-        header=("Area", "Status", "Action"),
-        rows=DEMO_TABLES["area"][1],
+        header=tables["area"][0],
+        rows=tables["area"][1],
         include_header=True,
         split_pages=False,
         include_outer_vertical=False,
@@ -708,8 +561,6 @@ def create_demo_pdf(path: Path) -> None:
     )
     builder.add_gap(24.0)
 
-    builder.add_body_text(
-        DEMO_FOOTER_LINES
-    )
+    builder.add_body_text(footer_lines)
 
     builder.save()

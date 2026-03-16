@@ -6,12 +6,8 @@ from pathlib import Path
 from typing import List, Sequence
 
 from extractor import extract_pdf_to_outputs
-from sample_generator import (
-    WATERMARK_TEXT,
-    create_demo_pdf,
-    get_demo_tables,
-    get_demo_text_lines,
-)
+from sample_fixture import load_demo_fixture
+from sample_generator import create_demo_pdf
 
 
 def _normalize(value: str) -> str:
@@ -102,6 +98,7 @@ def _row_values_present_in_text(expected_row: Sequence[str], text: str) -> bool:
 
 
 def run_checks() -> int:
+    fixture = load_demo_fixture()
     base = Path(__file__).resolve().parent
     root = base / "artifacts" / "verify"
     pdf_path = root / "sample_verify.pdf"
@@ -121,7 +118,7 @@ def run_checks() -> int:
     lower_text = txt_text.lower()
     normalized_text = _normalize(txt_text)
 
-    if _normalize(WATERMARK_TEXT) in _normalize(txt_text):
+    if _normalize(fixture["watermark_text"]) in _normalize(txt_text):
         raise AssertionError("watermark string remained in extracted text")
 
     header_footer_markers = (
@@ -134,12 +131,21 @@ def run_checks() -> int:
         if marker in lower_text:
             raise AssertionError(f"layout marker was not removed: {marker}")
 
-    for token in get_demo_text_lines()[:3]:
+    body_lines = (
+        fixture["body"]["intro"]
+        + fixture["body"]["after_item_table"]
+        + fixture["body"]["after_stage_table"]
+        + fixture["body"]["footer_lines"]
+    )
+    for token in body_lines[:3]:
         if _normalize(token) not in normalized_text:
             raise AssertionError(f"missing expected body text: {token}")
 
     extracted_tables = _extract_markdown_tables(markdown_text)
-    demo_tables = get_demo_tables()
+    demo_tables = {
+        table["id"]: (table["columns"], table["rows"])
+        for table in fixture["tables"]
+    }
     flattened_rows: List[Sequence[str]] = [row for rows in extracted_tables for row in rows]
     expected_rows = [row for _, rows in demo_tables.values() for row in rows]
 
