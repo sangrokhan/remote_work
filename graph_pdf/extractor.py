@@ -253,11 +253,13 @@ def _looks_like_table(table: Sequence[Sequence[str]]) -> bool:
     if max_cols < 2:
         return False
 
-    if not any(cell.strip() for cell in table[0]):
+    normalized_rows = [[str(cell or "").strip() for cell in row] for row in table]
+
+    if not any(cell for cell in normalized_rows[0]):
         return False
 
-    non_empty_cells = sum(1 for row in table for cell in row if str(cell).strip())
-    continuation_like = not _normalize_text(table[0][0]) and len(table) == 2
+    non_empty_cells = sum(1 for row in normalized_rows for cell in row if cell)
+    continuation_like = not _normalize_text(normalized_rows[0][0]) and len(normalized_rows) == 2
     min_cells = max_cols * 2
     if continuation_like:
         min_cells = max_cols + 1
