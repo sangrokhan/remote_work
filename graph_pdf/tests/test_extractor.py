@@ -19,6 +19,8 @@ from extractor import (
     _is_gray_color,
     _is_non_watermark_obj,
     _looks_like_table,
+    _merge_horizontal_band_segments,
+    _merge_vertical_band_segments,
     _normalize_cell_lines,
     _parse_pages_spec,
     extract_pdf_to_outputs,
@@ -184,6 +186,62 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
         self.assertEqual(40.0, body_top)
         self.assertEqual(710.0, body_bottom)
+
+    def test_merge_horizontal_band_segments_handles_contained_and_overlapping_lines(self) -> None:
+        segments = [
+            {"x0": 10.0, "x1": 50.0, "top": 100.0, "bottom": 100.0},
+            {"x0": 20.0, "x1": 40.0, "top": 100.0, "bottom": 100.0},
+            {"x0": 49.5, "x1": 80.0, "top": 100.0, "bottom": 100.0},
+            {"x0": 80.5, "x1": 100.0, "top": 100.0, "bottom": 100.0},
+        ]
+
+        merged = _merge_horizontal_band_segments(segments, tolerance=1.0)
+
+        self.assertEqual(
+            [{"x0": 10.0, "x1": 100.0, "top": 100.0, "bottom": 100.0}],
+            merged,
+        )
+
+    def test_merge_vertical_band_segments_handles_contained_and_overlapping_lines(self) -> None:
+        segments = [
+            {"x0": 200.0, "x1": 200.0, "top": 10.0, "bottom": 50.0},
+            {"x0": 200.0, "x1": 200.0, "top": 20.0, "bottom": 40.0},
+            {"x0": 200.0, "x1": 200.0, "top": 49.5, "bottom": 80.0},
+            {"x0": 200.0, "x1": 200.0, "top": 80.5, "bottom": 100.0},
+        ]
+
+        merged = _merge_vertical_band_segments(segments, tolerance=1.0)
+
+        self.assertEqual(
+            [{"x0": 200.0, "x1": 200.0, "top": 10.0, "bottom": 100.0}],
+            merged,
+        )
+
+    def test_merge_horizontal_band_segments_preserves_full_vertical_span(self) -> None:
+        segments = [
+            {"x0": 10.0, "x1": 50.0, "top": 100.0, "bottom": 100.6},
+            {"x0": 50.4, "x1": 80.0, "top": 99.6, "bottom": 100.0},
+        ]
+
+        merged = _merge_horizontal_band_segments(segments, tolerance=1.0)
+
+        self.assertEqual(
+            [{"x0": 10.0, "x1": 80.0, "top": 99.6, "bottom": 100.6}],
+            merged,
+        )
+
+    def test_merge_vertical_band_segments_preserves_full_horizontal_span(self) -> None:
+        segments = [
+            {"x0": 199.6, "x1": 200.0, "top": 10.0, "bottom": 50.0},
+            {"x0": 200.0, "x1": 200.6, "top": 49.5, "bottom": 80.0},
+        ]
+
+        merged = _merge_vertical_band_segments(segments, tolerance=1.0)
+
+        self.assertEqual(
+            [{"x0": 199.6, "x1": 200.6, "top": 10.0, "bottom": 80.0}],
+            merged,
+        )
 
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()

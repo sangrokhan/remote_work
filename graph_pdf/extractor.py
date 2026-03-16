@@ -132,6 +132,7 @@ def _merge_horizontal_band_segments(
         previous = merged[-1]
         if float(edge["x0"]) - float(previous["x1"]) <= tolerance:
             previous["x1"] = max(float(previous["x1"]), float(edge["x1"]))
+            previous["top"] = min(float(previous["top"]), float(edge["top"]))
             previous["bottom"] = max(float(previous["bottom"]), float(edge["bottom"]))
             continue
         merged.append(dict(edge))
@@ -151,6 +152,7 @@ def _merge_vertical_band_segments(
             continue
         previous = merged[-1]
         if float(edge["top"]) - float(previous["bottom"]) <= tolerance:
+            previous["x0"] = min(float(previous["x0"]), float(edge["x0"]))
             previous["bottom"] = max(float(previous["bottom"]), float(edge["bottom"]))
             previous["x1"] = max(float(previous["x1"]), float(edge["x1"]))
             continue
