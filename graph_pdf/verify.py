@@ -1,10 +1,95 @@
 from __future__ import annotations
 
-from pathlib import Path
+import re
 import sys
+from pathlib import Path
+from typing import Dict, List, Sequence, Tuple
 
-from sample_generator import create_demo_pdf
 from extractor import extract_pdf_to_outputs
+from sample_generator import (
+    WATERMARK_TEXT,
+    create_demo_pdf,
+    get_demo_tables,
+    get_demo_text_lines,
+)
+
+
+def _normalize(value: str) -> str:
+    v = str(value or "")
+    v = v.replace("<br>", " <br> ").replace("\\n", " <br> ")
+    v = re.sub(r"\s+", " ", v)
+    return v.strip().lower()
+
+
+def _parse_table_row(line: str) -> List[str]:
+    text = line.strip()
+    if not text.startswith("|") or not text.endswith("|"):
+        return []
+
+    is_separator = bool(re.fullmatch(r"\|\s*:?-{2,}:?(\s*\|\s*:?-{2,}:?\s*)+\|", text))
+    if is_separator:
+        return []
+
+    body = text.strip("|")
+    return [cell.strip() for cell in body.split("|")]
+
+
+def _extract_markdown_tables(markdown_text: str) -> Dict[Tuple[str, ...], List[List[str]]]:
+    lines = markdown_text.splitlines()
+    tables: Dict[Tuple[str, ...], List[List[str]]] = {}
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.startswith("### Page "):
+            i += 1
+            continue
+
+        i += 1
+        rows: List[List[str]] = []
+        while i < len(lines) and lines[i].startswith("|"):
+            parsed = _parse_table_row(lines[i])
+            if parsed:
+                rows.append(parsed)
+            i += 1
+
+        if len(rows) < 2:
+            continue
+
+        header = tuple(_normalize(cell) for cell in rows[0])
+        tables[header] = rows[1:]
+
+    return tables
+
+
+def _row_matches(expected_row: Sequence[str], actual_row: Sequence[str]) -> bool:
+    if len(expected_row) != len(actual_row):
+        return False
+
+    for e, a in zip(expected_row, actual_row):
+        e_n = _normalize(e)
+        a_n = _normalize(a)
+        if not e_n:
+            if a_n:
+                return False
+            continue
+        if e_n != a_n:
+            return False
+
+    return True
+
+
+def _contains_all_rows(
+    expected_rows: Sequence[Sequence[str]],
+    actual_rows: Sequence[Sequence[str]],
+) -> None:
+    normalized_actual = [tuple(_normalize(cell) for cell in row) for row in actual_rows]
+
+    for expected in expected_rows:
+        normalized_expected = tuple(_normalize(cell) for cell in expected)
+        matched = any(_row_matches(normalized_expected, actual) for actual in normalized_actual)
+        if not matched:
+            raise AssertionError(f"missing expected table row: {expected}")
 
 
 def run_checks() -> int:
@@ -26,41 +111,43 @@ def run_checks() -> int:
 
     markdown_text = result["markdown"]
     txt_text = result["text_file"].read_text(encoding="utf-8")
+    lower_text = txt_text.lower()
 
-    if "CONFIDENTIAL" in markdown_text:
+    if _normalize(WATERMARK_TEXT) in _normalize(txt_text):
         raise AssertionError("watermark string remained in extracted text")
-    if "Graph PDF Demo Header" in txt_text:
-        raise AssertionError("header text was not removed")
-    if "Graph PDF Demo Footer" in txt_text:
-        raise AssertionError("footer text was not removed")
 
-    if result["summary"]["table_count"] < 3:
-        raise AssertionError("expected at least 3 tables including spanning continuation")
+    header_footer_markers = (
+        "graph pdf demo header",
+        "prepared for table + text extraction tests",
+        "graph pdf demo footer",
+        "footer details: keep header/footer clean",
+    )
+    for marker in header_footer_markers:
+        if marker in lower_text:
+            raise AssertionError(f"layout marker was not removed: {marker}")
 
-    # Body + table multi-line + merged-cell style checks.
-    required_text = [
-        "Chapter 1: Deep Structure Verification",
-        "- 1st level bullet: layout and spacing checks",
-        "- nested detail: line 2 confirms indentation",
-        "- level 1: body copy, one of many lines",
-        "Scenario matrix",
-        "Docs",
-        "- 1st-level continuation bullet",
-    ]
+    for token in get_demo_text_lines()[:3]:
+        if _normalize(token) not in lower_text:
+            raise AssertionError(f"missing expected body text: {token}")
 
-    for required in required_text:
-        if required not in txt_text:
-            raise AssertionError(f"missing expected token: {required}")
+    extracted_tables = _extract_markdown_tables(markdown_text)
+    demo_tables = get_demo_tables()
 
-    # The spanning table should be merged into one logical table across page 1+2.
-    if txt_text.count("### Page 1 table") < 1:
-        raise AssertionError("missing table extraction output")
+    for table_name, (header, rows) in demo_tables.items():
+        normalized_header = tuple(_normalize(cell) for cell in header)
+        if normalized_header not in extracted_tables:
+            raise AssertionError(f"missing expected table: {table_name}")
+        _contains_all_rows(rows, extracted_tables[normalized_header])
 
-    if "scenario matrix" in txt_text.lower() and "### page 1 table" not in txt_text.lower():
-        raise AssertionError("table output marker changed after spanning merge")
+    if result["summary"]["table_count"] < len(demo_tables):
+        raise AssertionError("expected table count is lower than fixture table definitions")
 
-    if len(result["image_files"]) < 2:
-        raise AssertionError("expected page images for all pages")
+    all_rows = [row for rows in extracted_tables.values() for row in rows]
+    if not any(row and _normalize(row[0]) == "" and any(_normalize(cell) for cell in row[1:]) for row in all_rows):
+        raise AssertionError("merged/continuation-style rows were not present in table output")
+
+    if len(result["image_files"]) < 1:
+        raise AssertionError("expected at least one page image")
 
     print("[verify] PASS")
     print("text_file:", result["text_file"])

@@ -1,15 +1,215 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
 
+WATERMARK_TEXT = "CONFIDENTIAL"
+HEADER_LEFT = (
+    "Graph PDF Demo Header: sample source",
+    "Prepared for table + text extraction tests",
+)
+HEADER_RIGHT = (
+    "Page {page_no}",
+    "Header checks: layout boundary review",
+)
+FOOTER_LEFT = (
+    "Graph PDF Demo Footer / Left",
+    "Footer details: keep header/footer clean",
+)
+FOOTER_RIGHT = (
+    "Footer line 1: generated data",
+    "Footer page marker: {page_no}",
+)
+
 LineItem = Tuple[str, int]
 TableRow = Tuple[str, str, str]
+
+ITEM_ROWS: Tuple[TableRow, ...] = (
+    (
+        "Laptop\n- line 1",
+        "12",
+        "$120",
+    ),
+    (
+        "Keyboard\n- line 1\n- line 2",
+        "8",
+        "$32",
+    ),
+    (
+        "Monitor",
+        "5\n- line A\n- line B",
+        "$260",
+    ),
+    (
+        "Mouse",
+        "18\n- optical\n- silent click",
+        "$8",
+    ),
+    (
+        "Dock",
+        "3",
+        "$45\n- includes\n- 2 ports",
+    ),
+)
+
+STAGE_ROWS: Tuple[TableRow, ...] = (
+    (
+        "Phase A",
+        "Discovery",
+        "Kickoff scope lock\n- gather baseline\n- define risks\n- align dependencies",
+    ),
+    (
+        "",
+        "Design",
+        "UX skeleton review\n- navigation\n- component map\n- spacing audit",
+    ),
+    (
+        "",
+        "Frontend",
+        "Prototype pass\n- mobile spec\n- accessibility path\n- responsive breakpoints",
+    ),
+    (
+        "",
+        "Backend",
+        "Core API design\n- auth contract\n- payload schema\n- endpoint ownership",
+    ),
+    (
+        "",
+        "QA",
+        "Quality validation\n- smoke\n- integration matrix\n- rollback checks",
+    ),
+    (
+        "",
+        "Docs",
+        "Scenario matrix draft\n- migration\n- release notes\n- stakeholder sync",
+    ),
+    (
+        "",
+        "Release Notes",
+        "Publish cadence plan\n- draft audience\n- review windows\n- archive distribution",
+    ),
+    (
+        "Phase B",
+        "Operations",
+        "Runbook draft\n- infra checklist\n- alert thresholds\n- on-call routing",
+    ),
+    (
+        "",
+        "Security",
+        "Threat model\n- token handling\n- permission matrix\n- incident runbook",
+    ),
+    (
+        "",
+        "Release",
+        "Scenario matrix\n- smoke\n- negative cases\n- release windows",
+    ),
+    (
+        "",
+        "Platform",
+        "Support playbooks\n- upgrade path\n- dependency freeze\n- fallback scripts",
+    ),
+    (
+        "",
+        "Observability",
+        "Dashboard rollout\n- metric taxonomy\n- error alert policy\n- tracing contracts",
+    ),
+    (
+        "",
+        "Performance",
+        "Scale and profiling pass\n- load profile\n- memory pressure\n- queue saturation targets",
+    ),
+    (
+        "",
+        "Compliance",
+        "Policy sweep\n- controls list\n- retention rules\n- audit trails",
+    ),
+    (
+        "Phase C",
+        "Documentation",
+        "Publish handoff pack\n- API docs\n- release playbook\n- migration path",
+    ),
+    (
+        "",
+        "Legal",
+        "Terms and compliance checks\n- consent language\n- governance review\n- retention policy",
+    ),
+    (
+        "",
+        "Accessibility",
+        "Review deep pass\n- contrast baseline\n- keyboard order\n- narration labels",
+    ),
+    (
+        "",
+        "Operations",
+        "Post-launch tasks\n- monitor alerts\n- close checklist\n- confirm rollback route",
+    ),
+    (
+        "",
+        "Finance",
+        "Invoice trail\n- line item reconciliation\n- grant tracking\n- budget burn alerts",
+    ),
+)
+
+COMPACT_ROWS: Tuple[TableRow, ...] = (
+    ("Docs", "READY", "Finalize\n- sample\n- archive"),
+    ("QA", "TODO", "Confirm\n- edge case\n- fallback"),
+    ("Ops", "OK", "Archive path\n- cleanup\n- index refresh"),
+)
+
+DEMO_TABLES: Dict[str, Tuple[Tuple[str, str, str], Tuple[TableRow, ...]]] = {
+    "item": (("Item", "Qty", "Price"), ITEM_ROWS),
+    "stage": (("Stage", "Team", "Notes"), STAGE_ROWS),
+    "area": (("Area", "Status", "Action"), COMPACT_ROWS),
+}
+
+DEMO_BODY_LINES: Tuple[str, ...] = (
+    "Chapter 1: Deep Structure Verification",
+    "This section starts a body flow with multiple lines and clear indentation to test ordered extraction.",
+    "- 1st level bullet: layout and spacing checks",
+    "- nested detail: line 2 confirms indentation",
+    "- deeper detail: line 3 confirms paragraph wrap and line breaks",
+    "The extraction should remove header/footer and watermark while preserving indented body content.",
+    "- level 1: body copy, one of many lines",
+    "- level 2: second nested line",
+    "- level 3: third line to test depth",
+    "Body text here is cleaned for ingestion by GraphRAG or similar index pipelines.",
+)
+
+DEMO_AFTER_TABLE_LINES: Tuple[str, ...] = (
+    "The first table must fit entirely inside body bounds and end before the footer region.",
+    "After table, body lines must continue and never overlap following elements.",
+)
+
+DEMO_SPAN_TABLE_TAIL_LINES: Tuple[str, ...] = (
+    "Page 2 continues the flow if table rows spill over from the first table page.",
+    "This paragraph is intentionally after the spanning table so table continuation remains earlier on the next page.",
+    "- 1st-level continuation bullet",
+)
+
+DEMO_FOOTER_LINES: Tuple[str, ...] = (
+    "Appendix chapter line for verification:",
+    "- 1st level appendix bullet",
+    "- 2nd level appendix bullet",
+    "Final lines ensure normal paragraph flow does not overlap completed tables.",
+)
+
+
+def get_demo_tables() -> Dict[str, Tuple[Tuple[str, str, str], Tuple[TableRow, ...]]]:
+    return DEMO_TABLES
+
+
+def get_demo_text_lines() -> Tuple[str, ...]:
+    return (
+        *DEMO_BODY_LINES,
+        *DEMO_AFTER_TABLE_LINES,
+        *DEMO_SPAN_TABLE_TAIL_LINES,
+        *DEMO_FOOTER_LINES,
+    )
 
 
 def _split_cell_lines(text: str) -> List[str]:
@@ -53,12 +253,10 @@ class DemoPdfBuilder:
         self.canvas.setFont("Helvetica", 10)
 
         header_left = (
-            "Graph PDF Demo Header: sample source",
-            "Prepared for table + text extraction tests",
+            *HEADER_LEFT,
         )
         header_right = (
-            f"Page {self.page_no}",
-            "Header checks: layout boundary review",
+            *HEADER_RIGHT,
         )
 
         self.canvas.drawString(self.margin_x, self.height - 26, header_left[0])
@@ -66,7 +264,7 @@ class DemoPdfBuilder:
         self.canvas.drawRightString(
             self.width - self.margin_x,
             self.height - 26,
-            header_right[0],
+            header_right[0].format(page_no=self.page_no),
         )
         self.canvas.drawRightString(
             self.width - self.margin_x,
@@ -75,12 +273,10 @@ class DemoPdfBuilder:
         )
 
         footer_left = (
-            "Graph PDF Demo Footer / Left",
-            "Footer details: keep header/footer clean",
+            *FOOTER_LEFT,
         )
         footer_right = (
-            "Footer line 1: generated data",
-            f"Footer page marker: {self.page_no}",
+            *FOOTER_RIGHT,
         )
         self.canvas.drawString(self.margin_x, self.left_footer_y + 14, footer_left[0])
         self.canvas.drawString(self.margin_x, self.left_footer_y, footer_left[1])
@@ -92,7 +288,7 @@ class DemoPdfBuilder:
         self.canvas.drawRightString(
             self.width - self.margin_x,
             self.right_footer_y,
-            footer_right[1],
+            footer_right[1].format(page_no=self.page_no),
         )
 
         self.cursor_y = self.body_top
@@ -109,7 +305,7 @@ class DemoPdfBuilder:
         self.canvas.setFont("Helvetica-Bold", size)
         self.canvas.translate(x, y)
         self.canvas.rotate(55)
-        self.canvas.drawCentredString(0, 0, "CONFIDENTIAL")
+        self.canvas.drawCentredString(0, 0, WATERMARK_TEXT)
         self.canvas.restoreState()
 
     def add_body_text(self, lines: Sequence[LineItem | str], line_height: float = 14.0) -> None:
@@ -266,9 +462,29 @@ class DemoPdfBuilder:
             y -= header_h
 
         # Horizontal lines (including header/body split and bottom line).
-        for row_h in row_heights:
-            self.canvas.line(x, y, x + body_width, y)
+        table_start = y
+        for idx, row_h in enumerate(row_heights):
+            next_row_merges_first_col = False
+            if idx + 1 < len(rows):
+                next_row = rows[idx + 1]
+                next_row_merges_first_col = bool(next_row) and not str(next_row[0]).strip()
+
+            if idx == 0 and not include_header and rows and str(rows[0][0]).strip():
+                # Non-header continuation chunks keep first row text start as normal.
+                next_row_merges_first_col = next_row_merges_first_col
+
+            if next_row_merges_first_col:
+                self.canvas.line(col_x[0], y, x + body_width, y)
+            else:
+                self.canvas.line(x, y, x + body_width, y)
+
             y -= row_h
+
+        # If the first chunk starts a merged continuation row (empty first cell), do not
+        # draw the top border across the merged first column.
+        if not include_header and rows and not str(rows[0][0]).strip():
+            self.canvas.line(x + col_widths[0], table_start, x + body_width, table_start)
+
         self.canvas.line(x, y, x + body_width, y)
 
         # Vertical lines.
@@ -306,106 +522,18 @@ def create_demo_pdf(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     builder = DemoPdfBuilder(path)
 
-    item_rows: Tuple[TableRow, ...] = (
-        (
-            "Laptop\n- line 1",
-            "12",
-            "$120",
-        ),
-        (
-            "Keyboard\n- line 1\n- line 2",
-            "8",
-            "$32",
-        ),
-        (
-            "Monitor",
-            "5\n- line A\n- line B",
-            "$260",
-        ),
-        (
-            "Mouse",
-            "18\n- optical\n- silent click",
-            "$8",
-        ),
-        (
-            "Dock",
-            "3",
-            "$45\n- includes\n- 2 ports",
-        ),
-    )
-
-    stage_rows: Tuple[TableRow, ...] = (
-        (
-            "Phase A",
-            "Discovery",
-            "Kickoff scope lock\n- gather baseline\n- define risks",
-        ),
-        (
-            "",
-            "Design",
-            "UX skeleton review\n- navigation\n- component map",
-        ),
-        (
-            "",
-            "Frontend",
-            "Prototype pass\n- mobile spec\n- accessibility path",
-        ),
-        (
-            "",
-            "Backend",
-            "Core API design\n- auth contract\n- payload schema",
-        ),
-        (
-            "Phase B",
-            "Operations",
-            "Runbook draft\n- infra checklist\n- alert thresholds",
-        ),
-        (
-            "",
-            "Security",
-            "Threat model\n- token handling\n- permission matrix",
-        ),
-        (
-            "",
-            "Release",
-            "Scenario matrix\n- smoke\n- negative cases",
-        ),
-        (
-            "",
-            "Docs",
-            "Version notes\n- migration\n- rollout guide",
-        ),
-        (
-            "",
-            "QA",
-            "Closeout checks\n- verify docs\n- final signoff",
-        ),
-    )
-
-    compact_rows: Tuple[TableRow, ...] = (
-        ("Docs", "READY", "Finalize\n- sample\n- archive"),
-        ("QA", "TODO", "Confirm\n- edge case\n- fallback"),
-        ("Ops", "OK", "Archive path\n- cleanup\n- index refresh"),
-    )
-
     builder.add_body_text(
         (
-            "Chapter 1: Deep Structure Verification",
-            "This section starts a body flow with multiple lines and clear indentation to test ordered extraction.",
-            "- 1st level bullet: layout and spacing checks",
+            *DEMO_BODY_LINES[:3],
             ("  - nested detail: line 2 confirms indentation", 12),
             ("    - deeper detail: line 3 confirms paragraph wrap and line breaks", 24),
-            "The extraction should remove header/footer and watermark while preserving indented body content.",
-            ("- level 1: body copy, one of many lines", 12),
-            ("- level 2: second nested line", 24),
-            ("- level 3: third line to test depth", 36),
-            "Body text here is cleaned for ingestion by GraphRAG or similar index pipelines.",
+            *DEMO_BODY_LINES[5:],
         )
     )
 
     builder._draw_table_block(
         header=("Item", "Qty", "Price"),
-        rows=item_rows,
+        rows=DEMO_TABLES["item"][1],
         include_header=True,
         split_pages=False,
         include_outer_vertical=False,
@@ -414,16 +542,13 @@ def create_demo_pdf(path: Path) -> None:
     builder.add_gap(24.0)
 
     builder.add_body_text(
-        (
-            "The first table must fit entirely inside body bounds and end before the footer region.",
-            "After table, body lines must continue and never overlap following elements.",
-        )
+        DEMO_AFTER_TABLE_LINES
     )
-    builder.add_gap(180.0)
+    builder.add_gap(120.0)
 
     builder._draw_table_block(
         header=("Stage", "Team", "Notes"),
-        rows=stage_rows,
+        rows=DEMO_TABLES["stage"][1],
         include_header=True,
         split_pages=True,
         include_outer_vertical=False,
@@ -433,15 +558,14 @@ def create_demo_pdf(path: Path) -> None:
 
     builder.add_body_text(
         (
-            "Page 2 continues the flow if table rows spill over from the first table page.",
-            "This paragraph is intentionally after the spanning table so table continuation remains earlier on the next page.",
-            ("- 1st-level continuation bullet", 12),
+            *DEMO_SPAN_TABLE_TAIL_LINES[:2],
+            (DEMO_SPAN_TABLE_TAIL_LINES[2], 12),
         )
     )
 
     builder._draw_table_block(
         header=("Area", "Status", "Action"),
-        rows=compact_rows,
+        rows=DEMO_TABLES["area"][1],
         include_header=True,
         split_pages=False,
         include_outer_vertical=False,
@@ -450,12 +574,7 @@ def create_demo_pdf(path: Path) -> None:
     builder.add_gap(24.0)
 
     builder.add_body_text(
-        (
-            "Appendix chapter line for verification:",
-            "- 1st level appendix bullet",
-            "- 2nd level appendix bullet",
-            "Final lines ensure normal paragraph flow does not overlap completed tables.",
-        )
+        DEMO_FOOTER_LINES
     )
 
     builder.save()
