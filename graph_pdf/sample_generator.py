@@ -131,6 +131,18 @@ class DemoPdfBuilder:
             mask="auto",
         )
 
+    def _draw_header_image(self) -> None:
+        image = ImageReader(BytesIO(_SMALL_PNG))
+        self.canvas.drawImage(
+            image,
+            self.width - self.margin_x - 20,
+            self.height - 48,
+            width=12,
+            height=12,
+            preserveAspectRatio=True,
+            mask="auto",
+        )
+
     def _start_new_page(self) -> None:
         if self.page_no > 0:
             self.canvas.showPage()
@@ -170,7 +182,13 @@ class DemoPdfBuilder:
             footer_right[1].format(page_no=self.page_no),
         )
 
+        # Divider bars separate header/footer from the body region.
+        self.canvas.setLineWidth(1.0)
+        self.canvas.line(self.margin_x, self.height - 72, self.width - self.margin_x, self.height - 72)
+        self.canvas.line(self.margin_x, 60, self.width - self.margin_x, 60)
+
         self._draw_watermark(self.width / 2, self.height / 2, size=44)
+        self._draw_header_image()
         self._draw_small_page_image()
 
         self.cursor_y = self.body_top
