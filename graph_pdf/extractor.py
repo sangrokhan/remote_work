@@ -219,6 +219,18 @@ def _looks_like_header_row(row: Sequence[str]) -> bool:
     return alpha_like >= len(tokens) * 0.8 and short >= len(tokens) * 0.8
 
 
+def _rows_match(a: Sequence[str], b: Sequence[str]) -> bool:
+    if len(a) != len(b):
+        return False
+    return all(_normalize_text(x) == _normalize_text(y) for x, y in zip(a, b))
+
+
+def _split_repeated_header(prev_rows: TableRows, curr_rows: TableRows) -> TableRows:
+    if prev_rows and curr_rows and _rows_match(prev_rows[0], curr_rows[0]):
+        return curr_rows[1:]
+    return curr_rows
+
+
 def _is_continuation_chunk(prev_rows: TableRows, curr_rows: TableRows) -> bool:
     if not prev_rows or not curr_rows:
         return False
@@ -235,6 +247,13 @@ def _is_continuation_chunk(prev_rows: TableRows, curr_rows: TableRows) -> bool:
         return False
 
     return any(_normalize_text(cell) for cell in first[1:])
+
+
+def _format_markdown_cell(value: str) -> str:
+    lines = _normalize_cell_lines(value)
+    if not lines:
+        return ""
+    return "<br>".join(line.replace("|", "\\|") for line in lines)
 
 
 def _table_regions(
@@ -408,17 +427,6 @@ def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
     return merged
 
 
-def _render_field_lines(label: str, value: str) -> List[str]:
-    logical_lines = _normalize_cell_lines(value)
-    if not logical_lines:
-        return [f"  {label}:"]
-
-    first, *rest = logical_lines
-    output = [f"  {label}: {first}"]
-    output.extend(f"  {line}" for line in rest)
-    return output
-
-
 def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
     if not rows:
         return ""
@@ -430,20 +438,35 @@ def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
         body = rows
         header = [f"Column {idx}" for idx in range(1, len(rows[0]) + 1)]
 
-    blocks: List[str] = []
-    for row_idx, row in enumerate(body, start=1):
-        field_lines = [f"- Row {row_idx}"]
+    header_line = "| " + " | ".join(cell or f"Column {idx + 1}" for idx, cell in enumerate(header)) + " |"
+    divider_line = "| " + " | ".join("---" for _ in header) + " |"
+    body_lines = []
+    for row in body:
         padded_row = list(row) + [""] * max(0, len(header) - len(row))
-        for label, value in zip(header, padded_row):
-            normalized_label = _normalize_text(label) or "Value"
-            field_lines.extend(_render_field_lines(normalized_label, str(value or "")))
-        blocks.append("\n".join(field_lines))
+        body_lines.append("| " + " | ".join(_format_markdown_cell(str(value or "")) for value in padded_row) + " |")
 
-    return "\n\n".join(blocks)
+    return "\n".join([header_line, divider_line, *body_lines])
+
+
+def _merge_split_rows(rows: TableRows) -> TableRows:
+    if not rows:
+        return rows
+
+    merged: TableRows = [list(rows[0])]
+    for row in rows[1:]:
+        non_empty = [idx for idx, cell in enumerate(row) if _normalize_text(cell)]
+        if len(non_empty) == 1 and non_empty[0] > 0 and len(merged) > 1:
+            idx = non_empty[0]
+            previous = merged[-1]
+            joiner = "\n" if previous[idx].strip() else ""
+            previous[idx] = f"{previous[idx]}{joiner}{row[idx]}".strip()
+            continue
+        merged.append(list(row))
+    return merged
 
 
 def _append_output_table(output_tables: List[str], page_no: int, table_no: int, table_rows: TableRows) -> None:
-    table_text = _table_text_from_rows(table_rows)
+    table_text = _table_text_from_rows(_merge_split_rows(table_rows))
     if table_text:
         output_tables.append(f"### Page {page_no} table {table_no}\n{table_text}")
 
@@ -500,8 +523,9 @@ def extract_pdf_to_outputs(
 
             if tables:
                 for table_rows, _bbox in tables:
-                    if pending_table is not None and _is_continuation_chunk(pending_table, table_rows):
-                        pending_table.extend(table_rows)
+                    continuation_rows = _split_repeated_header(pending_table or [], table_rows)
+                    if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
+                        pending_table.extend(continuation_rows)
                         continue
 
                     _flush_pending()
@@ -517,9 +541,7 @@ def extract_pdf_to_outputs(
     text_file = out_md_dir / f"{stem}.txt"
     md_file = out_md_dir / f"{stem}.md"
     text_file.write_text(markdown, encoding="utf-8")
-
-    pure_text = "\n\n".join(output_text)
-    md_file.write_text(pure_text, encoding="utf-8")
+    md_file.write_text(markdown, encoding="utf-8")
 
     image_files = _extract_embedded_images(pdf_path=pdf_path, out_image_dir=out_image_dir, stem=stem)
 
