@@ -15,6 +15,7 @@ from extractor import (
     _char_rotation_degrees,
     _collect_rotated_text_debug,
     _extract_embedded_images,
+    _is_gray_color,
     _is_non_watermark_obj,
     _looks_like_table,
     _normalize_cell_lines,
@@ -150,9 +151,14 @@ class TableExtractionFormattingTests(unittest.TestCase):
         char = {
             "object_type": "char",
             "matrix": (0.588, 0.809, -0.809, 0.588, 0.0, 0.0),
-            "non_stroking_color": (0.501961, 0.501961, 0.501961),
+            "non_stroking_color": (0.92, 0.92, 0.92),
         }
         self.assertFalse(_is_non_watermark_obj(char))
+
+    def test_light_neutral_gray_range_is_detected(self) -> None:
+        self.assertTrue(_is_gray_color((0.92, 0.92, 0.92)))
+        self.assertFalse(_is_gray_color((0.92, 0.86, 0.92)))
+        self.assertFalse(_is_gray_color((0.72, 0.72, 0.72)))
 
     def test_detect_body_bounds_uses_long_top_and_bottom_rules_when_present(self) -> None:
         page = SimpleNamespace(
@@ -177,6 +183,19 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
         self.assertEqual(40.0, body_top)
         self.assertEqual(710.0, body_bottom)
+
+    def test_gray_text_between_53_and_57_degrees_is_treated_as_watermark(self) -> None:
+        char = {
+            "object_type": "char",
+            "matrix": (0.588, 0.809, -0.809, 0.588, 0.0, 0.0),
+            "non_stroking_color": (0.92, 0.92, 0.92),
+        }
+        self.assertFalse(_is_non_watermark_obj(char))
+
+    def test_light_neutral_gray_range_is_detected(self) -> None:
+        self.assertTrue(_is_gray_color((0.92, 0.92, 0.92)))
+        self.assertFalse(_is_gray_color((0.92, 0.86, 0.92)))
+        self.assertFalse(_is_gray_color((0.72, 0.72, 0.72)))
 
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -365,7 +384,7 @@ class TableExtractionFormattingTests(unittest.TestCase):
                     and 53.0 <= math.degrees(math.atan2(char["matrix"][1], char["matrix"][0])) <= 57.0
                     and isinstance(char.get("non_stroking_color"), tuple)
                     and len(char["non_stroking_color"]) >= 3
-                    and all(abs(float(c) - 0.501961) <= 0.02 for c in char["non_stroking_color"][:3])
+                    and all(abs(float(c) - 0.92) <= 0.03 for c in char["non_stroking_color"][:3])
                 ]
                 self.assertTrue(watermark_chars)
 

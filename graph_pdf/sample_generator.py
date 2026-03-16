@@ -200,7 +200,7 @@ class DemoPdfBuilder:
 
     def _draw_watermark(self, x: float, y: float, size: int = 48) -> None:
         self.canvas.saveState()
-        self.canvas.setFillColor(colors.grey)
+        self.canvas.setFillColor(colors.Color(0.92, 0.92, 0.92))
         self.canvas.setFillAlpha(0.13)
         self.canvas.setFont("Helvetica-Bold", size)
         self.canvas.translate(x, y)
