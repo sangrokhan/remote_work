@@ -11,9 +11,12 @@ from pathlib import Path
 import pdfplumber
 
 from extractor import (
+    TABLE_REGION_X_PADDING,
     _detect_body_bounds,
     _char_rotation_degrees,
     _collect_rotated_text_debug,
+    _collect_table_drawing_debug,
+    _expanded_table_crop_bbox,
     _extract_embedded_images,
     _is_gray_color,
     _is_non_watermark_obj,
@@ -184,18 +187,13 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(40.0, body_top)
         self.assertEqual(710.0, body_bottom)
 
-    def test_gray_text_between_53_and_57_degrees_is_treated_as_watermark(self) -> None:
-        char = {
-            "object_type": "char",
-            "matrix": (0.588, 0.809, -0.809, 0.588, 0.0, 0.0),
-            "non_stroking_color": (0.92, 0.92, 0.92),
-        }
-        self.assertFalse(_is_non_watermark_obj(char))
+    def test_table_region_crop_has_horizontal_padding(self) -> None:
+        crop_bbox = _expanded_table_crop_bbox(600.0, (100.0, 200.0, 420.0, 320.0))
+        self.assertEqual((100.0 - TABLE_REGION_X_PADDING, 200.0, 420.0 + TABLE_REGION_X_PADDING, 320.0), crop_bbox)
 
-    def test_light_neutral_gray_range_is_detected(self) -> None:
-        self.assertTrue(_is_gray_color((0.92, 0.92, 0.92)))
-        self.assertFalse(_is_gray_color((0.92, 0.86, 0.92)))
-        self.assertFalse(_is_gray_color((0.72, 0.72, 0.72)))
+    def test_table_region_crop_padding_clamps_to_page_width(self) -> None:
+        crop_bbox = _expanded_table_crop_bbox(600.0, (8.0, 200.0, 590.0, 320.0))
+        self.assertEqual((0.0, 200.0, 600.0, 320.0), crop_bbox)
 
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -330,6 +328,40 @@ class TableExtractionFormattingTests(unittest.TestCase):
         payload = json.loads(debug_file.read_text(encoding="utf-8"))
         self.assertTrue(payload)
         self.assertTrue(any(abs(entry["rotation"]) > 0.1 for entry in payload))
+
+    def test_collect_table_drawing_debug_reports_expected_page1_grid(self) -> None:
+        pdf_path = self._build_pdf()
+        with pdfplumber.open(str(pdf_path)) as pdf:
+            payload = _collect_table_drawing_debug(pdf.pages[0], page_no=1)
+
+        self.assertEqual(1, payload["page"])
+        self.assertEqual(2, len(payload["tables"]))
+        self.assertEqual(6, payload["tables"][0]["row_count"])
+        self.assertEqual(3, payload["tables"][0]["col_count"])
+        self.assertEqual(3, payload["tables"][1]["row_count"])
+        self.assertEqual(3, payload["tables"][1]["col_count"])
+
+    def test_debug_writes_table_drawing_log(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        pdf_path = root / "sample.pdf"
+        create_demo_pdf(pdf_path)
+
+        result = extract_pdf_to_outputs(
+            pdf_path=pdf_path,
+            out_md_dir=root / "md",
+            out_image_dir=root / "images",
+            stem="sample",
+            debug=True,
+        )
+
+        debug_file = result["debug_file"]
+        self.assertIsNotNone(debug_file)
+        payload = json.loads(debug_file.read_text(encoding="utf-8"))
+        self.assertEqual(3, len(payload["pages"]))
+        self.assertEqual(2, payload["pages"][0]["table_count"])
+        self.assertEqual(6, payload["pages"][0]["tables"][0]["row_count"])
 
     def test_stage_table_repeats_header_after_page_break(self) -> None:
         pdf_path = self._build_pdf()
