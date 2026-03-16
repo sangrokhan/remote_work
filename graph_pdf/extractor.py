@@ -9,6 +9,7 @@ import pdfplumber
 
 TableRows = List[List[str]]
 TableChunk = Tuple[TableRows, Tuple[float, float, float, float]]
+WATERMARK_FRAGMENT_TOKENS = {"CONFIDENTIAL", "FID", "I", "N", "O", "C"}
 
 
 def _normalize_text(text: str) -> str:
@@ -63,25 +64,29 @@ def _is_layout_artifact(text: str) -> bool:
     return any(marker in normalized for marker in (*header_markers, *footer_markers))
 
 
+def _is_non_watermark_obj(obj: dict) -> bool:
+    if obj.get("object_type") != "char":
+        return True
+
+    size = float(obj.get("size", 0))
+    color = obj.get("non_stroking_color") or obj.get("stroking_color")
+    is_gray_watermark = size >= 40 and isinstance(color, tuple) and len(color) >= 3 and all(
+        abs(float(c) - 0.501961) <= 0.02 for c in color
+    )
+    return not is_gray_watermark
+
+
+def _filter_page_for_extraction(page: "pdfplumber.page.Page") -> "pdfplumber.page.Page":
+    return page.filter(_is_non_watermark_obj)
+
+
 def _extract_body_text(
     page: "pdfplumber.page.Page",
     header_margin: float,
     footer_margin: float,
 ) -> str:
     body_bbox = (0, footer_margin, page.width, page.height - header_margin)
-
-    def _is_body_char(obj: dict) -> bool:
-        if obj.get("object_type") != "char":
-            return True
-
-        size = float(obj.get("size", 0))
-        color = obj.get("non_stroking_color") or obj.get("stroking_color")
-        is_gray_watermark = size >= 40 and isinstance(color, tuple) and len(color) >= 3 and all(
-            abs(float(c) - 0.501961) <= 0.02 for c in color
-        )
-        return not is_gray_watermark
-
-    body_page = page.filter(_is_body_char).crop(body_bbox)
+    body_page = _filter_page_for_extraction(page).crop(body_bbox)
     raw = body_page.extract_text(x_tolerance=1.5, y_tolerance=2) or ""
     lines = []
     for line in raw.splitlines():
@@ -104,6 +109,70 @@ def _merge_cells(table: Sequence[Sequence[str]]) -> List[List[str]]:
     for row in table:
         out.append([str(cell or "").strip() for cell in row])
     return out
+
+
+def _clean_cell_line(line: str) -> str:
+    cleaned = str(line or "").strip()
+    cleaned = re.sub(r"\bCONFIDENTIAL\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _remove_watermark_fragment_lines(lines: Sequence[str]) -> List[str]:
+    cleaned = [_clean_cell_line(line) for line in lines]
+    cleaned = [line for line in cleaned if line]
+
+    if len(cleaned) <= 1:
+        return cleaned
+
+    result: List[str] = []
+    for idx, line in enumerate(cleaned):
+        token = re.sub(r"[^A-Za-z]", "", line).upper()
+        next_line = cleaned[idx + 1] if idx + 1 < len(cleaned) else ""
+        if token in WATERMARK_FRAGMENT_TOKENS and next_line:
+            continue
+        result.append(line)
+    return result
+
+
+def _is_bullet_line(line: str) -> bool:
+    return bool(re.match(r"^(?:[-*•]|[0-9]+[.)])\s+", line))
+
+
+def _normalize_cell_lines(cell: str) -> List[str]:
+    raw_lines = [part.strip() for part in str(cell or "").splitlines()]
+    lines = _remove_watermark_fragment_lines(raw_lines)
+    if not lines:
+        return []
+
+    logical_lines: List[str] = []
+    buffer: List[str] = []
+
+    def _flush_buffer() -> None:
+        nonlocal buffer
+        if buffer:
+            logical_lines.append(" ".join(buffer))
+            buffer = []
+
+    for line in lines:
+        if _is_bullet_line(line):
+            _flush_buffer()
+            logical_lines.append(line)
+            continue
+        buffer.append(line)
+
+    _flush_buffer()
+    return logical_lines
+
+
+def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]]:
+    normalized: List[List[str]] = []
+    for row in table:
+        normalized_row = []
+        for cell in row:
+            normalized_row.append("\n".join(_normalize_cell_lines(str(cell or ""))))
+        normalized.append(normalized_row)
+    return normalized
 
 
 def _looks_like_table(table: Sequence[Sequence[str]]) -> bool:
@@ -268,6 +337,7 @@ def _extract_tables_from_crop(
 
 
 def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
+    page = _filter_page_for_extraction(page)
     seen_keys = set()
     merged: List[TableChunk] = []
     # Targeted extraction from table-like regions with missing outer vertical
@@ -278,6 +348,7 @@ def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
         y1 = max(edge["top"] for edge in lines) + 2
         crop_bbox = (max(0.0, x0), max(0.0, y0), min(page.width, x1), min(page.height, y1))
         for table, crop_box in _extract_tables_from_crop(page, crop_bbox):
+            table = _normalize_extracted_table(table)
             rows_key = tuple(tuple(row) for row in table)
             bbox_key = tuple(round(v, 2) for v in crop_box)
             key = (rows_key, bbox_key)
@@ -325,6 +396,7 @@ def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
         cleaned = [_merge_cells(table) for table in tables if _looks_like_table(table)]
         if cleaned:
             for table in cleaned:
+                table = _normalize_extracted_table(table)
                 rows_key = tuple(tuple(row) for row in table)
                 bbox_key = tuple(round(v, 2) for v in full_bbox)
                 key = (rows_key, bbox_key)
@@ -336,31 +408,44 @@ def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
     return merged
 
 
-def _normalize_cell(cell: str) -> str:
-    # Preserve multi-line cells as markdown `<br>` for readability.
-    return re.sub(r"\s*\n\s*", " <br> ", cell or "").strip()
+def _render_field_lines(label: str, value: str) -> List[str]:
+    logical_lines = _normalize_cell_lines(value)
+    if not logical_lines:
+        return [f"  {label}:"]
+
+    first, *rest = logical_lines
+    output = [f"  {label}: {first}"]
+    output.extend(f"  {line}" for line in rest)
+    return output
 
 
-def _md_table_from_rows(rows: Sequence[Sequence[str]]) -> str:
+def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
     if not rows:
         return ""
 
-    header = rows[0]
-    align = ["---" for _ in header]
+    header = [str(col or "").strip() for col in rows[0]]
     body = rows[1:]
 
-    def _row_to_md(cols: Sequence[str]) -> str:
-        return "| " + " | ".join(_normalize_cell(c) for c in cols) + " |"
+    if not body:
+        body = rows
+        header = [f"Column {idx}" for idx in range(1, len(rows[0]) + 1)]
 
-    lines = [_row_to_md(header), _row_to_md(align)]
-    lines.extend(_row_to_md(row) for row in body)
-    return "\n".join(lines)
+    blocks: List[str] = []
+    for row_idx, row in enumerate(body, start=1):
+        field_lines = [f"- Row {row_idx}"]
+        padded_row = list(row) + [""] * max(0, len(header) - len(row))
+        for label, value in zip(header, padded_row):
+            normalized_label = _normalize_text(label) or "Value"
+            field_lines.extend(_render_field_lines(normalized_label, str(value or "")))
+        blocks.append("\n".join(field_lines))
+
+    return "\n\n".join(blocks)
 
 
 def _append_output_table(output_tables: List[str], page_no: int, table_no: int, table_rows: TableRows) -> None:
-    markdown_table = _md_table_from_rows(table_rows)
-    if markdown_table:
-        output_tables.append(f"### Page {page_no} table {table_no}\n{markdown_table}")
+    table_text = _table_text_from_rows(table_rows)
+    if table_text:
+        output_tables.append(f"### Page {page_no} table {table_no}\n{table_text}")
 
 
 def extract_pdf_to_outputs(

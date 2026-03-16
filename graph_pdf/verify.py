@@ -22,19 +22,6 @@ def _normalize(value: str) -> str:
     return v.strip().lower()
 
 
-def _parse_table_row(line: str) -> List[str]:
-    text = line.strip()
-    if not text.startswith("|") or not text.endswith("|"):
-        return []
-
-    is_separator = bool(re.fullmatch(r"\|\s*:?-{2,}:?(\s*\|\s*:?-{2,}:?\s*)+\|", text))
-    if is_separator:
-        return []
-
-    body = text.strip("|")
-    return [cell.strip() for cell in body.split("|")]
-
-
 def _extract_markdown_tables(markdown_text: str) -> List[List[List[str]]]:
     lines = markdown_text.splitlines()
     tables: List[List[List[str]]] = []
@@ -47,17 +34,42 @@ def _extract_markdown_tables(markdown_text: str) -> List[List[List[str]]]:
             continue
 
         i += 1
-        rows: List[List[str]] = []
-        while i < len(lines) and lines[i].startswith("|"):
-            parsed = _parse_table_row(lines[i])
-            if parsed:
-                rows.append(parsed)
+        table_lines: List[str] = []
+        while i < len(lines) and not lines[i].startswith("### Page "):
+            table_lines.append(lines[i])
             i += 1
 
-        if len(rows) < 2:
-            continue
+        rows: List[List[str]] = []
+        current_row: List[str] = []
+        current_cell_idx = -1
+        for raw in table_lines:
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("- Row "):
+                if current_row:
+                    rows.append(current_row)
+                current_row = []
+                current_cell_idx = -1
+                continue
 
-        tables.append(rows[1:])
+            field_match = re.match(r"^\s{2}[^:]+:\s*(.*)$", raw)
+            if field_match:
+                current_row.append(field_match.group(1).strip())
+                current_cell_idx = len(current_row) - 1
+                continue
+
+            bullet_match = re.match(r"^\s{2}(- .+)$", raw)
+            if bullet_match and current_row and current_cell_idx >= 0:
+                current_row[current_cell_idx] = (
+                    current_row[current_cell_idx] + "\n" + bullet_match.group(1).strip()
+                ).strip()
+
+        if current_row:
+            rows.append(current_row)
+
+        if rows:
+            tables.append(rows)
 
     return tables
 
