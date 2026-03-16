@@ -121,7 +121,11 @@ def _looks_like_table(table: Sequence[Sequence[str]]) -> bool:
         return False
 
     non_empty_cells = sum(1 for row in table for cell in row if str(cell).strip())
-    if non_empty_cells < (max_cols * 2):
+    continuation_like = not _normalize_text(table[0][0]) and len(table) == 2
+    min_cells = max_cols * 2
+    if continuation_like:
+        min_cells = max_cols + 1
+    if non_empty_cells < min_cells:
         return False
 
     return True
@@ -163,7 +167,7 @@ def _is_continuation_chunk(prev_rows: TableRows, curr_rows: TableRows) -> bool:
 def _table_regions(
     page: pdfplumber.page.PageObject,
     x_tolerance: float = 5.0,
-    y_tolerance: float = 40.0,
+    y_tolerance: float = 52.0,
     min_lines: int = 3,
 ) -> List[tuple]:
     candidates = []
