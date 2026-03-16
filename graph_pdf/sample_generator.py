@@ -481,8 +481,19 @@ class DemoPdfBuilder:
         self.canvas.setFont("Helvetica", row_font_size)
         line_h = row_font_size + 1.2
         row_cursor = y_top - header_h
+        span_starts: dict[int, tuple[int, float, float]] = {}
+        rows_in_spans: set[int] = set()
 
-        for row, row_h in zip(rows, row_heights):
+        if merge_first_col and merged_first_col_spans:
+            body_top = y_top - header_h
+            for start, end in merged_first_col_spans:
+                span_top = body_top - row_tops[start]
+                span_bottom = body_top - row_tops[end + 1]
+                span_starts[start] = (end, span_top, span_bottom)
+                for row_idx in range(start, end + 1):
+                    rows_in_spans.add(row_idx)
+
+        for row_idx, (row, row_h) in enumerate(zip(rows, row_heights)):
             wrap_texts = [
                 _layout_cell_lines(cell, max(col_width - 8.0, 24.0), "Helvetica", row_font_size)
                 for cell, col_width in zip(row, col_widths)
@@ -490,10 +501,25 @@ class DemoPdfBuilder:
             max_line_count = max(len(t) for t in wrap_texts)
             row_baseline_top = row_cursor - 11
 
+            draw_first_col_per_row = row_idx not in rows_in_spans
             for i in range(max_line_count):
-                self.canvas.drawString(x + 4, row_baseline_top - (i * line_h), wrap_texts[0][i] if i < len(wrap_texts[0]) else "")
+                if draw_first_col_per_row:
+                    self.canvas.drawString(
+                        x + 4,
+                        row_baseline_top - (i * line_h),
+                        wrap_texts[0][i] if i < len(wrap_texts[0]) else "",
+                    )
                 self.canvas.drawString(col_x[0] + 4, row_baseline_top - (i * line_h), wrap_texts[1][i] if i < len(wrap_texts[1]) else "")
                 self.canvas.drawString(col_x[1] + 4, row_baseline_top - (i * line_h), wrap_texts[2][i] if i < len(wrap_texts[2]) else "")
+
+            if row_idx in span_starts and str(row[0]).strip():
+                _end, span_top, span_bottom = span_starts[row_idx]
+                first_col_lines = wrap_texts[0]
+                span_height = span_top - span_bottom
+                text_block_height = max(len(first_col_lines), 1) * line_h
+                block_top = span_top - max((span_height - text_block_height) / 2.0, 8.0) - 4.0
+                for i, line in enumerate(first_col_lines):
+                    self.canvas.drawString(x + 4, block_top - (i * line_h), line)
 
             row_cursor -= row_h
 
