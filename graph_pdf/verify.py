@@ -35,11 +35,23 @@ def run_checks() -> int:
     if "Graph PDF Demo Footer" in txt_text:
         raise AssertionError("footer text was not removed")
 
-    # 테이블 2개 + 헤더/본문 추출 확인
+    # 챕터, 들여쓰기 본문, 다중 행 테이블 셀, 표 추출 확인
     if result["summary"]["table_count"] < 2:
         raise AssertionError("table count is too low")
 
-    for required in ["Widget", "Keyboard", "Alpha", "Beta", "PDF extraction sample"]:
+    required_text = [
+        "Chapter 1. Document Structure",
+        "- level 1: overview",
+        "- level 2: detail",
+        "line 1",
+        "line 2",
+        "Widget",
+        "Keyboard",
+        "Alpha",
+        "Beta",
+        "PDF extraction sample",
+    ]
+    for required in required_text:
         if required not in txt_text:
             raise AssertionError(f"missing expected token: {required}")
 
