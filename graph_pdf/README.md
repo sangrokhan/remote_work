@@ -32,7 +32,8 @@ pip install -r graph_pdf/requirements.txt
 - 표 추출:
   - `horizontal_edges`로 표 영역 탐지
   - 영역별 `explicit_vertical_lines` 보정으로 좌우 외곽선 없는 테이블 처리
-  - 다단 헤더/멀티라인 셀 텍스트 허용
+  - 워터마크 문자 필터링 후 셀 정제
+  - 셀 내부 자동 줄바꿈은 한 줄로 병합, bullet/의도된 멀티라인은 같은 행 블록 안에서 유지
   - 두 페이지에 걸친 동일 표를 하나로 병합하는 후처리
 - 이미지 분리: 페이지별 PNG(`artifacts/.../images/*.png`)로 저장
 
@@ -46,6 +47,17 @@ pip install -r graph_pdf/requirements.txt
 ## 산출물 예시 위치
 - 텍스트/마크다운: `graph_pdf/artifacts/run_demo/md/demo.txt`, `demo.md`
 - 이미지: `graph_pdf/artifacts/run_demo/images/demo_page_01.png`, `demo_page_02.png`
+
+`demo.txt`의 표 출력은 마크다운 테이블이 아니라 아래와 같은 행 블록 구조입니다.
+
+```text
+### Page 1 table 1
+- Row 1
+  Item: Laptop
+  Qty: 12
+  Price: $120
+  - line 1
+```
 
 ## 결과 (verify.py)
 - PASS
