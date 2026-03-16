@@ -15,6 +15,7 @@ from extractor import (
     _char_rotation_degrees,
     _collect_rotated_text_debug,
     _collect_table_drawing_debug,
+    _continuation_regions_should_merge,
     _extract_embedded_images,
     _is_gray_color,
     _is_non_watermark_obj,
@@ -23,6 +24,7 @@ from extractor import (
     _merge_vertical_band_segments,
     _normalize_cell_lines,
     _parse_pages_spec,
+    _table_regions,
     extract_pdf_to_outputs,
 )
 from verify import _extract_markdown_tables
@@ -186,6 +188,42 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
         self.assertEqual(40.0, body_top)
         self.assertEqual(710.0, body_bottom)
+
+    def test_continuation_regions_merge_when_near_footer_header_with_shared_axes(self) -> None:
+        prev_bbox = (100.0, 620.0, 400.0, 705.0)
+        curr_bbox = (102.0, 88.0, 402.0, 190.0)
+        prev_axes = [180.0, 280.0]
+        curr_axes = [180.4, 279.8]
+
+        should_merge = _continuation_regions_should_merge(
+            prev_bbox=prev_bbox,
+            curr_bbox=curr_bbox,
+            prev_axes=prev_axes,
+            curr_axes=curr_axes,
+            body_top=72.0,
+            body_bottom=722.0,
+            gap_text_boxes=[],
+        )
+
+        self.assertTrue(should_merge)
+
+    def test_continuation_regions_do_not_merge_when_gap_has_other_content(self) -> None:
+        prev_bbox = (100.0, 620.0, 400.0, 705.0)
+        curr_bbox = (102.0, 88.0, 402.0, 190.0)
+        prev_axes = [180.0, 280.0]
+        curr_axes = [180.4, 279.8]
+
+        should_merge = _continuation_regions_should_merge(
+            prev_bbox=prev_bbox,
+            curr_bbox=curr_bbox,
+            prev_axes=prev_axes,
+            curr_axes=curr_axes,
+            body_top=72.0,
+            body_bottom=722.0,
+            gap_text_boxes=[(40.0, 730.0, 80.0, 742.0)],
+        )
+
+        self.assertFalse(should_merge)
 
     def test_merge_horizontal_band_segments_handles_contained_and_overlapping_lines(self) -> None:
         segments = [
