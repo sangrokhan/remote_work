@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pdfplumber
 
-from extractor import _normalize_cell_lines, _parse_pages_spec, extract_pdf_to_outputs
+from extractor import _looks_like_table, _normalize_cell_lines, _parse_pages_spec, extract_pdf_to_outputs
 from verify import _extract_markdown_tables
 from sample_fixture import load_demo_fixture
 from sample_generator import create_demo_pdf
@@ -112,6 +112,13 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
     def test_parse_pages_spec_supports_ranges_and_lists(self) -> None:
         self.assertEqual([1, 3, 4, 5, 8], _parse_pages_spec("1,3-5,8"))
+
+    def test_looks_like_table_tolerates_none_cells(self) -> None:
+        table = [
+            [None, "Status", "Notes"],
+            ["Docs", None, "Ready"],
+        ]
+        self.assertTrue(_looks_like_table(table))
 
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
