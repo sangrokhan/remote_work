@@ -680,6 +680,55 @@ def _normalize_two_col_continuation_rows(rows: TableRows) -> TableRows:
     return [["", str(row[0] or "").strip(), str(row[1] or "").strip()] for row in rows if row]
 
 
+def _vertical_axes_for_bbox(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+) -> List[float]:
+    x0, y0, x1, y1 = bbox
+    axes = [
+        float(edge["x0"])
+        for edge in page.vertical_edges
+        if float(edge["x0"]) >= x0 - 2.0
+        and float(edge["x0"]) <= x1 + 2.0
+        and float(edge["bottom"]) >= y0
+        and float(edge["top"]) <= y1
+    ]
+    return _merge_numeric_positions(axes, tolerance=1.0)
+
+
+def _continuation_regions_should_merge(
+    prev_bbox: Tuple[float, float, float, float],
+    curr_bbox: Tuple[float, float, float, float],
+    prev_axes: Sequence[float],
+    curr_axes: Sequence[float],
+    body_top: float,
+    body_bottom: float,
+    gap_text_boxes: Sequence[Tuple[float, float, float, float]],
+    edge_tolerance: float = 24.0,
+    axis_tolerance: float = 1.0,
+) -> bool:
+    _prev_x0, prev_top, _prev_x1, prev_bottom = prev_bbox
+    _curr_x0, curr_top, _curr_x1, curr_bottom = curr_bbox
+
+    prev_near_footer = abs(body_bottom - prev_bottom) <= edge_tolerance
+    curr_near_header = abs(curr_top - body_top) <= edge_tolerance
+    if not (prev_near_footer and curr_near_header):
+        return False
+
+    shared_axes = [
+        axis
+        for axis in prev_axes
+        if any(abs(axis - other) <= axis_tolerance for other in curr_axes)
+    ]
+    if not shared_axes:
+        return False
+
+    if gap_text_boxes:
+        return False
+
+    return True
+
+
 def _maybe_merge_missing_first_column_chunk(
     pending_table: TableRows | None,
     current_rows: TableRows,
@@ -732,16 +781,14 @@ def _table_regions(
 
         placed = False
         for region in candidates:
-            same_band = (
-                edge["top"] < region["y_max"] + y_tolerance
-                and edge["top"] > region["y_min"] - y_tolerance
-            )
+            same_band = abs(float(edge["top"]) - float(region["last_top"])) <= y_tolerance
             if not same_band:
                 continue
 
             region["lines"].append(edge)
             region["y_min"] = min(region["y_min"], edge["top"])
             region["y_max"] = max(region["y_max"], edge["top"])
+            region["last_top"] = edge["top"]
             region["x0"] = min(region["x0"], edge["x0"])
             region["x1"] = max(region["x1"], edge["x1"])
             placed = True
@@ -754,33 +801,16 @@ def _table_regions(
                     "x1": edge["x1"],
                     "y_min": edge["top"],
                     "y_max": edge["top"],
+                    "last_top": edge["top"],
                     "lines": [edge],
                 }
             )
 
-    groups = [
+    return [
         (group["x0"], group["x1"], group["lines"])
         for group in candidates
         if len(group["lines"]) >= min_lines
     ]
-
-    merged_groups: List[tuple] = []
-    idx = 0
-    while idx < len(groups):
-        x0, x1, lines = groups[idx]
-        if idx + 1 < len(groups):
-            next_x0, next_x1, next_lines = groups[idx + 1]
-            gap = min(edge["top"] for edge in next_lines) - max(edge["top"] for edge in lines)
-            same_width = abs(x0 - next_x0) <= 2 and abs(x1 - next_x1) <= 2
-            header_fragment = len(lines) <= 4
-            if same_width and header_fragment and gap <= 160:
-                merged_groups.append((min(x0, next_x0), max(x1, next_x1), [*lines, *next_lines]))
-                idx += 2
-                continue
-        merged_groups.append(groups[idx])
-        idx += 1
-
-    return merged_groups
 
 
 def _extract_tables_from_crop(
@@ -1059,13 +1089,17 @@ def extract_pdf_to_outputs(
 
     pending_table: Optional[TableRows] = None
     pending_page: Optional[int] = None
+    pending_bbox: Optional[Tuple[float, float, float, float]] = None
+    pending_axes: List[float] = []
 
     def _flush_pending() -> None:
-        nonlocal pending_table, pending_page
+        nonlocal pending_table, pending_page, pending_bbox, pending_axes
         if pending_table is not None and pending_page is not None:
             _append_output_table(output_tables, pending_page, len(output_tables) + 1, pending_table)
         pending_table = None
         pending_page = None
+        pending_bbox = None
+        pending_axes = []
 
     with pdfplumber.open(str(pdf_path)) as pdf:
         for page_idx, page in enumerate(pdf.pages, start=1):
@@ -1107,7 +1141,12 @@ def extract_pdf_to_outputs(
                 output_text.append(f"### Page {page_idx}\n{page_text}")
 
             if tables:
-                for table_rows, _bbox in tables:
+                body_top, body_bottom = _detect_body_bounds(
+                    page,
+                    header_margin=header_margin,
+                    footer_margin=footer_margin,
+                )
+                for table_rows, bbox in tables:
                     merged_missing_first = _maybe_merge_missing_first_column_chunk(
                         pending_table,
                         table_rows,
@@ -1122,9 +1161,37 @@ def extract_pdf_to_outputs(
                         pending_table.extend(continuation_rows)
                         continue
 
+                    current_axes = _vertical_axes_for_bbox(page, bbox)
+                    if (
+                        pending_table is not None
+                        and pending_bbox is not None
+                        and pending_page is not None
+                        and page_idx == pending_page + 1
+                        and _continuation_regions_should_merge(
+                            prev_bbox=pending_bbox,
+                            curr_bbox=bbox,
+                            prev_axes=pending_axes,
+                            curr_axes=current_axes,
+                            body_top=body_top,
+                            body_bottom=body_bottom,
+                            gap_text_boxes=[],
+                        )
+                    ):
+                        pending_table.extend(continuation_rows)
+                        pending_bbox = (
+                            min(pending_bbox[0], bbox[0]),
+                            min(pending_bbox[1], bbox[1]),
+                            max(pending_bbox[2], bbox[2]),
+                            max(pending_bbox[3], bbox[3]),
+                        )
+                        pending_axes = _merge_numeric_positions([*pending_axes, *current_axes], tolerance=1.0)
+                        continue
+
                     _flush_pending()
                     pending_table = table_rows
                     pending_page = page_idx
+                    pending_bbox = bbox
+                    pending_axes = current_axes
 
         _flush_pending()
 
