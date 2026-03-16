@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import List, Sequence, Tuple, Union
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -31,14 +31,52 @@ def _draw_watermark(c: canvas.Canvas, width: float, height: float) -> None:
     c.restoreState()
 
 
-def _draw_body_text(c: canvas.Canvas, width: float, start_y: float, lines: Sequence[str]) -> None:
+LineItem = Union[str, Tuple[str, int]]
+
+
+def _draw_body_text(c: canvas.Canvas, width: float, start_y: float, lines: Sequence[LineItem]) -> None:
     c.setFillColor(colors.black)
     c.setFont("Helvetica", 11)
     x = 36
     y = start_y
     for line in lines:
-        c.drawString(x, y, line)
+        text = line
+        indent = 0
+        if isinstance(line, tuple):
+            text, indent = line
+        c.drawString(x + indent, y, text)
         y -= 16
+
+
+def _draw_wrapped_table_row(
+    c: canvas.Canvas,
+    x0: float,
+    y: float,
+    lines: Sequence[str],
+    font_size: int,
+    column_positions: Sequence[int],
+    line_height: float,
+) -> float:
+    c.setFont("Helvetica", font_size)
+    y_cursor = y
+    max_lines = 1
+    split_lines = [line.split("\n") for line in lines]
+
+    for row_line in split_lines:
+        if len(row_line) > max_lines:
+            max_lines = len(row_line)
+
+    base_y = y
+    for line_idx in range(max_lines):
+        # Cell 0
+        c.drawString(x0 + 6, y_cursor, split_lines[0][line_idx] if line_idx < len(split_lines[0]) else "")
+        # Cell 1
+        c.drawString(x0 + column_positions[0] + 6, y_cursor, split_lines[1][line_idx] if line_idx < len(split_lines[1]) else "")
+        # Cell 2
+        c.drawString(x0 + column_positions[1] + 6, y_cursor, split_lines[2][line_idx] if line_idx < len(split_lines[2]) else "")
+        y_cursor -= line_height
+
+    return base_y - (max_lines - 1) * line_height
 
 
 def _draw_table(
@@ -46,7 +84,7 @@ def _draw_table(
     x0: float,
     y0: float,
     rows: Sequence[Tuple[str, str, str]],
-    row_height: float = 22,
+    row_height: float = 24,
     column_positions: Sequence[int] = (140, 260),
 ) -> None:
     """
@@ -78,9 +116,15 @@ def _draw_table(
     c.setFont("Helvetica", 9)
     y = y0 - row_height - 14
     for row in rows:
-        c.drawString(x0 + 6, y, row[0])
-        c.drawString(x0 + column_positions[0] + 6, y, row[1])
-        c.drawString(x0 + column_positions[1] + 6, y, row[2])
+        y = _draw_wrapped_table_row(
+            c,
+            x0=x0,
+            y=y,
+            lines=row,
+            font_size=8,
+            column_positions=column_positions,
+            line_height=10,
+        )
         y -= row_height
 
 
@@ -101,8 +145,8 @@ def create_demo_pdf(path: Path) -> None:
     ]
 
     right_rows = [
-        ("Alpha", "OK", "DONE"),
-        ("Beta", "WARN", "REVIEW"),
+        ("Alpha", "OK", "DONE\nline 1"),
+        ("Beta", "WARN", "REVIEW\nline 2"),
         ("Gamma", "FAIL", "PENDING"),
     ]
 
@@ -111,9 +155,13 @@ def create_demo_pdf(path: Path) -> None:
         width,
         start_y=height - 70,
         lines=[
+            "Chapter 1. Document Structure",
             "PDF extraction sample for body cleanup and structured table parsing.",
             "This page contains header, footer, watermark, and tables near the left and right edges.",
             "The tables are drawn with top/bottom and inner lines only; no outer vertical lines.",
+            ("This section has nested indentation:", 0),
+            ("- level 1: overview", 12),
+            ("- level 2: detail", 24),
             "Body text here is cleaned for ingestion by GraphRAG or similar index pipeline.",
         ],
     )
