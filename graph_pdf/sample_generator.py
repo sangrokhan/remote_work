@@ -382,59 +382,6 @@ class DemoPdfBuilder:
         for row_h in row_heights:
             row_tops.append(row_tops[-1] + row_h)
 
-        # Highlight merged first-column spans to make the visual grouping explicit.
-        # A merged span starts with a non-empty first column and continues while the
-        # first-column cell remains empty.
-        if merge_first_col and rows:
-            if merged_first_col_spans is not None:
-                spans = list(merged_first_col_spans)
-            else:
-                spans = []
-                i = 0
-                while i < len(rows):
-                    if str(rows[i][0]).strip():
-                        start = i
-                        end = i
-                        j = i + 1
-                        while j < len(rows) and not str(rows[j][0]).strip():
-                            end = j
-                            j += 1
-                        if end > start:
-                            spans.append((start, end))
-                        i = j
-                    else:
-                        i += 1
-
-            if spans:
-                self.canvas.saveState()
-                fill_color = colors.HexColor("#eceff6")
-                border_color = colors.HexColor("#7c8799")
-                self.canvas.setFillColor(fill_color)
-                self.canvas.setStrokeColor(border_color)
-                self.canvas.setLineWidth(0.7)
-                body_top = y_top - header_h
-                for start, end in spans:
-                    y_span_top = body_top - row_tops[start]
-                    y_span_bottom = body_top - row_tops[end + 1]
-                    group_height = y_span_top - y_span_bottom
-
-                    self.canvas.rect(
-                        x,
-                        y_span_bottom,
-                        col_x[0] - x,
-                        group_height,
-                        fill=1,
-                        stroke=0,
-                    )
-
-                    # Keep a clear boundary for merged spans to distinguish it from
-                    # ordinary blank-cell rows in monochrome extraction passes.
-                    self.canvas.setStrokeColor(border_color)
-                    self.canvas.line(x, y_span_top, col_x[0], y_span_top)
-                    self.canvas.line(x, y_span_bottom, col_x[0], y_span_bottom)
-                    self.canvas.line(col_x[0], y_span_top, col_x[0], y_span_bottom)
-                self.canvas.restoreState()
-
         y = y_top
         self.canvas.line(x, y_top, x + body_width, y_top)
 
@@ -481,15 +428,12 @@ class DemoPdfBuilder:
         self.canvas.setFont("Helvetica", row_font_size)
         line_h = row_font_size + 1.2
         row_cursor = y_top - header_h
-        span_starts: dict[int, tuple[int, float, float]] = {}
+        span_starts: set[int] = set()
         rows_in_spans: set[int] = set()
 
         if merge_first_col and merged_first_col_spans:
-            body_top = y_top - header_h
             for start, end in merged_first_col_spans:
-                span_top = body_top - row_tops[start]
-                span_bottom = body_top - row_tops[end + 1]
-                span_starts[start] = (end, span_top, span_bottom)
+                span_starts.add(start)
                 for row_idx in range(start, end + 1):
                     rows_in_spans.add(row_idx)
 
@@ -513,13 +457,9 @@ class DemoPdfBuilder:
                 self.canvas.drawString(col_x[1] + 4, row_baseline_top - (i * line_h), wrap_texts[2][i] if i < len(wrap_texts[2]) else "")
 
             if row_idx in span_starts and str(row[0]).strip():
-                _end, span_top, span_bottom = span_starts[row_idx]
                 first_col_lines = wrap_texts[0]
-                span_height = span_top - span_bottom
-                text_block_height = max(len(first_col_lines), 1) * line_h
-                block_top = span_top - max((span_height - text_block_height) / 2.0, 8.0) - 4.0
                 for i, line in enumerate(first_col_lines):
-                    self.canvas.drawString(x + 4, block_top - (i * line_h), line)
+                    self.canvas.drawString(x + 4, row_baseline_top - (i * line_h), line)
 
             row_cursor -= row_h
 
