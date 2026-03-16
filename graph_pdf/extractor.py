@@ -160,7 +160,12 @@ def _is_continuation_chunk(prev_rows: TableRows, curr_rows: TableRows) -> bool:
     return any(_normalize_text(cell) for cell in first[1:])
 
 
-def _table_regions(page: pdfplumber.page.PageObject, x_tolerance: float = 5.0, y_tolerance: float = 90.0) -> List[tuple]:
+def _table_regions(
+    page: pdfplumber.page.PageObject,
+    x_tolerance: float = 5.0,
+    y_tolerance: float = 40.0,
+    min_lines: int = 3,
+) -> List[tuple]:
     candidates = []
     edges = sorted(page.horizontal_edges, key=lambda edge: edge.get("top", 0.0))
     for edge in edges:
@@ -204,7 +209,7 @@ def _table_regions(page: pdfplumber.page.PageObject, x_tolerance: float = 5.0, y
     return [
         (group["x0"], group["x1"], group["lines"])
         for group in candidates
-        if len(group["lines"]) >= 4
+        if len(group["lines"]) >= min_lines
     ]
 
 
@@ -261,7 +266,25 @@ def _extract_tables_from_crop(
 def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
     seen_keys = set()
     merged: List[TableChunk] = []
+    # Targeted extraction from table-like regions with missing outer vertical
+    # borders. This is preferred for docs without full edge lines.
+    table_regions = _table_regions(page)
+    for x0, x1, lines in table_regions:
+        y0 = min(edge["top"] for edge in lines) - 2
+        y1 = max(edge["top"] for edge in lines) + 2
+        crop_bbox = (max(0.0, x0), max(0.0, y0), min(page.width, x1), min(page.height, y1))
+        for table, crop_box in _extract_tables_from_crop(page, crop_bbox):
+            rows_key = tuple(tuple(row) for row in table)
+            bbox_key = tuple(round(v, 2) for v in crop_box)
+            key = (rows_key, bbox_key)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                merged.append((table, crop_box))
 
+    if merged:
+        return merged
+
+    # Fallback to page-wide extraction when region-based cues are unavailable.
     full_bbox = (0.0, 0.0, float(page.width), float(page.height))
     fallback_settings = [
         {
@@ -306,27 +329,7 @@ def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
                     merged.append((table, full_bbox))
             break
 
-    # If fallback extraction already produced valid tables, keep it. Otherwise,
-    # try the targeted region-based approach that can be useful for missing
-    # borders while still remaining explicit.
-    if merged:
-        return merged
-
-    # Targeted extraction from table-like regions with missing outer vertical borders.
-    table_regions = _table_regions(page)
-    for x0, x1, lines in table_regions:
-        y0 = min(edge["top"] for edge in lines) - 2
-        y1 = max(edge["top"] for edge in lines) + 2
-        crop_bbox = (max(0.0, x0), max(0.0, y0), min(page.width, x1), min(page.height, y1))
-        for table, crop_box in _extract_tables_from_crop(page, crop_bbox):
-            rows_key = tuple(tuple(row) for row in table)
-            bbox_key = tuple(round(v, 2) for v in crop_box)
-            key = (rows_key, bbox_key)
-            if key not in seen_keys:
-                seen_keys.add(key)
-                merged.append((table, crop_box))
-
-    return []
+    return merged
 
 
 def _normalize_cell(cell: str) -> str:
