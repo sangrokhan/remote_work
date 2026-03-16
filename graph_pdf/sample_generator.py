@@ -456,12 +456,11 @@ class DemoPdfBuilder:
                     next_row = rows[idx + 1]
                     next_row_merges_first_col = bool(next_row) and not str(next_row[0]).strip()
 
+            y -= row_h
             if next_row_merges_first_col:
                 self.canvas.line(col_x[0], y, x + body_width, y)
             else:
                 self.canvas.line(x, y, x + body_width, y)
-
-            y -= row_h
 
         # If the first chunk starts a merged continuation row (empty first cell), do not
         # draw the top border across the merged first column.
