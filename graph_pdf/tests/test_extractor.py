@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import json
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -11,6 +12,8 @@ import pdfplumber
 
 from extractor import (
     _detect_body_bounds,
+    _char_rotation_degrees,
+    _collect_rotated_text_debug,
     _extract_embedded_images,
     _looks_like_table,
     _normalize_cell_lines,
@@ -120,6 +123,20 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
     def test_parse_pages_spec_supports_ranges_and_lists(self) -> None:
         self.assertEqual([1, 3, 4, 5, 8], _parse_pages_spec("1,3-5,8"))
+
+    def test_collect_rotated_text_debug_keeps_non_zero_angle_chars(self) -> None:
+        page = SimpleNamespace(
+            chars=[
+                {"text": "A", "matrix": (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), "top": 10.0, "bottom": 20.0},
+                {"text": "B", "matrix": (0.573576, 0.819152, -0.819152, 0.573576, 1.0, 1.0), "top": 30.0, "bottom": 40.0},
+            ]
+        )
+
+        entries = _collect_rotated_text_debug(page, page_no=2)
+
+        self.assertEqual(1, len(entries))
+        self.assertEqual("B", entries[0]["text"])
+        self.assertAlmostEqual(55.0, entries[0]["rotation"], places=1)
 
     def test_looks_like_table_tolerates_none_cells(self) -> None:
         table = [
@@ -264,6 +281,27 @@ class TableExtractionFormattingTests(unittest.TestCase):
         result = self._extract_result()
         self.assertEqual(5, raw_image_count)
         self.assertEqual(2, len(result["image_files"]))
+
+    def test_debug_watermark_writes_rotated_text_log(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        pdf_path = root / "sample.pdf"
+        create_demo_pdf(pdf_path)
+
+        result = extract_pdf_to_outputs(
+            pdf_path=pdf_path,
+            out_md_dir=root / "md",
+            out_image_dir=root / "images",
+            stem="sample",
+            debug_watermark=True,
+        )
+
+        debug_file = result["debug_watermark_file"]
+        self.assertIsNotNone(debug_file)
+        payload = json.loads(debug_file.read_text(encoding="utf-8"))
+        self.assertTrue(payload)
+        self.assertTrue(any(abs(entry["rotation"]) > 0.1 for entry in payload))
 
     def test_stage_table_repeats_header_after_page_break(self) -> None:
         pdf_path = self._build_pdf()
