@@ -202,6 +202,38 @@ class TableExtractionFormattingTests(unittest.TestCase):
             merged,
         )
 
+    def test_merge_horizontal_band_segments_is_order_independent_with_contained_lines(self) -> None:
+        segments = [
+            {"x0": 50.4, "x1": 80.0, "top": 100.0, "bottom": 100.2},
+            {"x0": 20.0, "x1": 40.0, "top": 99.9, "bottom": 100.1},
+            {"x0": 10.0, "x1": 50.0, "top": 100.0, "bottom": 100.0},
+            {"x0": 80.4, "x1": 100.0, "top": 100.0, "bottom": 100.0},
+        ]
+
+        merged = _merge_horizontal_band_segments(segments, tolerance=1.0)
+
+        self.assertEqual(
+            [{"x0": 10.0, "x1": 100.0, "top": 99.9, "bottom": 100.2}],
+            merged,
+        )
+
+    def test_merge_horizontal_band_segments_keeps_gaps_larger_than_tolerance(self) -> None:
+        segments = [
+            {"x0": 10.0, "x1": 50.0, "top": 100.0, "bottom": 100.0},
+            {"x0": 20.0, "x1": 40.0, "top": 100.0, "bottom": 100.0},
+            {"x0": 55.1, "x1": 80.0, "top": 100.0, "bottom": 100.0},
+        ]
+
+        merged = _merge_horizontal_band_segments(segments, tolerance=1.0)
+
+        self.assertEqual(
+            [
+                {"x0": 10.0, "x1": 50.0, "top": 100.0, "bottom": 100.0},
+                {"x0": 55.1, "x1": 80.0, "top": 100.0, "bottom": 100.0},
+            ],
+            merged,
+        )
+
     def test_merge_vertical_band_segments_handles_contained_and_overlapping_lines(self) -> None:
         segments = [
             {"x0": 200.0, "x1": 200.0, "top": 10.0, "bottom": 50.0},
@@ -214,6 +246,38 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
         self.assertEqual(
             [{"x0": 200.0, "x1": 200.0, "top": 10.0, "bottom": 100.0}],
+            merged,
+        )
+
+    def test_merge_vertical_band_segments_is_order_independent_with_contained_lines(self) -> None:
+        segments = [
+            {"x0": 199.8, "x1": 200.0, "top": 50.4, "bottom": 80.0},
+            {"x0": 200.0, "x1": 200.1, "top": 20.0, "bottom": 40.0},
+            {"x0": 200.0, "x1": 200.0, "top": 10.0, "bottom": 50.0},
+            {"x0": 200.0, "x1": 200.0, "top": 80.4, "bottom": 100.0},
+        ]
+
+        merged = _merge_vertical_band_segments(segments, tolerance=1.0)
+
+        self.assertEqual(
+            [{"x0": 199.8, "x1": 200.1, "top": 10.0, "bottom": 100.0}],
+            merged,
+        )
+
+    def test_merge_vertical_band_segments_keeps_gaps_larger_than_tolerance(self) -> None:
+        segments = [
+            {"x0": 200.0, "x1": 200.0, "top": 10.0, "bottom": 50.0},
+            {"x0": 200.0, "x1": 200.0, "top": 20.0, "bottom": 40.0},
+            {"x0": 200.0, "x1": 200.0, "top": 55.2, "bottom": 80.0},
+        ]
+
+        merged = _merge_vertical_band_segments(segments, tolerance=1.0)
+
+        self.assertEqual(
+            [
+                {"x0": 200.0, "x1": 200.0, "top": 10.0, "bottom": 50.0},
+                {"x0": 200.0, "x1": 200.0, "top": 55.2, "bottom": 80.0},
+            ],
             merged,
         )
 
