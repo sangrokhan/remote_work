@@ -116,6 +116,13 @@ def _draw_wrapped_table_row(
     return max(line_height * 1.5, content_height)
 
 
+def _estimate_wrapped_row_height(lines: Sequence[str], line_height: float) -> float:
+    split_lines = [str(line).split("\n") if line else [""] for line in lines]
+    max_lines = max((len(line) for line in split_lines), default=1)
+    content_height = max_lines * line_height
+    return max(line_height * 1.5, content_height)
+
+
 def _draw_table(
     c: canvas.Canvas,
     x0: float,
@@ -137,13 +144,23 @@ def _draw_table(
     c.setLineWidth(0.8)
 
     table_width = float(column_positions[-1]) + table_width_tail
-    row_count = len(rows) + (1 if include_header else 0)
-    total_height = row_count * row_height
+    body_line_height = 11
+    body_row_heights = [
+        max(row_height, _estimate_wrapped_row_height(row, body_line_height))
+        for row in rows
+    ]
+    header_height = row_height if include_header else 0.0
+    total_height = header_height + sum(body_row_heights)
 
     # Top, middle and bottom horizontal lines.
-    for row in range(row_count + 1):
-        y = y0 - row * row_height
-        c.line(x0, y, x0 + table_width, y)
+    horizontal_lines = [y0]
+    cursor = y0 - header_height
+    for row_height_used in body_row_heights:
+        cursor -= row_height_used
+        horizontal_lines.append(cursor)
+
+    for line_y in horizontal_lines:
+        c.line(x0, line_y, x0 + table_width, line_y)
 
     # Vertical lines.
     for col_x in column_positions:
@@ -159,8 +176,8 @@ def _draw_table(
         c.drawString(x0 + column_positions[1] + 6, y0 - 16, header[2] if len(header) > 2 else "")
 
     c.setFont("Helvetica", 9)
-    y = y0 - row_height
-    for row in rows:
+    y = y0 - header_height
+    for row, row_h in zip(rows, body_row_heights):
         row_used = _draw_wrapped_table_row(
             c=c,
             x0=x0,
@@ -168,9 +185,9 @@ def _draw_table(
             lines=row,
             font_size=8,
             column_positions=column_positions,
-            line_height=11,
+            line_height=body_line_height,
         )
-        y -= max(row_height, row_used)
+        y -= max(row_h, row_used)
 
 
 def create_demo_pdf(path: Path) -> None:
