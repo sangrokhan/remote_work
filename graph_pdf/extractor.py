@@ -16,6 +16,7 @@ WATERMARK_ROTATION_MAX_DEGREES = 57.0
 WATERMARK_GRAY_MIN = 0.88
 WATERMARK_GRAY_MAX = 0.96
 WATERMARK_GRAY_NEUTRAL_TOLERANCE = 0.03
+TABLE_REGION_X_PADDING = 24.0
 
 
 def _parse_pages_spec(spec: str) -> List[int]:
@@ -78,6 +79,65 @@ def _collect_rotated_text_debug(page: "pdfplumber.page.Page", page_no: int) -> L
             }
         )
     return entries
+
+
+def _merge_numeric_positions(values: Sequence[float], tolerance: float = 1.0) -> List[float]:
+    merged: List[float] = []
+    for value in sorted(float(v) for v in values):
+        if not merged or abs(value - merged[-1]) > tolerance:
+            merged.append(value)
+            continue
+        merged[-1] = (merged[-1] + value) / 2.0
+    return merged
+
+
+def _collect_table_drawing_debug(
+    page: "pdfplumber.page.Page",
+    page_no: int,
+    header_margin: float = 90.0,
+    footer_margin: float = 40.0,
+) -> dict:
+    body_top, body_bottom = _detect_body_bounds(
+        page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+    )
+    groups = _table_regions(page)
+    tables: List[dict] = []
+    for index, (x0, x1, lines) in enumerate(groups, start=1):
+        top = min(float(edge["top"]) for edge in lines)
+        bottom = max(float(edge["top"]) for edge in lines)
+        vertical_edges = [
+            edge
+            for edge in page.vertical_edges
+            if float(edge["x0"]) >= x0 - 2.0
+            and float(edge["x0"]) <= x1 + 2.0
+            and float(edge["bottom"]) >= top
+            and float(edge["top"]) <= bottom
+        ]
+        horizontal_positions = _merge_numeric_positions([float(edge["top"]) for edge in lines])
+        vertical_positions = _merge_numeric_positions(
+            [x0, x1, *(float(edge["x0"]) for edge in vertical_edges)]
+        )
+        tables.append(
+            {
+                "index": index,
+                "bbox": [round(x0, 2), round(top, 2), round(x1, 2), round(bottom, 2)],
+                "row_count": max(0, len(horizontal_positions) - 1),
+                "col_count": max(0, len(vertical_positions) - 1),
+                "horizontal_lines": [round(value, 2) for value in horizontal_positions],
+                "vertical_lines": [round(value, 2) for value in vertical_positions],
+                "horizontal_count": len(horizontal_positions),
+                "vertical_count": len(vertical_positions),
+            }
+        )
+
+    return {
+        "page": page_no,
+        "body_bounds": [round(body_top, 2), round(body_bottom, 2)],
+        "table_count": len(tables),
+        "tables": tables,
+    }
 def _repair_watermark_bleed(text: str) -> str:
     # Some rotated/conflicting watermark text can leak as a trailing single letter.
     text = re.sub(r"\s+[A-Za-z]$", "", text)
@@ -549,6 +609,20 @@ def _extract_tables_from_crop(
     return []
 
 
+def _expanded_table_crop_bbox(
+    page_width: float,
+    crop_bbox: Tuple[float, float, float, float],
+    x_padding: float = TABLE_REGION_X_PADDING,
+) -> Tuple[float, float, float, float]:
+    x0, y0, x1, y1 = crop_bbox
+    return (
+        max(0.0, x0 - x_padding),
+        y0,
+        min(page_width, x1 + x_padding),
+        y1,
+    )
+
+
 def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
     page = _filter_page_for_extraction(page)
     seen_keys = set()
@@ -559,8 +633,19 @@ def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
     for x0, x1, lines in table_regions:
         y0 = min(edge["top"] for edge in lines) - 2
         y1 = max(edge["top"] for edge in lines) + 2
-        crop_bbox = (max(0.0, x0), max(0.0, y0), min(page.width, x1), min(page.height, y1))
-        for table, crop_box in _extract_tables_from_crop(page, crop_bbox):
+        base_crop_bbox = (
+            max(0.0, x0),
+            max(0.0, y0),
+            min(page.width, x1),
+            min(page.height, y1),
+        )
+        extracted = _extract_tables_from_crop(page, base_crop_bbox)
+        if not extracted:
+            expanded_crop_bbox = _expanded_table_crop_bbox(page.width, base_crop_bbox)
+            if expanded_crop_bbox != base_crop_bbox:
+                extracted = _extract_tables_from_crop(page, expanded_crop_bbox)
+
+        for table, crop_box in extracted:
             table = _normalize_extracted_table(table)
             rows_key = tuple(tuple(row) for row in table)
             bbox_key = tuple(round(v, 2) for v in crop_box)
@@ -756,12 +841,14 @@ def extract_pdf_to_outputs(
     header_margin: float = 90,
     footer_margin: float = 40,
     pages: Optional[Sequence[int]] = None,
+    debug: bool = False,
     debug_watermark: bool = False,
 ) -> dict:
     out_md_dir.mkdir(parents=True, exist_ok=True)
 
     output_text = []
     output_tables = []
+    table_debug_pages: List[dict] = []
     rotated_debug: List[dict] = []
     selected_pages = set(int(page_no) for page_no in (pages or []))
 
@@ -780,6 +867,15 @@ def extract_pdf_to_outputs(
             if selected_pages and page_idx not in selected_pages:
                 _flush_pending()
                 continue
+            if debug:
+                table_debug_pages.append(
+                    _collect_table_drawing_debug(
+                        page,
+                        page_no=page_idx,
+                        header_margin=header_margin,
+                        footer_margin=footer_margin,
+                    )
+                )
             if debug_watermark:
                 rotated_debug.extend(_collect_rotated_text_debug(page, page_no=page_idx))
             tables = _extract_tables(page)
@@ -847,6 +943,15 @@ def extract_pdf_to_outputs(
     summary_file = out_md_dir / f"{stem}_summary.json"
     summary_file.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    debug_file: Optional[Path] = None
+    if debug:
+        debug_file = out_md_dir / f"{stem}_debug.json"
+        debug_payload = {
+            "pdf": str(pdf_path),
+            "pages": table_debug_pages,
+        }
+        debug_file.write_text(json.dumps(debug_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
     debug_watermark_file: Optional[Path] = None
     if debug_watermark:
         debug_watermark_file = out_md_dir / f"{stem}_watermark_debug.json"
@@ -858,6 +963,7 @@ def extract_pdf_to_outputs(
         "text_file": text_file,
         "md_file": md_file,
         "table_md_file": table_md_file,
+        "debug_file": debug_file,
         "debug_watermark_file": debug_watermark_file,
         "image_files": image_files,
         "summary": summary,
@@ -873,6 +979,7 @@ if __name__ == "__main__":  # basic manual run
     parser.add_argument("--out-image-dir", default="graph_pdf/artifacts/images")
     parser.add_argument("--stem", default="output")
     parser.add_argument("--pages", help="1-based pages like 1,3,5-8")
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--debug-watermark", action="store_true")
     args = parser.parse_args()
 
@@ -882,5 +989,6 @@ if __name__ == "__main__":  # basic manual run
         out_image_dir=Path(args.out_image_dir),
         stem=args.stem,
         pages=_parse_pages_spec(args.pages) if args.pages else None,
+        debug=args.debug,
         debug_watermark=args.debug_watermark,
     )
