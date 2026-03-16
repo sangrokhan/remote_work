@@ -309,13 +309,13 @@ def create_demo_pdf(path: Path) -> None:
 
     _draw_table(
         c,
-        x0=334,
+        x0=356,
         y0=325,
         header=("Group", "State", "Comment"),
         rows=right_rows,
         row_height=44,
-        column_positions=(84, 160),
-        table_width_tail=140.0,
+        column_positions=(70, 140),
+        table_width_tail=100.0,
     )
 
     # Spanning table starts on page 1 (header + first part).
@@ -369,7 +369,7 @@ def create_demo_pdf(path: Path) -> None:
     # A compact table near bottom keeps another size variant.
     _draw_table(
         c,
-        x0=360,
+        x0=392,
         y0=290,
         header=("Area", "Status", "Action"),
         rows=[
@@ -385,8 +385,8 @@ def create_demo_pdf(path: Path) -> None:
             ),
         ],
         row_height=40,
-        column_positions=(90, 170),
-        table_width_tail=110.0,
+        column_positions=(72, 130),
+        table_width_tail=90.0,
     )
 
     c.save()
