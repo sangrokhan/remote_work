@@ -118,24 +118,61 @@ def _round_segment(
     return payload
 
 
+def _normalize_band_segments(
+    segments: Sequence[dict],
+    start_key: str,
+    end_key: str,
+    orth_min_key: str,
+    orth_max_key: str,
+    tolerance: float = 1.0,
+) -> List[dict]:
+    normalized: List[dict] = []
+    ordered = sorted(
+        (dict(edge) for edge in segments),
+        key=lambda item: (float(item[start_key]), float(item[end_key])),
+    )
+    for edge in ordered:
+        if not normalized:
+            normalized.append(edge)
+            continue
+
+        current = normalized[-1]
+        current_start = float(current[start_key])
+        current_end = float(current[end_key])
+        edge_start = float(edge[start_key])
+        edge_end = float(edge[end_key])
+
+        # Fully-contained duplicates should only widen the orthogonal span.
+        if edge_start >= current_start and edge_end <= current_end:
+            current[orth_min_key] = min(float(current[orth_min_key]), float(edge[orth_min_key]))
+            current[orth_max_key] = max(float(current[orth_max_key]), float(edge[orth_max_key]))
+            continue
+
+        if edge_start - current_end <= tolerance:
+            current[end_key] = max(current_end, edge_end)
+            current[orth_min_key] = min(float(current[orth_min_key]), float(edge[orth_min_key]))
+            current[orth_max_key] = max(float(current[orth_max_key]), float(edge[orth_max_key]))
+            continue
+
+        normalized.append(edge)
+
+    return normalized
+
+
 def _merge_horizontal_band_segments(
     segments: Sequence[dict],
     tolerance: float = 1.0,
     body_top: float | None = None,
     body_bottom: float | None = None,
 ) -> List[dict]:
-    merged: List[dict] = []
-    for edge in sorted(segments, key=lambda item: (float(item["x0"]), float(item["x1"]))):
-        if not merged:
-            merged.append(dict(edge))
-            continue
-        previous = merged[-1]
-        if float(edge["x0"]) - float(previous["x1"]) <= tolerance:
-            previous["x1"] = max(float(previous["x1"]), float(edge["x1"]))
-            previous["top"] = min(float(previous["top"]), float(edge["top"]))
-            previous["bottom"] = max(float(previous["bottom"]), float(edge["bottom"]))
-            continue
-        merged.append(dict(edge))
+    merged = _normalize_band_segments(
+        segments,
+        start_key="x0",
+        end_key="x1",
+        orth_min_key="top",
+        orth_max_key="bottom",
+        tolerance=tolerance,
+    )
     return [_round_segment(edge, body_top=body_top, body_bottom=body_bottom) for edge in merged]
 
 
@@ -145,18 +182,14 @@ def _merge_vertical_band_segments(
     body_top: float | None = None,
     body_bottom: float | None = None,
 ) -> List[dict]:
-    merged: List[dict] = []
-    for edge in sorted(segments, key=lambda item: (float(item["top"]), float(item["bottom"]))):
-        if not merged:
-            merged.append(dict(edge))
-            continue
-        previous = merged[-1]
-        if float(edge["top"]) - float(previous["bottom"]) <= tolerance:
-            previous["x0"] = min(float(previous["x0"]), float(edge["x0"]))
-            previous["bottom"] = max(float(previous["bottom"]), float(edge["bottom"]))
-            previous["x1"] = max(float(previous["x1"]), float(edge["x1"]))
-            continue
-        merged.append(dict(edge))
+    merged = _normalize_band_segments(
+        segments,
+        start_key="top",
+        end_key="bottom",
+        orth_min_key="x0",
+        orth_max_key="x1",
+        tolerance=tolerance,
+    )
     return [_round_segment(edge, body_top=body_top, body_bottom=body_bottom) for edge in merged]
 
 
