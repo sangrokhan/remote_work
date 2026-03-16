@@ -225,6 +225,52 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
         self.assertFalse(should_merge)
 
+    def test_table_regions_split_when_components_have_different_vertical_edges(self) -> None:
+        page = SimpleNamespace(
+            width=600.0,
+            height=800.0,
+            horizontal_edges=[
+                {"x0": 100.0, "x1": 400.0, "top": 100.0, "bottom": 100.0},
+                {"x0": 100.0, "x1": 400.0, "top": 130.0, "bottom": 130.0},
+                {"x0": 100.0, "x1": 400.0, "top": 160.0, "bottom": 160.0},
+                {"x0": 420.0, "x1": 560.0, "top": 250.0, "bottom": 250.0},
+                {"x0": 420.0, "x1": 560.0, "top": 280.0, "bottom": 280.0},
+                {"x0": 420.0, "x1": 560.0, "top": 310.0, "bottom": 310.0},
+            ],
+            vertical_edges=[
+                {"x0": 180.0, "x1": 180.0, "top": 100.0, "bottom": 160.0},
+                {"x0": 280.0, "x1": 280.0, "top": 100.0, "bottom": 160.0},
+                {"x0": 470.0, "x1": 470.0, "top": 250.0, "bottom": 310.0},
+                {"x0": 520.0, "x1": 520.0, "top": 250.0, "bottom": 310.0},
+            ],
+        )
+
+        groups = _table_regions(page)
+
+        self.assertEqual(2, len(groups))
+
+    def test_table_regions_merge_when_components_share_vertical_edges(self) -> None:
+        page = SimpleNamespace(
+            width=600.0,
+            height=800.0,
+            horizontal_edges=[
+                {"x0": 100.0, "x1": 400.0, "top": 100.0, "bottom": 100.0},
+                {"x0": 100.0, "x1": 400.0, "top": 130.0, "bottom": 130.0},
+                {"x0": 100.0, "x1": 400.0, "top": 160.0, "bottom": 160.0},
+                {"x0": 102.0, "x1": 402.0, "top": 250.0, "bottom": 250.0},
+                {"x0": 102.0, "x1": 402.0, "top": 280.0, "bottom": 280.0},
+                {"x0": 102.0, "x1": 402.0, "top": 310.0, "bottom": 310.0},
+            ],
+            vertical_edges=[
+                {"x0": 180.0, "x1": 180.0, "top": 100.0, "bottom": 310.0},
+                {"x0": 280.0, "x1": 280.0, "top": 100.0, "bottom": 310.0},
+            ],
+        )
+
+        groups = _table_regions(page)
+
+        self.assertEqual(1, len(groups))
+
     def test_merge_horizontal_band_segments_handles_contained_and_overlapping_lines(self) -> None:
         segments = [
             {"x0": 10.0, "x1": 50.0, "top": 100.0, "bottom": 100.0},
