@@ -13,6 +13,9 @@ TableRows = List[List[str]]
 TableChunk = Tuple[TableRows, Tuple[float, float, float, float]]
 WATERMARK_ROTATION_MIN_DEGREES = 53.0
 WATERMARK_ROTATION_MAX_DEGREES = 57.0
+WATERMARK_GRAY_MIN = 0.88
+WATERMARK_GRAY_MAX = 0.96
+WATERMARK_GRAY_NEUTRAL_TOLERANCE = 0.03
 
 
 def _parse_pages_spec(spec: str) -> List[int]:
@@ -116,7 +119,11 @@ def _is_layout_artifact(text: str) -> bool:
     return any(marker in normalized for marker in (*header_markers, *footer_markers))
 
 def _is_gray_color(color: object) -> bool:
-    return isinstance(color, tuple) and len(color) >= 3 and all(abs(float(c) - 0.501961) <= 0.02 for c in color[:3])
+    if not isinstance(color, tuple) or len(color) < 3:
+        return False
+    rgb = [float(c) for c in color[:3]]
+    brightness = sum(rgb) / 3.0
+    return max(rgb) - min(rgb) <= WATERMARK_GRAY_NEUTRAL_TOLERANCE and WATERMARK_GRAY_MIN <= brightness <= WATERMARK_GRAY_MAX
 
 
 def _is_non_watermark_obj(obj: dict) -> bool:
