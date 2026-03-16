@@ -11,12 +11,10 @@ from pathlib import Path
 import pdfplumber
 
 from extractor import (
-    TABLE_REGION_X_PADDING,
     _detect_body_bounds,
     _char_rotation_degrees,
     _collect_rotated_text_debug,
     _collect_table_drawing_debug,
-    _expanded_table_crop_bbox,
     _extract_embedded_images,
     _is_gray_color,
     _is_non_watermark_obj,
@@ -186,14 +184,6 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
         self.assertEqual(40.0, body_top)
         self.assertEqual(710.0, body_bottom)
-
-    def test_table_region_crop_has_horizontal_padding(self) -> None:
-        crop_bbox = _expanded_table_crop_bbox(600.0, (100.0, 200.0, 420.0, 320.0))
-        self.assertEqual((100.0 - TABLE_REGION_X_PADDING, 200.0, 420.0 + TABLE_REGION_X_PADDING, 320.0), crop_bbox)
-
-    def test_table_region_crop_padding_clamps_to_page_width(self) -> None:
-        crop_bbox = _expanded_table_crop_bbox(600.0, (8.0, 200.0, 590.0, 320.0))
-        self.assertEqual((0.0, 200.0, 600.0, 320.0), crop_bbox)
 
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()

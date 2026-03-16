@@ -16,7 +16,6 @@ WATERMARK_ROTATION_MAX_DEGREES = 57.0
 WATERMARK_GRAY_MIN = 0.88
 WATERMARK_GRAY_MAX = 0.96
 WATERMARK_GRAY_NEUTRAL_TOLERANCE = 0.03
-TABLE_REGION_X_PADDING = 24.0
 
 
 def _parse_pages_spec(spec: str) -> List[int]:
@@ -609,20 +608,6 @@ def _extract_tables_from_crop(
     return []
 
 
-def _expanded_table_crop_bbox(
-    page_width: float,
-    crop_bbox: Tuple[float, float, float, float],
-    x_padding: float = TABLE_REGION_X_PADDING,
-) -> Tuple[float, float, float, float]:
-    x0, y0, x1, y1 = crop_bbox
-    return (
-        max(0.0, x0 - x_padding),
-        y0,
-        min(page_width, x1 + x_padding),
-        y1,
-    )
-
-
 def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
     page = _filter_page_for_extraction(page)
     seen_keys = set()
@@ -633,19 +618,13 @@ def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
     for x0, x1, lines in table_regions:
         y0 = min(edge["top"] for edge in lines) - 2
         y1 = max(edge["top"] for edge in lines) + 2
-        base_crop_bbox = (
+        crop_bbox = (
             max(0.0, x0),
             max(0.0, y0),
             min(page.width, x1),
             min(page.height, y1),
         )
-        extracted = _extract_tables_from_crop(page, base_crop_bbox)
-        if not extracted:
-            expanded_crop_bbox = _expanded_table_crop_bbox(page.width, base_crop_bbox)
-            if expanded_crop_bbox != base_crop_bbox:
-                extracted = _extract_tables_from_crop(page, expanded_crop_bbox)
-
-        for table, crop_box in extracted:
+        for table, crop_box in _extract_tables_from_crop(page, crop_bbox):
             table = _normalize_extracted_table(table)
             rows_key = tuple(tuple(row) for row in table)
             bbox_key = tuple(round(v, 2) for v in crop_box)
