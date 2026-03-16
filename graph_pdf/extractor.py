@@ -252,6 +252,67 @@ def _is_continuation_chunk(prev_rows: TableRows, curr_rows: TableRows) -> bool:
     return any(_normalize_text(cell) for cell in first[1:])
 
 
+def _extract_continuation_lines(
+    page_text: str,
+    repeated_header: str,
+    next_row_label: str,
+) -> List[str]:
+    lines = [line.strip() for line in str(page_text or "").splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    try:
+        start_idx = next(i for i, line in enumerate(lines) if _normalize_text(line) == _normalize_text(repeated_header))
+    except StopIteration:
+        return []
+
+    tail = lines[start_idx + 1 :]
+    if not tail:
+        return []
+
+    stop_idx = len(tail)
+    normalized_label = _normalize_text(next_row_label)
+    for i, line in enumerate(tail):
+        if _normalize_text(line).startswith(normalized_label):
+            stop_idx = i
+            break
+    return tail[:stop_idx]
+
+
+def _normalize_two_col_continuation_rows(rows: TableRows) -> TableRows:
+    return [["", str(row[0] or "").strip(), str(row[1] or "").strip()] for row in rows if row]
+
+
+def _maybe_merge_missing_first_column_chunk(
+    pending_table: TableRows | None,
+    current_rows: TableRows,
+    page_text: str,
+) -> TableRows | None:
+    if not pending_table or not current_rows:
+        return None
+    if len(pending_table[0]) != 3:
+        return None
+    if any(len(row) != 2 for row in current_rows):
+        return None
+
+    last_row = pending_table[-1]
+    if len(last_row) < 3 or not _normalize_text(last_row[1]):
+        return None
+
+    repeated_header = " ".join(str(cell or "").strip() for cell in pending_table[0]).strip()
+    continuation_lines = _extract_continuation_lines(page_text, repeated_header, str(current_rows[0][0] or ""))
+    if continuation_lines:
+        joiner = "\n" if str(last_row[2] or "").strip() else ""
+        last_row[2] = f"{last_row[2]}{joiner}" + "\n".join(continuation_lines)
+
+    normalized_rows = _normalize_two_col_continuation_rows(current_rows)
+    if not normalized_rows:
+        return None
+
+    pending_table.extend(normalized_rows)
+    return pending_table
+
+
 def _format_markdown_cell(value: str) -> str:
     lines = _normalize_cell_lines(value)
     if not lines:
@@ -558,6 +619,15 @@ def extract_pdf_to_outputs(
 
             if tables:
                 for table_rows, _bbox in tables:
+                    merged_missing_first = _maybe_merge_missing_first_column_chunk(
+                        pending_table,
+                        table_rows,
+                        page_text,
+                    )
+                    if merged_missing_first is not None:
+                        pending_table = merged_missing_first
+                        continue
+
                     continuation_rows = _split_repeated_header(pending_table or [], table_rows)
                     if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
                         pending_table.extend(continuation_rows)
