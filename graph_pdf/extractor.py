@@ -43,7 +43,36 @@ def _parse_pages_spec(spec: str) -> List[int]:
 def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
+def _char_rotation_degrees(char: dict) -> float:
+    matrix = char.get("matrix")
+    if not isinstance(matrix, tuple) or len(matrix) < 2:
+        return 0.0
+    return math.degrees(math.atan2(float(matrix[1]), float(matrix[0])))
 
+
+def _collect_rotated_text_debug(page: "pdfplumber.page.Page", page_no: int) -> List[dict]:
+    entries: List[dict] = []
+    for char in getattr(page, "chars", []):
+        rotation = _char_rotation_degrees(char)
+        if abs(rotation) <= 0.1:
+            continue
+        entries.append(
+            {
+                "page": page_no,
+                "text": str(char.get("text", "")),
+                "rotation": rotation,
+                "size": float(char.get("size", 0.0)),
+                "x0": float(char.get("x0", 0.0)),
+                "x1": float(char.get("x1", 0.0)),
+                "top": float(char.get("top", 0.0)),
+                "bottom": float(char.get("bottom", 0.0)),
+                "matrix": list(char.get("matrix", ())),
+                "non_stroking_color": char.get("non_stroking_color"),
+                "stroking_color": char.get("stroking_color"),
+                "fontname": char.get("fontname"),
+            }
+        )
+    return entries
 def _repair_watermark_bleed(text: str) -> str:
     # Some rotated/conflicting watermark text can leak as a trailing single letter.
     text = re.sub(r"\s+[A-Za-z]$", "", text)
@@ -84,14 +113,6 @@ def _is_layout_artifact(text: str) -> bool:
     )
     return any(marker in normalized for marker in (*header_markers, *footer_markers))
 
-
-def _char_rotation_degrees(obj: dict) -> float | None:
-    matrix = obj.get("matrix")
-    if not isinstance(matrix, tuple) or len(matrix) < 2:
-        return None
-    return math.degrees(math.atan2(float(matrix[1]), float(matrix[0])))
-
-
 def _is_gray_color(color: object) -> bool:
     return isinstance(color, tuple) and len(color) >= 3 and all(abs(float(c) - 0.501961) <= 0.02 for c in color[:3])
 
@@ -102,7 +123,7 @@ def _is_non_watermark_obj(obj: dict) -> bool:
 
     angle = _char_rotation_degrees(obj)
     color = obj.get("non_stroking_color") or obj.get("stroking_color")
-    is_gray_watermark = angle is not None and abs(angle - 55.0) <= 1.0 and _is_gray_color(color)
+    is_gray_watermark = abs(angle - 55.0) <= 1.0 and _is_gray_color(color)
     return not is_gray_watermark
 
 
@@ -726,11 +747,13 @@ def extract_pdf_to_outputs(
     header_margin: float = 90,
     footer_margin: float = 40,
     pages: Optional[Sequence[int]] = None,
+    debug_watermark: bool = False,
 ) -> dict:
     out_md_dir.mkdir(parents=True, exist_ok=True)
 
     output_text = []
     output_tables = []
+    rotated_debug: List[dict] = []
     selected_pages = set(int(page_no) for page_no in (pages or []))
 
     pending_table: Optional[TableRows] = None
@@ -748,6 +771,8 @@ def extract_pdf_to_outputs(
             if selected_pages and page_idx not in selected_pages:
                 _flush_pending()
                 continue
+            if debug_watermark:
+                rotated_debug.extend(_collect_rotated_text_debug(page, page_no=page_idx))
             tables = _extract_tables(page)
             full_page_text = _extract_body_text(
                 page,
@@ -813,12 +838,18 @@ def extract_pdf_to_outputs(
     summary_file = out_md_dir / f"{stem}_summary.json"
     summary_file.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    debug_watermark_file: Optional[Path] = None
+    if debug_watermark:
+        debug_watermark_file = out_md_dir / f"{stem}_watermark_debug.json"
+        debug_watermark_file.write_text(json.dumps(rotated_debug, ensure_ascii=False, indent=2), encoding="utf-8")
+
     return {
         "markdown": markdown,
         "table_markdown": table_markdown,
         "text_file": text_file,
         "md_file": md_file,
         "table_md_file": table_md_file,
+        "debug_watermark_file": debug_watermark_file,
         "image_files": image_files,
         "summary": summary,
     }
@@ -833,6 +864,7 @@ if __name__ == "__main__":  # basic manual run
     parser.add_argument("--out-image-dir", default="graph_pdf/artifacts/images")
     parser.add_argument("--stem", default="output")
     parser.add_argument("--pages", help="1-based pages like 1,3,5-8")
+    parser.add_argument("--debug-watermark", action="store_true")
     args = parser.parse_args()
 
     extract_pdf_to_outputs(
@@ -841,4 +873,5 @@ if __name__ == "__main__":  # basic manual run
         out_image_dir=Path(args.out_image_dir),
         stem=args.stem,
         pages=_parse_pages_spec(args.pages) if args.pages else None,
+        debug_watermark=args.debug_watermark,
     )
