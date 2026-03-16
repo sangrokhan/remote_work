@@ -69,7 +69,19 @@ def _extract_body_text(
     footer_margin: float,
 ) -> str:
     body_bbox = (0, footer_margin, page.width, page.height - header_margin)
-    body_page = page.crop(body_bbox)
+
+    def _is_body_char(obj: dict) -> bool:
+        if obj.get("object_type") != "char":
+            return True
+
+        size = float(obj.get("size", 0))
+        color = obj.get("non_stroking_color") or obj.get("stroking_color")
+        is_gray_watermark = size >= 40 and isinstance(color, tuple) and len(color) >= 3 and all(
+            abs(float(c) - 0.501961) <= 0.02 for c in color
+        )
+        return not is_gray_watermark
+
+    body_page = page.filter(_is_body_char).crop(body_bbox)
     raw = body_page.extract_text(x_tolerance=1.5, y_tolerance=2) or ""
     lines = []
     for line in raw.splitlines():
