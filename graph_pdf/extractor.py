@@ -645,12 +645,20 @@ def _body_excluded_bboxes(
     return excluded
 
 
-def _extract_embedded_images(pdf_path: Path, out_image_dir: Path, stem: str) -> List[Path]:
+def _extract_embedded_images(
+    pdf_path: Path,
+    out_image_dir: Path,
+    stem: str,
+    pages: Optional[Sequence[int]] = None,
+) -> List[Path]:
     out_image_dir.mkdir(parents=True, exist_ok=True)
 
     image_files: List[Path] = []
+    selected_pages = set(int(page_no) for page_no in (pages or []))
     reader = PdfReader(str(pdf_path))
     for page_idx, page in enumerate(reader.pages, start=1):
+        if selected_pages and page_idx not in selected_pages:
+            continue
         for image_idx, image_file in enumerate(page.images, start=1):
             image_name = Path(image_file.name or f"image_{image_idx}").name
             suffix = Path(image_name).suffix or ".bin"
@@ -738,7 +746,12 @@ def extract_pdf_to_outputs(
     md_file.write_text(markdown, encoding="utf-8")
     table_md_file.write_text(table_markdown, encoding="utf-8")
 
-    image_files = _extract_embedded_images(pdf_path=pdf_path, out_image_dir=out_image_dir, stem=stem)
+    image_files = _extract_embedded_images(
+        pdf_path=pdf_path,
+        out_image_dir=out_image_dir,
+        stem=stem,
+        pages=pages,
+    )
 
     summary = {
         "pdf": str(pdf_path),
