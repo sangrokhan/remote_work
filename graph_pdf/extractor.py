@@ -727,7 +727,7 @@ def _table_regions(
     for edge in edges:
         if edge["top"] < 80 or edge["top"] > page.height - 80:
             continue
-        if edge["x1"] - edge["x0"] < 120:
+        if edge["x1"] - edge["x0"] < 50:
             continue
 
         placed = False
