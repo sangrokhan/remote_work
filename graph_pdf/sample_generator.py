@@ -302,14 +302,14 @@ def create_demo_pdf(path: Path) -> None:
         y0=320,
         header=("Item", "Qty", "Price"),
         rows=left_rows,
-        row_height=38,
+        row_height=30,
         column_positions=(72, 160),
         table_width_tail=150.0,
     )
 
     _draw_table(
         c,
-        x0=356,
+        x0=392,
         y0=325,
         header=("Group", "State", "Comment"),
         rows=right_rows,
@@ -322,11 +322,11 @@ def create_demo_pdf(path: Path) -> None:
     _draw_table(
         c,
         x0=32,
-        y0=190,
+        y0=154,
         header=spanning_header,
         rows=spanning_rows_page1[:4],
-        row_height=46,
-        column_positions=(110, 240),
+        row_height=34,
+        column_positions=(82, 170),
         table_width_tail=170.0,
         include_outer_vertical=True,
     )
@@ -360,7 +360,7 @@ def create_demo_pdf(path: Path) -> None:
         header=(),
         rows=spanning_rows_page1[4:] + spanning_rows_page2,
         row_height=46,
-        column_positions=(110, 240),
+        column_positions=(82, 170),
         table_width_tail=170.0,
         include_header=False,
         include_outer_vertical=True,
