@@ -330,6 +330,16 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(3, payload["tables"][0]["col_count"])
         self.assertEqual(3, payload["tables"][1]["row_count"])
         self.assertEqual(3, payload["tables"][1]["col_count"])
+        self.assertTrue(payload["tables"][0]["horizontal_segments"])
+        self.assertTrue(payload["tables"][0]["vertical_segments"])
+        self.assertEqual(
+            {"x0", "x1", "top", "bottom"},
+            set(payload["tables"][0]["horizontal_segments"][0].keys()),
+        )
+        self.assertEqual(
+            {"x0", "x1", "top", "bottom"},
+            set(payload["tables"][0]["vertical_segments"][0].keys()),
+        )
 
     def test_debug_writes_table_drawing_log(self) -> None:
         tmp = tempfile.TemporaryDirectory()
