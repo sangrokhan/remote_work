@@ -1,0 +1,98 @@
+{
+  "watermark_text": "CONFIDENTIAL",
+  "header_left": [
+    "Graph PDF Demo Header: sample source",
+    "Prepared for table + text extraction tests"
+  ],
+  "header_right": [
+    "Page {page_no}",
+    "Header checks: layout boundary review"
+  ],
+  "footer_left": [
+    "Graph PDF Demo Footer / Left",
+    "Footer details: keep header/footer clean"
+  ],
+  "footer_right": [
+    "Footer line 1: generated data",
+    "Footer page marker: {page_no}"
+  ],
+  "body": {
+    "intro": [
+      "Chapter 1: Deep Structure Verification",
+      "This section starts a body flow with multiple lines and clear indentation to test ordered extraction.",
+      "- 1st level bullet: layout and spacing checks",
+      "- nested detail: line 2 confirms indentation",
+      "- deeper detail: line 3 confirms paragraph wrap and line breaks",
+      "The extraction should remove header/footer and watermark while preserving indented body content.",
+      "- level 1: body copy, one of many lines",
+      "- level 2: second nested line",
+      "- level 3: third line to test depth",
+      "Body text here is cleaned for ingestion by GraphRAG or similar index pipelines."
+    ],
+    "after_item_table": [
+      "The first table must fit entirely inside body bounds and end before the footer region.",
+      "After table, body lines must continue and never overlap following elements."
+    ],
+    "after_stage_table": [
+      "Page 2 continues the flow if table rows spill over from the first table page.",
+      "This paragraph is intentionally after the spanning table so table continuation remains earlier on the next page.",
+      "- 1st-level continuation bullet"
+    ],
+    "footer_lines": [
+      "Appendix chapter line for verification:",
+      "- 1st level appendix bullet",
+      "- 2nd level appendix bullet",
+      "Final lines ensure normal paragraph flow does not overlap completed tables."
+    ]
+  },
+  "tables": [
+    {
+      "id": "item",
+      "columns": ["Item", "Qty", "Price"],
+      "rows": [
+        ["Laptop\n- line 1", "12", "$120"],
+        ["Keyboard\n- line 1\n- line 2", "8", "$32"],
+        ["Monitor", "5\n- line A\n- line B", "$260"],
+        ["Mouse", "18\n- optical\n- silent click", "$8"],
+        ["Docking station compatibility review package for extended desktop deployment approval", "3", "$45\n- includes\n- 2 ports"]
+      ]
+    },
+    {
+      "id": "stage",
+      "columns": ["Stage", "Team", "Notes"],
+      "rows": [
+        ["Phase A", "Discovery", "Kickoff scope lock\n- gather baseline\n- define risks\n- align dependencies"],
+        ["", "Design", "UX skeleton review\n- navigation\n- component map\n- spacing audit"],
+        ["", "Frontend", "Prototype pass\n- mobile spec\n- accessibility path\n- responsive breakpoints"],
+        ["", "Backend", "Core API design\n- auth contract\n- payload schema\n- endpoint ownership"],
+        ["", "QA", "Quality validation\n- smoke\n- integration matrix\n- rollback checks"],
+        ["", "Docs", "Scenario matrix draft\n- migration\n- release notes\n- stakeholder sync"],
+        ["", "Release Notes", "Publish cadence plan\n- draft audience\n- review windows\n- archive distribution"],
+        ["Phase B", "Operations", "Runbook draft\n- infra checklist\n- alert thresholds\n- on-call routing"],
+        ["", "Security", "Threat model\n- token handling\n- permission matrix\n- incident runbook"],
+        ["", "Release", "Scenario matrix\n- smoke\n- negative cases\n- release windows"],
+        ["", "Platform", "Support playbooks\n- upgrade path\n- dependency freeze\n- fallback scripts"],
+        ["", "Observability", "Dashboard rollout\n- metric taxonomy\n- error alert policy\n- tracing contracts"],
+        ["", "Performance", "Scale and profiling pass\n- load profile\n- memory pressure\n- queue saturation targets"],
+        ["", "Compliance", "Policy sweep\n- controls list\n- retention rules\n- audit trails"],
+        ["Phase C", "Documentation", "Publish handoff pack\n- API docs\n- release playbook\n- migration path"],
+        ["", "Legal", "Terms and compliance checks\n- consent language review for regional disclosures and exception handling\n- governance review with escalation routing for disputed policy acknowledgements\n- retention policy alignment for legal hold scheduling and archival review windows\n- policy exception register with owner assignment and remediation due dates\n- cross-border review queue for regional transfer clauses and jurisdiction checks\n- signature archive retention including delegated approvals and fallback attestations\n- sign-off archive retention for release packets, evidence bundles, and renewal notices\n- contract appendix verification for special terms, carve-outs, and amendment history"],
+        ["", "Accessibility", "Review deep pass\n- contrast baseline\n- keyboard order\n- narration labels"],
+        ["", "Operations", "Post-launch tasks\n- monitor alerts\n- close checklist\n- confirm rollback route"],
+        ["", "Finance", "Invoice trail\n- line item reconciliation\n- grant tracking\n- budget burn alerts"]
+      ]
+    },
+    {
+      "id": "area",
+      "columns": ["Area", "Status", "Action"],
+      "rows": [
+        ["Docs", "READY", "Finalize\n- sample\n- archive"],
+        ["QA", "TODO", "Confirm\n- edge case\n- fallback"],
+        ["Ops", "OK", "Archive path\n- cleanup\n- index refresh"]
+      ]
+    }
+  ],
+  "expectations": {
+    "page_count": 3
+  }
+}
