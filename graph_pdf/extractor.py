@@ -771,46 +771,100 @@ def _table_regions(
     y_tolerance: float = 65.0,
     min_lines: int = 3,
 ) -> List[tuple]:
-    candidates = []
-    edges = sorted(page.horizontal_edges, key=lambda edge: edge.get("top", 0.0))
-    for edge in edges:
-        if edge["top"] < 80 or edge["top"] > page.height - 80:
-            continue
-        if edge["x1"] - edge["x0"] < 50:
-            continue
+    del y_tolerance  # table selection now relies on edge connectivity, not vertical-gap grouping
 
-        placed = False
-        for region in candidates:
-            same_band = abs(float(edge["top"]) - float(region["last_top"])) <= y_tolerance
-            if not same_band:
-                continue
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
 
-            region["lines"].append(edge)
-            region["y_min"] = min(region["y_min"], edge["top"])
-            region["y_max"] = max(region["y_max"], edge["top"])
-            region["last_top"] = edge["top"]
-            region["x0"] = min(region["x0"], edge["x0"])
-            region["x1"] = max(region["x1"], edge["x1"])
-            placed = True
-            break
-
-        if not placed:
-            candidates.append(
-                {
-                    "x0": edge["x0"],
-                    "x1": edge["x1"],
-                    "y_min": edge["top"],
-                    "y_max": edge["top"],
-                    "last_top": edge["top"],
-                    "lines": [edge],
-                }
-            )
-
-    return [
-        (group["x0"], group["x1"], group["lines"])
-        for group in candidates
-        if len(group["lines"]) >= min_lines
+    horizontal_edges = [
+        edge
+        for edge in page.horizontal_edges
+        if float(edge["x1"]) - float(edge["x0"]) >= 50.0
+        and float(edge["bottom"]) > body_top
+        and float(edge["top"]) < body_bottom
     ]
+    vertical_edges = [
+        edge
+        for edge in page.vertical_edges
+        if float(edge["bottom"]) > body_top
+        and float(edge["top"]) < body_bottom
+    ]
+
+    merged_h = []
+    for group in _build_segment_groups(
+        horizontal_edges,
+        axis_key="top",
+        merge_fn=_merge_horizontal_band_segments,
+        tolerance=1.0,
+    ):
+        merged_h.extend(group["merged_segments"])
+
+    merged_v = []
+    for group in _build_segment_groups(
+        vertical_edges,
+        axis_key="x0",
+        merge_fn=_merge_vertical_band_segments,
+        tolerance=1.0,
+    ):
+        merged_v.extend(group["merged_segments"])
+
+    if not merged_h:
+        return []
+
+    graph: List[set[int]] = [set() for _ in range(len(merged_h))]
+    component_verticals: List[set[int]] = [set() for _ in range(len(merged_h))]
+    tolerance = 1.0
+
+    for h_idx, h_edge in enumerate(merged_h):
+        for v_idx, v_edge in enumerate(merged_v):
+            intersects = (
+                float(v_edge["x0"]) >= float(h_edge["x0"]) - tolerance
+                and float(v_edge["x0"]) <= float(h_edge["x1"]) + tolerance
+                and float(h_edge["top"]) >= float(v_edge["top"]) - tolerance
+                and float(h_edge["top"]) <= float(v_edge["bottom"]) + tolerance
+            )
+            if not intersects:
+                continue
+            component_verticals[h_idx].add(v_idx)
+
+    for i in range(len(merged_h)):
+        for j in range(i + 1, len(merged_h)):
+            if component_verticals[i] and component_verticals[j]:
+                shared_vertical = component_verticals[i].intersection(component_verticals[j])
+                if shared_vertical:
+                    graph[i].add(j)
+                    graph[j].add(i)
+
+    visited = set()
+    groups: List[tuple] = []
+    for start in range(len(merged_h)):
+        if start in visited:
+            continue
+        stack = [start]
+        component = []
+        shared_verticals = set()
+        while stack:
+            idx = stack.pop()
+            if idx in visited:
+                continue
+            visited.add(idx)
+            component.append(idx)
+            shared_verticals.update(component_verticals[idx])
+            stack.extend(graph[idx] - visited)
+
+        component_lines = [merged_h[idx] for idx in component]
+        if len(component_lines) < min_lines:
+            continue
+        if not shared_verticals:
+            continue
+
+        x0 = min(float(edge["x0"]) for edge in component_lines)
+        x1 = max(float(edge["x1"]) for edge in component_lines)
+        if shared_verticals:
+            x0 = min(x0, *(float(merged_v[idx]["x0"]) for idx in shared_verticals))
+            x1 = max(x1, *(float(merged_v[idx]["x1"]) for idx in shared_verticals))
+        groups.append((x0, x1, component_lines))
+
+    return sorted(groups, key=lambda item: min(float(edge["top"]) for edge in item[2]))
 
 
 def _extract_tables_from_crop(
