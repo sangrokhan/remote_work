@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 
 import pdfplumber
 
-from extractor import _looks_like_table, _normalize_cell_lines, _parse_pages_spec, extract_pdf_to_outputs
+from extractor import (
+    _extract_embedded_images,
+    _looks_like_table,
+    _normalize_cell_lines,
+    _parse_pages_spec,
+    extract_pdf_to_outputs,
+)
 from verify import _extract_markdown_tables
 from sample_fixture import load_demo_fixture
 from sample_generator import create_demo_pdf
@@ -141,6 +149,31 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertIn("### Page 3 table 1", result["table_markdown"])
         self.assertIn("### Page 3 table 2", result["table_markdown"])
         self.assertEqual(2, result["summary"]["table_count"])
+        self.assertEqual(1, len(result["image_files"]))
+        self.assertTrue(result["image_files"][0].name.startswith("sample_page_03_image_"))
+
+    def test_extract_embedded_images_respects_selected_pages(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        out_dir = Path(tmp.name) / "images"
+        fake_reader = SimpleNamespace(
+            pages=[
+                SimpleNamespace(images=[SimpleNamespace(name="p1.png", data=b"one")]),
+                SimpleNamespace(images=[SimpleNamespace(name="p2.png", data=b"two")]),
+                SimpleNamespace(images=[SimpleNamespace(name="p3.png", data=b"three")]),
+            ]
+        )
+
+        with patch("extractor.PdfReader", return_value=fake_reader):
+            image_files = _extract_embedded_images(
+                pdf_path=Path("ignored.pdf"),
+                out_image_dir=out_dir,
+                stem="sample",
+                pages=[2],
+            )
+
+        self.assertEqual(1, len(image_files))
+        self.assertEqual("sample_page_02_image_01.png", image_files[0].name)
 
     def test_spanning_stage_table_merges_into_one_block(self) -> None:
         markdown = self._extract_table_markdown()
@@ -170,6 +203,7 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(table_markdown, table_md_file.read_text(encoding="utf-8"))
         self.assertTrue(table_md_file.name.endswith("_table.md"))
         self.assertIn("### Page 1 table 1", table_markdown)
+        self.assertEqual(2, len(result["image_files"]))
 
     def test_stage_table_repeats_header_after_page_break(self) -> None:
         pdf_path = self._build_pdf()

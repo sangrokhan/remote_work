@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
+from io import BytesIO
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
@@ -12,6 +15,9 @@ from sample_fixture import load_demo_fixture
 
 LineItem = Tuple[str, int]
 TableRow = Tuple[str, str, str]
+_SMALL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z/C/HwAHAQL/5ncLrgAAAABJRU5ErkJggg=="
+)
 
 def _fixture_tables() -> Dict[str, Tuple[Tuple[str, str, str], Tuple[TableRow, ...]]]:
     fixture = load_demo_fixture()
@@ -111,6 +117,20 @@ class DemoPdfBuilder:
         self.canvas = canvas.Canvas(str(output_path), pagesize=letter)
         self._start_new_page()
 
+    def _draw_small_page_image(self) -> None:
+        if self.page_no not in (1, 3):
+            return
+        image = ImageReader(BytesIO(_SMALL_PNG))
+        self.canvas.drawImage(
+            image,
+            self.width - self.margin_x - 20,
+            self.body_top - 10,
+            width=12,
+            height=12,
+            preserveAspectRatio=True,
+            mask="auto",
+        )
+
     def _start_new_page(self) -> None:
         if self.page_no > 0:
             self.canvas.showPage()
@@ -151,6 +171,7 @@ class DemoPdfBuilder:
         )
 
         self._draw_watermark(self.width / 2, self.height / 2, size=44)
+        self._draw_small_page_image()
 
         self.cursor_y = self.body_top
 
