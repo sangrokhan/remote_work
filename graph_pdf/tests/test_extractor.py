@@ -44,7 +44,10 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertIn("Qty: 12", markdown)
         self.assertIn("Price: $120", markdown)
         self.assertIn("Area: Docs", markdown)
-        self.assertIn("Action: Finalize", markdown)
+        self.assertIn(
+            "Action: Finalize archival checklist for downstream handoff review before publishing",
+            markdown,
+        )
         self.assertIn("  - sample", markdown)
         self.assertIn("  - archive", markdown)
 

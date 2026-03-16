@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
 
@@ -156,7 +157,11 @@ STAGE_ROWS: Tuple[TableRow, ...] = (
 )
 
 COMPACT_ROWS: Tuple[TableRow, ...] = (
-    ("Docs", "READY", "Finalize\n- sample\n- archive"),
+    (
+        "Docs",
+        "READY",
+        "Finalize archival checklist for downstream handoff review before publishing\n- sample\n- archive",
+    ),
     ("QA", "TODO", "Confirm\n- edge case\n- fallback"),
     ("Ops", "OK", "Archive path\n- cleanup\n- index refresh"),
 )
@@ -219,10 +224,42 @@ def _split_cell_lines(text: str) -> List[str]:
     return [line.strip() for line in lines]
 
 
+def _wrap_visual_line(text: str, max_width: float, font_name: str, font_size: float) -> List[str]:
+    words = str(text or "").split()
+    if not words:
+        return [""]
+
+    lines: List[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        if pdfmetrics.stringWidth(candidate, font_name, font_size) <= max_width:
+            current = candidate
+            continue
+        lines.append(current)
+        current = word
+    lines.append(current)
+    return lines
+
+
+def _layout_cell_lines(text: str, max_width: float, font_name: str, font_size: float) -> List[str]:
+    rendered: List[str] = []
+    for logical_line in _split_cell_lines(text):
+        if not logical_line:
+            rendered.append("")
+            continue
+        rendered.extend(_wrap_visual_line(logical_line, max_width, font_name, font_size))
+    return rendered or [""]
+
+
 def _estimate_row_heights(rows: Sequence[TableRow], col_widths: Sequence[float], font_size: float) -> List[float]:
     heights: List[float] = []
+    font_name = "Helvetica"
     for row in rows:
-        wrapped_lengths = [_split_cell_lines(cell) for cell in row]
+        wrapped_lengths = [
+            _layout_cell_lines(cell, max(col_width - 8.0, 24.0), font_name, font_size)
+            for cell, col_width in zip(row, col_widths)
+        ]
         lines = max(len(lines_) for lines_ in wrapped_lengths)
         content_h = lines * (font_size + 2.0)
         heights.append(max(24.0, content_h + 4.0))
@@ -560,8 +597,8 @@ class DemoPdfBuilder:
 
         for row, row_h in zip(rows, row_heights):
             wrap_texts = [
-                _split_cell_lines(cell)
-                for cell in row
+                _layout_cell_lines(cell, max(col_width - 8.0, 24.0), "Helvetica", row_font_size)
+                for cell, col_width in zip(row, col_widths)
             ]
             max_line_count = max(len(t) for t in wrap_texts)
             row_baseline_top = row_cursor - 11
