@@ -140,7 +140,7 @@ class DemoPdfBuilder:
         row_font_size: float = 8.0,
         include_header: bool = True,
         split_pages: bool = True,
-        include_outer_vertical: bool = True,
+        include_outer_vertical: bool = False,
         with_watermark: bool = False,
     ) -> None:
         if not rows:
@@ -408,7 +408,7 @@ def create_demo_pdf(path: Path) -> None:
         rows=item_rows,
         include_header=True,
         split_pages=False,
-        include_outer_vertical=True,
+        include_outer_vertical=False,
         with_watermark=True,
     )
     builder.add_gap(24.0)
@@ -426,7 +426,7 @@ def create_demo_pdf(path: Path) -> None:
         rows=stage_rows,
         include_header=True,
         split_pages=True,
-        include_outer_vertical=True,
+        include_outer_vertical=False,
         with_watermark=False,
     )
     builder.add_gap(24.0)
@@ -444,7 +444,7 @@ def create_demo_pdf(path: Path) -> None:
         rows=compact_rows,
         include_header=True,
         split_pages=False,
-        include_outer_vertical=True,
+        include_outer_vertical=False,
         with_watermark=False,
     )
     builder.add_gap(24.0)

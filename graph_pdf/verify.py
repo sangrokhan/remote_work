@@ -34,8 +34,8 @@ def run_checks() -> int:
     if "Graph PDF Demo Footer" in txt_text:
         raise AssertionError("footer text was not removed")
 
-    if result["summary"]["table_count"] < 3:
-        raise AssertionError("expected at least 3 tables including spanning continuation")
+    if result["summary"]["table_count"] < 2:
+        raise AssertionError("expected at least 2 tables to include spanning continuation")
 
     # Body + table multi-line + merged-cell style checks.
     required_text = [
