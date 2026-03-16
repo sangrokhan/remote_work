@@ -40,36 +40,17 @@ def _extract_markdown_tables(markdown_text: str) -> List[List[List[str]]]:
             i += 1
 
         rows: List[List[str]] = []
-        current_row: List[str] = []
-        current_cell_idx = -1
         for raw in table_lines:
             stripped = raw.strip()
-            if not stripped:
+            if not stripped or not stripped.startswith("|"):
                 continue
-            if stripped.startswith("- Row "):
-                if current_row:
-                    rows.append(current_row)
-                current_row = []
-                current_cell_idx = -1
+            cells = [part.strip().replace("<br>", "\n") for part in stripped.strip("|").split("|")]
+            if all(cell == "---" for cell in cells):
                 continue
-
-            field_match = re.match(r"^\s{2}[^:]+:\s*(.*)$", raw)
-            if field_match:
-                current_row.append(field_match.group(1).strip())
-                current_cell_idx = len(current_row) - 1
-                continue
-
-            bullet_match = re.match(r"^\s{2}(- .+)$", raw)
-            if bullet_match and current_row and current_cell_idx >= 0:
-                current_row[current_cell_idx] = (
-                    current_row[current_cell_idx] + "\n" + bullet_match.group(1).strip()
-                ).strip()
-
-        if current_row:
-            rows.append(current_row)
+            rows.append(cells)
 
         if rows:
-            tables.append(rows)
+            tables.append(rows[1:])
 
     return tables
 

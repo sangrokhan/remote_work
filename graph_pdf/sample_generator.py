@@ -137,7 +137,7 @@ STAGE_ROWS: Tuple[TableRow, ...] = (
     (
         "",
         "Legal",
-        "Terms and compliance checks\n- consent language\n- governance review\n- retention policy",
+        "Terms and compliance checks\n- consent language\n- governance review\n- retention policy\n- policy exception register\n- cross-border review queue\n- signature archive retention\n- sign-off archive retention",
     ),
     (
         "",
@@ -378,6 +378,7 @@ class DemoPdfBuilder:
         include_outer_vertical: bool = False,
         with_watermark: bool = False,
         merge_first_col: bool = False,
+        merged_first_col_spans: Sequence[Tuple[int, int]] | None = None,
     ) -> None:
         if not rows:
             return
@@ -456,6 +457,7 @@ class DemoPdfBuilder:
                 header_font_size=header_font_size,
                 row_font_size=row_font_size,
                 merge_first_col=merge_first_col,
+                merged_first_col_spans=merged_first_col_spans,
             )
 
             self.cursor_y = table_bottom
@@ -479,6 +481,7 @@ class DemoPdfBuilder:
         include_outer_vertical: bool,
         include_header: bool,
         merge_first_col: bool,
+        merged_first_col_spans: Sequence[Tuple[int, int]] | None,
         header_font_size: float,
         row_font_size: float,
     ) -> None:
@@ -495,25 +498,26 @@ class DemoPdfBuilder:
         # A merged span starts with a non-empty first column and continues while the
         # first-column cell remains empty.
         if merge_first_col and rows:
-            span_starts: List[int] = []
-            span_ends: List[int] = []
-            i = 0
-            while i < len(rows):
-                if str(rows[i][0]).strip():
-                    start = i
-                    end = i
-                    j = i + 1
-                    while j < len(rows) and not str(rows[j][0]).strip():
-                        end = j
-                        j += 1
-                    if end > start:
-                        span_starts.append(start)
-                        span_ends.append(end)
-                    i = j
-                else:
-                    i += 1
+            if merged_first_col_spans is not None:
+                spans = list(merged_first_col_spans)
+            else:
+                spans = []
+                i = 0
+                while i < len(rows):
+                    if str(rows[i][0]).strip():
+                        start = i
+                        end = i
+                        j = i + 1
+                        while j < len(rows) and not str(rows[j][0]).strip():
+                            end = j
+                            j += 1
+                        if end > start:
+                            spans.append((start, end))
+                        i = j
+                    else:
+                        i += 1
 
-            if span_starts:
+            if spans:
                 self.canvas.saveState()
                 fill_color = colors.HexColor("#eceff6")
                 border_color = colors.HexColor("#7c8799")
@@ -521,7 +525,7 @@ class DemoPdfBuilder:
                 self.canvas.setStrokeColor(border_color)
                 self.canvas.setLineWidth(0.7)
                 body_top = y_top - header_h
-                for start, end in zip(span_starts, span_ends):
+                for start, end in spans:
                     y_span_top = body_top - row_tops[start]
                     y_span_bottom = body_top - row_tops[end + 1]
                     group_height = y_span_top - y_span_bottom
@@ -540,7 +544,6 @@ class DemoPdfBuilder:
                     self.canvas.setStrokeColor(border_color)
                     self.canvas.line(x, y_span_top, col_x[0], y_span_top)
                     self.canvas.line(x, y_span_bottom, col_x[0], y_span_bottom)
-                    self.canvas.line(x, y_span_top, x, y_span_bottom)
                     self.canvas.line(col_x[0], y_span_top, col_x[0], y_span_bottom)
                 self.canvas.restoreState()
 
@@ -559,12 +562,11 @@ class DemoPdfBuilder:
         for idx, row_h in enumerate(row_heights):
             next_row_merges_first_col = False
             if idx + 1 < len(rows):
-                next_row = rows[idx + 1]
-                next_row_merges_first_col = bool(next_row) and not str(next_row[0]).strip()
-
-            if idx == 0 and not include_header and rows and str(rows[0][0]).strip():
-                # Non-header continuation chunks keep first row text start as normal.
-                next_row_merges_first_col = next_row_merges_first_col
+                if merged_first_col_spans is not None:
+                    next_row_merges_first_col = any(start <= idx < end for start, end in merged_first_col_spans)
+                else:
+                    next_row = rows[idx + 1]
+                    next_row_merges_first_col = bool(next_row) and not str(next_row[0]).strip()
 
             if next_row_merges_first_col:
                 self.canvas.line(col_x[0], y, x + body_width, y)
@@ -607,6 +609,53 @@ class DemoPdfBuilder:
 
             row_cursor -= row_h
 
+    def add_stage_demo_table(self) -> None:
+        stage_header = ("Stage", "Team", "Notes")
+        stage_rows = list(DEMO_TABLES["stage"][1])
+
+        page_one_rows = stage_rows[0:2]
+        page_two_rows = stage_rows[2:7] + stage_rows[7:11]
+        legal_prefix = (
+            "Terms and compliance checks\n- consent language\n- governance review\n- retention policy\n- policy exception register"
+        )
+        legal_suffix = (
+            "- cross-border review queue\n- signature archive retention\n- sign-off archive retention"
+        )
+        page_three_rows = [
+            stage_rows[11],
+            stage_rows[12],
+            stage_rows[13],
+            stage_rows[14],
+            ("", "Legal", legal_prefix),
+        ]
+        page_four_rows = [
+            ("", "", legal_suffix),
+            stage_rows[16],
+            stage_rows[17],
+            stage_rows[18],
+        ]
+
+        fragments = (
+            (page_one_rows, ((0, 1),)),
+            (page_two_rows, ((0, 4), (5, 8))),
+            (page_three_rows, ((0, 2), (3, 4))),
+            (page_four_rows, ((0, 3),)),
+        )
+
+        for idx, (rows, spans) in enumerate(fragments):
+            if idx > 0:
+                self._start_new_page()
+            self._draw_table_block(
+                header=stage_header,
+                rows=rows,
+                include_header=True,
+                split_pages=False,
+                include_outer_vertical=False,
+                with_watermark=False,
+                merge_first_col=True,
+                merged_first_col_spans=spans,
+            )
+
     def save(self) -> None:
         self.canvas.save()
 
@@ -639,15 +688,7 @@ def create_demo_pdf(path: Path) -> None:
     )
     builder.add_gap(120.0)
 
-    builder._draw_table_block(
-        header=("Stage", "Team", "Notes"),
-        rows=DEMO_TABLES["stage"][1],
-        include_header=True,
-        split_pages=True,
-        include_outer_vertical=False,
-        with_watermark=False,
-        merge_first_col=True,
-    )
+    builder.add_stage_demo_table()
     builder.add_gap(24.0)
 
     builder.add_body_text(
