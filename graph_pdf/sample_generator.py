@@ -185,7 +185,7 @@ class DemoPdfBuilder:
         # Divider bars separate header/footer from the body region.
         self.canvas.setLineWidth(1.0)
         self.canvas.line(self.margin_x, self.height - 72, self.width - self.margin_x, self.height - 72)
-        self.canvas.line(self.margin_x, 60, self.width - self.margin_x, 60)
+        self.canvas.line(self.margin_x, 70, self.width - self.margin_x, 70)
 
         self._draw_watermark(self.width / 2, self.height / 2, size=44)
         self._draw_header_image()
