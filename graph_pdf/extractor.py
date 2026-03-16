@@ -11,6 +11,8 @@ from pypdf import PdfReader
 
 TableRows = List[List[str]]
 TableChunk = Tuple[TableRows, Tuple[float, float, float, float]]
+WATERMARK_ROTATION_MIN_DEGREES = 53.0
+WATERMARK_ROTATION_MAX_DEGREES = 57.0
 
 
 def _parse_pages_spec(spec: str) -> List[int]:
@@ -123,7 +125,7 @@ def _is_non_watermark_obj(obj: dict) -> bool:
 
     angle = _char_rotation_degrees(obj)
     color = obj.get("non_stroking_color") or obj.get("stroking_color")
-    is_gray_watermark = abs(angle - 55.0) <= 1.0 and _is_gray_color(color)
+    is_gray_watermark = WATERMARK_ROTATION_MIN_DEGREES <= angle <= WATERMARK_ROTATION_MAX_DEGREES and _is_gray_color(color)
     return not is_gray_watermark
 
 

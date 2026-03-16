@@ -15,6 +15,7 @@ from extractor import (
     _char_rotation_degrees,
     _collect_rotated_text_debug,
     _extract_embedded_images,
+    _is_non_watermark_obj,
     _looks_like_table,
     _normalize_cell_lines,
     _parse_pages_spec,
@@ -144,6 +145,14 @@ class TableExtractionFormattingTests(unittest.TestCase):
             ["Docs", None, "Ready"],
         ]
         self.assertTrue(_looks_like_table(table))
+
+    def test_gray_text_between_53_and_57_degrees_is_treated_as_watermark(self) -> None:
+        char = {
+            "object_type": "char",
+            "matrix": (0.588, 0.809, -0.809, 0.588, 0.0, 0.0),
+            "non_stroking_color": (0.501961, 0.501961, 0.501961),
+        }
+        self.assertFalse(_is_non_watermark_obj(char))
 
     def test_detect_body_bounds_uses_long_top_and_bottom_rules_when_present(self) -> None:
         page = SimpleNamespace(
@@ -353,7 +362,7 @@ class TableExtractionFormattingTests(unittest.TestCase):
                     for char in page.chars
                     if isinstance(char.get("matrix"), tuple)
                     and len(char["matrix"]) >= 2
-                    and abs(math.degrees(math.atan2(char["matrix"][1], char["matrix"][0])) - 55.0) <= 1.0
+                    and 53.0 <= math.degrees(math.atan2(char["matrix"][1], char["matrix"][0])) <= 57.0
                     and isinstance(char.get("non_stroking_color"), tuple)
                     and len(char["non_stroking_color"]) >= 3
                     and all(abs(float(c) - 0.501961) <= 0.02 for c in char["non_stroking_color"][:3])
