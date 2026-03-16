@@ -21,26 +21,29 @@ class TableExtractionFormattingTests(unittest.TestCase):
         return pdf_path
 
     def _extract_result(self) -> dict:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            pdf_path = root / "sample.pdf"
-            md_dir = root / "md"
-            image_dir = root / "images"
-            create_demo_pdf(pdf_path)
-            result = extract_pdf_to_outputs(
-                pdf_path=pdf_path,
-                out_md_dir=md_dir,
-                out_image_dir=image_dir,
-                stem="sample",
-            )
-            return result
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        pdf_path = root / "sample.pdf"
+        md_dir = root / "md"
+        image_dir = root / "images"
+        create_demo_pdf(pdf_path)
+        return extract_pdf_to_outputs(
+            pdf_path=pdf_path,
+            out_md_dir=md_dir,
+            out_image_dir=image_dir,
+            stem="sample",
+        )
 
     def _extract_markdown(self) -> str:
         return self._extract_result()["markdown"]
 
+    def _extract_table_markdown(self) -> str:
+        return self._extract_result()["table_markdown"]
+
     def test_fixture_roundtrip_matches_expected_tables(self) -> None:
         fixture = load_demo_fixture()
-        markdown = self._extract_markdown()
+        markdown = self._extract_table_markdown()
         extracted_tables = _extract_markdown_tables(markdown)
         extracted_by_index = {idx: rows for idx, rows in enumerate(extracted_tables)}
 
@@ -64,7 +67,7 @@ class TableExtractionFormattingTests(unittest.TestCase):
         return blocks
 
     def test_table_output_uses_markdown_tables(self) -> None:
-        markdown = self._extract_markdown()
+        markdown = self._extract_table_markdown()
         self.assertIn("### Page 1 table 1", markdown)
         self.assertIn("| Item | Qty | Price |", markdown)
         self.assertIn("| --- | --- | --- |", markdown)
@@ -72,20 +75,24 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertIn("<br>", markdown)
 
     def test_watermark_fragments_do_not_remain_in_table_cells(self) -> None:
-        markdown = self._extract_markdown()
+        markdown = self._extract_table_markdown()
         self.assertNotIn("FID", markdown)
         self.assertNotIn("I Qty", markdown)
         self.assertNotIn("N <br>", markdown)
         self.assertNotIn("O <br>", markdown)
 
     def test_wrapped_cell_text_is_collapsed_but_bullets_remain_split(self) -> None:
-        markdown = self._extract_markdown()
+        markdown = self._extract_table_markdown()
         self.assertIn("| Laptop<br>- line 1 | 12 | $120 |", markdown)
         self.assertIn(
             "Docking station compatibility review package for extended desktop deployment approval",
             markdown,
         )
         self.assertIn("| Docs | READY | Finalize<br>- sample<br>- archive |", markdown)
+        self.assertIn(
+            "Escalation owner confirmed.<br>Regional fallback documented.<br>Launch blackout window approved.",
+            markdown,
+        )
 
     def test_punctuation_ends_logical_cell_line(self) -> None:
         cell = (
@@ -104,7 +111,7 @@ class TableExtractionFormattingTests(unittest.TestCase):
         )
 
     def test_spanning_stage_table_merges_into_one_block(self) -> None:
-        markdown = self._extract_markdown()
+        markdown = self._extract_table_markdown()
         blocks = self._table_blocks(markdown)
         self.assertEqual(3, len(blocks))
         stage_block = next((block for block in blocks if "Phase A" in block), "")
@@ -113,6 +120,24 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertIn("Phase C", stage_block)
         self.assertIn("Finance", stage_block)
         self.assertNotIn("### Page 2 table 3", markdown)
+
+    def test_demo_markdown_contains_only_body_text(self) -> None:
+        result = self._extract_result()
+        markdown = result["markdown"]
+        self.assertIn("Chapter 1: Deep Structure Verification", markdown)
+        self.assertNotIn("### Page 1 table 1", markdown)
+        self.assertNotIn("| Item | Qty | Price |", markdown)
+        self.assertNotIn("Phase A", markdown)
+        self.assertNotIn("Finalize<br>- sample<br>- archive", markdown)
+        self.assertEqual(markdown, result["md_file"].read_text(encoding="utf-8"))
+
+    def test_demo_table_markdown_is_written_to_separate_file(self) -> None:
+        result = self._extract_result()
+        table_markdown = result["table_markdown"]
+        table_md_file = result["table_md_file"]
+        self.assertEqual(table_markdown, table_md_file.read_text(encoding="utf-8"))
+        self.assertTrue(table_md_file.name.endswith("_table.md"))
+        self.assertIn("### Page 1 table 1", table_markdown)
 
     def test_stage_table_repeats_header_after_page_break(self) -> None:
         pdf_path = self._build_pdf()
