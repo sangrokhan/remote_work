@@ -13,6 +13,33 @@ TableChunk = Tuple[TableRows, Tuple[float, float, float, float]]
 WATERMARK_FRAGMENT_TOKENS = {"CONFIDENTIAL", "FID", "I", "N", "O", "C"}
 
 
+def _parse_pages_spec(spec: str) -> List[int]:
+    values = set()
+    for part in str(spec or "").split(","):
+        token = part.strip()
+        if not token:
+            raise ValueError("empty page token in --pages")
+        if "-" in token:
+            start_text, end_text = token.split("-", 1)
+            if not start_text.isdigit() or not end_text.isdigit():
+                raise ValueError(f"invalid page range: {token}")
+            start = int(start_text)
+            end = int(end_text)
+            if start < 1 or end < 1 or start > end:
+                raise ValueError(f"invalid page range: {token}")
+            values.update(range(start, end + 1))
+            continue
+        if not token.isdigit():
+            raise ValueError(f"invalid page number: {token}")
+        page_no = int(token)
+        if page_no < 1:
+            raise ValueError(f"invalid page number: {token}")
+        values.add(page_no)
+    if not values:
+        raise ValueError("no pages selected")
+    return sorted(values)
+
+
 def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
@@ -639,11 +666,13 @@ def extract_pdf_to_outputs(
     stem: str,
     header_margin: float = 90,
     footer_margin: float = 40,
+    pages: Optional[Sequence[int]] = None,
 ) -> dict:
     out_md_dir.mkdir(parents=True, exist_ok=True)
 
     output_text = []
     output_tables = []
+    selected_pages = set(int(page_no) for page_no in (pages or []))
 
     pending_table: Optional[TableRows] = None
     pending_page: Optional[int] = None
@@ -657,6 +686,9 @@ def extract_pdf_to_outputs(
 
     with pdfplumber.open(str(pdf_path)) as pdf:
         for page_idx, page in enumerate(pdf.pages, start=1):
+            if selected_pages and page_idx not in selected_pages:
+                _flush_pending()
+                continue
             tables = _extract_tables(page)
             full_page_text = _extract_body_text(
                 page,
@@ -736,6 +768,7 @@ if __name__ == "__main__":  # basic manual run
     parser.add_argument("--out-md-dir", default="graph_pdf/artifacts/md")
     parser.add_argument("--out-image-dir", default="graph_pdf/artifacts/images")
     parser.add_argument("--stem", default="output")
+    parser.add_argument("--pages", help="1-based pages like 1,3,5-8")
     args = parser.parse_args()
 
     extract_pdf_to_outputs(
@@ -743,4 +776,5 @@ if __name__ == "__main__":  # basic manual run
         out_md_dir=Path(args.out_md_dir),
         out_image_dir=Path(args.out_image_dir),
         stem=args.stem,
+        pages=_parse_pages_spec(args.pages) if args.pages else None,
     )

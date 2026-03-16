@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pdfplumber
 
-from extractor import _normalize_cell_lines, extract_pdf_to_outputs
+from extractor import _normalize_cell_lines, _parse_pages_spec, extract_pdf_to_outputs
 from verify import _extract_markdown_tables
 from sample_fixture import load_demo_fixture
 from sample_generator import create_demo_pdf
@@ -109,6 +109,31 @@ class TableExtractionFormattingTests(unittest.TestCase):
             ],
             _normalize_cell_lines(cell),
         )
+
+    def test_parse_pages_spec_supports_ranges_and_lists(self) -> None:
+        self.assertEqual([1, 3, 4, 5, 8], _parse_pages_spec("1,3-5,8"))
+
+    def test_extract_can_limit_to_selected_pages(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        pdf_path = root / "sample.pdf"
+        create_demo_pdf(pdf_path)
+
+        result = extract_pdf_to_outputs(
+            pdf_path=pdf_path,
+            out_md_dir=root / "md",
+            out_image_dir=root / "images",
+            stem="sample",
+            pages=[3],
+        )
+
+        self.assertNotIn("### Page 1", result["markdown"])
+        self.assertIn("### Page 3", result["markdown"])
+        self.assertNotIn("### Page 1 table 1", result["table_markdown"])
+        self.assertIn("### Page 3 table 1", result["table_markdown"])
+        self.assertIn("### Page 3 table 2", result["table_markdown"])
+        self.assertEqual(2, result["summary"]["table_count"])
 
     def test_spanning_stage_table_merges_into_one_block(self) -> None:
         markdown = self._extract_table_markdown()
