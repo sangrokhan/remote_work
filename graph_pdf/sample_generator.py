@@ -17,7 +17,14 @@ def _draw_header_and_footer(
     c.setFillColor(colors.black)
     c.setFont("Helvetica", 10)
     c.drawString(36, height - 28, "Graph PDF Demo Header: sample source")
-    c.drawString(36, 22, f"Graph PDF Demo Footer / Page {page_no}")
+    c.drawString(36, height - 44, "Prepared for table + text extraction tests")
+    c.drawRightString(width - 36, height - 28, f"Page {page_no} / 2")
+    c.drawRightString(width - 36, height - 44, "Header line 2: extraction boundary checks")
+
+    c.drawString(36, 36, "Graph PDF Demo Footer / Left")
+    c.drawString(36, 22, "Footer details: keep header/footer clean")
+    c.drawRightString(width - 36, 36, "Footer line 2: generated data")
+    c.drawRightString(width - 36, 22, f"Page {page_no} end")
 
 
 def _draw_watermark(c: canvas.Canvas, width: float, height: float) -> None:
@@ -32,6 +39,7 @@ def _draw_watermark(c: canvas.Canvas, width: float, height: float) -> None:
 
 
 LineItem = Union[str, Tuple[str, int]]
+TableRow = Tuple[str, str, str]
 
 
 def _draw_body_text(c: canvas.Canvas, width: float, start_y: float, lines: Sequence[LineItem]) -> None:
@@ -58,34 +66,42 @@ def _draw_wrapped_table_row(
     line_height: float,
 ) -> float:
     c.setFont("Helvetica", font_size)
-    y_cursor = y
-    max_lines = 1
-    split_lines = [line.split("\n") for line in lines]
+    split_lines = [str(line).split("\n") if line else [""] for line in lines]
+    max_lines = max((len(line) for line in split_lines), default=1)
 
-    for row_line in split_lines:
-        if len(row_line) > max_lines:
-            max_lines = len(row_line)
-
-    base_y = y
+    text_y = y - 12
     for line_idx in range(max_lines):
-        # Cell 0
-        c.drawString(x0 + 6, y_cursor, split_lines[0][line_idx] if line_idx < len(split_lines[0]) else "")
-        # Cell 1
-        c.drawString(x0 + column_positions[0] + 6, y_cursor, split_lines[1][line_idx] if line_idx < len(split_lines[1]) else "")
-        # Cell 2
-        c.drawString(x0 + column_positions[1] + 6, y_cursor, split_lines[2][line_idx] if line_idx < len(split_lines[2]) else "")
-        y_cursor -= line_height
+        c.drawString(
+            x0 + 6,
+            text_y,
+            split_lines[0][line_idx] if line_idx < len(split_lines[0]) else "",
+        )
+        c.drawString(
+            x0 + column_positions[0] + 6,
+            text_y,
+            split_lines[1][line_idx] if line_idx < len(split_lines[1]) else "",
+        )
+        c.drawString(
+            x0 + column_positions[1] + 6,
+            text_y,
+            split_lines[2][line_idx] if line_idx < len(split_lines[2]) else "",
+        )
+        text_y -= line_height
 
-    return base_y - (max_lines - 1) * line_height
+    content_height = max_lines * line_height
+    return max(line_height * 1.5, content_height)
 
 
 def _draw_table(
     c: canvas.Canvas,
     x0: float,
     y0: float,
-    rows: Sequence[Tuple[str, str, str]],
+    header: Sequence[str],
+    rows: Sequence[TableRow],
     row_height: float = 24,
     column_positions: Sequence[int] = (140, 260),
+    table_width_tail: float = 130.0,
+    include_header: bool = True,
 ) -> None:
     """
     Draw a table that has top/bottom/inner lines but no outer vertical borders.
@@ -95,8 +111,8 @@ def _draw_table(
     c.setStrokeColor(colors.black)
     c.setLineWidth(0.8)
 
-    row_count = len(rows) + 1
-    table_width = column_positions[-1] + 120
+    table_width = float(column_positions[-1]) + table_width_tail
+    row_count = len(rows) + (1 if include_header else 0)
     total_height = row_count * row_height
 
     # Top, middle and bottom horizontal lines.
@@ -108,24 +124,25 @@ def _draw_table(
     for col_x in column_positions:
         c.line(x0 + col_x, y0, x0 + col_x, y0 - total_height)
 
-    c.setFont("Helvetica-Bold", 9)
-    c.drawString(x0 + 6, y0 - 16, "Item")
-    c.drawString(x0 + column_positions[0] + 6, y0 - 16, "Qty")
-    c.drawString(x0 + column_positions[1] + 6, y0 - 16, "Price")
+    if include_header and header:
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(x0 + 6, y0 - 16, header[0])
+        c.drawString(x0 + column_positions[0] + 6, y0 - 16, header[1] if len(header) > 1 else "")
+        c.drawString(x0 + column_positions[1] + 6, y0 - 16, header[2] if len(header) > 2 else "")
 
     c.setFont("Helvetica", 9)
-    y = y0 - row_height - 14
+    y = y0 - row_height
     for row in rows:
-        y = _draw_wrapped_table_row(
-            c,
+        row_used = _draw_wrapped_table_row(
+            c=c,
             x0=x0,
             y=y,
             lines=row,
             font_size=8,
             column_positions=column_positions,
-            line_height=10,
+            line_height=11,
         )
-        y -= row_height
+        y -= max(row_height, row_used)
 
 
 def create_demo_pdf(path: Path) -> None:
@@ -137,17 +154,97 @@ def create_demo_pdf(path: Path) -> None:
     _draw_header_and_footer(c, 1, width, height)
     _draw_watermark(c, width, height)
 
-    left_rows = [
-        ("Widget", "12", "$120"),
-        ("Keyboard", "8", "$32"),
-        ("Monitor", "5", "$260"),
-        ("Mouse", "18", "$8"),
+    left_rows: Sequence[TableRow] = [
+        (
+            "Widget",
+            "12\n- stock check\n- reorder ready",
+            "$120",
+        ),
+        (
+            "Keyboard",
+            "8\n- mechanical\n- compact layout",
+            "$32",
+        ),
+        (
+            "Monitor",
+            "5\n- 4k review\n- flicker test",
+            "$260",
+        ),
+        (
+            "Mouse",
+            "18\n- 3 button\n- optical sensor",
+            "$8",
+        ),
     ]
 
-    right_rows = [
-        ("Alpha", "OK", "DONE\nline 1"),
-        ("Beta", "WARN", "REVIEW\nline 2"),
-        ("Gamma", "FAIL", "PENDING"),
+    right_rows: Sequence[TableRow] = [
+        (
+            "Alpha",
+            "OK",
+            "DONE\nline 1\nline 2",
+        ),
+        (
+            "Beta",
+            "WARN",
+            "REVIEW\nitemized\nneeds followup",
+        ),
+        (
+            "Gamma",
+            "FAIL",
+            "PENDING\n- check logs\n- rerun checks",
+        ),
+    ]
+
+    spanning_header: Sequence[str] = ("Stage", "Team", "Notes")
+    spanning_rows_page1: Sequence[TableRow] = [
+        (
+            "Phase A",
+            "Discovery",
+            "Kickoff scope lock\n- gather baseline\n- define risks",
+        ),
+        (
+            "",
+            "Design",
+            "UX skeleton review\n- navigation\n- component map",
+        ),
+        (
+            "",
+            "Frontend",
+            "Prototype pass\n- mobile spec\n- accessibility path",
+        ),
+        (
+            "Phase B",
+            "Backend",
+            "Core API design\n- auth contract\n- payload schema",
+        ),
+        (
+            "",
+            "Ops",
+            "Runbook draft\n- infra checklist\n- alert thresholds",
+        ),
+        (
+            "",
+            "Security",
+            "Threat model\n- token handling\n- permission matrix",
+        ),
+    ]
+
+    spanning_rows_page2: Sequence[TableRow] = [
+        (
+            "",
+            "QA",
+            "Scenario matrix\n- smoke\n- negative cases",
+        ),
+        (
+            "",
+            "Release",
+            "Rollout coordination\n- canary\n- monitoring",
+        ),
+        (
+            "",
+            "Docs",
+            "Version notes\n- migration\n- rollout guide",
+        ),
     ]
 
     _draw_body_text(
@@ -155,19 +252,55 @@ def create_demo_pdf(path: Path) -> None:
         width,
         start_y=height - 70,
         lines=[
-            "Chapter 1. Document Structure",
-            "PDF extraction sample for body cleanup and structured table parsing.",
-            "This page contains header, footer, watermark, and tables near the left and right edges.",
-            "The tables are drawn with top/bottom and inner lines only; no outer vertical lines.",
+            "Chapter 1: Deep Structure Verification",
+            "This page intentionally includes 3+ line body paragraph to validate multi-line normalization",
+            "for graph ingestion and chapter-aware chunking across paragraphs.",
+            ("- 1st level bullet: layout and spacing checks", 12),
+            ("  - nested detail: line 2 confirms indentation", 24),
+            ("  - nested detail: line 3 confirms paragraph wrap and line breaks", 24),
+            "The extraction should remove header/footer/watermark while preserving indented body content and table text.",
             ("This section has nested indentation:", 0),
-            ("- level 1: overview", 12),
-            ("- level 2: detail", 24),
+            ("- level 1: body copy, one of many lines", 12),
+            ("- level 2: second nested line", 24),
+            ("- level 3: third line to test depth", 36),
             "Body text here is cleaned for ingestion by GraphRAG or similar index pipeline.",
         ],
     )
 
-    _draw_table(c, x0=32, y0=320, rows=left_rows, column_positions=(90, 180))
-    _draw_table(c, x0=340, y0=320, rows=right_rows, column_positions=(70, 130))
+    # Two tables with different sizes on page 1.
+    _draw_table(
+        c,
+        x0=32,
+        y0=320,
+        header=("Item", "Qty", "Price"),
+        rows=left_rows,
+        row_height=38,
+        column_positions=(72, 160),
+        table_width_tail=150.0,
+    )
+
+    _draw_table(
+        c,
+        x0=334,
+        y0=325,
+        header=("Group", "State", "Comment"),
+        rows=right_rows,
+        row_height=44,
+        column_positions=(84, 160),
+        table_width_tail=140.0,
+    )
+
+    # Spanning table starts on page 1 (header + first part).
+    _draw_table(
+        c,
+        x0=32,
+        y0=190,
+        header=spanning_header,
+        rows=spanning_rows_page1[:4],
+        row_height=46,
+        column_positions=(110, 240),
+        table_width_tail=170.0,
+    )
 
     c.showPage()
 
@@ -180,10 +313,50 @@ def create_demo_pdf(path: Path) -> None:
         width,
         start_y=height - 90,
         lines=[
-            "Second page only validates body text extraction without embedded tables.",
-            "Even without table content, body text should stay while removing header/footer/watermark.",
-            "The extracted output should be suitable for text chunking into vectors or graph nodes.",
+            "Page 2 continues document structure and validates page-spanning table continuity.",
+            "A spanning table row set is intentionally split by page boundary and should be merged as one logical table in extraction.",
+            "Body line 1: continuation context confirms cleanup and ordering.",
+            "Body line 2: verify indentation and multiple bullet styles are retained as raw text.",
+            ("- 1st-level continuation bullet", 12),
+            ("- 2nd-level continuation bullet", 24),
+            "The output should still extract all rows and keep the merged column rows coherent.",
         ],
+    )
+
+    # Continuation of the spanning table starts from page 2 (no header on this page).
+    _draw_table(
+        c,
+        x0=32,
+        y0=730,
+        header=(),
+        rows=spanning_rows_page1[4:] + spanning_rows_page2,
+        row_height=46,
+        column_positions=(110, 240),
+        table_width_tail=170.0,
+        include_header=False,
+    )
+
+    # A compact table near bottom keeps another size variant.
+    _draw_table(
+        c,
+        x0=360,
+        y0=290,
+        header=("Area", "Status", "Action"),
+        rows=[
+            (
+                "Docs",
+                "READY",
+                "Finalize\n- sample\n- archive",
+            ),
+            (
+                "QA",
+                "TODO",
+                "Confirm\n- edge case\n- fallback",
+            ),
+        ],
+        row_height=40,
+        column_positions=(90, 170),
+        table_width_tail=110.0,
     )
 
     c.save()
