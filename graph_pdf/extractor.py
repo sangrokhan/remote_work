@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -10,7 +11,6 @@ from pypdf import PdfReader
 
 TableRows = List[List[str]]
 TableChunk = Tuple[TableRows, Tuple[float, float, float, float]]
-WATERMARK_FRAGMENT_TOKENS = {"CONFIDENTIAL", "FID", "I", "N", "O", "C"}
 
 
 def _parse_pages_spec(spec: str) -> List[int]:
@@ -44,10 +44,6 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
-def _is_watermark_line(text: str) -> bool:
-    return "CONFIDENTIAL" in (text or "").upper()
-
-
 def _repair_watermark_bleed(text: str) -> str:
     # Some rotated/conflicting watermark text can leak as a trailing single letter.
     text = re.sub(r"\s+[A-Za-z]$", "", text)
@@ -57,9 +53,6 @@ def _repair_watermark_bleed(text: str) -> str:
 def _is_layout_artifact(text: str) -> bool:
     normalized = _normalize_text(text).lower()
     if not normalized:
-        return True
-
-    if "confidential" in normalized:
         return True
 
     if "graph pdf demo header" in normalized:
@@ -92,20 +85,59 @@ def _is_layout_artifact(text: str) -> bool:
     return any(marker in normalized for marker in (*header_markers, *footer_markers))
 
 
+def _char_rotation_degrees(obj: dict) -> float | None:
+    matrix = obj.get("matrix")
+    if not isinstance(matrix, tuple) or len(matrix) < 2:
+        return None
+    return math.degrees(math.atan2(float(matrix[1]), float(matrix[0])))
+
+
+def _is_gray_color(color: object) -> bool:
+    return isinstance(color, tuple) and len(color) >= 3 and all(abs(float(c) - 0.501961) <= 0.02 for c in color[:3])
+
+
 def _is_non_watermark_obj(obj: dict) -> bool:
     if obj.get("object_type") != "char":
         return True
 
-    size = float(obj.get("size", 0))
+    angle = _char_rotation_degrees(obj)
     color = obj.get("non_stroking_color") or obj.get("stroking_color")
-    is_gray_watermark = size >= 40 and isinstance(color, tuple) and len(color) >= 3 and all(
-        abs(float(c) - 0.501961) <= 0.02 for c in color
-    )
+    is_gray_watermark = angle is not None and abs(angle - 55.0) <= 1.0 and _is_gray_color(color)
     return not is_gray_watermark
 
 
 def _filter_page_for_extraction(page: "pdfplumber.page.Page") -> "pdfplumber.page.Page":
     return page.filter(_is_non_watermark_obj)
+
+
+def _detect_body_bounds(
+    page: "pdfplumber.page.Page",
+    header_margin: float,
+    footer_margin: float,
+) -> Tuple[float, float]:
+    default_top = float(footer_margin)
+    default_bottom = float(page.height - header_margin)
+    min_width = float(page.width) * 0.7
+
+    top_candidates = [
+        edge
+        for edge in getattr(page, "horizontal_edges", [])
+        if float(edge.get("x1", 0.0)) - float(edge.get("x0", 0.0)) >= min_width
+        and float(edge.get("top", 0.0)) <= float(page.height) * 0.2
+    ]
+    bottom_candidates = [
+        edge
+        for edge in getattr(page, "horizontal_edges", [])
+        if float(edge.get("x1", 0.0)) - float(edge.get("x0", 0.0)) >= min_width
+        and float(edge.get("top", 0.0)) >= float(page.height) * 0.8
+    ]
+
+    body_top = min((float(edge["top"]) for edge in top_candidates), default=default_top)
+    body_bottom = max((float(edge["top"]) for edge in bottom_candidates), default=default_bottom)
+
+    if body_bottom <= body_top:
+        return default_top, default_bottom
+    return body_top, body_bottom
 
 
 def _extract_body_text(
@@ -114,8 +146,7 @@ def _extract_body_text(
     footer_margin: float,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
 ) -> str:
-    body_top = footer_margin
-    body_bottom = page.height - header_margin
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
     body_page = _filter_page_for_extraction(page)
 
     def _clean_lines(raw: str) -> List[str]:
@@ -125,8 +156,6 @@ def _extract_body_text(
             if not fixed:
                 continue
             if _is_layout_artifact(fixed):
-                continue
-            if _is_watermark_line(fixed):
                 continue
             if re.fullmatch(r"^[A-Za-z]$", fixed):
                 continue
@@ -168,7 +197,6 @@ def _merge_cells(table: Sequence[Sequence[str]]) -> List[List[str]]:
 
 def _clean_cell_line(line: str) -> str:
     cleaned = str(line or "").strip()
-    cleaned = re.sub(r"\bCONFIDENTIAL\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     tokens = cleaned.split()
     if len(tokens) >= 2 and tokens[-1].upper() == "I":
@@ -183,14 +211,7 @@ def _remove_watermark_fragment_lines(lines: Sequence[str]) -> List[str]:
     if len(cleaned) <= 1:
         return cleaned
 
-    result: List[str] = []
-    for idx, line in enumerate(cleaned):
-        token = re.sub(r"[^A-Za-z]", "", line).upper()
-        next_line = cleaned[idx + 1] if idx + 1 < len(cleaned) else ""
-        if token in WATERMARK_FRAGMENT_TOKENS and next_line:
-            continue
-        result.append(line)
-    return result
+    return cleaned
 
 
 def _is_bullet_line(line: str) -> bool:
@@ -645,6 +666,16 @@ def _body_excluded_bboxes(
     return excluded
 
 
+def _image_intersects_body(
+    image_meta: dict,
+    body_top: float,
+    body_bottom: float,
+) -> bool:
+    top = float(image_meta.get("top", 0.0))
+    bottom = float(image_meta.get("bottom", top))
+    return bottom > body_top and top < body_bottom
+
+
 def _extract_embedded_images(
     pdf_path: Path,
     out_image_dir: Path,
@@ -656,15 +687,33 @@ def _extract_embedded_images(
     image_files: List[Path] = []
     selected_pages = set(int(page_no) for page_no in (pages or []))
     reader = PdfReader(str(pdf_path))
-    for page_idx, page in enumerate(reader.pages, start=1):
-        if selected_pages and page_idx not in selected_pages:
-            continue
-        for image_idx, image_file in enumerate(page.images, start=1):
-            image_name = Path(image_file.name or f"image_{image_idx}").name
-            suffix = Path(image_name).suffix or ".bin"
-            out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_image_{image_idx:02d}{suffix}"
-            out_path.write_bytes(image_file.data)
-            image_files.append(out_path)
+    with pdfplumber.open(str(pdf_path)) as plumber_pdf:
+        for page_idx, (page, plumber_page) in enumerate(zip(reader.pages, plumber_pdf.pages), start=1):
+            if selected_pages and page_idx not in selected_pages:
+                continue
+
+            body_top, body_bottom = _detect_body_bounds(
+                plumber_page,
+                header_margin=90.0,
+                footer_margin=40.0,
+            )
+            allowed_names = {
+                str(image_meta.get("name") or "")
+                for image_meta in plumber_page.images
+                if _image_intersects_body(image_meta, body_top=body_top, body_bottom=body_bottom)
+            }
+
+            kept_idx = 0
+            for image_file in page.images:
+                image_name = Path(image_file.name or "").name
+                image_stem = Path(image_name).stem
+                if image_stem not in allowed_names and image_name not in allowed_names:
+                    continue
+                kept_idx += 1
+                suffix = Path(image_name).suffix or ".bin"
+                out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_image_{kept_idx:02d}{suffix}"
+                out_path.write_bytes(image_file.data)
+                image_files.append(out_path)
 
     return image_files
 

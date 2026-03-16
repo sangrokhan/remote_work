@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import math
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 import pdfplumber
 
 from extractor import (
+    _detect_body_bounds,
     _extract_embedded_images,
     _looks_like_table,
     _normalize_cell_lines,
@@ -83,11 +85,9 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertIn("<br>", markdown)
 
     def test_watermark_fragments_do_not_remain_in_table_cells(self) -> None:
+        fixture = load_demo_fixture()
         markdown = self._extract_table_markdown()
-        self.assertNotIn("FID", markdown)
-        self.assertNotIn("I Qty", markdown)
-        self.assertNotIn("N <br>", markdown)
-        self.assertNotIn("O <br>", markdown)
+        self.assertNotIn(fixture["watermark_text"], markdown)
 
     def test_wrapped_cell_text_is_collapsed_but_bullets_remain_split(self) -> None:
         markdown = self._extract_table_markdown()
@@ -128,6 +128,30 @@ class TableExtractionFormattingTests(unittest.TestCase):
         ]
         self.assertTrue(_looks_like_table(table))
 
+    def test_detect_body_bounds_uses_long_top_and_bottom_rules_when_present(self) -> None:
+        page = SimpleNamespace(
+            width=600.0,
+            height=800.0,
+            horizontal_edges=[
+                {"x0": 40.0, "x1": 560.0, "top": 52.0},
+                {"x0": 60.0, "x1": 220.0, "top": 180.0},
+                {"x0": 35.0, "x1": 565.0, "top": 742.0},
+            ],
+        )
+
+        body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
+
+        self.assertEqual(52.0, body_top)
+        self.assertEqual(742.0, body_bottom)
+
+    def test_detect_body_bounds_falls_back_when_no_dividers_exist(self) -> None:
+        page = SimpleNamespace(width=600.0, height=800.0, horizontal_edges=[])
+
+        body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
+
+        self.assertEqual(40.0, body_top)
+        self.assertEqual(710.0, body_bottom)
+
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -163,8 +187,35 @@ class TableExtractionFormattingTests(unittest.TestCase):
                 SimpleNamespace(images=[SimpleNamespace(name="p3.png", data=b"three")]),
             ]
         )
+        fake_plumber_pdf = SimpleNamespace(
+            pages=[
+                SimpleNamespace(
+                    width=600.0,
+                    height=800.0,
+                    horizontal_edges=[],
+                    images=[{"name": "p1", "top": 100.0, "bottom": 120.0}],
+                ),
+                SimpleNamespace(
+                    width=600.0,
+                    height=800.0,
+                    horizontal_edges=[],
+                    images=[{"name": "p2", "top": 100.0, "bottom": 120.0}],
+                ),
+                SimpleNamespace(
+                    width=600.0,
+                    height=800.0,
+                    horizontal_edges=[],
+                    images=[{"name": "p3", "top": 100.0, "bottom": 120.0}],
+                ),
+            ],
+        )
+        fake_plumber_open = MagicMock()
+        fake_plumber_open.__enter__.return_value = fake_plumber_pdf
+        fake_plumber_open.__exit__.return_value = False
 
-        with patch("extractor.PdfReader", return_value=fake_reader):
+        with patch("extractor.PdfReader", return_value=fake_reader), patch(
+            "extractor.pdfplumber.open", return_value=fake_plumber_open
+        ):
             image_files = _extract_embedded_images(
                 pdf_path=Path("ignored.pdf"),
                 out_image_dir=out_dir,
@@ -203,6 +254,15 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(table_markdown, table_md_file.read_text(encoding="utf-8"))
         self.assertTrue(table_md_file.name.endswith("_table.md"))
         self.assertIn("### Page 1 table 1", table_markdown)
+        self.assertEqual(2, len(result["image_files"]))
+
+    def test_header_images_are_not_exported_as_body_images(self) -> None:
+        pdf_path = self._build_pdf()
+        with pdfplumber.open(str(pdf_path)) as pdf:
+            raw_image_count = sum(len(page.images) for page in pdf.pages)
+
+        result = self._extract_result()
+        self.assertEqual(5, raw_image_count)
         self.assertEqual(2, len(result["image_files"]))
 
     def test_stage_table_repeats_header_after_page_break(self) -> None:
@@ -245,7 +305,7 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertIn("policy exception register", texts[2].lower())
         self.assertIn("sign-off archive retention", texts[2].lower())
 
-    def test_demo_pdf_has_confidential_watermark_on_every_page(self) -> None:
+    def test_demo_pdf_has_rotated_gray_watermark_on_every_page(self) -> None:
         pdf_path = self._build_pdf()
         with pdfplumber.open(str(pdf_path)) as pdf:
             self.assertEqual(len(pdf.pages), 3)
@@ -253,8 +313,12 @@ class TableExtractionFormattingTests(unittest.TestCase):
                 watermark_chars = [
                     char
                     for char in page.chars
-                    if "CONFIDENTIAL".startswith(char.get("text", "").upper())
-                    and float(char.get("size", 0)) >= 40
+                    if isinstance(char.get("matrix"), tuple)
+                    and len(char["matrix"]) >= 2
+                    and abs(math.degrees(math.atan2(char["matrix"][1], char["matrix"][0])) - 55.0) <= 1.0
+                    and isinstance(char.get("non_stroking_color"), tuple)
+                    and len(char["non_stroking_color"]) >= 3
+                    and all(abs(float(c) - 0.501961) <= 0.02 for c in char["non_stroking_color"][:3])
                 ]
                 self.assertTrue(watermark_chars)
 
