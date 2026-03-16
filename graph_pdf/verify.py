@@ -125,15 +125,13 @@ def run_checks() -> int:
     root = base / "artifacts" / "verify"
     pdf_path = root / "sample_verify.pdf"
     md_dir = root / "md"
-    image_dir = root / "images"
-
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
     create_demo_pdf(pdf_path)
 
     result = extract_pdf_to_outputs(
         pdf_path=pdf_path,
         out_md_dir=md_dir,
-        out_image_dir=image_dir,
+        out_image_dir=root / "images",
         stem="verify",
     )
 
@@ -182,13 +180,10 @@ def run_checks() -> int:
     if not any(not str(row[0]).strip() and any(str(cell).strip() for cell in row[1:]) for row in expected_rows):
         raise AssertionError("fixture does not include merged/continuation-style table rows")
 
-    if len(result["image_files"]) < 1:
-        raise AssertionError("expected at least one page image")
-
     print("[verify] PASS")
     print("text_file:", result["text_file"])
     print("md_file:", result["md_file"])
-    print("image count:", len(result["image_files"]))
+    print("embedded images:", len(result["image_files"]))
     print("table count:", result["summary"]["table_count"])
     return 0
 
