@@ -220,8 +220,8 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
     def test_build_body_blocks_keeps_paragraph_together_despite_style_change_when_sentence_continues(self) -> None:
         lines = [
-            {"text": "This line introduces the uncommon term", "x0": 36.0, "x1": 260.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "word_count": 6, "has_mixed_styles": False, "first_word_style_signature": ("Helvetica", False, False, None)},
-            {"text": "ProtoLexeme expands into explanation", "x0": 36.0, "x1": 220.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.2, 0.2, 0.7), "is_bold": False, "is_italic": False, "word_count": 4, "has_mixed_styles": True, "first_word_style_signature": ("Helvetica-Bold", True, False, None)},
+            {"text": "This line introduces the uncommon term", "x0": 36.0, "x1": 300.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "word_count": 6, "has_mixed_styles": False, "first_word_style_signature": ("Helvetica", False, False, None), "body_right": 320.0},
+            {"text": "ProtoLexeme expands into explanation", "x0": 36.0, "x1": 220.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.2, 0.2, 0.7), "is_bold": False, "is_italic": False, "word_count": 4, "has_mixed_styles": True, "first_word_style_signature": ("Helvetica-Bold", True, False, None), "first_word_width": 36.0},
         ]
 
         blocks = _build_body_blocks(lines)
@@ -232,6 +232,16 @@ class TableExtractionFormattingTests(unittest.TestCase):
             ["This line introduces the uncommon term", "ProtoLexeme expands into explanation"],
             [line["text"] for line in blocks[0]["lines"]],
         )
+
+    def test_build_body_blocks_splits_when_previous_line_has_room_for_next_first_word(self) -> None:
+        lines = [
+            {"text": "Short lead-in text", "x0": 36.0, "x1": 140.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "word_count": 3, "has_mixed_styles": False, "first_word_style_signature": ("Helvetica", False, False, None), "body_right": 320.0},
+            {"text": "ProtoLexeme expands into explanation", "x0": 36.0, "x1": 220.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.2, 0.2, 0.7), "is_bold": False, "is_italic": False, "word_count": 4, "has_mixed_styles": True, "first_word_style_signature": ("Helvetica-Bold", True, False, None), "first_word_width": 36.0},
+        ]
+
+        blocks = _build_body_blocks(lines)
+
+        self.assertEqual(2, len(blocks))
 
     def test_extract_body_word_lines_marks_marker_candidate_and_text_start(self) -> None:
         filtered_page = SimpleNamespace(
