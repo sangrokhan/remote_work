@@ -578,20 +578,19 @@ def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]
 
 
 def _looks_like_table(table: Sequence[Sequence[str]]) -> bool:
-    if len(table) < 2:
-        return False
+    return _table_rejection_reason(table) is None
 
-    if len(table) > 80:
-        return False
+
+def _table_rejection_reason(table: Sequence[Sequence[str]]) -> str | None:
+    if not table:
+        return "empty table"
 
     max_cols = max(len(r) for r in table)
-    if max_cols < 2:
-        return False
 
     normalized_rows = [[str(cell or "").strip() for cell in row] for row in table]
 
     if not any(cell for cell in normalized_rows[0]):
-        return False
+        return "empty first row"
 
     non_empty_cells = sum(1 for row in normalized_rows for cell in row if cell)
     continuation_like = not _normalize_text(normalized_rows[0][0]) and len(normalized_rows) == 2
@@ -599,9 +598,22 @@ def _looks_like_table(table: Sequence[Sequence[str]]) -> bool:
     if continuation_like:
         min_cells = max_cols + 1
     if non_empty_cells < min_cells:
-        return False
+        return f"too few non-empty cells ({non_empty_cells} < {min_cells})"
 
-    return True
+    return None
+
+
+def _log_rejected_table(
+    table: Sequence[Sequence[str]],
+    crop_bbox: Tuple[float, float, float, float],
+    reason: str,
+) -> None:
+    row_count = len(table)
+    col_count = max((len(row) for row in table), default=0)
+    bbox_text = ", ".join(f"{value:.2f}" for value in crop_bbox)
+    print(
+        f"[table-reject] bbox=({bbox_text}) rows={row_count} cols={col_count} reason={reason}"
+    )
 
 
 def _looks_like_header_row(row: Sequence[str]) -> bool:
@@ -911,7 +923,13 @@ def _extract_tables_from_crop(
 
     for settings in candidates:
         tables = crop.extract_tables(table_settings=settings) or []
-        cleaned = [_merge_cells(table) for table in tables if _looks_like_table(table)]
+        cleaned = []
+        for table in tables:
+            reason = _table_rejection_reason(table)
+            if reason is not None:
+                _log_rejected_table(table, crop_bbox, reason)
+                continue
+            cleaned.append(_merge_cells(table))
         if cleaned:
             return [(table, crop_bbox) for table in cleaned]
     return []
@@ -979,7 +997,13 @@ def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
 
     for settings in fallback_settings:
         tables = page.extract_tables(table_settings=settings) or []
-        cleaned = [_merge_cells(table) for table in tables if _looks_like_table(table)]
+        cleaned = []
+        for table in tables:
+            reason = _table_rejection_reason(table)
+            if reason is not None:
+                _log_rejected_table(table, full_bbox, reason)
+                continue
+            cleaned.append(_merge_cells(table))
         if cleaned:
             for table in cleaned:
                 table = _normalize_extracted_table(table)

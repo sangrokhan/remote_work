@@ -20,6 +20,7 @@ from extractor import (
     _is_gray_color,
     _is_non_watermark_obj,
     _looks_like_table,
+    _table_rejection_reason,
     _merge_horizontal_band_segments,
     _merge_vertical_band_segments,
     _normalize_cell_lines,
@@ -151,6 +152,17 @@ class TableExtractionFormattingTests(unittest.TestCase):
             ["Docs", None, "Ready"],
         ]
         self.assertTrue(_looks_like_table(table))
+
+    def test_looks_like_table_allows_single_column_when_other_checks_pass(self) -> None:
+        table = [
+            ["Status"],
+            ["Ready"],
+        ]
+        self.assertTrue(_looks_like_table(table))
+
+    def test_table_rejection_reason_no_longer_rejects_large_row_count_by_size_only(self) -> None:
+        table = [["Value"] for _ in range(81)]
+        self.assertIsNone(_table_rejection_reason(table))
 
     def test_gray_text_between_53_and_57_degrees_is_treated_as_watermark(self) -> None:
         char = {
