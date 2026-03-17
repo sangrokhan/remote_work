@@ -17,7 +17,7 @@ WATERMARK_GRAY_MIN = 0.88
 WATERMARK_GRAY_MAX = 0.96
 WATERMARK_GRAY_NEUTRAL_TOLERANCE = 0.03
 BULLET_PREFIX_RE = re.compile(
-    r"^(?:[-*•●○◦◯▪▫■□◆◇◈◊‣∙◉]|[0-9]+[.)]|o|\?|\uFFFD)\s+"
+    r"^(?:[-*•●○◦◯▪▫■□◆◇◈◊‣∙◉]|[0-9]+(?:[-.][0-9]+)*[.)]|o|\?|\uFFFD)\s+"
 )
 
 
@@ -636,8 +636,7 @@ def _is_list_continuation_line(line: dict, previous: dict, anchor_x: float) -> b
     style_close = _style_signature(line) == _style_signature(previous)
     indent_x = float(line.get("x0", 0.0))
     aligned_with_text = abs(indent_x - anchor_x) <= 8.0
-    further_indented = indent_x > anchor_x
-    return gap_close and size_close and style_close and (aligned_with_text or further_indented)
+    return gap_close and size_close and style_close and aligned_with_text
 
 
 def _looks_like_inline_term_continuation(line: dict) -> bool:
@@ -663,6 +662,7 @@ def _normalize_list_block_lines(lines: Sequence[dict]) -> List[str]:
     normalized: List[str] = []
     current_item: str | None = None
     current_depth = 0
+    current_text_start_x: float | None = None
     marker_positions = sorted(
         {
             round(float(line.get("marker_x", line.get("x0", 0.0))), 2)
@@ -674,6 +674,9 @@ def _normalize_list_block_lines(lines: Sequence[dict]) -> List[str]:
     def _item_prefix(depth: int) -> str:
         markers = ["-", "*", "+"]
         return f"{'  ' * depth}{markers[depth % len(markers)]} "
+
+    def _continuation_prefix(depth: int) -> str:
+        return f"{'  ' * (depth + 1)}"
 
     def _strip_marker_text(line: dict) -> str:
         text = str(line.get("text") or "").strip()
@@ -699,13 +702,20 @@ def _normalize_list_block_lines(lines: Sequence[dict]) -> List[str]:
                 current_depth = marker_positions.index(marker_x)
             except ValueError:
                 current_depth = 0
+            current_text_start_x = float(line.get("text_start_x", line.get("x0", 0.0)))
             current_item = f"{_item_prefix(current_depth)}{_strip_marker_text(line)}".rstrip()
             continue
         if current_item and current_item.endswith("-"):
             current_item = f"{current_item}{text}".strip()
             continue
         if current_item:
-            current_item = f"{current_item} {text}".strip()
+            line_x0 = float(line.get("x0", line.get("text_start_x", 0.0)))
+            if current_text_start_x is not None and abs(line_x0 - current_text_start_x) <= 8.0:
+                current_item = f"{current_item} {text}".strip()
+                continue
+            normalized.append(current_item)
+            current_item = None
+            normalized.append(f"{_continuation_prefix(current_depth)}{text}".rstrip())
             continue
         normalized.append(text)
 
