@@ -709,8 +709,8 @@ def _normalize_list_block_lines(lines: Sequence[dict]) -> List[str]:
             current_item = f"{current_item}{text}".strip()
             continue
         if current_item:
-            line_x0 = float(line.get("x0", line.get("text_start_x", 0.0)))
-            if current_text_start_x is not None and abs(line_x0 - current_text_start_x) <= 8.0:
+            line_text_start_x = float(line.get("text_start_x", line.get("x0", 0.0)))
+            if current_text_start_x is not None and abs(line_text_start_x - current_text_start_x) <= 8.0:
                 current_item = f"{current_item} {text}".strip()
                 continue
             normalized.append(current_item)
