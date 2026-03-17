@@ -226,14 +226,20 @@ class DemoPdfBuilder:
         self.canvas.setFillColor(colors.black)
         self.canvas.setFont("Helvetica", 11)
 
-        estimated_height = len(lines) * line_height
-        self._ensure_space(estimated_height)
-
+        wrapped_items: List[Tuple[str, int]] = []
         for item in lines:
             indent = 0
             text = item
             if isinstance(item, tuple):
                 text, indent = item
+            available_width = self.width - (self.margin_x * 2) - indent
+            wrapped_lines = _wrap_visual_line(str(text), max(available_width, 48.0), "Helvetica", 11)
+            wrapped_items.extend((wrapped_line, indent) for wrapped_line in wrapped_lines)
+
+        estimated_height = len(wrapped_items) * line_height
+        self._ensure_space(estimated_height)
+
+        for text, indent in wrapped_items:
             self.canvas.drawString(self.margin_x + indent, self.cursor_y, text)
             self.cursor_y -= line_height
 

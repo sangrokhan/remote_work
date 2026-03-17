@@ -305,11 +305,21 @@ def _collect_table_drawing_debug(
             }
         )
 
+    raw_text_lines, normalized_text_lines = _extract_body_text_lines(
+        page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+    )
+
     return {
         "page": page_no,
         "body_bounds": [round(body_top, 2), round(body_bottom, 2)],
         "table_count": len(tables),
         "tables": tables,
+        "text_debug": {
+            "raw_lines": raw_text_lines,
+            "normalized_lines": normalized_text_lines,
+        },
     }
 
 
@@ -460,6 +470,21 @@ def _extract_body_text(
     footer_margin: float,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
 ) -> str:
+    _raw_lines, normalized_lines = _extract_body_text_lines(
+        page=page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+        excluded_bboxes=excluded_bboxes,
+    )
+    return "\n".join(normalized_lines)
+
+
+def _extract_body_text_lines(
+    page: "pdfplumber.page.Page",
+    header_margin: float,
+    footer_margin: float,
+    excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
+) -> Tuple[List[str], List[str]]:
     body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
     body_page = _filter_page_for_extraction(page)
 
@@ -470,8 +495,6 @@ def _extract_body_text(
             if not fixed:
                 continue
             if _is_layout_artifact(fixed):
-                continue
-            if re.fullmatch(r"^[A-Za-z]$", fixed):
                 continue
             lines.append(fixed)
         return lines
@@ -492,14 +515,14 @@ def _extract_body_text(
     if cursor < body_bottom:
         slices.append((cursor, body_bottom))
 
-    lines: List[str] = []
+    raw_lines: List[str] = []
     for top, bottom in slices:
         if bottom - top < 4:
             continue
         raw = body_page.crop((0, top, page.width, bottom)).extract_text(x_tolerance=1.5, y_tolerance=2) or ""
-        lines.extend(_clean_lines(raw))
+        raw_lines.extend(_clean_lines(raw))
 
-    return "\n".join(lines)
+    return raw_lines, _normalize_body_lines(raw_lines)
 
 
 def _merge_cells(table: Sequence[Sequence[str]]) -> List[List[str]]:
@@ -534,6 +557,42 @@ def _is_bullet_line(line: str) -> bool:
 
 def _ends_sentence(line: str) -> bool:
     return bool(re.search(r"[.!?;:。！？]$" , str(line or "").strip()))
+
+
+def _is_body_heading_line(line: str) -> bool:
+    text = str(line or "").strip()
+    if not text:
+        return False
+    return bool(re.match(r"^(?:chapter|section|appendix)\b", text, flags=re.IGNORECASE))
+
+
+def _normalize_body_lines(lines: Sequence[str]) -> List[str]:
+    normalized: List[str] = []
+    buffer: List[str] = []
+
+    def _flush_buffer() -> None:
+        nonlocal buffer
+        if buffer:
+            normalized.append(" ".join(buffer))
+            buffer = []
+
+    for raw_line in lines:
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        if _is_bullet_line(line) or _is_body_heading_line(line):
+            _flush_buffer()
+            normalized.append(line)
+            continue
+        if buffer and str(buffer[-1]).endswith("-"):
+            buffer[-1] = f"{buffer[-1]}{line}".strip()
+            continue
+        if buffer and _ends_sentence(buffer[-1]):
+            _flush_buffer()
+        buffer.append(line)
+
+    _flush_buffer()
+    return normalized
 
 
 def _normalize_cell_lines(cell: str) -> List[str]:
