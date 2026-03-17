@@ -19,6 +19,7 @@ from extractor import (
     _collect_table_drawing_debug,
     _continuation_regions_should_merge,
     _extract_embedded_images,
+    _extract_body_word_lines,
     _extract_tables,
     _is_gray_color,
     _is_non_watermark_obj,
@@ -219,8 +220,8 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
     def test_build_body_blocks_keeps_paragraph_together_despite_style_change_when_sentence_continues(self) -> None:
         lines = [
-            {"text": "This line introduces the uncommon term", "x0": 36.0, "x1": 260.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False},
-            {"text": "ProtoLexeme", "x0": 36.0, "x1": 130.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica-Bold", "color": (0.2, 0.2, 0.7), "is_bold": True, "is_italic": False},
+            {"text": "This line introduces the uncommon term", "x0": 36.0, "x1": 260.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "word_count": 6, "has_mixed_styles": False, "first_word_style_signature": ("Helvetica", False, False, None)},
+            {"text": "ProtoLexeme expands into explanation", "x0": 36.0, "x1": 220.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.2, 0.2, 0.7), "is_bold": False, "is_italic": False, "word_count": 4, "has_mixed_styles": True, "first_word_style_signature": ("Helvetica-Bold", True, False, None)},
         ]
 
         blocks = _build_body_blocks(lines)
@@ -228,9 +229,28 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(1, len(blocks))
         self.assertEqual("paragraph", blocks[0]["kind"])
         self.assertEqual(
-            ["This line introduces the uncommon term", "ProtoLexeme"],
+            ["This line introduces the uncommon term", "ProtoLexeme expands into explanation"],
             [line["text"] for line in blocks[0]["lines"]],
         )
+
+    def test_extract_body_word_lines_marks_marker_candidate_and_text_start(self) -> None:
+        filtered_page = SimpleNamespace(
+            extract_words=lambda **kwargs: [
+                {"text": "?", "x0": 48.0, "x1": 54.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Symbol"},
+                {"text": "bullet", "x0": 64.0, "x1": 92.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica"},
+                {"text": "text", "x0": 96.0, "x1": 118.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica"},
+            ]
+        )
+        page = SimpleNamespace()
+
+        with patch("extractor._filter_page_for_extraction", return_value=filtered_page), patch(
+            "extractor._detect_body_bounds", return_value=(40.0, 700.0)
+        ):
+            lines = _extract_body_word_lines(page, header_margin=90.0, footer_margin=40.0)
+
+        self.assertEqual(1, len(lines))
+        self.assertTrue(lines[0]["marker_candidate"])
+        self.assertEqual(64.0, lines[0]["text_start_x"])
 
     def test_build_body_blocks_splits_when_bold_changes_between_lines(self) -> None:
         lines = [
