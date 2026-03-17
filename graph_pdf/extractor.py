@@ -434,6 +434,46 @@ def _filter_page_for_extraction(page: "pdfplumber.page.Page") -> "pdfplumber.pag
     return page.filter(_is_non_watermark_obj)
 
 
+def _detect_chapter_body_top(page: "pdfplumber.page.Page") -> float | None:
+    extract_words = getattr(page, "extract_words", None)
+    if not callable(extract_words):
+        return None
+
+    words = extract_words(
+        x_tolerance=1.5,
+        y_tolerance=2.0,
+        keep_blank_chars=False,
+        extra_attrs=["size", "fontname"],
+    ) or []
+    if not words:
+        return None
+
+    grouped_lines: List[List[dict]] = []
+    for word in sorted(words, key=lambda item: (float(item.get("top", 0.0)), float(item.get("x0", 0.0)))):
+        if not grouped_lines or abs(float(word.get("top", 0.0)) - float(grouped_lines[-1][0].get("top", 0.0))) > 2.5:
+            grouped_lines.append([word])
+            continue
+        grouped_lines[-1].append(word)
+
+    page_top_limit = float(page.height) * 0.25
+    for words_in_line in grouped_lines:
+        ordered = sorted(words_in_line, key=lambda item: float(item.get("x0", 0.0)))
+        text = " ".join(str(word.get("text") or "").strip() for word in ordered).strip()
+        if not text:
+            continue
+        top = min(float(word.get("top", 0.0)) for word in ordered)
+        if top > page_top_limit:
+            continue
+        avg_size = sum(float(word.get("size", 0.0)) for word in ordered) / max(len(ordered), 1)
+        if avg_size < 20.0:
+            continue
+        if not re.search(r"\b(chapter|section|appendix)\b", text, flags=re.IGNORECASE):
+            continue
+        return top
+
+    return None
+
+
 def _detect_body_bounds(
     page: "pdfplumber.page.Page",
     header_margin: float,
@@ -458,6 +498,11 @@ def _detect_body_bounds(
 
     body_top = min((float(edge["top"]) for edge in top_candidates), default=default_top)
     body_bottom = max((float(edge["top"]) for edge in bottom_candidates), default=default_bottom)
+
+    if not top_candidates:
+        chapter_top = _detect_chapter_body_top(page)
+        if chapter_top is not None:
+            body_top = chapter_top
 
     if body_bottom <= body_top:
         return default_top, default_bottom
