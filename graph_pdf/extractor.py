@@ -561,14 +561,13 @@ def _extract_body_text_lines(
 
     normalized_lines: List[str] = []
     for block in blocks:
-        if block["kind"] == "paragraph":
-            block_lines = [str(line["text"]) for line in block["lines"]]
-            normalized_lines.extend(_normalize_body_lines(block_lines))
-        elif block["kind"] == "list":
-            normalized_lines.extend(_normalize_list_block_lines(block["lines"]))
-        else:
-            block_lines = [str(line["text"]) for line in block["lines"]]
+        block_lines = [str(line["text"]) for line in block["lines"]]
+        if block["kind"] == "heading":
             normalized_lines.extend(block_lines)
+            continue
+        joined = _join_non_heading_block_lines(block_lines)
+        if joined:
+            normalized_lines.append(joined)
 
     return raw_lines, normalized_lines
 
@@ -620,10 +619,6 @@ def _is_body_heading_line(line: str) -> bool:
 
 def _line_kind(line: dict) -> str:
     text = str(line.get("text") or "").strip()
-    if bool(line.get("marker_candidate")):
-        return "list"
-    if _is_bullet_line(text):
-        return "list"
     if _is_body_heading_line(text):
         return "heading"
     return "paragraph"
@@ -760,38 +755,20 @@ def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
             current_block = {
                 "kind": kind,
                 "lines": [line],
-                "list_text_start_x": float(line.get("text_start_x", line.get("x0", 0.0))),
             }
             continue
 
         previous = current_block["lines"][-1]
         same_kind = current_block["kind"] == kind
-        size_close = abs(float(line.get("size", 0.0)) - float(previous.get("size", 0.0))) <= 0.8
-        line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
-        gap_close = line_gap <= max(6.0, float(previous.get("size", 0.0)) * 0.9)
-        style_close = _style_signature(line) == _style_signature(previous)
-        list_anchor_x = float(
-            current_block.get("list_text_start_x", previous.get("text_start_x", previous.get("x0", 0.0)))
-        )
-        hyphen_wrap = str(previous.get("text") or "").strip().endswith("-")
 
         if same_kind and kind == "paragraph" and _should_merge_paragraph_lines(previous, line):
             current_block["lines"].append(line)
             continue
-        if current_block["kind"] == "list":
-            if kind == "list" and size_close and gap_close and style_close:
-                current_block["lines"].append(line)
-                current_block["list_text_start_x"] = float(line.get("text_start_x", list_anchor_x))
-                continue
-            if _is_list_continuation_line(line, previous, list_anchor_x):
-                current_block["lines"].append(line)
-                continue
 
         blocks.append(current_block)
         current_block = {
             "kind": kind,
             "lines": [line],
-            "list_text_start_x": float(line.get("text_start_x", line.get("x0", 0.0))),
         }
 
     if current_block is not None:
@@ -953,6 +930,11 @@ def _normalize_body_lines(lines: Sequence[str]) -> List[str]:
 
     _flush_buffer()
     return normalized
+
+
+def _join_non_heading_block_lines(lines: Sequence[str]) -> str:
+    joined = [str(raw_line or "").strip() for raw_line in lines if str(raw_line or "").strip()]
+    return " ".join(joined).strip()
 
 
 def _normalize_cell_lines(cell: str) -> List[str]:
