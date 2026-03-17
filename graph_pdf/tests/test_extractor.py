@@ -374,6 +374,72 @@ class TableExtractionFormattingTests(unittest.TestCase):
             _normalize_list_block_lines(lines),
         )
 
+    def test_rule_same_text_start_indent_without_marker_merges_into_same_item(self) -> None:
+        lines = [
+            {"text": "- top level", "x0": 48.0, "x1": 120.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 48.0, "text_start_x": 64.0},
+            {"text": "same item continuation", "x0": 64.0, "x1": 220.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
+        ]
+
+        self.assertEqual(
+            ["- top level same item continuation"],
+            _normalize_list_block_lines(lines),
+        )
+
+    def test_rule_same_bullet_indent_starts_new_item(self) -> None:
+        lines = [
+            {"text": "- first item", "x0": 48.0, "x1": 120.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 48.0, "text_start_x": 64.0},
+            {"text": "- second item", "x0": 48.0, "x1": 132.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 48.0, "text_start_x": 64.0},
+        ]
+
+        self.assertEqual(
+            ["- first item", "- second item"],
+            _normalize_list_block_lines(lines),
+        )
+
+    def test_rule_marker_at_previous_text_start_becomes_new_item(self) -> None:
+        lines = [
+            {"text": "- parent item", "x0": 48.0, "x1": 120.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 48.0, "text_start_x": 64.0},
+            {"text": "◆ child item", "x0": 64.0, "x1": 150.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Symbol", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 64.0, "text_start_x": 80.0},
+        ]
+
+        self.assertEqual(
+            ["- parent item", "  * child item"],
+            _normalize_list_block_lines(lines),
+        )
+
+    def test_rule_outdented_followup_line_stays_separate(self) -> None:
+        lines = [
+            {"text": "- parent item", "x0": 48.0, "x1": 120.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 48.0, "text_start_x": 64.0},
+            {"text": "outdented follow-up", "x0": 40.0, "x1": 160.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 40.0},
+        ]
+
+        self.assertEqual(
+            ["- parent item", "  outdented follow-up"],
+            _normalize_list_block_lines(lines),
+        )
+
+    def test_rule_non_marker_line_at_marker_indent_stays_separate(self) -> None:
+        lines = [
+            {"text": "1) parent item", "x0": 48.0, "x1": 132.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 48.0, "text_start_x": 64.0},
+            {"text": "follow-up at marker indent", "x0": 48.0, "x1": 190.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 48.0},
+        ]
+
+        self.assertEqual(
+            ["- parent item", "  follow-up at marker indent"],
+            _normalize_list_block_lines(lines),
+        )
+
+    def test_rule_continuation_prefers_text_start_x_over_line_x0(self) -> None:
+        lines = [
+            {"text": "- parent item", "x0": 48.0, "x1": 120.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 48.0, "text_start_x": 64.0},
+            {"text": "continuation aligned to text start", "x0": 52.0, "x1": 220.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
+        ]
+
+        self.assertEqual(
+            ["- parent item continuation aligned to text start"],
+            _normalize_list_block_lines(lines),
+        )
+
     def test_parse_pages_spec_supports_ranges_and_lists(self) -> None:
         self.assertEqual([1, 3, 4, 5, 8], _parse_pages_spec("1,3-5,8"))
 
