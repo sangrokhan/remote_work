@@ -717,6 +717,84 @@ def _should_try_table_continuation_merge(
     return pending_page is not None and current_page == pending_page + 1
 
 
+def _bboxes_intersect(
+    a: Tuple[float, float, float, float],
+    b: Tuple[float, float, float, float],
+) -> bool:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    return ax0 < bx1 and ax1 > bx0 and ay0 < by1 and ay1 > by0
+
+
+def _body_text_boxes(
+    page: pdfplumber.page.PageObject,
+    header_margin: float,
+    footer_margin: float,
+    excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
+) -> List[Tuple[float, float, float, float]]:
+    filtered_page = _filter_page_for_extraction(page)
+    body_top, body_bottom = _detect_body_bounds(
+        page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+    )
+    text_boxes: List[Tuple[float, float, float, float]] = []
+    for word in filtered_page.extract_words() or []:
+        text = _normalize_text(str(word.get("text") or ""))
+        if not text or _is_layout_artifact(text):
+            continue
+        bbox = (
+            float(word.get("x0", 0.0)),
+            float(word.get("top", 0.0)),
+            float(word.get("x1", 0.0)),
+            float(word.get("bottom", 0.0)),
+        )
+        if bbox[3] <= body_top or bbox[1] >= body_bottom:
+            continue
+        if any(_bboxes_intersect(bbox, excluded_bbox) for excluded_bbox in excluded_bboxes):
+            continue
+        text_boxes.append(bbox)
+    return text_boxes
+
+
+def _gap_text_boxes_after_bbox(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+    table_bboxes: Sequence[Tuple[float, float, float, float]],
+    header_margin: float,
+    footer_margin: float,
+) -> List[Tuple[float, float, float, float]]:
+    return [
+        text_bbox
+        for text_bbox in _body_text_boxes(
+            page,
+            header_margin=header_margin,
+            footer_margin=footer_margin,
+            excluded_bboxes=table_bboxes,
+        )
+        if float(text_bbox[1]) >= float(bbox[3])
+    ]
+
+
+def _gap_text_boxes_before_bbox(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+    table_bboxes: Sequence[Tuple[float, float, float, float]],
+    header_margin: float,
+    footer_margin: float,
+) -> List[Tuple[float, float, float, float]]:
+    return [
+        text_bbox
+        for text_bbox in _body_text_boxes(
+            page,
+            header_margin=header_margin,
+            footer_margin=footer_margin,
+            excluded_bboxes=table_bboxes,
+        )
+        if float(text_bbox[3]) <= float(bbox[1])
+    ]
+
+
 def _vertical_axes_for_bbox(
     page: pdfplumber.page.PageObject,
     bbox: Tuple[float, float, float, float],
@@ -747,11 +825,6 @@ def _continuation_regions_should_merge(
     _prev_x0, prev_top, _prev_x1, prev_bottom = prev_bbox
     _curr_x0, curr_top, _curr_x1, curr_bottom = curr_bbox
 
-    prev_near_footer = abs(body_bottom - prev_bottom) <= edge_tolerance
-    curr_near_header = abs(curr_top - body_top) <= edge_tolerance
-    if not (prev_near_footer and curr_near_header):
-        return False
-
     shared_axes = [
         axis
         for axis in prev_axes
@@ -762,6 +835,11 @@ def _continuation_regions_should_merge(
 
     if gap_text_boxes:
         return False
+
+    prev_near_footer = abs(body_bottom - prev_bottom) <= edge_tolerance
+    curr_near_header = abs(curr_top - body_top) <= edge_tolerance
+    if prev_near_footer or curr_near_header:
+        return True
 
     return True
 
@@ -1195,9 +1273,10 @@ def extract_pdf_to_outputs(
     pending_last_page: Optional[int] = None
     pending_bbox: Optional[Tuple[float, float, float, float]] = None
     pending_axes: List[float] = []
+    pending_gap_text_boxes: List[Tuple[float, float, float, float]] = []
 
     def _flush_pending() -> None:
-        nonlocal pending_table, pending_page, pending_last_page, pending_bbox, pending_axes
+        nonlocal pending_table, pending_page, pending_last_page, pending_bbox, pending_axes, pending_gap_text_boxes
         if pending_table is not None and pending_page is not None:
             _append_output_table(output_tables, pending_page, len(output_tables) + 1, pending_table)
         pending_table = None
@@ -1205,6 +1284,7 @@ def extract_pdf_to_outputs(
         pending_last_page = None
         pending_bbox = None
         pending_axes = []
+        pending_gap_text_boxes = []
 
     with pdfplumber.open(str(pdf_path)) as pdf:
         for page_idx, page in enumerate(pdf.pages, start=1):
@@ -1252,6 +1332,7 @@ def extract_pdf_to_outputs(
                     footer_margin=footer_margin,
                 )
                 for table_rows, bbox in tables:
+                    table_bboxes = [table_bbox for _table_rows, table_bbox in tables]
                     cross_page_continuation = _should_try_table_continuation_merge(
                         pending_page=pending_last_page,
                         current_page=page_idx,
@@ -1269,6 +1350,13 @@ def extract_pdf_to_outputs(
                         pending_last_page = page_idx
                         pending_bbox = bbox
                         pending_axes = _vertical_axes_for_bbox(page, bbox)
+                        pending_gap_text_boxes = _gap_text_boxes_after_bbox(
+                            page,
+                            bbox,
+                            table_bboxes,
+                            header_margin=header_margin,
+                            footer_margin=footer_margin,
+                        )
                         continue
 
                     continuation_rows = table_rows
@@ -1286,11 +1374,25 @@ def extract_pdf_to_outputs(
                                     max(pending_bbox[3], bbox[3]),
                                 )
                             else:
-                                pending_bbox = bbox
+                                    pending_bbox = bbox
                             pending_axes = _merge_numeric_positions([*pending_axes, *current_axes], tolerance=1.0)
+                            pending_gap_text_boxes = _gap_text_boxes_after_bbox(
+                                page,
+                                bbox,
+                                table_bboxes,
+                                header_margin=header_margin,
+                                footer_margin=footer_margin,
+                            )
                             continue
 
                     current_axes = _vertical_axes_for_bbox(page, bbox)
+                    current_gap_text_boxes = _gap_text_boxes_before_bbox(
+                        page,
+                        bbox,
+                        table_bboxes,
+                        header_margin=header_margin,
+                        footer_margin=footer_margin,
+                    )
                     if (
                         pending_table is not None
                         and pending_bbox is not None
@@ -1303,7 +1405,7 @@ def extract_pdf_to_outputs(
                             curr_axes=current_axes,
                             body_top=body_top,
                             body_bottom=body_bottom,
-                            gap_text_boxes=[],
+                            gap_text_boxes=[*pending_gap_text_boxes, *current_gap_text_boxes],
                         )
                     ):
                         pending_table.extend(continuation_rows)
@@ -1315,6 +1417,13 @@ def extract_pdf_to_outputs(
                             max(pending_bbox[3], bbox[3]),
                         )
                         pending_axes = _merge_numeric_positions([*pending_axes, *current_axes], tolerance=1.0)
+                        pending_gap_text_boxes = _gap_text_boxes_after_bbox(
+                            page,
+                            bbox,
+                            table_bboxes,
+                            header_margin=header_margin,
+                            footer_margin=footer_margin,
+                        )
                         continue
 
                     _flush_pending()
@@ -1323,6 +1432,13 @@ def extract_pdf_to_outputs(
                     pending_last_page = page_idx
                     pending_bbox = bbox
                     pending_axes = current_axes
+                    pending_gap_text_boxes = _gap_text_boxes_after_bbox(
+                        page,
+                        bbox,
+                        table_bboxes,
+                        header_margin=header_margin,
+                        footer_margin=footer_margin,
+                    )
 
         _flush_pending()
 

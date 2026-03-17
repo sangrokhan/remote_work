@@ -266,6 +266,24 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
         self.assertTrue(should_merge)
 
+    def test_continuation_regions_merge_without_boundary_proximity_when_gap_has_no_body_content(self) -> None:
+        prev_bbox = (100.0, 540.0, 400.0, 610.0)
+        curr_bbox = (102.0, 140.0, 402.0, 220.0)
+        prev_axes = [180.0, 280.0]
+        curr_axes = [180.4, 279.8]
+
+        should_merge = _continuation_regions_should_merge(
+            prev_bbox=prev_bbox,
+            curr_bbox=curr_bbox,
+            prev_axes=prev_axes,
+            curr_axes=curr_axes,
+            body_top=72.0,
+            body_bottom=722.0,
+            gap_text_boxes=[],
+        )
+
+        self.assertTrue(should_merge)
+
     def test_continuation_regions_do_not_merge_when_gap_has_other_content(self) -> None:
         prev_bbox = (100.0, 620.0, 400.0, 705.0)
         curr_bbox = (102.0, 88.0, 402.0, 190.0)
