@@ -14,24 +14,38 @@ from reportlab.pdfgen import canvas
 from sample_fixture import load_demo_fixture
 
 LineItem = Tuple[str, int]
-TableRow = Tuple[str, str, str]
+TableRow = Tuple[str, ...]
 _SMALL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z/C/HwAHAQL/5ncLrgAAAABJRU5ErkJggg=="
 )
 
-def _fixture_tables() -> Dict[str, Tuple[Tuple[str, str, str], Tuple[TableRow, ...]]]:
+def _fixture_tables() -> Dict[str, Tuple[Tuple[str, ...], Tuple[TableRow, ...]]]:
     fixture = load_demo_fixture()
     return {
         table["id"]: (
-            tuple(table["columns"]),
+            tuple(str(cell) for cell in table["columns"]),
             tuple(tuple(str(cell) for cell in row) for row in table["rows"]),
         )
         for table in fixture["tables"]
     }
 
 
-def get_demo_tables() -> Dict[str, Tuple[Tuple[str, str, str], Tuple[TableRow, ...]]]:
+def get_demo_tables() -> Dict[str, Tuple[Tuple[str, ...], Tuple[TableRow, ...]]]:
     return _fixture_tables()
+
+
+def _fixture_table_render_meta(table_id: str) -> tuple[Tuple[str, ...], Tuple[TableRow, ...], Tuple[float, ...] | None]:
+    for table in load_demo_fixture()["tables"]:
+        if table["id"] != table_id:
+            continue
+        columns = tuple(str(cell) for cell in table.get("render_columns", table["columns"]))
+        rows = tuple(
+            tuple(str(cell) for cell in row)
+            for row in table.get("render_rows", table["rows"])
+        )
+        weights = table.get("render_column_weights")
+        return columns, rows, tuple(float(value) for value in weights) if weights else None
+    raise KeyError(table_id)
 
 
 def get_demo_text_lines() -> Tuple[str, ...]:
@@ -232,6 +246,7 @@ class DemoPdfBuilder:
         self,
         header: Sequence[str],
         rows: Sequence[TableRow],
+        column_weights: Sequence[float] | None = None,
         header_font_size: float = 9.0,
         row_font_size: float = 8.0,
         include_header: bool = True,
@@ -247,9 +262,19 @@ class DemoPdfBuilder:
         if not body_width:
             return
 
-        column_weights = [0.28, 0.2, 0.52]
+        if column_weights is None:
+            if len(header) == 3:
+                column_weights = [0.28, 0.2, 0.52]
+            else:
+                column_weights = [1.0 / max(len(header), 1)] * max(len(header), 1)
+        total_weight = sum(column_weights) or 1.0
+        column_weights = [float(weight) / total_weight for weight in column_weights]
         col_widths = [w * body_width for w in column_weights]
-        col_x = [self.margin_x + col_widths[0], self.margin_x + col_widths[0] + col_widths[1]]
+        col_x: List[float] = []
+        running_x = self.margin_x
+        for width in col_widths[:-1]:
+            running_x += width
+            col_x.append(running_x)
         header_height = 20.0
         line_h = row_font_size + 1.2
 
@@ -426,9 +451,9 @@ class DemoPdfBuilder:
 
         if include_header and header:
             self.canvas.setFont("Helvetica-Bold", header_font_size)
-            self.canvas.drawString(x + 6, y_top - 14, header[0])
-            self.canvas.drawString(col_x[0] + 6, y_top - 14, header[1] if len(header) > 1 else "")
-            self.canvas.drawString(col_x[1] + 6, y_top - 14, header[2] if len(header) > 2 else "")
+            text_x_positions = [x + 6, *[boundary + 6 for boundary in col_x]]
+            for idx, title in enumerate(header):
+                self.canvas.drawString(text_x_positions[idx], y_top - 14, title)
             y -= header_h
             self.canvas.line(x, y, x + body_width, y)
 
@@ -460,8 +485,8 @@ class DemoPdfBuilder:
         if include_outer_vertical:
             self.canvas.line(x, y_top, x, y)
             self.canvas.line(x + body_width, y_top, x + body_width, y)
-        self.canvas.line(col_x[0], y_top, col_x[0], y)
-        self.canvas.line(col_x[1], y_top, col_x[1], y)
+        for boundary_x in col_x:
+            self.canvas.line(boundary_x, y_top, boundary_x, y)
 
         # Body text.
         self.canvas.setFont("Helvetica", row_font_size)
@@ -483,22 +508,27 @@ class DemoPdfBuilder:
             ]
             max_line_count = max(len(t) for t in wrap_texts)
             row_baseline_top = row_cursor - 11
+            text_x_positions = [x + 4, *[boundary + 4 for boundary in col_x]]
 
             draw_first_col_per_row = row_idx not in rows_in_spans
             for i in range(max_line_count):
                 if draw_first_col_per_row:
                     self.canvas.drawString(
-                        x + 4,
+                        text_x_positions[0],
                         row_baseline_top - (i * line_h),
                         wrap_texts[0][i] if i < len(wrap_texts[0]) else "",
                     )
-                self.canvas.drawString(col_x[0] + 4, row_baseline_top - (i * line_h), wrap_texts[1][i] if i < len(wrap_texts[1]) else "")
-                self.canvas.drawString(col_x[1] + 4, row_baseline_top - (i * line_h), wrap_texts[2][i] if i < len(wrap_texts[2]) else "")
+                for col_idx in range(1, len(wrap_texts)):
+                    self.canvas.drawString(
+                        text_x_positions[col_idx],
+                        row_baseline_top - (i * line_h),
+                        wrap_texts[col_idx][i] if i < len(wrap_texts[col_idx]) else "",
+                    )
 
             if row_idx in span_starts and str(row[0]).strip():
                 first_col_lines = wrap_texts[0]
                 for i, line in enumerate(first_col_lines):
-                    self.canvas.drawString(x + 4, row_baseline_top - (i * line_h), line)
+                    self.canvas.drawString(text_x_positions[0], row_baseline_top - (i * line_h), line)
 
             row_cursor -= row_h
 
@@ -557,8 +587,9 @@ def create_demo_pdf(path: Path) -> None:
     )
 
     builder._draw_table_block(
-        header=tables["area"][0],
-        rows=tables["area"][1],
+        header=_fixture_table_render_meta("area")[0],
+        rows=_fixture_table_render_meta("area")[1],
+        column_weights=_fixture_table_render_meta("area")[2],
         include_header=True,
         split_pages=False,
         include_outer_vertical=False,

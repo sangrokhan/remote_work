@@ -11,6 +11,7 @@ from pathlib import Path
 import pdfplumber
 
 from extractor import (
+    _collapse_structural_triplet_columns,
     _detect_body_bounds,
     _char_rotation_degrees,
     _collect_rotated_text_debug,
@@ -130,6 +131,14 @@ class TableExtractionFormattingTests(unittest.TestCase):
             _normalize_cell_lines(cell),
         )
 
+    def test_hyphen_ended_line_joins_next_line_without_space(self) -> None:
+        cell = "cross-\nborder policy"
+        self.assertEqual(["cross-border policy"], _normalize_cell_lines(cell))
+
+    def test_hyphen_ended_line_does_not_absorb_next_bullet(self) -> None:
+        cell = "review-\n- next item"
+        self.assertEqual(["review-", "- next item"], _normalize_cell_lines(cell))
+
     def test_parse_pages_spec_supports_ranges_and_lists(self) -> None:
         self.assertEqual([1, 3, 4, 5, 8], _parse_pages_spec("1,3-5,8"))
 
@@ -171,6 +180,36 @@ class TableExtractionFormattingTests(unittest.TestCase):
             ["Ready", "", ""],
         ]
         self.assertIsNone(_table_rejection_reason(table))
+
+    def test_collapse_structural_triplet_columns_removes_empty_side_columns(self) -> None:
+        table = [
+            ["", "Area", "", "", "Status", "", "", "Action", ""],
+            ["", "Docs", "", "", "READY", "", "", "Finalize", ""],
+            ["", "QA", "", "", "TODO", "", "", "Confirm", ""],
+        ]
+
+        self.assertEqual(
+            [
+                ["Area", "Status", "Action"],
+                ["Docs", "READY", "Finalize"],
+                ["QA", "TODO", "Confirm"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_keeps_non_empty_side_columns(self) -> None:
+        table = [
+            ["", "Area", "", "", "Status", "", "", "Action", ""],
+            ["note", "Docs", "", "", "READY", "", "", "Finalize", ""],
+        ]
+
+        self.assertEqual(
+            [
+                ["", "Area", "", "Status", "Action"],
+                ["note", "Docs", "", "READY", "Finalize"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
 
     def test_gray_text_between_53_and_57_degrees_is_treated_as_watermark(self) -> None:
         char = {
@@ -495,6 +534,7 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(3, len(blocks))
         stage_block = next((block for block in blocks if "Phase A" in block), "")
         self.assertTrue(stage_block)
+        self.assertIn("### Page 1 table 2", markdown)
         self.assertIn("Release Notes", stage_block)
         self.assertIn("Phase C", stage_block)
         self.assertIn("Finance", stage_block)
@@ -610,6 +650,13 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertIn("selected_horizontal_edges", edge_payload["pages"][0])
         self.assertIn("all_vertical_edges", edge_payload["pages"][0])
         self.assertIn("selected_vertical_edges", edge_payload["pages"][0])
+
+    def test_third_table_uses_structural_triplet_columns_in_sample_pdf(self) -> None:
+        pdf_path = self._build_pdf()
+        with pdfplumber.open(str(pdf_path)) as pdf:
+            payload = _collect_table_drawing_debug(pdf.pages[2], page_no=3)
+
+        self.assertTrue(any(table["col_count"] == 9 for table in payload["tables"]))
 
     def test_stage_table_repeats_header_after_page_break(self) -> None:
         pdf_path = self._build_pdf()
