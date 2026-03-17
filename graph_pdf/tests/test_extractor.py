@@ -19,6 +19,7 @@ from extractor import (
     _collect_table_drawing_debug,
     _continuation_regions_should_merge,
     _extract_embedded_images,
+    _extract_tables,
     _is_gray_color,
     _is_non_watermark_obj,
     _looks_like_table,
@@ -611,6 +612,19 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(2, result["summary"]["table_count"])
         self.assertEqual(1, len(result["image_files"]))
         self.assertTrue(result["image_files"][0].name.startswith("sample_page_03_image_"))
+
+    def test_extract_tables_skips_page_wide_fallback_by_default(self) -> None:
+        page = SimpleNamespace(
+            width=600.0,
+            height=800.0,
+            horizontal_edges=[],
+            vertical_edges=[],
+            extract_tables=MagicMock(return_value=[[["A", "B"], ["1", "2"]]]),
+            filter=lambda fn: page,
+        )
+
+        self.assertEqual([], _extract_tables(page))
+        page.extract_tables.assert_not_called()
 
     def test_extract_embedded_images_respects_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()

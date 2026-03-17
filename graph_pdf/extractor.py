@@ -1257,7 +1257,10 @@ def _extract_tables_from_crop(
     return []
 
 
-def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
+def _extract_tables(
+    page: pdfplumber.page.PageObject,
+    force_table: bool = False,
+) -> List[TableChunk]:
     page = _filter_page_for_extraction(page)
     seen_keys = set()
     merged: List[TableChunk] = []
@@ -1285,7 +1288,11 @@ def _extract_tables(page: pdfplumber.page.PageObject) -> List[TableChunk]:
     if merged:
         return merged
 
-    # Fallback to page-wide extraction when region-based cues are unavailable.
+    if not force_table:
+        return merged
+
+    # Fallback to page-wide extraction when region-based cues are unavailable
+    # and the caller explicitly requests aggressive table extraction.
     full_bbox = (0.0, 0.0, float(page.width), float(page.height))
     fallback_settings = [
         {
@@ -1475,6 +1482,7 @@ def extract_pdf_to_outputs(
     header_margin: float = 90,
     footer_margin: float = 40,
     pages: Optional[Sequence[int]] = None,
+    force_table: bool = False,
     debug: bool = False,
     debug_watermark: bool = False,
 ) -> dict:
@@ -1529,7 +1537,7 @@ def extract_pdf_to_outputs(
                 )
             if debug_watermark:
                 rotated_debug.extend(_collect_rotated_text_debug(page, page_no=page_idx))
-            tables = _extract_tables(page)
+            tables = _extract_tables(page, force_table=force_table)
             full_page_text = _extract_body_text(
                 page,
                 header_margin=header_margin,
@@ -1733,6 +1741,7 @@ if __name__ == "__main__":  # basic manual run
     parser.add_argument("--out-image-dir", default="graph_pdf/artifacts/images")
     parser.add_argument("--stem", default="output")
     parser.add_argument("--pages", help="1-based pages like 1,3,5-8")
+    parser.add_argument("--force-table", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--debug-watermark", action="store_true")
     args = parser.parse_args()
@@ -1743,6 +1752,7 @@ if __name__ == "__main__":  # basic manual run
         out_image_dir=Path(args.out_image_dir),
         stem=args.stem,
         pages=_parse_pages_spec(args.pages) if args.pages else None,
+        force_table=args.force_table,
         debug=args.debug,
         debug_watermark=args.debug_watermark,
     )
