@@ -559,6 +559,9 @@ def _normalize_cell_lines(cell: str) -> List[str]:
         if logical_lines and _is_bullet_line(logical_lines[-1]) and not buffer:
             logical_lines[-1] = f"{logical_lines[-1]} {line}".strip()
             continue
+        if buffer and str(buffer[-1]).endswith("-"):
+            buffer[-1] = f"{buffer[-1]}{line}".strip()
+            continue
         if buffer and _ends_sentence(buffer[-1]):
             _flush_buffer()
         buffer.append(line)
@@ -567,18 +570,39 @@ def _normalize_cell_lines(cell: str) -> List[str]:
     return logical_lines
 
 
+def _collapse_structural_triplet_columns(table: Sequence[Sequence[str]]) -> List[List[str]]:
+    rows = [list(row) for row in table]
+    if not rows:
+        return []
+
+    col_count = max((len(row) for row in rows), default=0)
+    if col_count == 0 or col_count % 3 != 0:
+        return [list(row) for row in rows]
+
+    padded_rows = [list(row) + [""] * (col_count - len(row)) for row in rows]
+    collapsed_indices: List[int] = []
+
+    for start in range(0, col_count, 3):
+        left_values = [_normalize_text(row[start]) for row in padded_rows]
+        right_values = [_normalize_text(row[start + 2]) for row in padded_rows]
+        if any(left_values) or any(right_values):
+            collapsed_indices.extend([start, start + 1, start + 2])
+            continue
+        collapsed_indices.append(start + 1)
+
+    return [[row[idx] for idx in collapsed_indices] for row in padded_rows]
+
+
 def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]]:
-    # TODO: Some source PDFs render one visual column as three structural
-    # columns by inserting narrow left/right spacer columns. Collapse those
-    # structural triples into one display column before markdown output once the
-    # grouping rule is validated on real documents.
+    # TODO: Extend structural-column collapse beyond strict 3-column spacer
+    # triples when real documents expose asymmetric spacer patterns.
     normalized: List[List[str]] = []
     for row in table:
         normalized_row = []
         for cell in row:
             normalized_row.append("\n".join(_normalize_cell_lines(str(cell or ""))))
         normalized.append(normalized_row)
-    return normalized
+    return _collapse_structural_triplet_columns(normalized)
 
 
 def _looks_like_table(table: Sequence[Sequence[str]]) -> bool:
@@ -1168,15 +1192,17 @@ def extract_pdf_to_outputs(
 
     pending_table: Optional[TableRows] = None
     pending_page: Optional[int] = None
+    pending_last_page: Optional[int] = None
     pending_bbox: Optional[Tuple[float, float, float, float]] = None
     pending_axes: List[float] = []
 
     def _flush_pending() -> None:
-        nonlocal pending_table, pending_page, pending_bbox, pending_axes
+        nonlocal pending_table, pending_page, pending_last_page, pending_bbox, pending_axes
         if pending_table is not None and pending_page is not None:
             _append_output_table(output_tables, pending_page, len(output_tables) + 1, pending_table)
         pending_table = None
         pending_page = None
+        pending_last_page = None
         pending_bbox = None
         pending_axes = []
 
@@ -1227,7 +1253,7 @@ def extract_pdf_to_outputs(
                 )
                 for table_rows, bbox in tables:
                     cross_page_continuation = _should_try_table_continuation_merge(
-                        pending_page=pending_page,
+                        pending_page=pending_last_page,
                         current_page=page_idx,
                     )
 
@@ -1240,7 +1266,7 @@ def extract_pdf_to_outputs(
                         )
                     if merged_missing_first is not None:
                         pending_table = merged_missing_first
-                        pending_page = page_idx
+                        pending_last_page = page_idx
                         pending_bbox = bbox
                         pending_axes = _vertical_axes_for_bbox(page, bbox)
                         continue
@@ -1250,7 +1276,7 @@ def extract_pdf_to_outputs(
                         continuation_rows = _split_repeated_header(pending_table or [], table_rows)
                         if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
                             pending_table.extend(continuation_rows)
-                            pending_page = page_idx
+                            pending_last_page = page_idx
                             current_axes = _vertical_axes_for_bbox(page, bbox)
                             if pending_bbox is not None:
                                 pending_bbox = (
@@ -1268,7 +1294,7 @@ def extract_pdf_to_outputs(
                     if (
                         pending_table is not None
                         and pending_bbox is not None
-                        and pending_page is not None
+                        and pending_last_page is not None
                         and cross_page_continuation
                         and _continuation_regions_should_merge(
                             prev_bbox=pending_bbox,
@@ -1281,7 +1307,7 @@ def extract_pdf_to_outputs(
                         )
                     ):
                         pending_table.extend(continuation_rows)
-                        pending_page = page_idx
+                        pending_last_page = page_idx
                         pending_bbox = (
                             min(pending_bbox[0], bbox[0]),
                             min(pending_bbox[1], bbox[1]),
@@ -1294,6 +1320,7 @@ def extract_pdf_to_outputs(
                     _flush_pending()
                     pending_table = table_rows
                     pending_page = page_idx
+                    pending_last_page = page_idx
                     pending_bbox = bbox
                     pending_axes = current_axes
 

@@ -85,6 +85,14 @@
     {
       "id": "area",
       "columns": ["Area", "Status", "Action"],
+      "render_columns": ["", "Area", "", "", "Status", "", "", "Action", ""],
+      "render_column_weights": [0.03, 0.27, 0.03, 0.03, 0.27, 0.03, 0.03, 0.27, 0.03],
+      "render_rows": [
+        ["", "Docs", "", "", "READY", "", "", "Finalize\n- sample\n- archive", ""],
+        ["", "QA", "", "", "TODO", "", "", "Confirm\n- edge case\n- fallback", ""],
+        ["", "Ops", "", "", "OK", "", "", "Archive path\n- cleanup\n- index refresh", ""],
+        ["", "Support", "", "", "REVIEW", "", "", "Escalation owner confirmed.\nRegional fallback documented.\nLaunch blackout window approved.", ""]
+      ],
       "rows": [
         ["Docs", "READY", "Finalize\n- sample\n- archive"],
         ["QA", "TODO", "Confirm\n- edge case\n- fallback"],
