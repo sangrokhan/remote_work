@@ -308,6 +308,11 @@ def _collect_table_drawing_debug(
             }
         )
 
+    line_payloads = _extract_body_word_lines(
+        page=page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+    )
     raw_text_lines, normalized_text_lines = _extract_body_text_lines(
         page,
         header_margin=header_margin,
@@ -321,6 +326,18 @@ def _collect_table_drawing_debug(
         "tables": tables,
         "text_debug": {
             "raw_lines": raw_text_lines,
+            "raw_line_boxes": [
+                {
+                    "text": str(line.get("text") or ""),
+                    "x0": round(float(line.get("x0", 0.0)), 2),
+                    "x1": round(float(line.get("x1", 0.0)), 2),
+                    "top": round(float(line.get("top", 0.0)), 2),
+                    "bottom": round(float(line.get("bottom", 0.0)), 2),
+                    "text_start_x": round(float(line.get("text_start_x", line.get("x0", 0.0))), 2),
+                    "marker_candidate": bool(line.get("marker_candidate")),
+                }
+                for line in line_payloads
+            ],
             "normalized_lines": normalized_text_lines,
         },
     }

@@ -1054,11 +1054,22 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(6, payload["pages"][0]["tables"][0]["row_count"])
         self.assertIn("text_debug", payload["pages"][0])
         self.assertIn("raw_lines", payload["pages"][0]["text_debug"])
+        self.assertIn("raw_line_boxes", payload["pages"][0]["text_debug"])
         self.assertIn("normalized_lines", payload["pages"][0]["text_debug"])
         self.assertGreaterEqual(
             len(payload["pages"][0]["text_debug"]["raw_lines"]),
             len(payload["pages"][0]["text_debug"]["normalized_lines"]),
         )
+        self.assertEqual(
+            len(payload["pages"][0]["text_debug"]["raw_lines"]),
+            len(payload["pages"][0]["text_debug"]["raw_line_boxes"]),
+        )
+        first_line_box = payload["pages"][0]["text_debug"]["raw_line_boxes"][0]
+        self.assertIn("text", first_line_box)
+        self.assertIn("x0", first_line_box)
+        self.assertIn("x1", first_line_box)
+        self.assertIn("top", first_line_box)
+        self.assertIn("bottom", first_line_box)
         edge_debug_file = result["debug_edges_file"]
         self.assertIsNotNone(edge_debug_file)
         edge_payload = json.loads(edge_debug_file.read_text(encoding="utf-8"))
