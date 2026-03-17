@@ -11,6 +11,7 @@ from pathlib import Path
 import pdfplumber
 
 from extractor import (
+    _build_body_blocks,
     _collapse_structural_triplet_columns,
     _detect_body_bounds,
     _char_rotation_degrees,
@@ -157,6 +158,25 @@ class TableExtractionFormattingTests(unittest.TestCase):
                 "The next paragraph also starts cleanly.",
             ],
             _normalize_body_lines(lines),
+        )
+
+    def test_build_body_blocks_splits_heading_paragraph_and_list(self) -> None:
+        lines = [
+            {"text": "Chapter 1: Deep Structure Verification", "x0": 36.0, "x1": 260.0, "top": 90.0, "bottom": 102.0, "size": 14.0},
+            {"text": "This paragraph starts on one extracted line", "x0": 36.0, "x1": 320.0, "top": 118.0, "bottom": 130.0, "size": 11.0},
+            {"text": "and continues on the next extracted line", "x0": 36.0, "x1": 310.0, "top": 132.0, "bottom": 144.0, "size": 11.0},
+            {"text": "- bullet item", "x0": 48.0, "x1": 120.0, "top": 160.0, "bottom": 172.0, "size": 11.0},
+        ]
+
+        blocks = _build_body_blocks(lines)
+
+        self.assertEqual(
+            [
+                {"kind": "heading", "lines": ["Chapter 1: Deep Structure Verification"]},
+                {"kind": "paragraph", "lines": ["This paragraph starts on one extracted line", "and continues on the next extracted line"]},
+                {"kind": "list", "lines": ["- bullet item"]},
+            ],
+            [{"kind": block["kind"], "lines": [line["text"] for line in block["lines"]]} for block in blocks],
         )
 
     def test_parse_pages_spec_supports_ranges_and_lists(self) -> None:
