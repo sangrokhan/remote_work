@@ -650,6 +650,15 @@ def _looks_like_inline_term_continuation(line: dict) -> bool:
     return bool(line.get("has_mixed_styles")) and int(line.get("word_count", 0)) >= 2
 
 
+def _has_room_for_next_line_start(previous: dict, line: dict) -> bool:
+    body_right = float(previous.get("body_right", previous.get("x1", 0.0)))
+    remaining_width = body_right - float(previous.get("x1", 0.0))
+    first_word_width = float(line.get("first_word_width", 0.0))
+    if first_word_width <= 0.0:
+        return False
+    return remaining_width >= first_word_width * 1.25
+
+
 def _normalize_list_block_lines(lines: Sequence[dict]) -> List[str]:
     normalized: List[str] = []
     current_item: str | None = None
@@ -736,7 +745,11 @@ def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
 
         if same_kind and indent_close and size_close and gap_close and kind == "paragraph":
             sentence_continues = not _ends_sentence(str(previous.get("text") or "").strip())
-            if style_close or (sentence_continues and _looks_like_inline_term_continuation(line)):
+            if style_close or (
+                sentence_continues
+                and _looks_like_inline_term_continuation(line)
+                and not _has_room_for_next_line_start(previous, line)
+            ):
                 current_block["lines"].append(line)
                 continue
         if current_block["kind"] == "list":
@@ -876,6 +889,8 @@ def _extract_body_word_lines(
                 "is_italic": bool(re.search(r"(italic|oblique)", dominant_font, flags=re.IGNORECASE)),
                 "marker_candidate": marker_candidate,
                 "text_start_x": float(first_non_bullet_word.get("x0", ordered[0].get("x0", 0.0))),
+                "first_word_width": float(first_non_bullet_word.get("x1", 0.0)) - float(first_non_bullet_word.get("x0", 0.0)),
+                "body_right": float(getattr(page, "width", 0.0)),
                 "word_count": len(ordered),
                 "has_mixed_styles": len(set(word_style_signatures)) > 1,
                 "first_word_style_signature": word_style_signatures[0] if word_style_signatures else None,
