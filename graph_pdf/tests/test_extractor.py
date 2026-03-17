@@ -159,6 +159,14 @@ class TableExtractionFormattingTests(unittest.TestCase):
             _normalize_body_lines(["Wrapped sentence line", "? next item"]),
         )
 
+    def test_diamond_bullet_starts_new_item_instead_of_continuation(self) -> None:
+        cell = "review-\n◆ next item"
+        self.assertEqual(["review-", "◆ next item"], _normalize_cell_lines(cell))
+        self.assertEqual(
+            ["Wrapped sentence line", "◆ next item"],
+            _normalize_body_lines(["Wrapped sentence line", "◆ next item"]),
+        )
+
     def test_normalize_body_lines_joins_wrapped_sentence_lines(self) -> None:
         lines = [
             "This paragraph starts on one visual line and",
@@ -208,6 +216,21 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(2, len(blocks))
         self.assertEqual(["First paragraph line"], [line["text"] for line in blocks[0]["lines"]])
         self.assertEqual(["Second line with different color"], [line["text"] for line in blocks[1]["lines"]])
+
+    def test_build_body_blocks_keeps_paragraph_together_despite_style_change_when_sentence_continues(self) -> None:
+        lines = [
+            {"text": "This line introduces the uncommon term", "x0": 36.0, "x1": 260.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False},
+            {"text": "ProtoLexeme", "x0": 36.0, "x1": 130.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica-Bold", "color": (0.2, 0.2, 0.7), "is_bold": True, "is_italic": False},
+        ]
+
+        blocks = _build_body_blocks(lines)
+
+        self.assertEqual(1, len(blocks))
+        self.assertEqual("paragraph", blocks[0]["kind"])
+        self.assertEqual(
+            ["This line introduces the uncommon term", "ProtoLexeme"],
+            [line["text"] for line in blocks[0]["lines"]],
+        )
 
     def test_build_body_blocks_splits_when_bold_changes_between_lines(self) -> None:
         lines = [

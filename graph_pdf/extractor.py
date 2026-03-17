@@ -17,7 +17,7 @@ WATERMARK_GRAY_MIN = 0.88
 WATERMARK_GRAY_MAX = 0.96
 WATERMARK_GRAY_NEUTRAL_TOLERANCE = 0.03
 BULLET_PREFIX_RE = re.compile(
-    r"^(?:[-*•●○◦◯▪▫■□‣∙◉]|[0-9]+[.)]|o|\?|\uFFFD)\s+"
+    r"^(?:[-*•●○◦◯▪▫■□◆◇◈◊‣∙◉]|[0-9]+[.)]|o|\?|\uFFFD)\s+"
 )
 
 
@@ -638,6 +638,14 @@ def _is_list_continuation_line(line: dict, previous: dict, anchor_x: float) -> b
     return gap_close and size_close and style_close and (aligned_with_text or further_indented)
 
 
+def _looks_like_inline_term_continuation(line: dict) -> bool:
+    text = str(line.get("text") or "").strip()
+    if not text:
+        return False
+    tokens = text.split()
+    return len(tokens) == 1 and not _ends_sentence(text)
+
+
 def _normalize_list_block_lines(lines: Sequence[dict]) -> List[str]:
     normalized: List[str] = []
     current_item: str | None = None
@@ -693,9 +701,11 @@ def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
             current_block.get("list_text_start_x", previous.get("text_start_x", previous.get("x0", 0.0)))
         )
 
-        if same_kind and indent_close and size_close and gap_close and style_close and kind == "paragraph":
-            current_block["lines"].append(line)
-            continue
+        if same_kind and indent_close and size_close and gap_close and kind == "paragraph":
+            sentence_continues = not _ends_sentence(str(previous.get("text") or "").strip())
+            if style_close or (sentence_continues and _looks_like_inline_term_continuation(line)):
+                current_block["lines"].append(line)
+                continue
         if current_block["kind"] == "list":
             if kind == "list" and size_close and gap_close and style_close:
                 current_block["lines"].append(line)
