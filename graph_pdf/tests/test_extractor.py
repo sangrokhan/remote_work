@@ -23,6 +23,7 @@ from extractor import (
     _is_gray_color,
     _is_non_watermark_obj,
     _looks_like_table,
+    _normalize_list_block_lines,
     _normalize_body_lines,
     _table_rejection_reason,
     _merge_horizontal_band_segments,
@@ -219,6 +220,47 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(2, len(blocks))
         self.assertEqual(["Regular line"], [line["text"] for line in blocks[0]["lines"]])
         self.assertEqual(["Bold line"], [line["text"] for line in blocks[1]["lines"]])
+
+    def test_build_body_blocks_keeps_bullet_continuation_aligned_with_text_start(self) -> None:
+        lines = [
+            {"text": "- bullet item starts here", "x0": 48.0, "x1": 220.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
+            {"text": "and continues aligned with item text", "x0": 64.0, "x1": 260.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
+        ]
+
+        blocks = _build_body_blocks(lines)
+
+        self.assertEqual(1, len(blocks))
+        self.assertEqual("list", blocks[0]["kind"])
+        self.assertEqual(
+            ["- bullet item starts here", "and continues aligned with item text"],
+            [line["text"] for line in blocks[0]["lines"]],
+        )
+
+    def test_build_body_blocks_keeps_bullet_continuation_when_further_indented(self) -> None:
+        lines = [
+            {"text": "- bullet item starts here", "x0": 48.0, "x1": 220.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
+            {"text": "continuation under the bullet body", "x0": 72.0, "x1": 260.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 72.0},
+        ]
+
+        blocks = _build_body_blocks(lines)
+
+        self.assertEqual(1, len(blocks))
+        self.assertEqual("list", blocks[0]["kind"])
+
+    def test_normalize_list_block_lines_merges_continuation_lines_into_item(self) -> None:
+        lines = [
+            {"text": "- bullet item starts here", "x0": 48.0, "x1": 220.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
+            {"text": "and continues aligned with item text", "x0": 64.0, "x1": 260.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
+            {"text": "- next bullet", "x0": 48.0, "x1": 130.0, "top": 160.0, "bottom": 172.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
+        ]
+
+        self.assertEqual(
+            [
+                "- bullet item starts here and continues aligned with item text",
+                "- next bullet",
+            ],
+            _normalize_list_block_lines(lines),
+        )
 
     def test_parse_pages_spec_supports_ranges_and_lists(self) -> None:
         self.assertEqual([1, 3, 4, 5, 8], _parse_pages_spec("1,3-5,8"))
