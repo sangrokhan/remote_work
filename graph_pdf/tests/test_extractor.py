@@ -25,6 +25,7 @@ from extractor import (
     _merge_vertical_band_segments,
     _normalize_cell_lines,
     _parse_pages_spec,
+    _should_try_table_continuation_merge,
     _table_regions,
     extract_pdf_to_outputs,
 )
@@ -243,6 +244,10 @@ class TableExtractionFormattingTests(unittest.TestCase):
         )
 
         self.assertFalse(should_merge)
+
+    def test_same_page_tables_do_not_trigger_continuation_merge(self) -> None:
+        self.assertFalse(_should_try_table_continuation_merge(pending_page=2, current_page=2))
+        self.assertTrue(_should_try_table_continuation_merge(pending_page=2, current_page=3))
 
     def test_table_regions_split_when_components_have_different_vertical_edges(self) -> None:
         page = SimpleNamespace(

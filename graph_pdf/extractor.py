@@ -686,6 +686,13 @@ def _normalize_two_col_continuation_rows(rows: TableRows) -> TableRows:
     return [["", str(row[0] or "").strip(), str(row[1] or "").strip()] for row in rows if row]
 
 
+def _should_try_table_continuation_merge(
+    pending_page: int | None,
+    current_page: int,
+) -> bool:
+    return pending_page is not None and current_page == pending_page + 1
+
+
 def _vertical_axes_for_bbox(
     page: pdfplumber.page.PageObject,
     bbox: Tuple[float, float, float, float],
@@ -1219,26 +1226,50 @@ def extract_pdf_to_outputs(
                     footer_margin=footer_margin,
                 )
                 for table_rows, bbox in tables:
-                    merged_missing_first = _maybe_merge_missing_first_column_chunk(
-                        pending_table,
-                        table_rows,
-                        full_page_text,
+                    cross_page_continuation = _should_try_table_continuation_merge(
+                        pending_page=pending_page,
+                        current_page=page_idx,
                     )
+
+                    merged_missing_first = None
+                    if cross_page_continuation:
+                        merged_missing_first = _maybe_merge_missing_first_column_chunk(
+                            pending_table,
+                            table_rows,
+                            full_page_text,
+                        )
                     if merged_missing_first is not None:
                         pending_table = merged_missing_first
+                        pending_page = page_idx
+                        pending_bbox = bbox
+                        pending_axes = _vertical_axes_for_bbox(page, bbox)
                         continue
 
-                    continuation_rows = _split_repeated_header(pending_table or [], table_rows)
-                    if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
-                        pending_table.extend(continuation_rows)
-                        continue
+                    continuation_rows = table_rows
+                    if cross_page_continuation:
+                        continuation_rows = _split_repeated_header(pending_table or [], table_rows)
+                        if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
+                            pending_table.extend(continuation_rows)
+                            pending_page = page_idx
+                            current_axes = _vertical_axes_for_bbox(page, bbox)
+                            if pending_bbox is not None:
+                                pending_bbox = (
+                                    min(pending_bbox[0], bbox[0]),
+                                    min(pending_bbox[1], bbox[1]),
+                                    max(pending_bbox[2], bbox[2]),
+                                    max(pending_bbox[3], bbox[3]),
+                                )
+                            else:
+                                pending_bbox = bbox
+                            pending_axes = _merge_numeric_positions([*pending_axes, *current_axes], tolerance=1.0)
+                            continue
 
                     current_axes = _vertical_axes_for_bbox(page, bbox)
                     if (
                         pending_table is not None
                         and pending_bbox is not None
                         and pending_page is not None
-                        and page_idx == pending_page + 1
+                        and cross_page_continuation
                         and _continuation_regions_should_merge(
                             prev_bbox=pending_bbox,
                             curr_bbox=bbox,
@@ -1250,6 +1281,7 @@ def extract_pdf_to_outputs(
                         )
                     ):
                         pending_table.extend(continuation_rows)
+                        pending_page = page_idx
                         pending_bbox = (
                             min(pending_bbox[0], bbox[0]),
                             min(pending_bbox[1], bbox[1]),
