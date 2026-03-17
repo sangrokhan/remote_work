@@ -292,15 +292,31 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
     def test_normalize_list_block_lines_merges_continuation_lines_into_item(self) -> None:
         lines = [
-            {"text": "- bullet item starts here", "x0": 48.0, "x1": 220.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
+            {"text": "- bullet item starts here", "x0": 48.0, "x1": 220.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0, "marker_x": 48.0},
             {"text": "and continues aligned with item text", "x0": 64.0, "x1": 260.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
-            {"text": "- next bullet", "x0": 48.0, "x1": 130.0, "top": 160.0, "bottom": 172.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0},
+            {"text": "- next bullet", "x0": 48.0, "x1": 130.0, "top": 160.0, "bottom": 172.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0, "marker_x": 48.0},
         ]
 
         self.assertEqual(
             [
                 "- bullet item starts here and continues aligned with item text",
                 "- next bullet",
+            ],
+            _normalize_list_block_lines(lines),
+        )
+
+    def test_normalize_list_block_lines_uses_different_markers_per_depth(self) -> None:
+        lines = [
+            {"text": "? top level", "x0": 48.0, "x1": 120.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Symbol", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 48.0, "text_start_x": 64.0},
+            {"text": "o child level", "x0": 64.0, "x1": 132.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Symbol", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 64.0, "text_start_x": 80.0},
+            {"text": "◆ grandchild level", "x0": 80.0, "x1": 168.0, "top": 148.0, "bottom": 160.0, "size": 11.0, "fontname": "Symbol", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 80.0, "text_start_x": 96.0},
+        ]
+
+        self.assertEqual(
+            [
+                "- top level",
+                "  * child level",
+                "    + grandchild level",
             ],
             _normalize_list_block_lines(lines),
         )
