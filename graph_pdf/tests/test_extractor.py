@@ -312,6 +312,58 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(40.0, body_top)
         self.assertEqual(710.0, body_bottom)
 
+    def test_detect_body_bounds_uses_large_chapter_line_when_no_top_divider_exists(self) -> None:
+        page = SimpleNamespace(
+            width=600.0,
+            height=800.0,
+            horizontal_edges=[
+                {"x0": 35.0, "x1": 565.0, "top": 742.0},
+            ],
+            extract_words=lambda **kwargs: [
+                {
+                    "text": "Chapter",
+                    "x0": 36.0,
+                    "x1": 110.0,
+                    "top": 96.0,
+                    "bottom": 114.0,
+                    "size": 20.0,
+                    "fontname": "Helvetica-Bold",
+                },
+                {
+                    "text": "3:",
+                    "x0": 118.0,
+                    "x1": 140.0,
+                    "top": 96.0,
+                    "bottom": 114.0,
+                    "size": 20.0,
+                    "fontname": "Helvetica-Bold",
+                },
+                {
+                    "text": "New",
+                    "x0": 148.0,
+                    "x1": 190.0,
+                    "top": 96.0,
+                    "bottom": 114.0,
+                    "size": 20.0,
+                    "fontname": "Helvetica-Bold",
+                },
+                {
+                    "text": "Section",
+                    "x0": 198.0,
+                    "x1": 260.0,
+                    "top": 96.0,
+                    "bottom": 114.0,
+                    "size": 20.0,
+                    "fontname": "Helvetica-Bold",
+                },
+            ],
+        )
+
+        body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
+
+        self.assertEqual(96.0, body_top)
+        self.assertEqual(742.0, body_bottom)
+
     def test_continuation_regions_merge_when_near_footer_header_with_shared_axes(self) -> None:
         prev_bbox = (100.0, 620.0, 400.0, 705.0)
         curr_bbox = (102.0, 88.0, 402.0, 190.0)
