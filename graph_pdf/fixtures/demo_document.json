@@ -17,12 +17,12 @@
     "Footer page marker: {page_no}"
   ],
   "body": {
-    "intro": [
-      "Chapter 1: Deep Structure Verification",
-      "This section starts a body flow with multiple lines and clear indentation to test ordered extraction.",
-      "- 1st level bullet: layout and spacing checks",
-      "- nested detail: line 2 confirms indentation",
-      "- deeper detail: line 3 confirms paragraph wrap and line breaks",
+      "intro": [
+        "Chapter 1: Deep Structure Verification",
+        "This intentionally verbose sentence exists to force a visual wrap in the sample PDF while still representing single logical sentence for downstream language-model parsing and retrieval quality checks across extracted body text.",
+        "- 1st level bullet: layout and spacing checks",
+        "- nested detail: line 2 confirms indentation",
+        "- deeper detail: line 3 confirms paragraph wrap and line breaks",
       "The extraction should remove header/footer and watermark while preserving indented body content.",
       "- level 1: body copy, one of many lines",
       "- level 2: second nested line",

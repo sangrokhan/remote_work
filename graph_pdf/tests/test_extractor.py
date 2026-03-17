@@ -21,6 +21,7 @@ from extractor import (
     _is_gray_color,
     _is_non_watermark_obj,
     _looks_like_table,
+    _normalize_body_lines,
     _table_rejection_reason,
     _merge_horizontal_band_segments,
     _merge_vertical_band_segments,
@@ -138,6 +139,25 @@ class TableExtractionFormattingTests(unittest.TestCase):
     def test_hyphen_ended_line_does_not_absorb_next_bullet(self) -> None:
         cell = "review-\n- next item"
         self.assertEqual(["review-", "- next item"], _normalize_cell_lines(cell))
+
+    def test_normalize_body_lines_joins_wrapped_sentence_lines(self) -> None:
+        lines = [
+            "This paragraph starts on one visual line and",
+            "continues on the next extracted line without punctuation",
+            "- bullet item should stay separate",
+            "Chapter 2: Heading stays separate",
+            "The next paragraph also starts cleanly.",
+        ]
+
+        self.assertEqual(
+            [
+                "This paragraph starts on one visual line and continues on the next extracted line without punctuation",
+                "- bullet item should stay separate",
+                "Chapter 2: Heading stays separate",
+                "The next paragraph also starts cleanly.",
+            ],
+            _normalize_body_lines(lines),
+        )
 
     def test_parse_pages_spec_supports_ranges_and_lists(self) -> None:
         self.assertEqual([1, 3, 4, 5, 8], _parse_pages_spec("1,3-5,8"))
@@ -562,6 +582,10 @@ class TableExtractionFormattingTests(unittest.TestCase):
         result = self._extract_result()
         markdown = result["markdown"]
         self.assertIn("Chapter 1: Deep Structure Verification", markdown)
+        self.assertIn(
+            "This intentionally verbose sentence exists to force a visual wrap in the sample PDF while still representing single logical sentence for downstream language-model parsing and retrieval quality checks across extracted body text.",
+            markdown,
+        )
         self.assertNotIn("### Page 1 table 1", markdown)
         self.assertNotIn("| Item | Qty | Price |", markdown)
         self.assertNotIn("Phase A", markdown)
@@ -657,13 +681,22 @@ class TableExtractionFormattingTests(unittest.TestCase):
         debug_file = result["debug_file"]
         self.assertIsNotNone(debug_file)
         payload = json.loads(debug_file.read_text(encoding="utf-8"))
-        self.assertEqual(3, len(payload["pages"]))
+        with pdfplumber.open(str(pdf_path)) as pdf:
+            expected_page_count = len(pdf.pages)
+        self.assertEqual(expected_page_count, len(payload["pages"]))
         self.assertEqual(2, payload["pages"][0]["table_count"])
         self.assertEqual(6, payload["pages"][0]["tables"][0]["row_count"])
+        self.assertIn("text_debug", payload["pages"][0])
+        self.assertIn("raw_lines", payload["pages"][0]["text_debug"])
+        self.assertIn("normalized_lines", payload["pages"][0]["text_debug"])
+        self.assertGreaterEqual(
+            len(payload["pages"][0]["text_debug"]["raw_lines"]),
+            len(payload["pages"][0]["text_debug"]["normalized_lines"]),
+        )
         edge_debug_file = result["debug_edges_file"]
         self.assertIsNotNone(edge_debug_file)
         edge_payload = json.loads(edge_debug_file.read_text(encoding="utf-8"))
-        self.assertEqual(3, len(edge_payload["pages"]))
+        self.assertEqual(expected_page_count, len(edge_payload["pages"]))
         self.assertIn("all_horizontal_edges", edge_payload["pages"][0])
         self.assertIn("selected_horizontal_edges", edge_payload["pages"][0])
         self.assertIn("all_vertical_edges", edge_payload["pages"][0])
