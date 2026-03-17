@@ -485,44 +485,24 @@ def _extract_body_text_lines(
     footer_margin: float,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
 ) -> Tuple[List[str], List[str]]:
-    body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
-    body_page = _filter_page_for_extraction(page)
+    line_payloads = _extract_body_word_lines(
+        page=page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+        excluded_bboxes=excluded_bboxes,
+    )
+    raw_lines = [str(line["text"]) for line in line_payloads]
+    blocks = _build_body_blocks(line_payloads)
 
-    def _clean_lines(raw: str) -> List[str]:
-        lines = []
-        for line in (raw or "").splitlines():
-            fixed = _repair_watermark_bleed(line.strip())
-            if not fixed:
-                continue
-            if _is_layout_artifact(fixed):
-                continue
-            lines.append(fixed)
-        return lines
+    normalized_lines: List[str] = []
+    for block in blocks:
+        block_lines = [str(line["text"]) for line in block["lines"]]
+        if block["kind"] == "paragraph":
+            normalized_lines.extend(_normalize_body_lines(block_lines))
+        else:
+            normalized_lines.extend(block_lines)
 
-    excluded = []
-    for x0, top, x1, bottom in excluded_bboxes:
-        if bottom <= body_top or top >= body_bottom:
-            continue
-        excluded.append((max(body_top, top), min(body_bottom, bottom)))
-    excluded.sort()
-
-    slices: List[Tuple[float, float]] = []
-    cursor = body_top
-    for top, bottom in excluded:
-        if top > cursor:
-            slices.append((cursor, top))
-        cursor = max(cursor, bottom)
-    if cursor < body_bottom:
-        slices.append((cursor, body_bottom))
-
-    raw_lines: List[str] = []
-    for top, bottom in slices:
-        if bottom - top < 4:
-            continue
-        raw = body_page.crop((0, top, page.width, bottom)).extract_text(x_tolerance=1.5, y_tolerance=2) or ""
-        raw_lines.extend(_clean_lines(raw))
-
-    return raw_lines, _normalize_body_lines(raw_lines)
+    return raw_lines, normalized_lines
 
 
 def _merge_cells(table: Sequence[Sequence[str]]) -> List[List[str]]:
@@ -564,6 +544,115 @@ def _is_body_heading_line(line: str) -> bool:
     if not text:
         return False
     return bool(re.match(r"^(?:chapter|section|appendix)\b", text, flags=re.IGNORECASE))
+
+
+def _line_kind(line: dict) -> str:
+    text = str(line.get("text") or "").strip()
+    if _is_bullet_line(text):
+        return "list"
+    if _is_body_heading_line(text):
+        return "heading"
+    return "paragraph"
+
+
+def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
+    if not lines:
+        return []
+
+    blocks: List[dict] = []
+    current_block: dict | None = None
+
+    for line in lines:
+        kind = _line_kind(line)
+        if current_block is None:
+            current_block = {"kind": kind, "lines": [line]}
+            continue
+
+        previous = current_block["lines"][-1]
+        same_kind = current_block["kind"] == kind
+        indent_close = abs(float(line.get("x0", 0.0)) - float(previous.get("x0", 0.0))) <= 8.0
+        size_close = abs(float(line.get("size", 0.0)) - float(previous.get("size", 0.0))) <= 0.8
+        line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
+        gap_close = line_gap <= max(6.0, float(previous.get("size", 0.0)) * 0.9)
+
+        if same_kind and indent_close and size_close and gap_close and kind == "paragraph":
+            current_block["lines"].append(line)
+            continue
+
+        blocks.append(current_block)
+        current_block = {"kind": kind, "lines": [line]}
+
+    if current_block is not None:
+        blocks.append(current_block)
+
+    return blocks
+
+
+def _extract_body_word_lines(
+    page: "pdfplumber.page.Page",
+    header_margin: float,
+    footer_margin: float,
+    excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
+) -> List[dict]:
+    filtered_page = _filter_page_for_extraction(page)
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
+    words = filtered_page.extract_words(
+        x_tolerance=1.5,
+        y_tolerance=2.0,
+        keep_blank_chars=False,
+        extra_attrs=["size", "fontname"],
+    ) or []
+
+    def _word_bbox(word: dict) -> Tuple[float, float, float, float]:
+        top = float(word.get("top", 0.0))
+        bottom = float(word.get("bottom", top))
+        return (
+            float(word.get("x0", 0.0)),
+            top,
+            float(word.get("x1", 0.0)),
+            bottom,
+        )
+
+    def _word_in_body(word: dict) -> bool:
+        bbox = _word_bbox(word)
+        if bbox[3] <= body_top or bbox[1] >= body_bottom:
+            return False
+        return not any(_bboxes_intersect(bbox, excluded_bbox) for excluded_bbox in excluded_bboxes)
+
+    filtered_words = [word for word in words if _word_in_body(word)]
+    grouped_lines: List[List[dict]] = []
+    for word in sorted(filtered_words, key=lambda item: (float(item.get("top", 0.0)), float(item.get("x0", 0.0)))):
+        cleaned = _repair_watermark_bleed(str(word.get("text") or "").strip())
+        if not cleaned or _is_layout_artifact(cleaned):
+            continue
+        if not grouped_lines or abs(float(word.get("top", 0.0)) - float(grouped_lines[-1][0].get("top", 0.0))) > 2.5:
+            grouped_lines.append([word])
+            continue
+        grouped_lines[-1].append(word)
+
+    lines: List[dict] = []
+    for words_in_line in grouped_lines:
+        ordered = sorted(words_in_line, key=lambda item: float(item.get("x0", 0.0)))
+        text_parts = []
+        for word in ordered:
+            cleaned = _repair_watermark_bleed(str(word.get("text") or "").strip())
+            if cleaned:
+                text_parts.append(cleaned)
+        text = " ".join(text_parts).strip()
+        if not text or _is_layout_artifact(text):
+            continue
+        lines.append(
+            {
+                "text": text,
+                "x0": float(ordered[0].get("x0", 0.0)),
+                "x1": float(ordered[-1].get("x1", 0.0)),
+                "top": min(float(word.get("top", 0.0)) for word in ordered),
+                "bottom": max(float(word.get("bottom", 0.0)) for word in ordered),
+                "size": sum(float(word.get("size", 0.0)) for word in ordered) / max(len(ordered), 1),
+            }
+        )
+
+    return lines
 
 
 def _normalize_body_lines(lines: Sequence[str]) -> List[str]:
