@@ -653,15 +653,44 @@ def _looks_like_inline_term_continuation(line: dict) -> bool:
 def _normalize_list_block_lines(lines: Sequence[dict]) -> List[str]:
     normalized: List[str] = []
     current_item: str | None = None
+    current_depth = 0
+    marker_positions = sorted(
+        {
+            round(float(line.get("marker_x", line.get("x0", 0.0))), 2)
+            for line in lines
+            if bool(line.get("marker_candidate")) or _is_bullet_line(str(line.get("text") or "").strip())
+        }
+    )
+
+    def _item_prefix(depth: int) -> str:
+        markers = ["-", "*", "+"]
+        return f"{'  ' * depth}{markers[depth % len(markers)]} "
+
+    def _strip_marker_text(line: dict) -> str:
+        text = str(line.get("text") or "").strip()
+        if not text:
+            return text
+        parts = text.split(maxsplit=1)
+        if len(parts) == 1:
+            return ""
+        first = parts[0]
+        if bool(line.get("marker_candidate")) or _is_bullet_marker_text(first) or _is_bullet_line(text):
+            return parts[1].strip()
+        return text
 
     for line in lines:
         text = str(line.get("text") or "").strip()
         if not text:
             continue
-        if _is_bullet_line(text):
+        if bool(line.get("marker_candidate")) or _is_bullet_line(text):
             if current_item:
                 normalized.append(current_item)
-            current_item = text
+            marker_x = round(float(line.get("marker_x", line.get("x0", 0.0))), 2)
+            try:
+                current_depth = marker_positions.index(marker_x)
+            except ValueError:
+                current_depth = 0
+            current_item = f"{_item_prefix(current_depth)}{_strip_marker_text(line)}".rstrip()
             continue
         if current_item and current_item.endswith("-"):
             current_item = f"{current_item}{text}".strip()
