@@ -603,6 +603,8 @@ def _is_body_heading_line(line: str) -> bool:
 
 def _line_kind(line: dict) -> str:
     text = str(line.get("text") or "").strip()
+    if bool(line.get("marker_candidate")):
+        return "list"
     if _is_bullet_line(text):
         return "list"
     if _is_body_heading_line(text):
@@ -625,7 +627,7 @@ def _style_signature(line: dict) -> tuple:
 
 def _is_list_continuation_line(line: dict, previous: dict, anchor_x: float) -> bool:
     text = str(line.get("text") or "").strip()
-    if not text or _is_bullet_line(text) or _is_body_heading_line(text):
+    if not text or bool(line.get("marker_candidate")) or _is_bullet_line(text) or _is_body_heading_line(text):
         return False
 
     line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
@@ -643,7 +645,9 @@ def _looks_like_inline_term_continuation(line: dict) -> bool:
     if not text:
         return False
     tokens = text.split()
-    return len(tokens) == 1 and not _ends_sentence(text)
+    if len(tokens) == 1 and not _ends_sentence(text):
+        return True
+    return bool(line.get("has_mixed_styles")) and int(line.get("word_count", 0)) >= 2
 
 
 def _normalize_list_block_lines(lines: Sequence[dict]) -> List[str]:
@@ -789,14 +793,46 @@ def _extract_body_word_lines(
         if normalized_colors:
             color_keys = [tuple(round(float(value), 3) for value in color[:3]) for color in normalized_colors]
             dominant_color = max(color_keys, key=color_keys.count)
+        first_cleaned = _repair_watermark_bleed(str(ordered[0].get("text") or "").strip())
+        second_word = ordered[1] if len(ordered) > 1 else ordered[0]
+        marker_gap = float(second_word.get("x0", ordered[0].get("x1", 0.0))) - float(ordered[0].get("x1", 0.0))
+        marker_candidate = len(ordered) > 1 and (
+            _is_bullet_marker_text(first_cleaned)
+            or (
+                len(first_cleaned) == 1
+                and not first_cleaned.isalnum()
+                and marker_gap >= 4.0
+            )
+            or (
+                first_cleaned in {"o", "O", "?", "\uFFFD"}
+                and marker_gap >= 4.0
+            )
+        )
         first_non_bullet_word = next(
             (
                 word
                 for word in ordered
-                if not _is_bullet_marker_text(_repair_watermark_bleed(str(word.get("text") or "").strip()))
+                if not marker_candidate
+                or not _is_bullet_marker_text(_repair_watermark_bleed(str(word.get("text") or "").strip()))
+                and _repair_watermark_bleed(str(word.get("text") or "").strip()) not in {"o", "O", "?", "\uFFFD"}
             ),
             ordered[0],
         )
+        word_style_signatures = []
+        for word in ordered:
+            fontname = str(word.get("fontname") or "")
+            color = word.get("non_stroking_color") or word.get("stroking_color")
+            normalized_color = None
+            if isinstance(color, tuple) and len(color) >= 3:
+                normalized_color = tuple(round(float(value), 3) for value in color[:3])
+            word_style_signatures.append(
+                (
+                    fontname,
+                    bool(re.search(r"bold", fontname, flags=re.IGNORECASE)),
+                    bool(re.search(r"(italic|oblique)", fontname, flags=re.IGNORECASE)),
+                    normalized_color,
+                )
+            )
         lines.append(
             {
                 "text": text,
@@ -809,7 +845,11 @@ def _extract_body_word_lines(
                 "color": dominant_color,
                 "is_bold": bool(re.search(r"bold", dominant_font, flags=re.IGNORECASE)),
                 "is_italic": bool(re.search(r"(italic|oblique)", dominant_font, flags=re.IGNORECASE)),
+                "marker_candidate": marker_candidate,
                 "text_start_x": float(first_non_bullet_word.get("x0", ordered[0].get("x0", 0.0))),
+                "word_count": len(ordered),
+                "has_mixed_styles": len(set(word_style_signatures)) > 1,
+                "first_word_style_signature": word_style_signatures[0] if word_style_signatures else None,
             }
         )
 
