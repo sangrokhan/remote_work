@@ -544,10 +544,13 @@ def _extract_body_text_lines(
 
     normalized_lines: List[str] = []
     for block in blocks:
-        block_lines = [str(line["text"]) for line in block["lines"]]
         if block["kind"] == "paragraph":
+            block_lines = [str(line["text"]) for line in block["lines"]]
             normalized_lines.extend(_normalize_body_lines(block_lines))
+        elif block["kind"] == "list":
+            normalized_lines.extend(_normalize_list_block_lines(block["lines"]))
         else:
+            block_lines = [str(line["text"]) for line in block["lines"]]
             normalized_lines.extend(block_lines)
 
     return raw_lines, normalized_lines
@@ -583,6 +586,10 @@ def _is_bullet_line(line: str) -> bool:
     return bool(BULLET_PREFIX_RE.match(str(line or "").strip()))
 
 
+def _is_bullet_marker_text(text: str) -> bool:
+    return bool(BULLET_PREFIX_RE.match(f"{str(text or '').strip()} x"))
+
+
 def _ends_sentence(line: str) -> bool:
     return bool(re.search(r"[.!?;:。！？]$" , str(line or "").strip()))
 
@@ -616,6 +623,48 @@ def _style_signature(line: dict) -> tuple:
     )
 
 
+def _is_list_continuation_line(line: dict, previous: dict, anchor_x: float) -> bool:
+    text = str(line.get("text") or "").strip()
+    if not text or _is_bullet_line(text) or _is_body_heading_line(text):
+        return False
+
+    line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
+    gap_close = line_gap <= max(6.0, float(previous.get("size", 0.0)) * 0.9)
+    size_close = abs(float(line.get("size", 0.0)) - float(previous.get("size", 0.0))) <= 0.8
+    style_close = _style_signature(line) == _style_signature(previous)
+    indent_x = float(line.get("x0", 0.0))
+    aligned_with_text = abs(indent_x - anchor_x) <= 8.0
+    further_indented = indent_x > anchor_x
+    return gap_close and size_close and style_close and (aligned_with_text or further_indented)
+
+
+def _normalize_list_block_lines(lines: Sequence[dict]) -> List[str]:
+    normalized: List[str] = []
+    current_item: str | None = None
+
+    for line in lines:
+        text = str(line.get("text") or "").strip()
+        if not text:
+            continue
+        if _is_bullet_line(text):
+            if current_item:
+                normalized.append(current_item)
+            current_item = text
+            continue
+        if current_item and current_item.endswith("-"):
+            current_item = f"{current_item}{text}".strip()
+            continue
+        if current_item:
+            current_item = f"{current_item} {text}".strip()
+            continue
+        normalized.append(text)
+
+    if current_item:
+        normalized.append(current_item)
+
+    return normalized
+
+
 def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
     if not lines:
         return []
@@ -626,7 +675,11 @@ def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
     for line in lines:
         kind = _line_kind(line)
         if current_block is None:
-            current_block = {"kind": kind, "lines": [line]}
+            current_block = {
+                "kind": kind,
+                "lines": [line],
+                "list_text_start_x": float(line.get("text_start_x", line.get("x0", 0.0))),
+            }
             continue
 
         previous = current_block["lines"][-1]
@@ -636,13 +689,28 @@ def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
         line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
         gap_close = line_gap <= max(6.0, float(previous.get("size", 0.0)) * 0.9)
         style_close = _style_signature(line) == _style_signature(previous)
+        list_anchor_x = float(
+            current_block.get("list_text_start_x", previous.get("text_start_x", previous.get("x0", 0.0)))
+        )
 
         if same_kind and indent_close and size_close and gap_close and style_close and kind == "paragraph":
             current_block["lines"].append(line)
             continue
+        if current_block["kind"] == "list":
+            if kind == "list" and size_close and gap_close and style_close:
+                current_block["lines"].append(line)
+                current_block["list_text_start_x"] = float(line.get("text_start_x", list_anchor_x))
+                continue
+            if _is_list_continuation_line(line, previous, list_anchor_x):
+                current_block["lines"].append(line)
+                continue
 
         blocks.append(current_block)
-        current_block = {"kind": kind, "lines": [line]}
+        current_block = {
+            "kind": kind,
+            "lines": [line],
+            "list_text_start_x": float(line.get("text_start_x", line.get("x0", 0.0))),
+        }
 
     if current_block is not None:
         blocks.append(current_block)
@@ -711,6 +779,14 @@ def _extract_body_word_lines(
         if normalized_colors:
             color_keys = [tuple(round(float(value), 3) for value in color[:3]) for color in normalized_colors]
             dominant_color = max(color_keys, key=color_keys.count)
+        first_non_bullet_word = next(
+            (
+                word
+                for word in ordered
+                if not _is_bullet_marker_text(_repair_watermark_bleed(str(word.get("text") or "").strip()))
+            ),
+            ordered[0],
+        )
         lines.append(
             {
                 "text": text,
@@ -723,6 +799,7 @@ def _extract_body_word_lines(
                 "color": dominant_color,
                 "is_bold": bool(re.search(r"bold", dominant_font, flags=re.IGNORECASE)),
                 "is_italic": bool(re.search(r"(italic|oblique)", dominant_font, flags=re.IGNORECASE)),
+                "text_start_x": float(first_non_bullet_word.get("x0", ordered[0].get("x0", 0.0))),
             }
         )
 
