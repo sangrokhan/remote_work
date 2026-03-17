@@ -164,6 +164,13 @@ class TableExtractionFormattingTests(unittest.TestCase):
         table = [["Value"] for _ in range(81)]
         self.assertIsNone(_table_rejection_reason(table))
 
+    def test_table_rejection_reason_allows_sparse_tables(self) -> None:
+        table = [
+            ["Status", "", ""],
+            ["Ready", "", ""],
+        ]
+        self.assertIsNone(_table_rejection_reason(table))
+
     def test_gray_text_between_53_and_57_degrees_is_treated_as_watermark(self) -> None:
         char = {
             "object_type": "char",

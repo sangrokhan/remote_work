@@ -568,6 +568,10 @@ def _normalize_cell_lines(cell: str) -> List[str]:
 
 
 def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]]:
+    # TODO: Some source PDFs render one visual column as three structural
+    # columns by inserting narrow left/right spacer columns. Collapse those
+    # structural triples into one display column before markdown output once the
+    # grouping rule is validated on real documents.
     normalized: List[List[str]] = []
     for row in table:
         normalized_row = []
@@ -585,20 +589,10 @@ def _table_rejection_reason(table: Sequence[Sequence[str]]) -> str | None:
     if not table:
         return "empty table"
 
-    max_cols = max(len(r) for r in table)
-
     normalized_rows = [[str(cell or "").strip() for cell in row] for row in table]
 
     if not any(cell for cell in normalized_rows[0]):
         return "empty first row"
-
-    non_empty_cells = sum(1 for row in normalized_rows for cell in row if cell)
-    continuation_like = not _normalize_text(normalized_rows[0][0]) and len(normalized_rows) == 2
-    min_cells = max_cols * 2
-    if continuation_like:
-        min_cells = max_cols + 1
-    if non_empty_cells < min_cells:
-        return f"too few non-empty cells ({non_empty_cells} < {min_cells})"
 
     return None
 
