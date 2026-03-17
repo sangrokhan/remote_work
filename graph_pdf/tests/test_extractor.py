@@ -144,6 +144,14 @@ class TableExtractionFormattingTests(unittest.TestCase):
         cell = "review-\n- next item"
         self.assertEqual(["review-", "- next item"], _normalize_cell_lines(cell))
 
+    def test_hyphen_ended_line_does_not_absorb_hierarchical_numbering_marker(self) -> None:
+        cell = "review-\n1-1) next item"
+        self.assertEqual(["review-", "1-1) next item"], _normalize_cell_lines(cell))
+        self.assertEqual(
+            ["Wrapped sentence line", "1-1) next item"],
+            _normalize_body_lines(["Wrapped sentence line", "1-1) next item"]),
+        )
+
     def test_hollow_circle_like_o_is_treated_as_bullet(self) -> None:
         cell = "review-\no next item"
         self.assertEqual(["review-", "o next item"], _normalize_cell_lines(cell))
@@ -311,6 +319,16 @@ class TableExtractionFormattingTests(unittest.TestCase):
         self.assertEqual(1, len(blocks))
         self.assertEqual("list", blocks[0]["kind"])
 
+    def test_build_body_blocks_splits_when_further_indented_line_starts_new_nested_item(self) -> None:
+        lines = [
+            {"text": "- parent item", "x0": 48.0, "x1": 180.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0, "marker_candidate": True, "marker_x": 48.0},
+            {"text": "o nested child", "x0": 64.0, "x1": 170.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Symbol", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 80.0, "marker_candidate": True, "marker_x": 64.0},
+        ]
+
+        blocks = _build_body_blocks(lines)
+
+        self.assertEqual(2, len(blocks))
+
     def test_normalize_list_block_lines_merges_continuation_lines_into_item(self) -> None:
         lines = [
             {"text": "- bullet item starts here", "x0": 48.0, "x1": 220.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 64.0, "marker_x": 48.0},
@@ -338,6 +356,20 @@ class TableExtractionFormattingTests(unittest.TestCase):
                 "- top level",
                 "  * child level",
                 "    + grandchild level",
+            ],
+            _normalize_list_block_lines(lines),
+        )
+
+    def test_normalize_list_block_lines_keeps_non_aligned_followup_on_separate_line(self) -> None:
+        lines = [
+            {"text": "- top level", "x0": 48.0, "x1": 120.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "marker_candidate": True, "marker_x": 48.0, "text_start_x": 64.0},
+            {"text": "follow-up detail at different indent", "x0": 80.0, "x1": 220.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "text_start_x": 80.0},
+        ]
+
+        self.assertEqual(
+            [
+                "- top level",
+                "  follow-up detail at different indent",
             ],
             _normalize_list_block_lines(lines),
         )
