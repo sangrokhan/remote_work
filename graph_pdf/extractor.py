@@ -555,6 +555,19 @@ def _line_kind(line: dict) -> str:
     return "paragraph"
 
 
+def _style_signature(line: dict) -> tuple:
+    color = line.get("color")
+    normalized_color = None
+    if isinstance(color, tuple):
+        normalized_color = tuple(round(float(value), 3) for value in color[:3])
+    return (
+        str(line.get("fontname") or ""),
+        bool(line.get("is_bold")),
+        bool(line.get("is_italic")),
+        normalized_color,
+    )
+
+
 def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
     if not lines:
         return []
@@ -574,8 +587,9 @@ def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
         size_close = abs(float(line.get("size", 0.0)) - float(previous.get("size", 0.0))) <= 0.8
         line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
         gap_close = line_gap <= max(6.0, float(previous.get("size", 0.0)) * 0.9)
+        style_close = _style_signature(line) == _style_signature(previous)
 
-        if same_kind and indent_close and size_close and gap_close and kind == "paragraph":
+        if same_kind and indent_close and size_close and gap_close and style_close and kind == "paragraph":
             current_block["lines"].append(line)
             continue
 
@@ -641,6 +655,14 @@ def _extract_body_word_lines(
         text = " ".join(text_parts).strip()
         if not text or _is_layout_artifact(text):
             continue
+        fontnames = [str(word.get("fontname") or "") for word in ordered if str(word.get("fontname") or "")]
+        dominant_font = max(fontnames, key=fontnames.count) if fontnames else ""
+        colors = [word.get("non_stroking_color") or word.get("stroking_color") for word in ordered]
+        normalized_colors = [color for color in colors if isinstance(color, tuple) and len(color) >= 3]
+        dominant_color = None
+        if normalized_colors:
+            color_keys = [tuple(round(float(value), 3) for value in color[:3]) for color in normalized_colors]
+            dominant_color = max(color_keys, key=color_keys.count)
         lines.append(
             {
                 "text": text,
@@ -649,6 +671,10 @@ def _extract_body_word_lines(
                 "top": min(float(word.get("top", 0.0)) for word in ordered),
                 "bottom": max(float(word.get("bottom", 0.0)) for word in ordered),
                 "size": sum(float(word.get("size", 0.0)) for word in ordered) / max(len(ordered), 1),
+                "fontname": dominant_font,
+                "color": dominant_color,
+                "is_bold": bool(re.search(r"bold", dominant_font, flags=re.IGNORECASE)),
+                "is_italic": bool(re.search(r"(italic|oblique)", dominant_font, flags=re.IGNORECASE)),
             }
         )
 
