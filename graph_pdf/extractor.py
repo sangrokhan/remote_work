@@ -676,32 +676,8 @@ def _has_room_for_next_line_start(previous: dict, line: dict) -> bool:
 
 
 def _should_merge_paragraph_lines(previous: dict, line: dict) -> bool:
-    indent_close = abs(float(line.get("x0", 0.0)) - float(previous.get("x0", 0.0))) <= 8.0
-    size_close = abs(float(line.get("size", 0.0)) - float(previous.get("size", 0.0))) <= 0.8
-    if not (indent_close and size_close):
-        return False
-
     line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
-    font_size = max(float(previous.get("size", 0.0)), float(line.get("size", 0.0)), 1.0)
-    gap_close = line_gap <= max(6.0, float(previous.get("size", 0.0)) * 0.9)
-    if str(previous.get("text") or "").strip().endswith("-") and gap_close:
-        return True
-
-    low_gap = font_size * 0.25
-    high_gap = font_size * 0.5
-    if line_gap >= high_gap:
-        return False
-
-    style_close = _style_signature(line) == _style_signature(previous)
-    sentence_continues = not _ends_sentence(str(previous.get("text") or "").strip())
-    inline_term_wrap = (
-        sentence_continues
-        and _looks_like_inline_term_continuation(line)
-        and not _has_room_for_next_line_start(previous, line)
-    )
-    if line_gap <= low_gap:
-        return style_close or inline_term_wrap
-    return inline_term_wrap
+    return line_gap <= 5.0
 
 
 def _normalize_list_block_lines(lines: Sequence[dict]) -> List[str]:
