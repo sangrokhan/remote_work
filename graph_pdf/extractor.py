@@ -16,6 +16,9 @@ WATERMARK_ROTATION_MAX_DEGREES = 57.0
 WATERMARK_GRAY_MIN = 0.88
 WATERMARK_GRAY_MAX = 0.96
 WATERMARK_GRAY_NEUTRAL_TOLERANCE = 0.03
+BULLET_PREFIX_RE = re.compile(
+    r"^(?:[-*•●○◦◯▪▫■□‣∙◉]|[0-9]+[.)]|o|\?|\uFFFD)\s+"
+)
 
 
 def _parse_pages_spec(spec: str) -> List[int]:
@@ -577,7 +580,7 @@ def _remove_watermark_fragment_lines(lines: Sequence[str]) -> List[str]:
 
 
 def _is_bullet_line(line: str) -> bool:
-    return bool(re.match(r"^(?:[-*•]|[0-9]+[.)])\s+", line))
+    return bool(BULLET_PREFIX_RE.match(str(line or "").strip()))
 
 
 def _ends_sentence(line: str) -> bool:

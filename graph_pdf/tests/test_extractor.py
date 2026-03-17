@@ -142,6 +142,22 @@ class TableExtractionFormattingTests(unittest.TestCase):
         cell = "review-\n- next item"
         self.assertEqual(["review-", "- next item"], _normalize_cell_lines(cell))
 
+    def test_hollow_circle_like_o_is_treated_as_bullet(self) -> None:
+        cell = "review-\no next item"
+        self.assertEqual(["review-", "o next item"], _normalize_cell_lines(cell))
+        self.assertEqual(
+            ["Wrapped sentence line", "o next item"],
+            _normalize_body_lines(["Wrapped sentence line", "o next item"]),
+        )
+
+    def test_unknown_glyph_like_question_mark_is_treated_as_bullet(self) -> None:
+        cell = "review-\n? next item"
+        self.assertEqual(["review-", "? next item"], _normalize_cell_lines(cell))
+        self.assertEqual(
+            ["Wrapped sentence line", "? next item"],
+            _normalize_body_lines(["Wrapped sentence line", "? next item"]),
+        )
+
     def test_normalize_body_lines_joins_wrapped_sentence_lines(self) -> None:
         lines = [
             "This paragraph starts on one visual line and",
