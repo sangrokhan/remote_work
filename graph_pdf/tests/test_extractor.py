@@ -243,6 +243,17 @@ class TableExtractionFormattingTests(unittest.TestCase):
 
         self.assertEqual(2, len(blocks))
 
+    def test_build_body_blocks_keeps_hyphen_wrap_together_before_style_checks(self) -> None:
+        lines = [
+            {"text": "special-case-", "x0": 36.0, "x1": 160.0, "top": 120.0, "bottom": 132.0, "size": 11.0, "fontname": "Helvetica", "color": (0.0, 0.0, 0.0), "is_bold": False, "is_italic": False, "word_count": 1, "has_mixed_styles": False, "first_word_style_signature": ("Helvetica", False, False, None), "body_right": 180.0},
+            {"text": "ProtoLexeme", "x0": 36.0, "x1": 126.0, "top": 134.0, "bottom": 146.0, "size": 11.0, "fontname": "Helvetica-Bold", "color": (0.2, 0.2, 0.7), "is_bold": True, "is_italic": False, "word_count": 1, "has_mixed_styles": False, "first_word_style_signature": ("Helvetica-Bold", True, False, None), "first_word_width": 40.0},
+        ]
+
+        blocks = _build_body_blocks(lines)
+
+        self.assertEqual(1, len(blocks))
+        self.assertEqual("paragraph", blocks[0]["kind"])
+
     def test_extract_body_word_lines_marks_marker_candidate_and_text_start(self) -> None:
         filtered_page = SimpleNamespace(
             extract_words=lambda **kwargs: [

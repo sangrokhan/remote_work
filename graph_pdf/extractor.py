@@ -742,6 +742,18 @@ def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
         list_anchor_x = float(
             current_block.get("list_text_start_x", previous.get("text_start_x", previous.get("x0", 0.0)))
         )
+        hyphen_wrap = str(previous.get("text") or "").strip().endswith("-")
+
+        if (
+            current_block["kind"] == "paragraph"
+            and hyphen_wrap
+            and kind == "paragraph"
+            and gap_close
+            and not bool(line.get("marker_candidate"))
+            and not _is_body_heading_line(str(line.get("text") or "").strip())
+        ):
+            current_block["lines"].append(line)
+            continue
 
         if same_kind and indent_close and size_close and gap_close and kind == "paragraph":
             sentence_continues = not _ends_sentence(str(previous.get("text") or "").strip())
