@@ -666,6 +666,10 @@ def _should_merge_paragraph_lines(previous: dict, line: dict) -> bool:
 
     line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
     font_size = max(float(previous.get("size", 0.0)), float(line.get("size", 0.0)), 1.0)
+    gap_close = line_gap <= max(6.0, float(previous.get("size", 0.0)) * 0.9)
+    if str(previous.get("text") or "").strip().endswith("-") and gap_close:
+        return True
+
     low_gap = font_size * 0.25
     high_gap = font_size * 0.5
     if line_gap >= high_gap:
@@ -777,17 +781,6 @@ def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
             current_block.get("list_text_start_x", previous.get("text_start_x", previous.get("x0", 0.0)))
         )
         hyphen_wrap = str(previous.get("text") or "").strip().endswith("-")
-
-        if (
-            current_block["kind"] == "paragraph"
-            and hyphen_wrap
-            and kind == "paragraph"
-            and gap_close
-            and not bool(line.get("marker_candidate"))
-            and not _is_body_heading_line(str(line.get("text") or "").strip())
-        ):
-            current_block["lines"].append(line)
-            continue
 
         if same_kind and kind == "paragraph" and _should_merge_paragraph_lines(previous, line):
             current_block["lines"].append(line)
