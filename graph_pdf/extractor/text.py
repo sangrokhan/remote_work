@@ -17,11 +17,13 @@ from .shared import (
 
 
 def _repair_watermark_bleed(text: str) -> str:
+    # Rotated watermark glyphs can leak as a trailing single character in extracted words.
     text = re.sub(r"\s+[A-Za-z]$", "", text)
     return text.strip()
 
 
 def _is_layout_artifact(text: str) -> bool:
+    # The sample/demo PDFs contain known header/footer strings that should never enter body extraction.
     normalized = _normalize_text(text).lower()
     if not normalized:
         return True
@@ -54,6 +56,7 @@ def _is_layout_artifact(text: str) -> bool:
 
 
 def _is_gray_color(color: object) -> bool:
+    # Watermark detection uses a narrow neutral-gray band instead of any light-colored text.
     if not isinstance(color, tuple) or len(color) < 3:
         return False
     rgb = [float(c) for c in color[:3]]
@@ -62,6 +65,7 @@ def _is_gray_color(color: object) -> bool:
 
 
 def _is_non_watermark_obj(obj: dict) -> bool:
+    # Only rotated gray chars are treated as watermark; everything else remains extractable.
     if obj.get("object_type") != "char":
         return True
     angle = _char_rotation_degrees(obj)
@@ -71,10 +75,12 @@ def _is_non_watermark_obj(obj: dict) -> bool:
 
 
 def _filter_page_for_extraction(page: "pdfplumber.page.Page") -> "pdfplumber.page.Page":
+    # Apply watermark filtering once so downstream code can work on a cleaned page view.
     return page.filter(_is_non_watermark_obj)
 
 
 def _detect_chapter_body_top(page: "pdfplumber.page.Page") -> float | None:
+    # If the page lacks a clear top divider, use a large chapter-like heading as the body start.
     extract_words = getattr(page, "extract_words", None)
     if not callable(extract_words):
         return None
@@ -118,6 +124,7 @@ def _detect_body_bounds(
     header_margin: float,
     footer_margin: float,
 ) -> Tuple[float, float]:
+    # Prefer explicit horizontal divider lines, then fall back to a chapter heading or the configured margins.
     default_top = float(footer_margin)
     default_bottom = float(page.height - header_margin)
     min_width = float(page.width) * 0.7
@@ -154,6 +161,7 @@ def _extract_body_text(
     footer_margin: float,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
 ) -> str:
+    # Most callers want page text as joined logical lines rather than raw line payloads.
     _raw_lines, normalized_lines = _extract_body_text_lines(
         page=page,
         header_margin=header_margin,
@@ -169,6 +177,7 @@ def _extract_body_text_lines(
     footer_margin: float,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
 ) -> Tuple[List[str], List[str]]:
+    # Return both the raw visual lines and the normalized logical lines for debug and downstream reuse.
     line_payloads = _extract_body_word_lines(
         page=page,
         header_margin=header_margin,
@@ -192,6 +201,7 @@ def _extract_body_text_lines(
 
 
 def _clean_cell_line(line: str) -> str:
+    # Table cell cleanup is conservative: collapse whitespace and drop a common trailing watermark fragment.
     cleaned = str(line or "").strip()
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     tokens = cleaned.split()
@@ -201,23 +211,28 @@ def _clean_cell_line(line: str) -> str:
 
 
 def _remove_watermark_fragment_lines(lines: Sequence[str]) -> List[str]:
+    # Preserve multi-line structure but drop empty fragments after cleanup.
     cleaned = [_clean_cell_line(line) for line in lines]
     return [line for line in cleaned if line]
 
 
 def _is_bullet_line(line: str) -> bool:
+    # Bullet detection is shared by body and table-cell normalization.
     return bool(BULLET_PREFIX_RE.match(str(line or "").strip()))
 
 
 def _is_bullet_marker_text(text: str) -> bool:
+    # Marker detection is looser because line-building needs to recognize standalone marker glyphs.
     return bool(BULLET_PREFIX_RE.match(f"{str(text or '').strip()} x"))
 
 
 def _ends_sentence(line: str) -> bool:
+    # Sentence-ending punctuation is used as a lightweight signal for table-cell line splitting.
     return bool(re.search(r"[.!?;:。！？]$", str(line or "").strip()))
 
 
 def _is_body_heading_line(line: str) -> bool:
+    # Body normalization only gives special treatment to coarse chapter/section-like headings.
     text = str(line or "").strip()
     if not text:
         return False
@@ -225,17 +240,20 @@ def _is_body_heading_line(line: str) -> bool:
 
 
 def _line_kind(line: dict) -> str:
+    # The current body flow distinguishes only headings and paragraphs.
     if _is_body_heading_line(str(line.get("text") or "").strip()):
         return "heading"
     return "paragraph"
 
 
 def _should_merge_paragraph_lines(previous: dict, line: dict) -> bool:
+    # Paragraph grouping intentionally uses a simple fixed gap rule after legacy heuristics were removed.
     line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
     return line_gap <= 5.0
 
 
 def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
+    # Collapse adjacent body lines into coarse logical blocks before converting them to page text.
     if not lines:
         return []
 
@@ -250,6 +268,7 @@ def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
         previous = current_block["lines"][-1]
         same_kind = current_block["kind"] == kind
         if same_kind and kind == "paragraph" and _should_merge_paragraph_lines(previous, line):
+            # Paragraphs are the only block type that can absorb the next visual line.
             current_block["lines"].append(line)
             continue
 
@@ -267,6 +286,7 @@ def _extract_body_word_lines(
     footer_margin: float,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
 ) -> List[dict]:
+    # Convert word-level extraction into line payloads enriched with the signals later heuristics need.
     filtered_page = _filter_page_for_extraction(page)
     body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
     words = filtered_page.extract_words(
@@ -284,6 +304,7 @@ def _extract_body_word_lines(
     filtered_words = []
     for word in words:
         bbox = _word_bbox(word)
+        # Excluded bboxes are used to suppress table text when generating the final body output.
         if bbox[3] <= body_top or bbox[1] >= body_bottom:
             continue
         if any(_bboxes_intersect(bbox, excluded_bbox) for excluded_bbox in excluded_bboxes):
@@ -324,6 +345,7 @@ def _extract_body_word_lines(
         first_cleaned = _repair_watermark_bleed(str(ordered[0].get("text") or "").strip())
         second_word = ordered[1] if len(ordered) > 1 else ordered[0]
         marker_gap = float(second_word.get("x0", ordered[0].get("x1", 0.0))) - float(ordered[0].get("x1", 0.0))
+        # Standalone punctuation and symbol glyphs often represent bullets in PDF word extraction.
         marker_candidate = len(ordered) > 1 and (
             _is_bullet_marker_text(first_cleaned)
             or (len(first_cleaned) == 1 and not first_cleaned.isalnum() and marker_gap >= 4.0)
@@ -379,11 +401,13 @@ def _extract_body_word_lines(
 
 
 def _join_non_heading_block_lines(lines: Sequence[str]) -> str:
+    # Paragraph blocks are intentionally flattened into one logical line for downstream indexing.
     joined = [str(raw_line or "").strip() for raw_line in lines if str(raw_line or "").strip()]
     return " ".join(joined).strip()
 
 
 def _normalize_cell_lines(cell: str) -> List[str]:
+    # Table cells keep bullet and sentence boundaries, unlike body text which is flattened more aggressively.
     raw_lines = [part.strip() for part in str(cell or "").splitlines()]
     lines = _remove_watermark_fragment_lines(raw_lines)
     if not lines:
@@ -400,6 +424,7 @@ def _normalize_cell_lines(cell: str) -> List[str]:
 
     for line in lines:
         if _is_bullet_line(line):
+            # Bullets always start a new logical line in markdown table output.
             _flush_buffer()
             logical_lines.append(line)
             continue

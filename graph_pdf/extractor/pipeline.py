@@ -69,6 +69,7 @@ def extract_pdf_to_outputs(
     pending_gap_text_boxes: List[Tuple[float, float, float, float]] = []
 
     def _flush_pending() -> None:
+        # Tables are emitted only after we know the next page will not extend them.
         nonlocal pending_table, pending_page, pending_last_page, pending_bbox, pending_axes, pending_gap_text_boxes
         if pending_table is not None and pending_page is not None:
             _append_output_table(output_tables, pending_page, len(output_tables) + 1, pending_table)
@@ -97,6 +98,7 @@ def extract_pdf_to_outputs(
 
             tables = _extract_tables(page, force_table=force_table)
             full_page_text = _extract_body_text(page, header_margin=header_margin, footer_margin=footer_margin)
+            # Body text for the final page output excludes table areas so prose does not duplicate table content.
             page_text = _extract_body_text(
                 page,
                 header_margin=header_margin,
@@ -117,6 +119,7 @@ def extract_pdf_to_outputs(
                     current_page=page_idx,
                 )
 
+                # Some continuation fragments lose the first column and need a specialized merge path.
                 merged_missing_first = None
                 if cross_page_continuation:
                     merged_missing_first = _maybe_merge_missing_first_column_chunk(
@@ -134,6 +137,7 @@ def extract_pdf_to_outputs(
 
                 continuation_rows = table_rows
                 if cross_page_continuation:
+                    # Repeated headers should not be duplicated when the next page is clearly part of the same table.
                     continuation_rows = _split_repeated_header(pending_table or [], table_rows)
                     if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
                         pending_table.extend(continuation_rows)
@@ -180,6 +184,7 @@ def extract_pdf_to_outputs(
                     pending_gap_text_boxes = _gap_text_boxes_after_bbox(page, bbox, table_bboxes, header_margin=header_margin, footer_margin=footer_margin)
                     continue
 
+                # Once continuation checks fail, the previous pending table is finalized and a new table starts.
                 _flush_pending()
                 pending_table = table_rows
                 pending_page = page_idx
@@ -200,6 +205,7 @@ def extract_pdf_to_outputs(
     md_file.write_text(markdown, encoding="utf-8")
     table_md_file.write_text(table_markdown, encoding="utf-8")
 
+    # Image extraction happens after text/table rendering so image export stays independent from markdown generation.
     image_files = _extract_embedded_images(pdf_path=pdf_path, out_image_dir=out_image_dir, stem=stem, pages=pages)
 
     summary = {

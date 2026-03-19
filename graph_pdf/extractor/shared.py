@@ -19,6 +19,7 @@ BULLET_PREFIX_RE = re.compile(
 
 
 def _parse_pages_spec(spec: str) -> List[int]:
+    # Accept `1,3-5,8` style CLI input and normalize it into a sorted unique page list.
     values = set()
     for part in str(spec or "").split(","):
         token = part.strip()
@@ -46,10 +47,12 @@ def _parse_pages_spec(spec: str) -> List[int]:
 
 
 def _normalize_text(text: str) -> str:
+    # Most table/body comparisons only care about semantic text, not spacing differences.
     return re.sub(r"\s+", " ", text or "").strip()
 
 
 def _char_rotation_degrees(char: dict) -> float:
+    # pdfplumber exposes the text matrix directly, so rotation comes from the matrix rather than a dedicated field.
     matrix = char.get("matrix")
     if not isinstance(matrix, tuple) or len(matrix) < 2:
         return 0.0
@@ -57,6 +60,7 @@ def _char_rotation_degrees(char: dict) -> float:
 
 
 def _merge_numeric_positions(values: Sequence[float], tolerance: float = 1.0) -> List[float]:
+    # Nearby edge coordinates often differ by sub-pixel noise; collapse them before higher-level reasoning.
     merged: List[float] = []
     for value in sorted(float(v) for v in values):
         if not merged or abs(value - merged[-1]) > tolerance:
@@ -67,6 +71,7 @@ def _merge_numeric_positions(values: Sequence[float], tolerance: float = 1.0) ->
 
 
 def _cluster_axis_values(values: Sequence[float], tolerance: float = 1.0) -> List[List[float]]:
+    # Segment grouping starts by clustering nearly-identical coordinates on one axis.
     clusters: List[List[float]] = []
     for value in sorted(float(v) for v in values):
         if not clusters or abs(value - clusters[-1][-1]) > tolerance:
@@ -81,6 +86,7 @@ def _round_segment(
     body_top: float | None = None,
     body_bottom: float | None = None,
 ) -> dict:
+    # Debug payloads use rounded values so JSON stays readable and stable across runs.
     payload = {
         "x0": round(float(edge["x0"]), 2),
         "x1": round(float(edge["x1"]), 2),
@@ -102,6 +108,7 @@ def _normalize_band_segments(
     orth_max_key: str,
     tolerance: float = 1.0,
 ) -> List[dict]:
+    # Horizontal and vertical segment merging share the same overlap/containment rules.
     normalized: List[dict] = []
     ordered = sorted(
         (dict(edge) for edge in segments),
@@ -140,6 +147,7 @@ def _merge_horizontal_band_segments(
     body_top: float | None = None,
     body_bottom: float | None = None,
 ) -> List[dict]:
+    # Horizontal lines are merged on x-range while preserving the full vertical span seen in source edges.
     merged = _normalize_band_segments(
         segments,
         start_key="x0",
@@ -157,6 +165,7 @@ def _merge_vertical_band_segments(
     body_top: float | None = None,
     body_bottom: float | None = None,
 ) -> List[dict]:
+    # Vertical lines are merged on y-range while preserving the full horizontal span seen in source edges.
     merged = _normalize_band_segments(
         segments,
         start_key="top",
@@ -176,6 +185,7 @@ def _build_segment_groups(
     body_top: float | None = None,
     body_bottom: float | None = None,
 ) -> List[dict]:
+    # Group raw edges by shared axis position first, then expose both original and merged segment views for debug.
     clusters = _cluster_axis_values([float(edge[axis_key]) for edge in segments], tolerance=tolerance)
     groups: List[dict] = []
     for cluster in clusters:
@@ -207,6 +217,7 @@ def _bboxes_intersect(
     a: Tuple[float, float, float, float],
     b: Tuple[float, float, float, float],
 ) -> bool:
+    # Text/table/image exclusion logic only needs simple rectangle overlap checks.
     ax0, ay0, ax1, ay1 = a
     bx0, by0, bx1, by1 = b
     return ax0 < bx1 and ax1 > bx0 and ay0 < by1 and ay1 > by0
