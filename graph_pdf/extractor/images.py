@@ -14,6 +14,7 @@ def _image_intersects_body(
     body_top: float,
     body_bottom: float,
 ) -> bool:
+    # Header/footer artwork is ignored; only images overlapping the body band are exported.
     top = float(image_meta.get("top", 0.0))
     bottom = float(image_meta.get("bottom", top))
     return bottom > body_top and top < body_bottom
@@ -25,6 +26,7 @@ def _extract_embedded_images(
     stem: str,
     pages: Optional[Sequence[int]] = None,
 ) -> List[Path]:
+    # Image extraction is intentionally independent from table/text extraction so it can be reused or debugged separately.
     out_image_dir.mkdir(parents=True, exist_ok=True)
 
     image_files: List[Path] = []
@@ -48,6 +50,7 @@ def _extract_embedded_images(
 
             kept_idx = 0
             for image_file in page.images:
+                # pypdf and pdfplumber expose image identifiers slightly differently, so compare both forms.
                 image_name = Path(image_file.name or "").name
                 image_stem = Path(image_name).stem
                 if image_stem not in allowed_names and image_name not in allowed_names:

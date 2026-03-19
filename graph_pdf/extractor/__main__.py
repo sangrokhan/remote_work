@@ -8,6 +8,7 @@ from .shared import _parse_pages_spec
 
 
 def main() -> None:
+    # Keep the CLI intentionally thin so the real behavior lives in pipeline.py.
     parser = argparse.ArgumentParser()
     parser.add_argument("pdf_path")
     parser.add_argument("--out-md-dir", default="graph_pdf/artifacts/md")

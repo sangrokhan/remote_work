@@ -37,6 +37,8 @@ from .text import (
     _should_merge_paragraph_lines,
 )
 
+# Re-export the main entrypoint and selected helpers so tests and scripts can
+# keep importing from `extractor` after the package split.
 __all__ = [
     "extract_pdf_to_outputs",
     "_append_output_table",

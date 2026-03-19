@@ -24,10 +24,12 @@ from .text import (
 
 
 def _merge_cells(table: Sequence[Sequence[str]]) -> List[List[str]]:
+    # pdfplumber can yield `None` cells, so normalize early to simple stripped strings.
     return [[str(cell or "").strip() for cell in row] for row in table]
 
 
 def _collapse_structural_triplet_columns(table: Sequence[Sequence[str]]) -> List[List[str]]:
+    # Some sample tables use [blank, value, blank] triples to simulate merged columns; collapse only those empty side columns.
     rows = [list(row) for row in table]
     if not rows:
         return []
@@ -50,6 +52,7 @@ def _collapse_structural_triplet_columns(table: Sequence[Sequence[str]]) -> List
 
 
 def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]]:
+    # Table normalization is deliberately cell-local so geometric table structure stays untouched.
     normalized: List[List[str]] = []
     for row in table:
         normalized_row = []
@@ -60,6 +63,7 @@ def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]
 
 
 def _table_rejection_reason(table: Sequence[Sequence[str]]) -> str | None:
+    # Rejection stays intentionally minimal to avoid throwing away sparse but valid tables.
     if not table:
         return "empty table"
     normalized_rows = [[str(cell or "").strip() for cell in row] for row in table]
@@ -73,6 +77,7 @@ def _log_rejected_table(
     crop_bbox: Tuple[float, float, float, float],
     reason: str,
 ) -> None:
+    # Rejection logging is only for manual debugging; tests assert on accepted output instead.
     row_count = len(table)
     col_count = max((len(row) for row in table), default=0)
     bbox_text = ", ".join(f"{value:.2f}" for value in crop_bbox)
@@ -80,6 +85,7 @@ def _log_rejected_table(
 
 
 def _looks_like_header_row(row: Sequence[str]) -> bool:
+    # Header detection is heuristic and only used for cross-page continuation handling.
     if not row:
         return False
     normalized = [_normalize_text(c) for c in row]
@@ -92,18 +98,21 @@ def _looks_like_header_row(row: Sequence[str]) -> bool:
 
 
 def _rows_match(a: Sequence[str], b: Sequence[str]) -> bool:
+    # Header rows are compared after whitespace normalization to avoid duplicate header output.
     if len(a) != len(b):
         return False
     return all(_normalize_text(x) == _normalize_text(y) for x, y in zip(a, b))
 
 
 def _split_repeated_header(prev_rows: TableRows, curr_rows: TableRows) -> TableRows:
+    # When a page repeats the same header row, only keep the first occurrence in the merged output.
     if prev_rows and curr_rows and _rows_match(prev_rows[0], curr_rows[0]):
         return curr_rows[1:]
     return curr_rows
 
 
 def _is_continuation_chunk(prev_rows: TableRows, curr_rows: TableRows) -> bool:
+    # Continuation chunks usually keep the schema but leave the first column blank while the row carries on.
     if not prev_rows or not curr_rows:
         return False
     if len(prev_rows[0]) != len(curr_rows[0]):
@@ -119,6 +128,7 @@ def _extract_continuation_lines(
     repeated_header: str,
     next_row_label: str,
 ) -> List[str]:
+    # Missing-first-column continuation rows borrow prose lines from the surrounding page text.
     lines = [line.strip() for line in str(page_text or "").splitlines() if line.strip()]
     if not lines:
         return []
@@ -141,6 +151,7 @@ def _extract_continuation_lines(
 
 
 def _normalize_two_col_continuation_rows(rows: TableRows) -> TableRows:
+    # Reconstruct a 3-column shape when a continuation fragment drops the first column entirely.
     return [["", str(row[0] or "").strip(), str(row[1] or "").strip()] for row in rows if row]
 
 
@@ -148,6 +159,7 @@ def _should_try_table_continuation_merge(
     pending_page: int | None,
     current_page: int,
 ) -> bool:
+    # Cross-page merging is limited to immediately adjacent pages.
     return pending_page is not None and current_page == pending_page + 1
 
 
@@ -157,6 +169,7 @@ def _body_text_boxes(
     footer_margin: float,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
 ) -> List[Tuple[float, float, float, float]]:
+    # These boxes are used only to detect prose sitting between two candidate table fragments.
     filtered_page = _filter_page_for_extraction(page)
     body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
     text_boxes: List[Tuple[float, float, float, float]] = []
@@ -185,6 +198,7 @@ def _gap_text_boxes_after_bbox(
     header_margin: float,
     footer_margin: float,
 ) -> List[Tuple[float, float, float, float]]:
+    # Text after a table candidate can block continuation into the next page.
     return [
         text_bbox
         for text_bbox in _body_text_boxes(
@@ -204,6 +218,7 @@ def _gap_text_boxes_before_bbox(
     header_margin: float,
     footer_margin: float,
 ) -> List[Tuple[float, float, float, float]]:
+    # Text before a table candidate can mean the new page starts with prose rather than a continuation table.
     return [
         text_bbox
         for text_bbox in _body_text_boxes(
@@ -220,6 +235,7 @@ def _vertical_axes_for_bbox(
     page: pdfplumber.page.PageObject,
     bbox: Tuple[float, float, float, float],
 ) -> List[float]:
+    # Shared vertical axes are one of the strongest geometric signals that two fragments belong to the same table.
     x0, y0, x1, y1 = bbox
     axes = [
         float(edge["x0"])
@@ -243,6 +259,7 @@ def _continuation_regions_should_merge(
     edge_tolerance: float = 24.0,
     axis_tolerance: float = 1.0,
 ) -> bool:
+    # Merge only when geometry matches and no body text sits between the two fragments.
     _prev_x0, _prev_top, _prev_x1, prev_bottom = prev_bbox
     _curr_x0, curr_top, _curr_x1, _curr_bottom = curr_bbox
 
@@ -250,6 +267,7 @@ def _continuation_regions_should_merge(
     if not shared_axes or gap_text_boxes:
         return False
 
+    # Near-footer / near-header placement is the common continuation pattern, but shared axes already make this permissive.
     prev_near_footer = abs(body_bottom - prev_bottom) <= edge_tolerance
     curr_near_header = abs(curr_top - body_top) <= edge_tolerance
     if prev_near_footer or curr_near_header:
@@ -262,6 +280,7 @@ def _maybe_merge_missing_first_column_chunk(
     current_rows: TableRows,
     page_text: str,
 ) -> TableRows | None:
+    # Some PDFs drop the leading column when a long row spills to the next page.
     if not pending_table or not current_rows:
         return None
     if len(pending_table[0]) != 3:
@@ -288,6 +307,7 @@ def _maybe_merge_missing_first_column_chunk(
 
 
 def _format_markdown_cell(value: str) -> str:
+    # Markdown cells preserve logical line breaks with `<br>` while escaping literal pipe characters.
     lines = _normalize_cell_lines(value)
     if not lines:
         return ""
@@ -299,6 +319,7 @@ def _table_regions(
     y_tolerance: float = 65.0,
     min_lines: int = 3,
 ) -> List[tuple]:
+    # Table discovery is driven by connected edge geometry rather than text layout alone.
     del y_tolerance
 
     body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
@@ -333,6 +354,7 @@ def _table_regions(
 
     for h_idx, h_edge in enumerate(merged_h):
         for v_idx, v_edge in enumerate(merged_v):
+            # A horizontal line joins a component only when a vertical edge crosses it within tolerance.
             intersects = (
                 float(v_edge["x0"]) >= float(h_edge["x0"]) - tolerance
                 and float(v_edge["x0"]) <= float(h_edge["x1"]) + tolerance
@@ -368,6 +390,7 @@ def _table_regions(
             stack.extend(graph[idx] - visited)
 
         component_lines = [merged_h[idx] for idx in component]
+        # Ignore weak components that do not look like a stable table grid.
         if len(component_lines) < min_lines or not shared_verticals:
             continue
 
@@ -384,6 +407,7 @@ def _extract_tables_from_crop(
     page: pdfplumber.page.PageObject,
     crop_bbox: Tuple[float, float, float, float],
 ) -> List[TableChunk]:
+    # Crop-level extraction gives table_settings a tighter region and improves recovery of border-light tables.
     x0, y0, x1, y1 = crop_bbox
     crop = page.crop(crop_bbox)
 
@@ -420,6 +444,7 @@ def _extract_tables_from_crop(
     ]
 
     for settings in candidates:
+        # Try line-driven extraction first, then a text-assisted fallback inside the same crop.
         tables = crop.extract_tables(table_settings=settings) or []
         cleaned = []
         for table in tables:
@@ -437,6 +462,7 @@ def _extract_tables(
     page: pdfplumber.page.PageObject,
     force_table: bool = False,
 ) -> List[TableChunk]:
+    # Region-based extraction is preferred because full-page fallback tends to over-merge adjacent content.
     page = _filter_page_for_extraction(page)
     seen_keys = set()
     merged: List[TableChunk] = []
@@ -457,6 +483,7 @@ def _extract_tables(
     if merged or not force_table:
         return merged
 
+    # The caller can opt into a more aggressive page-wide fallback when geometric table regions are absent.
     full_bbox = (0.0, 0.0, float(page.width), float(page.height))
     fallback_settings = [
         {
@@ -511,6 +538,7 @@ def _extract_tables(
 
 
 def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
+    # Convert normalized row data into markdown table text used by the final artifacts.
     if not rows:
         return ""
 
@@ -530,6 +558,7 @@ def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
 
 
 def _merge_split_rows(rows: TableRows) -> TableRows:
+    # Post-process rows that were extracted as separate fragments even though they belong to the same logical row.
     if not rows:
         return rows
 
@@ -554,6 +583,7 @@ def _merge_split_rows(rows: TableRows) -> TableRows:
 
 
 def _append_output_table(output_tables: List[str], page_no: int, table_no: int, table_rows: TableRows) -> None:
+    # Table numbering is derived at append time so merged cross-page tables keep one output block.
     table_text = _table_text_from_rows(_merge_split_rows(table_rows))
     if table_text:
         output_tables.append(f"### Page {page_no} table {table_no}\n{table_text}")

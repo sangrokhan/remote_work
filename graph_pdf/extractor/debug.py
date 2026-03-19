@@ -15,6 +15,7 @@ from .text import _detect_body_bounds, _extract_body_text_lines, _extract_body_w
 
 
 def _collect_rotated_text_debug(page: "pdfplumber.page.Page", page_no: int) -> List[dict]:
+    # Debug output keeps only rotated chars because non-rotated body text is already visible elsewhere.
     entries: List[dict] = []
     for char in getattr(page, "chars", []):
         rotation = _char_rotation_degrees(char)
@@ -45,6 +46,7 @@ def _collect_table_drawing_debug(
     header_margin: float = 90.0,
     footer_margin: float = 40.0,
 ) -> dict:
+    # This payload explains how the extractor turned raw edges into table regions.
     body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
     groups = _table_regions(page)
     tables: List[dict] = []
@@ -132,6 +134,7 @@ def _collect_page_edge_debug(
     header_margin: float = 90.0,
     footer_margin: float = 40.0,
 ) -> dict:
+    # Edge debug is lower-level than table debug and shows both all edges and the subset used for tables.
     body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
     groups = _table_regions(page)
     selected_horizontal_edges = []
