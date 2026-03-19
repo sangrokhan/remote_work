@@ -15,6 +15,7 @@ from sample_fixture import load_demo_fixture
 
 LineItem = Tuple[str, int]
 TableRow = Tuple[str, ...]
+_HEADER_ROW_HEIGHT = 16.0
 _SMALL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z/C/HwAHAQL/5ncLrgAAAABJRU5ErkJggg=="
 )
@@ -34,17 +35,26 @@ def get_demo_tables() -> Dict[str, Tuple[Tuple[str, ...], Tuple[TableRow, ...]]]
     return _fixture_tables()
 
 
-def _fixture_table_render_meta(table_id: str) -> tuple[Tuple[str, ...], Tuple[TableRow, ...], Tuple[float, ...] | None]:
+def _fixture_table_render_meta(
+    table_id: str,
+) -> tuple[Tuple[TableRow, ...], Tuple[TableRow, ...], Tuple[float, ...] | None]:
     for table in load_demo_fixture()["tables"]:
         if table["id"] != table_id:
             continue
-        columns = tuple(str(cell) for cell in table.get("render_columns", table["columns"]))
+        header_rows = table.get("render_header_rows") or table.get("header_rows")
+        if header_rows:
+            headers = tuple(
+                tuple(str(cell) for cell in header_row)
+                for header_row in header_rows
+            )
+        else:
+            headers = (tuple(str(cell) for cell in table.get("render_columns", table["columns"])),)
         rows = tuple(
             tuple(str(cell) for cell in row)
             for row in table.get("render_rows", table["rows"])
         )
         weights = table.get("render_column_weights")
-        return columns, rows, tuple(float(value) for value in weights) if weights else None
+        return headers, rows, tuple(float(value) for value in weights) if weights else None
     raise KeyError(table_id)
 
 
@@ -250,7 +260,7 @@ class DemoPdfBuilder:
 
     def _draw_table_block(
         self,
-        header: Sequence[str],
+        header_rows: Sequence[TableRow],
         rows: Sequence[TableRow],
         column_weights: Sequence[float] | None = None,
         header_font_size: float = 9.0,
@@ -268,6 +278,7 @@ class DemoPdfBuilder:
         if not body_width:
             return
 
+        header = tuple(header_rows[0]) if header_rows else ()
         if column_weights is None:
             if len(header) == 3:
                 column_weights = [0.28, 0.2, 0.52]
@@ -281,7 +292,7 @@ class DemoPdfBuilder:
         for width in col_widths[:-1]:
             running_x += width
             col_x.append(running_x)
-        header_height = 20.0
+        header_height = (_HEADER_ROW_HEIGHT * len(header_rows)) if include_header else 0.0
         line_h = row_font_size + 1.2
 
         prepared_rows = []
@@ -411,7 +422,7 @@ class DemoPdfBuilder:
                 col_x=col_x,
                 col_widths=col_widths,
                 body_width=body_width,
-                header=header if include_header else (),
+                header_rows=header_rows if include_header else (),
                 rows=chunk_rows,
                 row_heights=chunk_heights,
                 include_outer_vertical=include_outer_vertical,
@@ -433,7 +444,7 @@ class DemoPdfBuilder:
         col_x: Sequence[float],
         col_widths: Sequence[float],
         body_width: float,
-        header: Sequence[str],
+        header_rows: Sequence[TableRow],
         rows: Sequence[TableRow],
         row_heights: Sequence[float],
         include_outer_vertical: bool,
@@ -446,7 +457,7 @@ class DemoPdfBuilder:
         self.canvas.setStrokeColor(colors.black)
         self.canvas.setLineWidth(0.8)
 
-        header_h = 20.0 if include_header else 0.0
+        header_h = (_HEADER_ROW_HEIGHT * len(header_rows)) if include_header else 0.0
         table_h = header_h + sum(row_heights)
         row_tops = [0.0]
         for row_h in row_heights:
@@ -455,13 +466,16 @@ class DemoPdfBuilder:
         y = y_top
         self.canvas.line(x, y_top, x + body_width, y_top)
 
-        if include_header and header:
+        if include_header and header_rows:
             self.canvas.setFont("Helvetica-Bold", header_font_size)
             text_x_positions = [x + 6, *[boundary + 6 for boundary in col_x]]
-            for idx, title in enumerate(header):
-                self.canvas.drawString(text_x_positions[idx], y_top - 14, title)
+            header_cursor = y_top
+            for header_row in header_rows:
+                for idx, title in enumerate(header_row):
+                    self.canvas.drawString(text_x_positions[idx], header_cursor - 11, title)
+                header_cursor -= _HEADER_ROW_HEIGHT
+                self.canvas.line(x, header_cursor, x + body_width, header_cursor)
             y -= header_h
-            self.canvas.line(x, y, x + body_width, y)
 
         # Horizontal lines (including header/body split and bottom line).
         table_start = y
@@ -562,7 +576,7 @@ def create_demo_pdf(path: Path) -> None:
     )
 
     builder._draw_table_block(
-        header=tables["item"][0],
+        header_rows=(tables["item"][0],),
         rows=tables["item"][1],
         include_header=True,
         split_pages=False,
@@ -572,10 +586,10 @@ def create_demo_pdf(path: Path) -> None:
     builder.add_gap(24.0)
 
     builder.add_body_text(after_item_table)
-    builder.add_gap(100.0)
+    builder.add_gap(76.0)
 
     builder._draw_table_block(
-        header=tables["stage"][0],
+        header_rows=_fixture_table_render_meta("stage")[0],
         rows=tables["stage"][1],
         include_header=True,
         split_pages=True,
@@ -593,7 +607,7 @@ def create_demo_pdf(path: Path) -> None:
     )
 
     builder._draw_table_block(
-        header=_fixture_table_render_meta("area")[0],
+        header_rows=_fixture_table_render_meta("area")[0],
         rows=_fixture_table_render_meta("area")[1],
         column_weights=_fixture_table_render_meta("area")[2],
         include_header=True,

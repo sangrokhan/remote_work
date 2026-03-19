@@ -59,6 +59,10 @@
     },
     {
       "id": "stage",
+      "header_rows": [
+        ["Stage", "Team", "Notes"],
+        ["Group", "Function", "Deliverable"]
+      ],
       "columns": ["Stage", "Team", "Notes"],
       "rows": [
         ["Phase A", "Discovery", "Kickoff scope lock\n- gather baseline\n- define risks\n- align dependencies"],

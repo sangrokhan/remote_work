@@ -85,6 +85,13 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertIn("| Laptop<br>- line 1 | 12 | $120 |", markdown)
         self.assertIn("| Docs | READY | Finalize<br>- sample<br>- archive |", markdown)
 
+    def test_stage_table_uses_collapsed_multirow_header_in_markdown_output(self) -> None:
+        markdown = self._extract_table_markdown()
+        self.assertIn(
+            "| Stage<br>Group | Team<br>Function | Notes<br>Deliverable |",
+            markdown,
+        )
+
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
