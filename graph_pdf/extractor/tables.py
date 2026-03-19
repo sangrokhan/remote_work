@@ -104,10 +104,43 @@ def _rows_match(a: Sequence[str], b: Sequence[str]) -> bool:
     return all(_normalize_text(x) == _normalize_text(y) for x, y in zip(a, b))
 
 
+def _header_row_count(rows: Sequence[Sequence[str]], max_header_rows: int = 2) -> int:
+    # Treat consecutive short alpha-like top rows as a multi-row header block.
+    count = 0
+    for row in rows[:max_header_rows]:
+        if not _looks_like_header_row(row):
+            break
+        count += 1
+    return count
+
+
+def _collapse_header_rows(header_rows: Sequence[Sequence[str]]) -> List[str]:
+    # Markdown can only express one header row directly, so fold multi-row headers into one logical row.
+    if not header_rows:
+        return []
+    col_count = max((len(row) for row in header_rows), default=0)
+    collapsed: List[str] = []
+    for col_idx in range(col_count):
+        parts = [
+            str(row[col_idx]).strip()
+            for row in header_rows
+            if col_idx < len(row) and str(row[col_idx]).strip()
+        ]
+        collapsed.append("\n".join(parts))
+    return collapsed
+
+
 def _split_repeated_header(prev_rows: TableRows, curr_rows: TableRows) -> TableRows:
     # When a page repeats the same header row, only keep the first occurrence in the merged output.
-    if prev_rows and curr_rows and _rows_match(prev_rows[0], curr_rows[0]):
-        return curr_rows[1:]
+    prev_header_count = _header_row_count(prev_rows)
+    curr_header_count = _header_row_count(curr_rows)
+    if not prev_header_count or prev_header_count != curr_header_count:
+        return curr_rows
+    if all(
+        _rows_match(prev_rows[idx], curr_rows[idx])
+        for idx in range(curr_header_count)
+    ):
+        return curr_rows[curr_header_count:]
     return curr_rows
 
 
@@ -312,6 +345,13 @@ def _format_markdown_cell(value: str) -> str:
     if not lines:
         return ""
     return "<br>".join(line.replace("|", "\\|") for line in lines)
+
+
+def _format_header_markdown_cell(value: str) -> str:
+    # Header rows are already semantically separated, so preserve their row boundaries directly.
+    parts = [str(part or "").strip().replace("|", "\\|") for part in str(value or "").splitlines()]
+    parts = [part for part in parts if part]
+    return "<br>".join(parts)
 
 
 def _table_regions(
@@ -542,13 +582,15 @@ def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
     if not rows:
         return ""
 
-    header = [str(col or "").strip() for col in rows[0]]
-    body = rows[1:]
+    header_row_count = _header_row_count(rows)
+    header_rows = rows[:header_row_count] if header_row_count else rows[:1]
+    header = _collapse_header_rows(header_rows)
+    body = rows[header_row_count:] if header_row_count else rows[1:]
     if not body:
         body = rows
         header = [f"Column {idx}" for idx in range(1, len(rows[0]) + 1)]
 
-    header_line = "| " + " | ".join(cell or f"Column {idx + 1}" for idx, cell in enumerate(header)) + " |"
+    header_line = "| " + " | ".join(_format_header_markdown_cell(cell or f"Column {idx + 1}") for idx, cell in enumerate(header)) + " |"
     divider_line = "| " + " | ".join("---" for _ in header) + " |"
     body_lines = []
     for row in body:

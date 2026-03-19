@@ -8,9 +8,11 @@ from extractor.tables import (
     _collapse_structural_triplet_columns,
     _continuation_regions_should_merge,
     _extract_tables,
+    _split_repeated_header,
     _should_try_table_continuation_merge,
     _table_regions,
     _table_rejection_reason,
+    _table_text_from_rows,
 )
 
 
@@ -152,3 +154,32 @@ class TableModuleTests(unittest.TestCase):
             filter=lambda fn: page,
         )
         self.assertEqual([], _extract_tables(page))
+
+    def test_table_text_from_rows_collapses_two_header_rows_into_single_markdown_header(self) -> None:
+        rows = [
+            ["Stage", "Team", "Notes"],
+            ["Group", "Function", "Deliverable"],
+            ["Phase A", "Discovery", "Kickoff scope lock"],
+        ]
+
+        markdown = _table_text_from_rows(rows)
+
+        self.assertIn("| Stage<br>Group | Team<br>Function | Notes<br>Deliverable |", markdown)
+        self.assertIn("| Phase A | Discovery | Kickoff scope lock |", markdown)
+
+    def test_split_repeated_header_removes_repeated_two_row_header_block(self) -> None:
+        prev_rows = [
+            ["Stage", "Team", "Notes"],
+            ["Group", "Function", "Deliverable"],
+            ["Phase A", "Discovery", "Kickoff scope lock"],
+        ]
+        curr_rows = [
+            ["Stage", "Team", "Notes"],
+            ["Group", "Function", "Deliverable"],
+            ["", "Design", "UX skeleton review"],
+        ]
+
+        self.assertEqual(
+            [["", "Design", "UX skeleton review"]],
+            _split_repeated_header(prev_rows, curr_rows),
+        )
