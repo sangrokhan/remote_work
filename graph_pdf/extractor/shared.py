@@ -87,11 +87,20 @@ def _round_segment(
     body_bottom: float | None = None,
 ) -> dict:
     # Debug payloads use rounded values so JSON stays readable and stable across runs.
+    stroking_color = edge.get("stroking_color")
+    non_stroking_color = edge.get("non_stroking_color")
     payload = {
         "x0": round(float(edge["x0"]), 2),
         "x1": round(float(edge["x1"]), 2),
         "top": round(float(edge["top"]), 2),
         "bottom": round(float(edge["bottom"]), 2),
+        "linewidth": round(float(edge.get("linewidth", 0.0)), 2),
+        "stroke": bool(edge.get("stroke", False)),
+        "dash": edge.get("dash"),
+        "object_type": edge.get("object_type"),
+        "orientation": edge.get("orientation"),
+        "stroking_color": list(stroking_color) if isinstance(stroking_color, tuple) else stroking_color,
+        "non_stroking_color": list(non_stroking_color) if isinstance(non_stroking_color, tuple) else non_stroking_color,
     }
     if body_top is not None and body_bottom is not None:
         payload["in_body_bounds"] = (
