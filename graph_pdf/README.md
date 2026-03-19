@@ -19,6 +19,52 @@ pip install -r graph_pdf/requirements.txt
 .venv/bin/python graph_pdf/verify.py
 ```
 
+## 직접 실행 방법
+샘플 생성 없이 임의의 PDF를 바로 추출하려면 `extractor` 모듈을 직접 실행하면 됩니다.
+
+```bash
+python3 -m extractor sample.pdf \
+  --out-md-dir artifacts/manual/md \
+  --out-image-dir artifacts/manual/images \
+  --stem sample
+```
+
+또는 엔트리 파일을 직접 실행할 수도 있습니다.
+
+```bash
+python3 extractor/__main__.py sample.pdf \
+  --out-md-dir artifacts/manual/md \
+  --out-image-dir artifacts/manual/images \
+  --stem sample
+```
+
+### 주요 옵션
+- `--pages 1,3,5-8`: 추출할 페이지 범위 지정
+- `--force-table`: 표 영역 탐지 실패 시 더 공격적인 페이지 전체 표 추출 허용
+- `--debug`: 표 구조/edge 디버그 JSON 생성
+- `--debug-watermark`: 회전 문자 디버그 JSON 생성
+
+### 직접 실행 예시
+```bash
+python3 -m extractor sample.pdf \
+  --out-md-dir artifacts/manual/md \
+  --out-image-dir artifacts/manual/images \
+  --stem sample \
+  --pages 1-2 \
+  --debug \
+  --debug-watermark
+```
+
+### 직접 실행 산출물
+- `artifacts/manual/md/sample.txt`: 본문 텍스트
+- `artifacts/manual/md/sample.md`: 본문 markdown
+- `artifacts/manual/md/sample_table.md`: 표 markdown
+- `artifacts/manual/md/sample_summary.json`: 추출 요약
+- `artifacts/manual/md/sample_debug.json`: 표 구조 디버그 (`--debug`)
+- `artifacts/manual/md/sample_edges_debug.json`: edge 디버그 (`--debug`)
+- `artifacts/manual/md/sample_watermark_debug.json`: 회전 문자 디버그 (`--debug-watermark`)
+- `artifacts/manual/images/*`: body 영역 이미지 추출 결과
+
 ## 파일별 역할
 - `run_demo.py`: 샘플 PDF를 생성하고 추출 파이프라인을 실행하는 진입 스크립트
 - `verify.py`: 데모 산출물이 기대한 shape인지 확인하는 검증 스크립트
