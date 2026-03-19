@@ -129,19 +129,22 @@ class TableModuleTests(unittest.TestCase):
             {"x0": 200.0, "x1": 200.0, "top": 90.2, "bottom": 110.0},
         ]
 
+        horizontal_merged = _merge_horizontal_band_segments(horizontal, tolerance=1.0)
+        vertical_merged = _merge_vertical_band_segments(vertical, tolerance=1.0)
+
         self.assertEqual(
             [
                 {"x0": 10.0, "x1": 80.0, "top": 99.6, "bottom": 100.6},
                 {"x0": 90.5, "x1": 110.0, "top": 100.0, "bottom": 100.0},
             ],
-            _merge_horizontal_band_segments(horizontal, tolerance=1.0),
+            [{key: segment[key] for key in ("x0", "x1", "top", "bottom")} for segment in horizontal_merged],
         )
         self.assertEqual(
             [
                 {"x0": 199.6, "x1": 200.6, "top": 10.0, "bottom": 80.0},
                 {"x0": 200.0, "x1": 200.0, "top": 90.2, "bottom": 110.0},
             ],
-            _merge_vertical_band_segments(vertical, tolerance=1.0),
+            [{key: segment[key] for key in ("x0", "x1", "top", "bottom")} for segment in vertical_merged],
         )
 
     def test_extract_tables_skips_page_wide_fallback_by_default(self) -> None:

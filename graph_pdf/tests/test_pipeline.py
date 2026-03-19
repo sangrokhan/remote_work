@@ -217,6 +217,9 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertEqual(3, payload["tables"][0]["col_count"])
         self.assertTrue(payload["tables"][0]["horizontal_groups"])
         self.assertTrue(payload["tables"][0]["vertical_groups"])
+        self.assertIn("stroking_color", payload["tables"][0]["horizontal_segments"][0])
+        self.assertIn("linewidth", payload["tables"][0]["horizontal_segments"][0])
+        self.assertIn("stroke", payload["tables"][0]["horizontal_segments"][0])
 
     def test_debug_writes_table_drawing_log(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -238,6 +241,8 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertEqual(3, len(payload["pages"]))
         self.assertEqual(3, len(edge_payload["pages"]))
         self.assertIn("text_debug", payload["pages"][0])
+        self.assertIn("stroking_color", payload["pages"][0]["tables"][0]["horizontal_segments"][0])
+        self.assertIn("linewidth", edge_payload["pages"][0]["all_horizontal_edges"][0])
 
     def test_long_legal_notes_row_spans_two_pages(self) -> None:
         markdown = self._extract_table_markdown().lower()
