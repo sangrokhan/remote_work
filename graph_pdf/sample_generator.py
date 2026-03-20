@@ -258,6 +258,35 @@ class DemoPdfBuilder:
         if self.cursor_y < self.body_bottom + 8:
             self._start_new_page()
 
+    def add_single_column_box(self, text: str) -> None:
+        # This shape looks like a single highlighted row visually, but the text spans multiple visual lines.
+        box_width = self.width - (2 * self.margin_x)
+        box_height = 82.0
+        self._ensure_space(box_height + 12.0)
+
+        x0 = self.margin_x
+        y0 = self.cursor_y - box_height
+        mid_x = x0 + (box_width / 2.0)
+
+        self.canvas.setStrokeColor(colors.Color(0.2, 0.5, 0.9))
+        self.canvas.setLineWidth(1.0)
+        self.canvas.line(x0, self.cursor_y, x0 + box_width, self.cursor_y)
+        self.canvas.line(x0, y0, x0 + box_width, y0)
+
+        # Two touching fill-only rects simulate layout blocks that should still behave as one cell.
+        self.canvas.setFillColor(colors.white)
+        self.canvas.rect(x0, y0, box_width / 2.0, box_height, stroke=0, fill=1)
+        self.canvas.rect(mid_x, y0, box_width / 2.0, box_height, stroke=0, fill=1)
+
+        self.canvas.setFillColor(colors.black)
+        self.canvas.setFont("Helvetica", 11)
+        text_y = self.cursor_y - 16.0
+        for line in _split_cell_lines(text):
+            self.canvas.drawString(x0 + 8.0, text_y, line)
+            text_y -= 16.0
+
+        self.cursor_y = y0 - 18.0
+
     def _draw_table_block(
         self,
         header_rows: Sequence[TableRow],
@@ -618,5 +647,7 @@ def create_demo_pdf(path: Path) -> None:
     builder.add_gap(24.0)
 
     builder.add_body_text(footer_lines)
+    builder._start_new_page()
+    builder.add_single_column_box(tables["callout"][1][0][0])
 
     builder.save()

@@ -103,9 +103,18 @@
         ["Ops", "OK", "Archive path\n- cleanup\n- index refresh"],
         ["Support", "REVIEW", "Escalation owner confirmed.\nRegional fallback documented.\nLaunch blackout window approved."]
       ]
+    },
+    {
+      "id": "callout",
+      "columns": ["Notice"],
+      "rows": [
+        [
+          "Escalation lane summary Owner confirmed for regional review and exception routing.\nBackup approver stays on the same visual box and must not become a second table row."
+        ]
+      ]
     }
   ],
   "expectations": {
-    "page_count": 3
+    "page_count": 4
   }
 }
