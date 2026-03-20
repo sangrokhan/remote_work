@@ -586,6 +586,37 @@ def _extract_text_from_box_region(
     return "\n".join(lines)
 
 
+def _bbox_area(bbox: Tuple[float, float, float, float]) -> float:
+    x0, y0, x1, y1 = bbox
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
+
+
+def _bbox_overlap_ratio(
+    a: Tuple[float, float, float, float],
+    b: Tuple[float, float, float, float],
+) -> float:
+    ix0 = max(a[0], b[0])
+    iy0 = max(a[1], b[1])
+    ix1 = min(a[2], b[2])
+    iy1 = min(a[3], b[3])
+    intersection = _bbox_area((ix0, iy0, ix1, iy1))
+    if intersection <= 0.0:
+        return 0.0
+    return intersection / max(min(_bbox_area(a), _bbox_area(b)), 1.0)
+
+
+def _looks_like_single_column_box_misclassification(rows: TableRows) -> bool:
+    # Reclassify only sparse one-column outputs that are likely a visual box broken into multiple table rows.
+    if not rows or len(rows) < 2:
+        return False
+    column_count = max((len(row) for row in rows), default=0)
+    if column_count != 1:
+        return False
+    if any(not _normalize_text(row[0]) for row in rows if row):
+        return False
+    return True
+
+
 def _extract_tables_from_crop(
     page: pdfplumber.page.PageObject,
     crop_bbox: Tuple[float, float, float, float],
@@ -663,17 +694,28 @@ def _extract_tables(
                 seen_keys.add(key)
                 merged.append((table, crop_box))
 
+    reclassified: List[TableChunk] = []
     for crop_bbox in _single_column_box_regions(page):
         cell_text = _extract_text_from_box_region(page, crop_bbox)
         if not cell_text:
             continue
-        table = [[cell_text]]
-        rows_key = tuple(tuple(row) for row in table)
+        replacement = [[cell_text]]
+        merged = [
+            (rows, bbox)
+            for rows, bbox in merged
+            if not (
+                _bbox_overlap_ratio(bbox, crop_bbox) >= 0.8
+                and _looks_like_single_column_box_misclassification(rows)
+            )
+        ]
+        rows_key = tuple(tuple(row) for row in replacement)
         bbox_key = tuple(round(v, 2) for v in crop_bbox)
         key = (rows_key, bbox_key)
         if key not in seen_keys:
             seen_keys.add(key)
-            merged.append((table, crop_bbox))
+            reclassified.append((replacement, crop_bbox))
+
+    merged.extend(reclassified)
 
     if merged or not force_table:
         return merged
