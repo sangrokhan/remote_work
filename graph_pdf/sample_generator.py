@@ -259,7 +259,7 @@ class DemoPdfBuilder:
             self._start_new_page()
 
     def add_single_column_box(self, text: str) -> None:
-        # This shape looks like a single highlighted row visually, but the text spans multiple visual lines.
+        # This shape uses thin filled rect strips instead of stroked lines for the top and bottom boundary.
         box_width = self.width - (2 * self.margin_x)
         box_height = 82.0
         self._ensure_space(box_height + 12.0)
@@ -267,16 +267,16 @@ class DemoPdfBuilder:
         x0 = self.margin_x
         y0 = self.cursor_y - box_height
         mid_x = x0 + (box_width / 2.0)
+        strip_height = 1.0
 
-        self.canvas.setStrokeColor(colors.Color(0.2, 0.5, 0.9))
-        self.canvas.setLineWidth(1.0)
-        self.canvas.line(x0, self.cursor_y, x0 + box_width, self.cursor_y)
-        self.canvas.line(x0, y0, x0 + box_width, y0)
+        self.canvas.setFillColor(colors.Color(0.2, 0.5, 0.9))
+        self.canvas.rect(x0, self.cursor_y - strip_height, box_width, strip_height, stroke=0, fill=1)
+        self.canvas.rect(x0, y0, box_width, strip_height, stroke=0, fill=1)
 
         # Two touching fill-only rects simulate layout blocks that should still behave as one cell.
         self.canvas.setFillColor(colors.white)
-        self.canvas.rect(x0, y0, box_width / 2.0, box_height, stroke=0, fill=1)
-        self.canvas.rect(mid_x, y0, box_width / 2.0, box_height, stroke=0, fill=1)
+        self.canvas.rect(x0, y0 + strip_height, box_width / 2.0, box_height - (2 * strip_height), stroke=0, fill=1)
+        self.canvas.rect(mid_x, y0 + strip_height, box_width / 2.0, box_height - (2 * strip_height), stroke=0, fill=1)
 
         self.canvas.setFillColor(colors.black)
         self.canvas.setFont("Helvetica", 11)

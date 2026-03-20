@@ -485,6 +485,16 @@ def _merge_touching_fill_rects(
     return merged
 
 
+def _thin_strip_rects(rects: Sequence[dict], max_height: float = 1.5) -> List[dict]:
+    # Some PDFs use filled rect strips instead of stroked lines for box boundaries.
+    return [
+        rect
+        for rect in rects
+        if bool(rect.get("fill"))
+        and float(rect.get("bottom", 0.0)) - float(rect.get("top", 0.0)) <= max_height
+    ]
+
+
 def _single_column_box_regions(page: pdfplumber.page.PageObject) -> List[Tuple[float, float, float, float]]:
     # Detect box-like regions that visually behave as one cell even if the PDF uses multiple fill rects inside.
     body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
@@ -492,30 +502,35 @@ def _single_column_box_regions(page: pdfplumber.page.PageObject) -> List[Tuple[f
         rect
         for rect in getattr(page, "rects", [])
         if bool(rect.get("fill"))
-        and not bool(rect.get("stroke"))
         and float(rect.get("bottom", 0.0)) > body_top
         and float(rect.get("top", 0.0)) < body_bottom
     ]
+    boundary_rects = _thin_strip_rects(fill_rects)
+    content_rects = [
+        rect
+        for rect in fill_rects
+        if rect not in boundary_rects and not bool(rect.get("stroke"))
+    ]
     candidates: List[Tuple[float, float, float, float]] = []
-    for bbox in _merge_touching_fill_rects(fill_rects):
+    for bbox in _merge_touching_fill_rects(content_rects):
         x0, top, x1, bottom = bbox
         width = x1 - x0
         if width < 120.0:
             continue
 
-        stroke_horizontal = [
-            edge
-            for edge in page.horizontal_edges
-            if bool(edge.get("stroke"))
-            and float(edge.get("x0", 0.0)) <= x0 + 1.0
-            and float(edge.get("x1", 0.0)) >= x1 - 1.0
-            and (
-                abs(float(edge.get("top", 0.0)) - top) <= 1.5
-                or abs(float(edge.get("top", 0.0)) - bottom) <= 1.5
-            )
-        ]
-        horizontal_positions = _merge_numeric_positions([float(edge["top"]) for edge in stroke_horizontal], tolerance=1.0)
-        if len(horizontal_positions) != 2:
+        top_strip = any(
+            float(rect.get("x0", 0.0)) <= x0 + 1.0
+            and float(rect.get("x1", 0.0)) >= x1 - 1.0
+            and abs(float(rect.get("bottom", 0.0)) - top) <= 1.5
+            for rect in boundary_rects
+        )
+        bottom_strip = any(
+            float(rect.get("x0", 0.0)) <= x0 + 1.0
+            and float(rect.get("x1", 0.0)) >= x1 - 1.0
+            and abs(float(rect.get("top", 0.0)) - bottom) <= 1.5
+            for rect in boundary_rects
+        )
+        if not top_strip or not bottom_strip:
             continue
 
         internal_verticals = _merge_numeric_positions(
