@@ -60,8 +60,8 @@ python3 -m extractor sample.pdf \
 - `artifacts/manual/md/sample.md`: 본문 markdown
 - `artifacts/manual/md/sample_table.md`: 표 markdown
 - `artifacts/manual/md/sample_summary.json`: 추출 요약
-- `artifacts/manual/md/sample_debug.json`: 표 구조 디버그 (`--debug`)
-- `artifacts/manual/md/sample_edges_debug.json`: edge 디버그 (`--debug`)
+- `artifacts/manual/md/sample_debug.json`: 표 구조 + 원본 drawing 객체 + 텍스트 폰트 크기 프로파일 디버그 (`--debug`)
+- `artifacts/manual/md/sample_edges_debug.json`: edge 분해 결과 디버그 (`--debug`)
 - `artifacts/manual/md/sample_watermark_debug.json`: 회전 문자 디버그 (`--debug-watermark`)
 - `artifacts/manual/images/*`: body 영역 이미지 추출 결과
 
@@ -76,7 +76,7 @@ python3 -m extractor sample.pdf \
 - `extractor/pipeline.py`: 전체 PDF 추출 orchestration, 페이지 순회, cross-page table merge, 결과 파일 기록
 - `extractor/text.py`: 워터마크/레이아웃 artifact 제거, body bounds 계산, 본문 line 추출과 정규화
 - `extractor/tables.py`: 표 영역 탐지, 표 추출, 셀 정규화, 페이지 간 표 continuation merge 판단, markdown table 렌더링
-- `extractor/debug.py`: 표 선분/그리드 디버그와 회전 문자 디버그 payload 생성
+- `extractor/debug.py`: 표 선분/그리드, 원본 drawing 객체, 텍스트 스타일/폰트 크기 디버그 payload 생성
 - `extractor/images.py`: body 영역과 겹치는 embedded image만 저장
 - `extractor/shared.py`: 공통 타입, 상수, geometry/segment helper
 - `tests/test_text.py`: 본문/워터마크/바운드 계산 관련 테스트
@@ -108,7 +108,7 @@ python3 -m extractor sample.pdf \
 ## pipeline 흐름
 1. `extract_pdf_to_outputs(...)`가 PDF를 열고 출력 디렉터리를 준비합니다.
 2. 선택된 페이지 범위가 있으면 그 페이지들만 순회합니다.
-3. `debug=True`면 표 구조/edge 디버그 payload를 수집합니다.
+3. `debug=True`면 표 구조, 원본 drawing 객체, 텍스트 폰트 크기 프로파일, edge 디버그 payload를 수집합니다.
 4. `debug_watermark=True`면 회전된 문자 디버그 payload를 수집합니다.
 5. `extractor.tables._extract_tables(...)`가 현재 페이지의 표 후보를 찾고 행 데이터를 정규화합니다.
 6. `extractor.text._extract_body_text(...)`가 전체 body text를 구합니다.

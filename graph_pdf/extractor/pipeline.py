@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -22,6 +23,38 @@ from .tables import (
     _vertical_axes_for_bbox,
 )
 from .text import _detect_body_bounds, _extract_body_text
+
+
+def _document_text_profile(debug_pages: Sequence[dict]) -> dict:
+    # Document-level text profile lets later structure rules pick thresholds from observed font sizes.
+    font_size_counter: Counter[float] = Counter()
+    fontname_counter: Counter[str] = Counter()
+    pages_using_size: dict[float, set[int]] = {}
+    for page in debug_pages:
+        page_no = int(page.get("page", 0))
+        page_profile = page.get("text_debug", {}).get("profile", {})
+        for size_text, count in page_profile.get("font_size_histogram", {}).items():
+            size = round(float(size_text), 2)
+            font_size_counter[size] += int(count)
+            pages_using_size.setdefault(size, set()).add(page_no)
+        for fontname, count in page_profile.get("fontname_histogram", {}).items():
+            if str(fontname):
+                fontname_counter[str(fontname)] += int(count)
+
+    dominant_font_size = max(font_size_counter, key=font_size_counter.get) if font_size_counter else 0.0
+    dominant_fontname = max(fontname_counter, key=fontname_counter.get) if fontname_counter else ""
+    return {
+        "font_size_histogram": {
+            f"{size:.2f}": count for size, count in sorted(font_size_counter.items())
+        },
+        "fontname_histogram": dict(sorted(fontname_counter.items())),
+        "font_size_candidates": sorted(font_size_counter),
+        "dominant_font_size": dominant_font_size,
+        "dominant_fontname": dominant_fontname,
+        "pages_using_size": {
+            f"{size:.2f}": sorted(page_numbers) for size, page_numbers in sorted(pages_using_size.items())
+        },
+    }
 
 
 def _body_excluded_bboxes(
@@ -223,7 +256,18 @@ def extract_pdf_to_outputs(
     debug_edges_file: Optional[Path] = None
     if debug:
         debug_file = out_md_dir / f"{stem}_debug.json"
-        debug_file.write_text(json.dumps({"pdf": str(pdf_path), "pages": table_debug_pages}, ensure_ascii=False, indent=2), encoding="utf-8")
+        debug_file.write_text(
+            json.dumps(
+                {
+                    "pdf": str(pdf_path),
+                    "document_text_profile": _document_text_profile(table_debug_pages),
+                    "pages": table_debug_pages,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         debug_edges_file = out_md_dir / f"{stem}_edges_debug.json"
         debug_edges_file.write_text(json.dumps({"pdf": str(pdf_path), "pages": edge_debug_pages}, ensure_ascii=False, indent=2), encoding="utf-8")
 

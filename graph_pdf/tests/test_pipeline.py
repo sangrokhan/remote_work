@@ -220,6 +220,16 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertIn("stroking_color", payload["tables"][0]["horizontal_segments"][0])
         self.assertIn("linewidth", payload["tables"][0]["horizontal_segments"][0])
         self.assertIn("stroke", payload["tables"][0]["horizontal_segments"][0])
+        self.assertIn("source_drawings", payload)
+        self.assertIn("lines", payload["source_drawings"])
+        self.assertIn("rects", payload["source_drawings"])
+        self.assertIn("curves", payload["source_drawings"])
+        self.assertTrue(payload["source_drawings"]["lines"])
+        self.assertIn("profile", payload["text_debug"])
+        self.assertIn("dominant_font_size", payload["text_debug"]["profile"])
+        self.assertIn("font_size_histogram", payload["text_debug"]["profile"])
+        self.assertIn("font_size_candidates", payload["text_debug"]["raw_line_boxes"][0])
+        self.assertIn("dominant_font_size", payload["text_debug"]["raw_line_boxes"][0])
 
     def test_debug_writes_table_drawing_log(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -242,6 +252,11 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertEqual(3, len(edge_payload["pages"]))
         self.assertIn("text_debug", payload["pages"][0])
         self.assertIn("stroking_color", payload["pages"][0]["tables"][0]["horizontal_segments"][0])
+        self.assertIn("document_text_profile", payload)
+        self.assertIn("font_size_histogram", payload["document_text_profile"])
+        self.assertIn("source_drawings", payload["pages"][0])
+        self.assertIn("lines", payload["pages"][0]["source_drawings"])
+        self.assertIn("profile", payload["pages"][0]["text_debug"])
         self.assertIn("linewidth", edge_payload["pages"][0]["all_horizontal_edges"][0])
 
     def test_long_legal_notes_row_spans_two_pages(self) -> None:
