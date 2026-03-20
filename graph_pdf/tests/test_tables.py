@@ -159,6 +159,73 @@ class TableModuleTests(unittest.TestCase):
         )
         self.assertEqual([], _extract_tables(page))
 
+    def test_extract_tables_reclassifies_single_column_box_overlapping_detected_table(self) -> None:
+        table_bbox = (40.0, 119.0, 540.0, 150.0)
+        page = SimpleNamespace(
+            width=600.0,
+            height=800.0,
+            rects=[
+                {
+                    "x0": 40.0,
+                    "x1": 540.0,
+                    "top": 120.0,
+                    "bottom": 121.0,
+                    "fill": True,
+                    "stroke": False,
+                    "non_stroking_color": (0.2, 0.5, 0.9),
+                },
+                {
+                    "x0": 40.0,
+                    "x1": 290.0,
+                    "top": 121.0,
+                    "bottom": 148.0,
+                    "fill": True,
+                    "stroke": False,
+                    "non_stroking_color": 1,
+                },
+                {
+                    "x0": 290.0,
+                    "x1": 540.0,
+                    "top": 121.0,
+                    "bottom": 148.0,
+                    "fill": True,
+                    "stroke": False,
+                    "non_stroking_color": 1,
+                },
+                {
+                    "x0": 40.0,
+                    "x1": 540.0,
+                    "top": 148.0,
+                    "bottom": 149.0,
+                    "fill": True,
+                    "stroke": False,
+                    "non_stroking_color": (0.2, 0.5, 0.9),
+                },
+            ],
+            horizontal_edges=[],
+            vertical_edges=[],
+            chars=[],
+            filter=lambda fn: page,
+            crop=lambda bbox: SimpleNamespace(
+                extract_words=lambda **kwargs: [
+                    {"text": "Escalation", "x0": 50.0, "x1": 100.0, "top": 126.0, "bottom": 134.0},
+                    {"text": "lane", "x0": 104.0, "x1": 130.0, "top": 126.0, "bottom": 134.0},
+                    {"text": "summary", "x0": 134.0, "x1": 190.0, "top": 126.0, "bottom": 134.0},
+                ]
+            ),
+            extract_tables=lambda **kwargs: [],
+        )
+
+        from unittest.mock import patch
+
+        with patch("extractor.tables._table_regions", return_value=[(40.0, 540.0, [{"top": 121.0}, {"top": 148.0}])]), patch(
+            "extractor.tables._extract_tables_from_crop",
+            return_value=[([["Escalation lane summary"], ["Owner confirmed"]], table_bbox)],
+        ):
+            tables = _extract_tables(page)
+
+        self.assertEqual([([["Escalation lane summary"]], (40.0, 121.0, 540.0, 148.0))], tables)
+
     def test_table_text_from_rows_collapses_two_header_rows_into_single_markdown_header(self) -> None:
         rows = [
             ["Stage", "Team", "Notes"],
