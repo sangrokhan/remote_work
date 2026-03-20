@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import re
 from typing import List, Sequence, Tuple
 
@@ -335,6 +336,9 @@ def _extract_body_word_lines(
 
         fontnames = [str(word.get("fontname") or "") for word in ordered if str(word.get("fontname") or "")]
         dominant_font = max(fontnames, key=fontnames.count) if fontnames else ""
+        size_candidates = [round(float(word.get("size", 0.0)), 2) for word in ordered if float(word.get("size", 0.0)) > 0.0]
+        size_counter = Counter(size_candidates)
+        dominant_font_size = max(size_counter, key=size_counter.get) if size_counter else 0.0
         colors = [word.get("non_stroking_color") or word.get("stroking_color") for word in ordered]
         normalized_colors = [color for color in colors if isinstance(color, tuple) and len(color) >= 3]
         dominant_color = None
@@ -385,6 +389,9 @@ def _extract_body_word_lines(
                 "bottom": max(float(word.get("bottom", 0.0)) for word in ordered),
                 "size": sum(float(word.get("size", 0.0)) for word in ordered) / max(len(ordered), 1),
                 "fontname": dominant_font,
+                "fontnames": sorted(set(fontnames)),
+                "dominant_font_size": dominant_font_size,
+                "font_size_candidates": sorted(size_counter),
                 "color": dominant_color,
                 "is_bold": bool(re.search(r"bold", dominant_font, flags=re.IGNORECASE)),
                 "is_italic": bool(re.search(r"(italic|oblique)", dominant_font, flags=re.IGNORECASE)),

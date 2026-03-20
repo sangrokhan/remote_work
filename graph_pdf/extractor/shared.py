@@ -87,8 +87,8 @@ def _round_segment(
     body_bottom: float | None = None,
 ) -> dict:
     # Debug payloads use rounded values so JSON stays readable and stable across runs.
-    stroking_color = edge.get("stroking_color")
-    non_stroking_color = edge.get("non_stroking_color")
+    stroking_color = _normalize_debug_color(edge.get("stroking_color"))
+    non_stroking_color = _normalize_debug_color(edge.get("non_stroking_color"))
     payload = {
         "x0": round(float(edge["x0"]), 2),
         "x1": round(float(edge["x1"]), 2),
@@ -99,12 +99,51 @@ def _round_segment(
         "dash": edge.get("dash"),
         "object_type": edge.get("object_type"),
         "orientation": edge.get("orientation"),
-        "stroking_color": list(stroking_color) if isinstance(stroking_color, tuple) else stroking_color,
-        "non_stroking_color": list(non_stroking_color) if isinstance(non_stroking_color, tuple) else non_stroking_color,
+        "stroking_color": stroking_color,
+        "non_stroking_color": non_stroking_color,
     }
     if body_top is not None and body_bottom is not None:
         payload["in_body_bounds"] = (
             float(edge["bottom"]) > body_top and float(edge["top"]) < body_bottom
+        )
+    return payload
+
+
+def _normalize_debug_color(color: object) -> object:
+    if isinstance(color, tuple):
+        return [round(float(value), 3) for value in color]
+    if isinstance(color, list):
+        return [round(float(value), 3) for value in color]
+    if isinstance(color, (int, float)):
+        return round(float(color), 3)
+    return color
+
+
+def _round_graphic_object(
+    obj: dict,
+    body_top: float | None = None,
+    body_bottom: float | None = None,
+) -> dict:
+    # Drawing debug exposes original objects with the same rounded coordinate style as edge debug.
+    payload = {
+        "x0": round(float(obj.get("x0", 0.0)), 2),
+        "x1": round(float(obj.get("x1", obj.get("x0", 0.0))), 2),
+        "top": round(float(obj.get("top", 0.0)), 2),
+        "bottom": round(float(obj.get("bottom", obj.get("top", 0.0))), 2),
+        "width": round(float(obj.get("width", 0.0)), 2),
+        "height": round(float(obj.get("height", 0.0)), 2),
+        "linewidth": round(float(obj.get("linewidth", 0.0)), 2),
+        "stroke": bool(obj.get("stroke", False)),
+        "fill": bool(obj.get("fill", False)),
+        "dash": obj.get("dash"),
+        "evenodd": bool(obj.get("evenodd", False)),
+        "object_type": obj.get("object_type"),
+        "stroking_color": _normalize_debug_color(obj.get("stroking_color")),
+        "non_stroking_color": _normalize_debug_color(obj.get("non_stroking_color")),
+    }
+    if body_top is not None and body_bottom is not None:
+        payload["in_body_bounds"] = (
+            float(obj.get("bottom", 0.0)) > body_top and float(obj.get("top", 0.0)) < body_bottom
         )
     return payload
 

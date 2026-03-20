@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import List
 
 from .shared import (
@@ -8,10 +9,36 @@ from .shared import (
     _merge_horizontal_band_segments,
     _merge_numeric_positions,
     _merge_vertical_band_segments,
+    _round_graphic_object,
     _round_segment,
 )
 from .tables import _table_regions
 from .text import _detect_body_bounds, _extract_body_text_lines, _extract_body_word_lines
+
+
+def _build_text_profile(line_payloads: List[dict]) -> dict:
+    # Text-size histograms are meant for debugging future document-structure heuristics.
+    font_size_counter: Counter[float] = Counter()
+    fontname_counter: Counter[str] = Counter()
+    for line in line_payloads:
+        for size in line.get("font_size_candidates", []):
+            font_size_counter[round(float(size), 2)] += 1
+        for fontname in line.get("fontnames", []):
+            if str(fontname):
+                fontname_counter[str(fontname)] += 1
+
+    dominant_font_size = max(font_size_counter, key=font_size_counter.get) if font_size_counter else 0.0
+    dominant_fontname = max(fontname_counter, key=fontname_counter.get) if fontname_counter else ""
+    return {
+        "line_count": len(line_payloads),
+        "font_size_histogram": {
+            f"{size:.2f}": count for size, count in sorted(font_size_counter.items())
+        },
+        "fontname_histogram": dict(sorted(fontname_counter.items())),
+        "font_size_candidates": sorted(font_size_counter),
+        "dominant_font_size": dominant_font_size,
+        "dominant_fontname": dominant_fontname,
+    }
 
 
 def _collect_rotated_text_debug(page: "pdfplumber.page.Page", page_no: int) -> List[dict]:
@@ -103,13 +130,29 @@ def _collect_table_drawing_debug(
 
     line_payloads = _extract_body_word_lines(page=page, header_margin=header_margin, footer_margin=footer_margin)
     raw_text_lines, normalized_text_lines = _extract_body_text_lines(page, header_margin=header_margin, footer_margin=footer_margin)
+    text_profile = _build_text_profile(line_payloads)
 
     return {
         "page": page_no,
         "body_bounds": [round(body_top, 2), round(body_bottom, 2)],
         "table_count": len(tables),
         "tables": tables,
+        "source_drawings": {
+            "lines": [
+                _round_graphic_object(line, body_top=body_top, body_bottom=body_bottom)
+                for line in getattr(page, "lines", [])
+            ],
+            "rects": [
+                _round_graphic_object(rect, body_top=body_top, body_bottom=body_bottom)
+                for rect in getattr(page, "rects", [])
+            ],
+            "curves": [
+                _round_graphic_object(curve, body_top=body_top, body_bottom=body_bottom)
+                for curve in getattr(page, "curves", [])
+            ],
+        },
         "text_debug": {
+            "profile": text_profile,
             "raw_lines": raw_text_lines,
             "raw_line_boxes": [
                 {
@@ -118,6 +161,13 @@ def _collect_table_drawing_debug(
                     "x1": round(float(line.get("x1", 0.0)), 2),
                     "top": round(float(line.get("top", 0.0)), 2),
                     "bottom": round(float(line.get("bottom", 0.0)), 2),
+                    "size": round(float(line.get("size", 0.0)), 2),
+                    "fontname": str(line.get("fontname") or ""),
+                    "fontnames": list(line.get("fontnames", [])),
+                    "dominant_font_size": round(float(line.get("dominant_font_size", 0.0)), 2),
+                    "font_size_candidates": [
+                        round(float(size), 2) for size in line.get("font_size_candidates", [])
+                    ],
                     "text_start_x": round(float(line.get("text_start_x", line.get("x0", 0.0))), 2),
                     "marker_candidate": bool(line.get("marker_candidate")),
                 }
