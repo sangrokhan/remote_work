@@ -92,6 +92,16 @@ class PipelineExtractionTests(unittest.TestCase):
             markdown,
         )
 
+    def test_single_column_box_like_region_is_emitted_as_one_cell_table(self) -> None:
+        markdown = self._extract_table_markdown()
+        self.assertIn("| Column 1 |", markdown)
+        self.assertIn(
+            "| Escalation lane summary Owner confirmed for regional review and exception routing.<br>Backup approver stays on the same visual box and must not become a second table row. |",
+            markdown,
+        )
+        self.assertNotIn("| Escalation lane summary |", markdown)
+        self.assertNotIn("| Owner confirmed for regional review and exception routing. |", markdown)
+
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -151,7 +161,7 @@ class PipelineExtractionTests(unittest.TestCase):
     def test_spanning_stage_table_merges_into_one_block(self) -> None:
         markdown = self._extract_table_markdown()
         blocks = self._table_blocks(markdown)
-        self.assertEqual(3, len(blocks))
+        self.assertEqual(4, len(blocks))
         stage_block = next((block for block in blocks if "Phase A" in block), "")
         self.assertTrue(stage_block)
         self.assertIn("Release Notes", stage_block)
@@ -170,7 +180,7 @@ class PipelineExtractionTests(unittest.TestCase):
             raw_image_count = sum(len(page.images) for page in pdf.pages)
 
         result = self._extract_result()
-        self.assertEqual(5, raw_image_count)
+        self.assertEqual(6, raw_image_count)
         self.assertEqual(2, len(result["image_files"]))
 
     def test_debug_watermark_writes_rotated_text_log(self) -> None:
@@ -248,8 +258,8 @@ class PipelineExtractionTests(unittest.TestCase):
 
         payload = json.loads(result["debug_file"].read_text(encoding="utf-8"))
         edge_payload = json.loads(result["debug_edges_file"].read_text(encoding="utf-8"))
-        self.assertEqual(3, len(payload["pages"]))
-        self.assertEqual(3, len(edge_payload["pages"]))
+        self.assertEqual(4, len(payload["pages"]))
+        self.assertEqual(4, len(edge_payload["pages"]))
         self.assertIn("text_debug", payload["pages"][0])
         self.assertIn("stroking_color", payload["pages"][0]["tables"][0]["horizontal_segments"][0])
         self.assertIn("document_text_profile", payload)
@@ -267,7 +277,7 @@ class PipelineExtractionTests(unittest.TestCase):
     def test_demo_pdf_has_rotated_gray_watermark_on_every_page(self) -> None:
         pdf_path = self._build_pdf()
         with pdfplumber.open(str(pdf_path)) as pdf:
-            self.assertEqual(len(pdf.pages), 3)
+            self.assertEqual(len(pdf.pages), 4)
             for page in pdf.pages:
                 watermark_chars = [
                     char

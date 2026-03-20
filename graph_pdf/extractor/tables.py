@@ -20,6 +20,7 @@ from .text import (
     _filter_page_for_extraction,
     _is_layout_artifact,
     _normalize_cell_lines,
+    _repair_watermark_bleed,
 )
 
 
@@ -443,6 +444,134 @@ def _table_regions(
     return sorted(groups, key=lambda item: min(float(edge["top"]) for edge in item[2]))
 
 
+def _merge_touching_fill_rects(
+    rects: Sequence[dict],
+    tolerance: float = 1.0,
+) -> List[Tuple[float, float, float, float]]:
+    # Adjacent fill-only rects often represent one visual box split into multiple PDF drawing objects.
+    merged: List[Tuple[float, float, float, float]] = []
+    ordered = sorted(
+        rects,
+        key=lambda rect: (
+            round(float(rect.get("top", 0.0)), 1),
+            round(float(rect.get("bottom", 0.0)), 1),
+            float(rect.get("x0", 0.0)),
+        ),
+    )
+    for rect in ordered:
+        candidate = (
+            float(rect.get("x0", 0.0)),
+            float(rect.get("top", 0.0)),
+            float(rect.get("x1", 0.0)),
+            float(rect.get("bottom", 0.0)),
+        )
+        if not merged:
+            merged.append(candidate)
+            continue
+
+        prev_x0, prev_top, prev_x1, prev_bottom = merged[-1]
+        cur_x0, cur_top, cur_x1, cur_bottom = candidate
+        same_band = abs(prev_top - cur_top) <= tolerance and abs(prev_bottom - cur_bottom) <= tolerance
+        touching = cur_x0 <= prev_x1 + tolerance
+        if same_band and touching:
+            merged[-1] = (
+                min(prev_x0, cur_x0),
+                min(prev_top, cur_top),
+                max(prev_x1, cur_x1),
+                max(prev_bottom, cur_bottom),
+            )
+            continue
+        merged.append(candidate)
+    return merged
+
+
+def _single_column_box_regions(page: pdfplumber.page.PageObject) -> List[Tuple[float, float, float, float]]:
+    # Detect box-like regions that visually behave as one cell even if the PDF uses multiple fill rects inside.
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
+    fill_rects = [
+        rect
+        for rect in getattr(page, "rects", [])
+        if bool(rect.get("fill"))
+        and not bool(rect.get("stroke"))
+        and float(rect.get("bottom", 0.0)) > body_top
+        and float(rect.get("top", 0.0)) < body_bottom
+    ]
+    candidates: List[Tuple[float, float, float, float]] = []
+    for bbox in _merge_touching_fill_rects(fill_rects):
+        x0, top, x1, bottom = bbox
+        width = x1 - x0
+        height = bottom - top
+        if width < 120.0 or height < 36.0:
+            continue
+
+        stroke_horizontal = [
+            edge
+            for edge in page.horizontal_edges
+            if bool(edge.get("stroke"))
+            and float(edge.get("x0", 0.0)) <= x0 + 1.0
+            and float(edge.get("x1", 0.0)) >= x1 - 1.0
+            and (
+                abs(float(edge.get("top", 0.0)) - top) <= 1.5
+                or abs(float(edge.get("top", 0.0)) - bottom) <= 1.5
+            )
+        ]
+        horizontal_positions = _merge_numeric_positions([float(edge["top"]) for edge in stroke_horizontal], tolerance=1.0)
+        if len(horizontal_positions) != 2:
+            continue
+
+        internal_verticals = _merge_numeric_positions(
+            [
+                float(edge["x0"])
+                for edge in page.vertical_edges
+                if bool(edge.get("stroke"))
+                and float(edge.get("x0", 0.0)) > x0 + 2.0
+                and float(edge.get("x0", 0.0)) < x1 - 2.0
+                and float(edge.get("top", 0.0)) <= bottom
+                and float(edge.get("bottom", 0.0)) >= top
+            ],
+            tolerance=1.0,
+        )
+        if internal_verticals:
+            continue
+        candidates.append(bbox)
+    return candidates
+
+
+def _extract_text_from_box_region(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+) -> str:
+    # Box-like regions should collapse into one cell, preserving visual line breaks inside the box.
+    filtered_page = _filter_page_for_extraction(page)
+    words = (
+        filtered_page
+        .crop(bbox)
+        .extract_words(x_tolerance=1.5, y_tolerance=2.0, keep_blank_chars=False)
+        or []
+    )
+    grouped_lines: List[List[dict]] = []
+    for word in sorted(words, key=lambda item: (float(item.get("top", 0.0)), float(item.get("x0", 0.0)))):
+        cleaned = _repair_watermark_bleed(str(word.get("text") or "").strip())
+        if not cleaned or _is_layout_artifact(cleaned):
+            continue
+        if not grouped_lines or abs(float(word.get("top", 0.0)) - float(grouped_lines[-1][0].get("top", 0.0))) > 2.5:
+            grouped_lines.append([word])
+            continue
+        grouped_lines[-1].append(word)
+
+    lines: List[str] = []
+    for words_in_line in grouped_lines:
+        ordered = sorted(words_in_line, key=lambda item: float(item.get("x0", 0.0)))
+        text = " ".join(
+            _repair_watermark_bleed(str(word.get("text") or "").strip())
+            for word in ordered
+            if _repair_watermark_bleed(str(word.get("text") or "").strip())
+        ).strip()
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
 def _extract_tables_from_crop(
     page: pdfplumber.page.PageObject,
     crop_bbox: Tuple[float, float, float, float],
@@ -519,6 +648,18 @@ def _extract_tables(
             if key not in seen_keys:
                 seen_keys.add(key)
                 merged.append((table, crop_box))
+
+    for crop_bbox in _single_column_box_regions(page):
+        cell_text = _extract_text_from_box_region(page, crop_bbox)
+        if not cell_text:
+            continue
+        table = [[cell_text]]
+        rows_key = tuple(tuple(row) for row in table)
+        bbox_key = tuple(round(v, 2) for v in crop_bbox)
+        key = (rows_key, bbox_key)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            merged.append((table, crop_bbox))
 
     if merged or not force_table:
         return merged
