@@ -195,26 +195,43 @@ class TableModuleTests(unittest.TestCase):
             rects=[
                 {
                     "x0": 40.0,
-                    "x1": 290.0,
+                    "x1": 540.0,
                     "top": 120.0,
+                    "bottom": 121.0,
+                    "fill": True,
+                    "stroke": False,
+                    "non_stroking_color": (0.2, 0.5, 0.9),
+                },
+                {
+                    "x0": 40.0,
+                    "x1": 290.0,
+                    "top": 121.0,
                     "bottom": 148.0,
                     "fill": True,
                     "stroke": False,
+                    "non_stroking_color": 1,
                 },
                 {
                     "x0": 290.0,
                     "x1": 540.0,
-                    "top": 120.0,
+                    "top": 121.0,
                     "bottom": 148.0,
                     "fill": True,
                     "stroke": False,
+                    "non_stroking_color": 1,
+                },
+                {
+                    "x0": 40.0,
+                    "x1": 540.0,
+                    "top": 148.0,
+                    "bottom": 149.0,
+                    "fill": True,
+                    "stroke": False,
+                    "non_stroking_color": (0.2, 0.5, 0.9),
                 },
             ],
-            horizontal_edges=[
-                {"x0": 40.0, "x1": 540.0, "top": 120.0, "bottom": 120.0, "stroke": True},
-                {"x0": 40.0, "x1": 540.0, "top": 148.0, "bottom": 148.0, "stroke": True},
-            ],
+            horizontal_edges=[],
             vertical_edges=[],
         )
 
-        self.assertEqual([(40.0, 120.0, 540.0, 148.0)], _single_column_box_regions(page))
+        self.assertEqual([(40.0, 121.0, 540.0, 148.0)], _single_column_box_regions(page))
