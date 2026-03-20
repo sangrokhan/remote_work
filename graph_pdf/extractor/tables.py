@@ -500,8 +500,7 @@ def _single_column_box_regions(page: pdfplumber.page.PageObject) -> List[Tuple[f
     for bbox in _merge_touching_fill_rects(fill_rects):
         x0, top, x1, bottom = bbox
         width = x1 - x0
-        height = bottom - top
-        if width < 120.0 or height < 36.0:
+        if width < 120.0:
             continue
 
         stroke_horizontal = [

@@ -8,6 +8,7 @@ from extractor.tables import (
     _collapse_structural_triplet_columns,
     _continuation_regions_should_merge,
     _extract_tables,
+    _single_column_box_regions,
     _split_repeated_header,
     _should_try_table_continuation_merge,
     _table_regions,
@@ -186,3 +187,34 @@ class TableModuleTests(unittest.TestCase):
             [["", "Design", "UX skeleton review"]],
             _split_repeated_header(prev_rows, curr_rows),
         )
+
+    def test_single_column_box_regions_allow_short_height_boxes(self) -> None:
+        page = SimpleNamespace(
+            width=600.0,
+            height=800.0,
+            rects=[
+                {
+                    "x0": 40.0,
+                    "x1": 290.0,
+                    "top": 120.0,
+                    "bottom": 148.0,
+                    "fill": True,
+                    "stroke": False,
+                },
+                {
+                    "x0": 290.0,
+                    "x1": 540.0,
+                    "top": 120.0,
+                    "bottom": 148.0,
+                    "fill": True,
+                    "stroke": False,
+                },
+            ],
+            horizontal_edges=[
+                {"x0": 40.0, "x1": 540.0, "top": 120.0, "bottom": 120.0, "stroke": True},
+                {"x0": 40.0, "x1": 540.0, "top": 148.0, "bottom": 148.0, "stroke": True},
+            ],
+            vertical_edges=[],
+        )
+
+        self.assertEqual([(40.0, 120.0, 540.0, 148.0)], _single_column_box_regions(page))
