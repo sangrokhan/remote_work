@@ -33,6 +33,7 @@
       "The first table must fit entirely inside body bounds and end before the footer region.",
       "After table, body lines must continue and never overlap following elements."
     ],
+    "accent_line": "Blue accent line marks a separate style bucket for font profile review.",
     "after_stage_table": [
       "Page 2 continues the flow if table rows spill over from the first table page.",
       "This paragraph is intentionally after the spanning table so table continuation remains earlier on the next page.",

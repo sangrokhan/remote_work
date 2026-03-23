@@ -60,7 +60,13 @@ def _fixture_table_render_meta(
 
 def get_demo_text_lines() -> Tuple[str, ...]:
     body = load_demo_fixture()["body"]
-    return tuple(body["intro"] + body["after_item_table"] + body["after_stage_table"] + body["footer_lines"])
+    return tuple(
+        body["intro"]
+        + [body.get("accent_line", "")]
+        + body["after_item_table"]
+        + body["after_stage_table"]
+        + body["footer_lines"]
+    )
 
 
 def _fixture_layout() -> dict:
@@ -252,6 +258,38 @@ class DemoPdfBuilder:
         for text, indent in wrapped_items:
             self.canvas.drawString(self.margin_x + indent, self.cursor_y, text)
             self.cursor_y -= line_height
+
+    def add_body_heading(self, text: str, line_height: float = 22.0) -> None:
+        # A large heading gives the font-profile mode a stable non-body size bucket.
+        wrapped_lines = _wrap_visual_line(
+            str(text),
+            max(self.width - (self.margin_x * 2), 48.0),
+            "Helvetica-Bold",
+            20,
+        )
+        self._ensure_space(len(wrapped_lines) * line_height)
+        self.canvas.setFillColor(colors.black)
+        self.canvas.setFont("Helvetica-Bold", 20)
+        for line in wrapped_lines:
+            self.canvas.drawString(self.margin_x, self.cursor_y, line)
+            self.cursor_y -= line_height
+        self.canvas.setFont("Helvetica", 11)
+
+    def add_accent_body_text(self, text: str, line_height: float = 14.0) -> None:
+        # Accent-colored sample text gives the font profile mode a stable non-black style bucket.
+        wrapped_lines = _wrap_visual_line(
+            str(text),
+            max(self.width - (self.margin_x * 2), 48.0),
+            "Helvetica",
+            11,
+        )
+        self._ensure_space(len(wrapped_lines) * line_height)
+        self.canvas.setFillColor(colors.Color(0.0, 0.3, 0.7))
+        self.canvas.setFont("Helvetica", 11)
+        for line in wrapped_lines:
+            self.canvas.drawString(self.margin_x, self.cursor_y, line)
+            self.cursor_y -= line_height
+        self.canvas.setFillColor(colors.black)
 
     def add_gap(self, height: float) -> None:
         self.cursor_y -= max(0.0, float(height))
@@ -591,18 +629,22 @@ def create_demo_pdf(path: Path) -> None:
     body = builder.fixture["body"]
     tables = builder.fixture["tables"]
     intro_lines = tuple(body["intro"])
+    accent_line = str(body.get("accent_line") or "")
     after_item_table = tuple(body["after_item_table"])
     after_stage_table = tuple(body["after_stage_table"])
     footer_lines = tuple(body["footer_lines"])
 
+    builder.add_body_heading(intro_lines[0])
     builder.add_body_text(
         (
-            *intro_lines[:3],
+            *intro_lines[1:3],
             ("  - nested detail: line 2 confirms indentation", 12),
             ("    - deeper detail: line 3 confirms paragraph wrap and line breaks", 24),
             *intro_lines[5:],
         )
     )
+    if accent_line:
+        builder.add_accent_body_text(accent_line)
 
     builder._draw_table_block(
         header_rows=(tables["item"][0],),

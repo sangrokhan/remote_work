@@ -6,6 +6,9 @@ import extractor
 
 
 class ExtractorPublicApiTests(unittest.TestCase):
+    def test_font_profile_entrypoint_is_exposed(self) -> None:
+        self.assertTrue(callable(extractor.profile_pdf_fonts))
+
     def test_legacy_helpers_are_not_exposed(self) -> None:
         self.assertFalse(hasattr(extractor, "_normalize_body_lines"))
         self.assertFalse(hasattr(extractor, "_normalize_list_block_lines"))

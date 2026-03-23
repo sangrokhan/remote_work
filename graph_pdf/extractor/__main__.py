@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .font_profile import profile_pdf_fonts
 from .pipeline import extract_pdf_to_outputs
 from .shared import _parse_pages_spec
 
@@ -18,7 +19,17 @@ def main() -> None:
     parser.add_argument("--force-table", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--debug-watermark", action="store_true")
+    parser.add_argument("--profile-fonts", action="store_true")
     args = parser.parse_args()
+
+    if args.profile_fonts:
+        profile_pdf_fonts(
+            pdf_path=Path(args.pdf_path),
+            out_dir=Path(args.out_md_dir),
+            stem=args.stem,
+            pages=_parse_pages_spec(args.pages) if args.pages else None,
+        )
+        return
 
     extract_pdf_to_outputs(
         pdf_path=Path(args.pdf_path),

@@ -5,6 +5,7 @@ from .debug import (
     _collect_rotated_text_debug,
     _collect_table_drawing_debug,
 )
+from .font_profile import profile_pdf_fonts
 from .images import _extract_embedded_images
 from .pipeline import extract_pdf_to_outputs
 from .shared import (
@@ -41,6 +42,7 @@ from .text import (
 # keep importing from `extractor` after the package split.
 __all__ = [
     "extract_pdf_to_outputs",
+    "profile_pdf_fonts",
     "_append_output_table",
     "_build_body_blocks",
     "_char_rotation_degrees",
