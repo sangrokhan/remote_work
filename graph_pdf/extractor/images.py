@@ -9,6 +9,32 @@ from pypdf import PdfReader
 from .text import _detect_body_bounds
 
 
+def _crop_page_region(
+    page_image: "pdfplumber.display.PageImage",
+    page_height: float,
+    bbox: Tuple[float, float, float, float],
+    resolution: float,
+) -> "Image":
+    # `PageImage` removed `.crop()` in current versions, so crop via Pillow with
+    # explicit point-to-pixel conversion using the same PDF coordinate system.
+    x0, top, x1, bottom = bbox
+    left = float(min(x0, x1))
+    right = float(max(x0, x1))
+    y0 = float(min(top, bottom))
+    y1 = float(max(top, bottom))
+
+    scale = float(resolution) / 72.0
+    image_width, image_height = page_image.original.size
+    left_px = max(0, min(int(round(left * scale)), image_width))
+    right_px = max(0, min(int(round(right * scale)), image_width))
+    top_px = max(0, min(int(round((page_height - y1) * scale)), image_height))
+    bottom_px = max(0, min(int(round((page_height - y0) * scale)), image_height))
+
+    # The `PageImage.original` coordinate origin is top-left, so we convert from
+    # PDF y-coordinates (bottom-origin) accordingly.
+    return page_image.original.crop((left_px, top_px, right_px, bottom_px))
+
+
 def _image_intersects_body(
     image_meta: dict,
     body_top: float,
@@ -76,7 +102,12 @@ def _extract_embedded_images(
                     continue
                 try:
                     page_image = plumber_page.to_image(resolution=180)
-                    region_image = page_image.crop((left, top_y, right, bottom_y), relative=False)
+                    region_image = _crop_page_region(
+                        page_image=page_image,
+                        page_height=height,
+                        bbox=(left, top_y, right, bottom_y),
+                        resolution=180.0,
+                    )
                     drawing_image_idx += 1
                     out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_drawing_{drawing_image_idx:02d}.png"
                     region_image.save(str(out_path), format="PNG")
