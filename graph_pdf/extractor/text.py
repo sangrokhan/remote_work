@@ -17,6 +17,145 @@ from .shared import (
     _normalize_text,
 )
 
+_DRAWING_OBJECT_TOLERANCE = 3.0
+_MIN_DRAWING_IMAGE_AREA = 2500.0
+_MIN_DRAWING_IMAGE_SPAN = 16.0
+
+
+def _object_bbox(obj: dict) -> Tuple[float, float, float, float]:
+    return (
+        float(obj.get("x0", 0.0)),
+        float(obj.get("top", 0.0)),
+        float(obj.get("x1", obj.get("x0", 0.0))),
+        float(obj.get("bottom", obj.get("top", 0.0))),
+    )
+
+
+def _bbox_area(bbox: Tuple[float, float, float, float]) -> float:
+    x0, top, x1, bottom = bbox
+    width = max(0.0, x1 - x0)
+    height = max(0.0, bottom - top)
+    return width * height
+
+
+def _bbox_span_minima(bbox: Tuple[float, float, float, float]) -> Tuple[float, float]:
+    x0, top, x1, bottom = bbox
+    return x1 - x0, bottom - top
+
+
+def _bboxes_touch(a: Tuple[float, float, float, float], b: Tuple[float, float, float, float], tolerance: float = 0.0) -> bool:
+    return (
+        b[0] <= a[2] + tolerance
+        and b[2] >= a[0] - tolerance
+        and b[1] <= a[3] + tolerance
+        and b[3] >= a[1] - tolerance
+    )
+
+
+def _collect_curve_line_rect_objects(
+    page: "pdfplumber.page.Page",
+    header_margin: float,
+    footer_margin: float,
+) -> List[dict]:
+    # curve/line/rect coordinates are used to discover directly drawn graphics that behave like images.
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
+    objects: List[dict] = []
+    for raw_obj in [
+        *getattr(page, "curves", []),
+        *getattr(page, "lines", []),
+        *getattr(page, "rects", []),
+    ]:
+        obj_type = str(raw_obj.get("object_type") or "")
+        if obj_type not in {"curve", "line", "rect"}:
+            continue
+        bbox = _object_bbox(raw_obj)
+        if bbox[3] <= body_top or bbox[1] >= body_bottom:
+            continue
+        objects.append({"bbox": bbox, "object_type": obj_type})
+    return objects
+
+
+def _cluster_drawing_objects(objects: List[dict]) -> List[List[dict]]:
+    # Place-by-place grouping keeps separate drawings from accidentally merging into one image.
+    groups: List[List[dict]] = []
+    if not objects:
+        return groups
+
+    remaining = set(range(len(objects)))
+    while remaining:
+        seed_idx = remaining.pop()
+        queue = [seed_idx]
+        group = []
+        while queue:
+            current_idx = queue.pop()
+            current = objects[current_idx]
+            group.append(current)
+
+            current_bbox = current["bbox"]
+            related = [
+                idx
+                for idx in remaining
+                if _bboxes_touch(current_bbox, objects[idx]["bbox"], tolerance=_DRAWING_OBJECT_TOLERANCE)
+            ]
+            for idx in related:
+                remaining.remove(idx)
+                queue.append(idx)
+
+        groups.append(group)
+    return groups
+
+
+def _selected_drawing_image_groups(
+    page: "pdfplumber.page.Page",
+    header_margin: float,
+    footer_margin: float,
+    excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
+) -> List[dict]:
+    objects = _collect_curve_line_rect_objects(page, header_margin=header_margin, footer_margin=footer_margin)
+    groups = _cluster_drawing_objects(objects)
+    if not groups:
+        return []
+
+    selected: List[dict] = []
+    for group in groups:
+        curve_bboxes = [entry["bbox"] for entry in group if entry["object_type"] == "curve"]
+        if not curve_bboxes:
+            continue
+        image_bbox = max(curve_bboxes, key=_bbox_area)
+        width, height = _bbox_span_minima(image_bbox)
+        if _bbox_area(image_bbox) < _MIN_DRAWING_IMAGE_AREA or width < _MIN_DRAWING_IMAGE_SPAN or height < _MIN_DRAWING_IMAGE_SPAN:
+            continue
+        if any(_bboxes_intersect(image_bbox, excluded_bbox) for excluded_bbox in excluded_bboxes):
+            continue
+
+        image_objects = [{"object_type": entry["object_type"], "bbox": entry["bbox"]} for entry in group]
+        selected.append(
+            {
+                "image_bbox": image_bbox,
+                "object_count": len(group),
+                "objects": image_objects,
+            }
+        )
+    selected.sort(key=lambda group: (group["image_bbox"][1], group["image_bbox"][0], group["image_bbox"][2], group["image_bbox"][3]))
+    return selected
+
+
+def _extract_drawing_image_bboxes(
+    page: "pdfplumber.page.Page",
+    header_margin: float,
+    footer_margin: float,
+    excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
+) -> List[Tuple[float, float, float, float]]:
+    return [
+        group["image_bbox"]
+        for group in _selected_drawing_image_groups(
+            page=page,
+            header_margin=header_margin,
+            footer_margin=footer_margin,
+            excluded_bboxes=excluded_bboxes,
+        )
+    ]
+
 
 def _merge_touching_shape_rects(rects: Sequence[dict]) -> List[Tuple[float, float, float, float]]:
     merged: List[Tuple[float, float, float, float]] = []
@@ -380,6 +519,14 @@ def _extract_body_word_lines(
     filtered_page = _filter_page_for_extraction(page)
     body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
     shape_regions = _shape_text_regions(page)
+    shape_regions.extend(
+        _extract_drawing_image_bboxes(
+            page=page,
+            header_margin=header_margin,
+            footer_margin=footer_margin,
+            excluded_bboxes=excluded_bboxes,
+        )
+    )
     words = filtered_page.extract_words(
         x_tolerance=1.5,
         y_tolerance=2.0,

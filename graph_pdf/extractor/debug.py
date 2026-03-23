@@ -14,7 +14,12 @@ from .shared import (
     _round_segment,
 )
 from .tables import _table_regions
-from .text import _detect_body_bounds, _extract_body_text_lines, _extract_body_word_lines
+from .text import (
+    _detect_body_bounds,
+    _extract_body_text_lines,
+    _extract_body_word_lines,
+    _selected_drawing_image_groups,
+)
 
 
 def _build_text_profile(line_payloads: List[dict]) -> dict:
@@ -143,17 +148,89 @@ def _collect_table_drawing_debug(
             }
         )
 
-    line_payloads = _extract_body_word_lines(page=page, header_margin=header_margin, footer_margin=footer_margin)
+    table_bboxes = [
+        (float(table.get("bbox", [0, 0, 0, 0])[0]), float(table.get("bbox", [0, 0, 0, 0])[1]), float(table.get("bbox", [0, 0, 0, 0])[2]), float(table.get("bbox", [0, 0, 0, 0])[3]))
+        for table in tables
+    ]
+    table_bboxes = [bbox for bbox in table_bboxes if float(bbox[2]) > float(bbox[0]) and float(bbox[3]) > float(bbox[1])]
+    image_groups = _selected_drawing_image_groups(
+        page=page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+        excluded_bboxes=table_bboxes,
+    )
+    image_regions = [group["image_bbox"] for group in image_groups]
+    excluded_bboxes = [*table_bboxes, *image_regions]
+
+    line_payloads = _extract_body_word_lines(
+        page=page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+        excluded_bboxes=excluded_bboxes,
+    )
     for line in line_payloads:
         line["font_color"] = _color_key(line.get("color"))
-    raw_text_lines, normalized_text_lines = _extract_body_text_lines(page, header_margin=header_margin, footer_margin=footer_margin)
+    raw_text_lines, normalized_text_lines = _extract_body_text_lines(
+        page=page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+        excluded_bboxes=excluded_bboxes,
+    )
     text_profile = _build_text_profile(line_payloads)
+    image_payload = [
+        {
+            "index": index,
+            "image_bbox": [round(float(bbox[0]), 2), round(float(bbox[1]), 2), round(float(bbox[2]), 2), round(float(bbox[3]), 2)],
+            "object_count": int(group.get("object_count", 0)),
+            "objects": [
+                {
+                    "object_type": str(obj["object_type"]),
+                    "bbox": [
+                        round(float(obj["bbox"][0]), 2),
+                        round(float(obj["bbox"][1]), 2),
+                        round(float(obj["bbox"][2]), 2),
+                        round(float(obj["bbox"][3]), 2),
+                    ],
+                }
+                for obj in group.get("objects", [])
+            ],
+        }
+        for index, (group, bbox) in enumerate(zip(image_groups, image_regions), start=1)
+    ]
 
     return {
         "page": page_no,
         "body_bounds": [round(body_top, 2), round(body_bottom, 2)],
         "table_count": len(tables),
         "tables": tables,
+        "table_objects": tables,
+        "image_objects": image_payload,
+        "text_objects": {
+            "profile": text_profile,
+            "line_boxes": [
+                {
+                    "text": str(line.get("text") or ""),
+                    "x0": round(float(line.get("x0", 0.0)), 2),
+                    "x1": round(float(line.get("x1", 0.0)), 2),
+                    "top": round(float(line.get("top", 0.0)), 2),
+                    "bottom": round(float(line.get("bottom", 0.0)), 2),
+                    "size": round(float(line.get("size", 0.0)), 2),
+                    "fontname": str(line.get("fontname") or ""),
+                    "fontnames": list(line.get("fontnames", [])),
+                    "dominant_font_size": round(float(line.get("dominant_font_size", 0.0)), 2),
+                    "font_color": str(line.get("font_color") or ""),
+                    "font_size_candidates": [
+                        round(float(size), 2) for size in line.get("font_size_candidates", [])
+                    ],
+                    "text_start_x": round(float(line.get("text_start_x", line.get("x0", 0.0))), 2),
+                    "marker_candidate": bool(line.get("marker_candidate")),
+                    "is_shape_text": bool(line.get("is_shape_text")),
+                }
+                for line in line_payloads
+            ],
+            "normalized_lines": normalized_text_lines,
+            "raw_lines": raw_text_lines,
+        },
         "source_drawings": {
             "lines": [
                 _round_graphic_object(line, body_top=body_top, body_bottom=body_bottom)
@@ -188,6 +265,7 @@ def _collect_table_drawing_debug(
                     ],
                     "text_start_x": round(float(line.get("text_start_x", line.get("x0", 0.0))), 2),
                     "marker_candidate": bool(line.get("marker_candidate")),
+                    "is_shape_text": bool(line.get("is_shape_text")),
                 }
                 for line in line_payloads
             ],

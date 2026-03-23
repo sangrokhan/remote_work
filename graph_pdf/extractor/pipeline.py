@@ -17,12 +17,12 @@ from .tables import (
     _gap_text_boxes_after_bbox,
     _gap_text_boxes_before_bbox,
     _maybe_merge_missing_first_column_chunk,
+    _is_continuation_chunk,
     _should_try_table_continuation_merge,
     _split_repeated_header,
-    _is_continuation_chunk,
     _vertical_axes_for_bbox,
 )
-from .text import _detect_body_bounds, _extract_body_text
+from .text import _detect_body_bounds, _extract_body_text, _extract_drawing_image_bboxes
 
 
 def _document_text_profile(debug_pages: Sequence[dict]) -> dict:
@@ -60,9 +60,11 @@ def _document_text_profile(debug_pages: Sequence[dict]) -> dict:
 def _body_excluded_bboxes(
     pending_table: Optional[TableRows],
     tables: Sequence[Tuple[TableRows, Tuple[float, float, float, float]]],
+    image_regions: Sequence[Tuple[float, float, float, float]],
     body_top: float,
 ) -> List[Tuple[float, float, float, float]]:
     excluded = [bbox for _rows, bbox in tables]
+    excluded.extend(list(image_regions))
     if not pending_table or not tables:
         return excluded
 
@@ -93,6 +95,7 @@ def extract_pdf_to_outputs(
     edge_debug_pages: List[dict] = []
     rotated_debug: List[dict] = []
     selected_pages = set(int(page_no) for page_no in (pages or []))
+    drawing_regions_by_page: dict[int, list[Tuple[float, float, float, float]]] = {}
 
     pending_table: Optional[TableRows] = None
     pending_page: Optional[int] = None
@@ -130,13 +133,25 @@ def extract_pdf_to_outputs(
                 rotated_debug.extend(_collect_rotated_text_debug(page, page_no=page_idx))
 
             tables = _extract_tables(page, force_table=force_table)
+            image_regions = _extract_drawing_image_bboxes(
+                page=page,
+                header_margin=header_margin,
+                footer_margin=footer_margin,
+                excluded_bboxes=[bbox for _rows, bbox in tables],
+            )
+            drawing_regions_by_page[page_idx] = image_regions
             full_page_text = _extract_body_text(page, header_margin=header_margin, footer_margin=footer_margin)
             # Body text for the final page output excludes table areas so prose does not duplicate table content.
             page_text = _extract_body_text(
                 page,
                 header_margin=header_margin,
                 footer_margin=footer_margin,
-                excluded_bboxes=_body_excluded_bboxes(pending_table, tables, footer_margin),
+                excluded_bboxes=_body_excluded_bboxes(
+                    pending_table=pending_table,
+                    tables=tables,
+                    image_regions=image_regions,
+                    body_top=footer_margin,
+                ),
             )
             if page_text.strip():
                 output_text.append(f"### Page {page_idx}\n{page_text}")
@@ -239,7 +254,13 @@ def extract_pdf_to_outputs(
     table_md_file.write_text(table_markdown, encoding="utf-8")
 
     # Image extraction happens after text/table rendering so image export stays independent from markdown generation.
-    image_files = _extract_embedded_images(pdf_path=pdf_path, out_image_dir=out_image_dir, stem=stem, pages=pages)
+    image_files = _extract_embedded_images(
+        pdf_path=pdf_path,
+        out_image_dir=out_image_dir,
+        stem=stem,
+        pages=pages,
+        drawing_regions_by_page=drawing_regions_by_page,
+    )
 
     summary = {
         "pdf": str(pdf_path),
