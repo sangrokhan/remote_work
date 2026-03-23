@@ -43,6 +43,7 @@ python3 extractor/__main__.py sample.pdf \
 - `--force-table`: 표 영역 탐지 실패 시 더 공격적인 페이지 전체 표 추출 허용
 - `--debug`: 표 구조/edge 디버그 JSON 생성
 - `--debug-watermark`: 회전 문자 디버그 JSON 생성
+- `--profile-fonts`: body text 기준 `font_size + font_color` 조합 프로파일 JSON/CSV 생성
 
 ### 직접 실행 예시
 ```bash
@@ -55,6 +56,15 @@ python3 -m extractor sample.pdf \
   --debug-watermark
 ```
 
+폰트 스타일 조합만 먼저 훑고 싶으면 profile 모드로 실행할 수 있습니다.
+
+```bash
+python3 -m extractor sample.pdf \
+  --out-md-dir artifacts/manual/md \
+  --stem sample \
+  --profile-fonts
+```
+
 ### 직접 실행 산출물
 - `artifacts/manual/md/sample.txt`: 본문 텍스트
 - `artifacts/manual/md/sample.md`: 본문 markdown
@@ -63,7 +73,24 @@ python3 -m extractor sample.pdf \
 - `artifacts/manual/md/sample_debug.json`: 표 구조 + 원본 drawing 객체 + 텍스트 폰트 크기 프로파일 디버그 (`--debug`)
 - `artifacts/manual/md/sample_edges_debug.json`: edge 분해 결과 디버그 (`--debug`)
 - `artifacts/manual/md/sample_watermark_debug.json`: 회전 문자 디버그 (`--debug-watermark`)
+- `artifacts/manual/md/sample_font_profile.json`: body text의 `font_size + font_color` 조합 요약 (`--profile-fonts`)
+- `artifacts/manual/md/sample_font_profile.csv`: 동일 프로파일의 표 형태 출력 (`--profile-fonts`)
 - `artifacts/manual/images/*`: body 영역 이미지 추출 결과
+
+### font profile 모드
+이 모드는 표 추출 대신 문서의 body text line을 전체 순회하면서 스타일 분포를 집계합니다.
+
+- 집계 키: `font_size`, `font_color`
+- 제외 대상: 헤더, 푸터, 워터마크
+- 결과 필드:
+  - `font_size`
+  - `font_color`
+  - `line_count`
+  - `page_count`
+  - `sample_pages`
+  - `sample_texts`
+
+대용량 문서에서 먼저 어떤 스타일 조합이 존재하는지 확인한 뒤, 이후 구조화 규칙에서 `h1`~`h6` 기준을 잡는 용도로 사용할 수 있습니다.
 
 ## 파일별 역할
 - `run_demo.py`: 샘플 PDF를 생성하고 추출 파이프라인을 실행하는 진입 스크립트
@@ -73,6 +100,7 @@ python3 -m extractor sample.pdf \
 - `fixtures/demo_document.json`: 샘플 문서의 기대 본문/표 데이터 fixture
 - `extractor/__init__.py`: 외부에서 사용하는 공개 진입점 export
 - `extractor/__main__.py`: CLI 실행용 entrypoint
+- `extractor/font_profile.py`: body text 기준 `font_size + font_color` 프로파일 생성과 JSON/CSV 기록
 - `extractor/pipeline.py`: 전체 PDF 추출 orchestration, 페이지 순회, cross-page table merge, 결과 파일 기록
 - `extractor/text.py`: 워터마크/레이아웃 artifact 제거, body bounds 계산, 본문 line 추출과 정규화
 - `extractor/tables.py`: 표 영역 탐지, 표 추출, 셀 정규화, 페이지 간 표 continuation merge 판단, markdown table 렌더링
