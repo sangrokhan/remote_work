@@ -448,14 +448,14 @@ def _merge_touching_fill_rects(
     rects: Sequence[dict],
     tolerance: float = 1.0,
 ) -> List[Tuple[float, float, float, float]]:
-    # A single-column boxed region is represented by vertically stacked fill rects with the same x-span.
+    # Adjacent fill-only rects often represent one visual box split into multiple PDF drawing objects.
     merged: List[Tuple[float, float, float, float]] = []
     ordered = sorted(
         rects,
         key=lambda rect: (
-            float(rect.get("x0", 0.0)),
-            float(rect.get("x1", 0.0)),
             round(float(rect.get("top", 0.0)), 1),
+            round(float(rect.get("bottom", 0.0)), 1),
+            float(rect.get("x0", 0.0)),
         ),
     )
     for rect in ordered:
@@ -471,8 +471,8 @@ def _merge_touching_fill_rects(
 
         prev_x0, prev_top, prev_x1, prev_bottom = merged[-1]
         cur_x0, cur_top, cur_x1, cur_bottom = candidate
-        same_band = abs(prev_x0 - cur_x0) <= tolerance and abs(prev_x1 - cur_x1) <= tolerance
-        touching = cur_top <= prev_bottom + tolerance
+        same_band = abs(prev_top - cur_top) <= tolerance and abs(prev_bottom - cur_bottom) <= tolerance
+        touching = cur_x0 <= prev_x1 + tolerance
         if same_band and touching:
             merged[-1] = (
                 min(prev_x0, cur_x0),
@@ -612,14 +612,9 @@ def _looks_like_single_column_box_misclassification(rows: TableRows) -> bool:
     column_count = max((len(row) for row in rows), default=0)
     if column_count != 1:
         return False
-    non_empty_rows = [row for row in rows if row and _normalize_text(row[0])]
-    return len(non_empty_rows) >= 2
-
-
-def _collapse_single_column_rows(rows: TableRows) -> str:
-    # Reclassified box tables should preserve the existing top-to-bottom row text as one cell.
-    parts = [str(row[0]).strip() for row in rows if row and _normalize_text(row[0])]
-    return "\n".join(parts).strip()
+    if any(not _normalize_text(row[0]) for row in rows if row):
+        return False
+    return True
 
 
 def _extract_tables_from_crop(
@@ -701,24 +696,18 @@ def _extract_tables(
 
     reclassified: List[TableChunk] = []
     for crop_bbox in _single_column_box_regions(page):
-        matched_rows: TableRows | None = None
-        retained: List[TableChunk] = []
-        for rows, bbox in merged:
-            should_replace = (
-                _bbox_overlap_ratio(bbox, crop_bbox) >= 0.8
-                and _looks_like_single_column_box_misclassification(rows)
-            )
-            if should_replace and matched_rows is None:
-                matched_rows = rows
-                continue
-            retained.append((rows, bbox))
-        merged = retained
-        cell_text = _collapse_single_column_rows(matched_rows or [])
-        if not cell_text:
-            cell_text = _extract_text_from_box_region(page, crop_bbox)
+        cell_text = _extract_text_from_box_region(page, crop_bbox)
         if not cell_text:
             continue
         replacement = [[cell_text]]
+        merged = [
+            (rows, bbox)
+            for rows, bbox in merged
+            if not (
+                _bbox_overlap_ratio(bbox, crop_bbox) >= 0.8
+                and _looks_like_single_column_box_misclassification(rows)
+            )
+        ]
         rows_key = tuple(tuple(row) for row in replacement)
         bbox_key = tuple(round(v, 2) for v in crop_bbox)
         key = (rows_key, bbox_key)
