@@ -11,6 +11,7 @@ from extractor.text import (
     _extract_body_word_lines,
     _is_gray_color,
     _is_non_watermark_obj,
+    _is_shape_text_line,
     _normalize_cell_lines,
     _should_merge_paragraph_lines,
 )
@@ -76,6 +77,50 @@ class TextModuleTests(unittest.TestCase):
         self.assertEqual(1, len(lines))
         self.assertTrue(lines[0]["marker_candidate"])
         self.assertEqual(64.0, lines[0]["text_start_x"])
+
+    def test_extract_body_word_lines_marks_shape_text_when_line_overlaps_shape_region(self) -> None:
+        filtered_page = SimpleNamespace(
+            extract_words=lambda **kwargs: [
+                {
+                    "text": "Callout",
+                    "x0": 48.0,
+                    "x1": 92.0,
+                    "top": 120.0,
+                    "bottom": 132.0,
+                    "size": 11.0,
+                    "fontname": "Helvetica",
+                },
+                {
+                    "text": "summary",
+                    "x0": 96.0,
+                    "x1": 144.0,
+                    "top": 120.0,
+                    "bottom": 132.0,
+                    "size": 11.0,
+                    "fontname": "Helvetica",
+                },
+            ],
+            chars=[],
+        )
+        page = SimpleNamespace()
+
+        with patch("extractor.text._filter_page_for_extraction", return_value=filtered_page), patch(
+            "extractor.text._detect_body_bounds", return_value=(40.0, 700.0)
+        ), patch(
+            "extractor.text._shape_text_regions", return_value=[(40.0, 110.0, 540.0, 150.0)]
+        ):
+            lines = _extract_body_word_lines(page, header_margin=90.0, footer_margin=40.0)
+
+        self.assertEqual(1, len(lines))
+        self.assertTrue(lines[0]["is_shape_text"])
+
+    def test_is_shape_text_line_returns_false_when_line_is_outside_shape_regions(self) -> None:
+        self.assertFalse(
+            _is_shape_text_line(
+                {"x0": 48.0, "x1": 144.0, "top": 120.0, "bottom": 132.0},
+                [(200.0, 200.0, 300.0, 260.0)],
+            )
+        )
 
     def test_gray_text_between_53_and_57_degrees_is_treated_as_watermark(self) -> None:
         char = {
