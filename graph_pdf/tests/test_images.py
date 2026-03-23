@@ -5,12 +5,35 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from PIL import Image
+from PIL import Image, ImageChops
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
 from extractor.images import _crop_page_region, _extract_embedded_images
+
+
+def _build_flow_label_pdf(pdf_path: Path, include_watermark: bool) -> None:
+    c = canvas.Canvas(str(pdf_path), pagesize=letter)
+    c.setLineWidth(1.0)
+    c.rect(140.0, 260.0, 300.0, 240.0)
+    c.line(160.0, 280.0, 340.0, 480.0)
+    c.line(160.0, 480.0, 420.0, 280.0)
+    c.bezier(140.0, 390.0, 140.0, 250.0, 440.0, 470.0, 440.0, 270.0)
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica-Bold", 20)
+    c.drawString(225.0, 388.0, "NODE")
+
+    if include_watermark:
+        c.saveState()
+        c.setFillColor(colors.Color(0.92, 0.92, 0.92))
+        c.setFont("Helvetica-Bold", 44)
+        c.translate(300.0, 405.0)
+        c.rotate(55)
+        c.drawCentredString(0, 0, "CONFIDENTIAL")
+        c.restoreState()
+
+    c.save()
 
 
 class CropPageRegionTests(unittest.TestCase):
@@ -32,29 +55,33 @@ class CropPageRegionTests(unittest.TestCase):
         self.assertEqual((10, 10, 10), cropped.getpixel((0, 0)))
         self.assertEqual((29, 29, 29), cropped.getpixel((0, 19)))
 
-    def test_extract_embedded_images_removes_watermark_from_drawing_crop(self) -> None:
+    def test_extract_embedded_images_preserves_label_text_while_excluding_watermark(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        pdf_path = root / "watermark_only.pdf"
+        clean_pdf_path = root / "label_only.pdf"
+        watermark_pdf_path = root / "label_with_watermark.pdf"
+        drawing_region = (140.0, 292.0, 440.0, 532.0)
+        _build_flow_label_pdf(clean_pdf_path, include_watermark=False)
+        _build_flow_label_pdf(watermark_pdf_path, include_watermark=True)
 
-        c = canvas.Canvas(str(pdf_path), pagesize=letter)
-        c.saveState()
-        c.setFillColor(colors.Color(0.92, 0.92, 0.92))
-        c.setFont("Helvetica-Bold", 44)
-        c.translate(letter[0] / 2.0, letter[1] / 2.0)
-        c.rotate(55)
-        c.drawCentredString(0, 0, "CONFIDENTIAL")
-        c.restoreState()
-        c.save()
-
-        image_files = _extract_embedded_images(
-            pdf_path=pdf_path,
-            out_image_dir=root / "images",
-            stem="watermark_only",
-            drawing_regions_by_page={1: [(0.0, 0.0, float(letter[0]), float(letter[1]))]},
+        clean_files = _extract_embedded_images(
+            pdf_path=clean_pdf_path,
+            out_image_dir=root / "images_clean",
+            stem="label_only",
+            drawing_regions_by_page={1: [drawing_region]},
+        )
+        watermark_files = _extract_embedded_images(
+            pdf_path=watermark_pdf_path,
+            out_image_dir=root / "images_watermark",
+            stem="label_with_watermark",
+            drawing_regions_by_page={1: [drawing_region]},
         )
 
-        self.assertEqual(1, len(image_files))
-        image = Image.open(image_files[0]).convert("L")
-        self.assertEqual((255, 255), image.getextrema())
+        self.assertEqual(1, len(clean_files))
+        self.assertEqual(1, len(watermark_files))
+        clean_image = Image.open(clean_files[0]).convert("L")
+        watermark_image = Image.open(watermark_files[0]).convert("L")
+        self.assertEqual(clean_image.size, watermark_image.size)
+        self.assertLess(watermark_image.getextrema()[0], 255)
+        self.assertIsNone(ImageChops.difference(clean_image, watermark_image).getbbox())
