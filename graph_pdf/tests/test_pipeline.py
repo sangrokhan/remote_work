@@ -241,7 +241,8 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertIn("font_color_histogram", payload["text_debug"]["profile"])
         self.assertIn("font_size_candidates", payload["text_debug"]["raw_line_boxes"][0])
         self.assertIn("dominant_font_size", payload["text_debug"]["raw_line_boxes"][0])
-        self.assertIn("dominant_font_color", payload["text_debug"]["raw_line_boxes"][0])
+        self.assertIn("font_color", payload["text_debug"]["raw_line_boxes"][0])
+        self.assertNotEqual("", payload["text_debug"]["raw_line_boxes"][0]["font_color"])
 
     def test_debug_writes_table_drawing_log(self) -> None:
         tmp = tempfile.TemporaryDirectory()
