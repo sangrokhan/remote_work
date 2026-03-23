@@ -9,6 +9,7 @@ from .shared import (
     _merge_horizontal_band_segments,
     _merge_numeric_positions,
     _merge_vertical_band_segments,
+    _normalize_debug_color,
     _round_graphic_object,
     _round_segment,
 )
@@ -20,12 +21,16 @@ def _build_text_profile(line_payloads: List[dict]) -> dict:
     # Text-size histograms are meant for debugging future document-structure heuristics.
     font_size_counter: Counter[float] = Counter()
     fontname_counter: Counter[str] = Counter()
+    font_color_counter: Counter[str] = Counter()
     for line in line_payloads:
         for size in line.get("font_size_candidates", []):
             font_size_counter[round(float(size), 2)] += 1
         for fontname in line.get("fontnames", []):
             if str(fontname):
                 fontname_counter[str(fontname)] += 1
+        color_key = str(line.get("dominant_font_color") or "")
+        if color_key:
+            font_color_counter[color_key] += 1
 
     dominant_font_size = max(font_size_counter, key=font_size_counter.get) if font_size_counter else 0.0
     dominant_fontname = max(fontname_counter, key=fontname_counter.get) if fontname_counter else ""
@@ -35,10 +40,20 @@ def _build_text_profile(line_payloads: List[dict]) -> dict:
             f"{size:.2f}": count for size, count in sorted(font_size_counter.items())
         },
         "fontname_histogram": dict(sorted(fontname_counter.items())),
+        "font_color_histogram": dict(sorted(font_color_counter.items())),
         "font_size_candidates": sorted(font_size_counter),
         "dominant_font_size": dominant_font_size,
         "dominant_fontname": dominant_fontname,
     }
+
+
+def _color_key(color: object) -> str:
+    normalized = _normalize_debug_color(color)
+    if isinstance(normalized, list):
+        return ",".join(f"{float(value):.3f}" for value in normalized)
+    if isinstance(normalized, (int, float)):
+        return f"{float(normalized):.3f}"
+    return str(normalized or "")
 
 
 def _collect_rotated_text_debug(page: "pdfplumber.page.Page", page_no: int) -> List[dict]:
@@ -129,6 +144,8 @@ def _collect_table_drawing_debug(
         )
 
     line_payloads = _extract_body_word_lines(page=page, header_margin=header_margin, footer_margin=footer_margin)
+    for line in line_payloads:
+        line["dominant_font_color"] = _color_key(line.get("color"))
     raw_text_lines, normalized_text_lines = _extract_body_text_lines(page, header_margin=header_margin, footer_margin=footer_margin)
     text_profile = _build_text_profile(line_payloads)
 
@@ -165,6 +182,7 @@ def _collect_table_drawing_debug(
                     "fontname": str(line.get("fontname") or ""),
                     "fontnames": list(line.get("fontnames", [])),
                     "dominant_font_size": round(float(line.get("dominant_font_size", 0.0)), 2),
+                    "dominant_font_color": str(line.get("dominant_font_color") or ""),
                     "font_size_candidates": [
                         round(float(size), 2) for size in line.get("font_size_candidates", [])
                     ],
