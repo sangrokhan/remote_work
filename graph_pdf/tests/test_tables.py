@@ -176,26 +176,17 @@ class TableModuleTests(unittest.TestCase):
                 },
                 {
                     "x0": 40.0,
+                    "x1": 290.0,
+                    "top": 121.0,
+                    "bottom": 148.0,
+                    "fill": True,
+                    "stroke": False,
+                    "non_stroking_color": 1,
+                },
+                {
+                    "x0": 290.0,
                     "x1": 540.0,
                     "top": 121.0,
-                    "bottom": 130.0,
-                    "fill": True,
-                    "stroke": False,
-                    "non_stroking_color": 1,
-                },
-                {
-                    "x0": 40.0,
-                    "x1": 540.0,
-                    "top": 130.0,
-                    "bottom": 139.0,
-                    "fill": True,
-                    "stroke": False,
-                    "non_stroking_color": 1,
-                },
-                {
-                    "x0": 40.0,
-                    "x1": 540.0,
-                    "top": 139.0,
                     "bottom": 148.0,
                     "fill": True,
                     "stroke": False,
@@ -229,11 +220,11 @@ class TableModuleTests(unittest.TestCase):
 
         with patch("extractor.tables._table_regions", return_value=[(40.0, 540.0, [{"top": 121.0}, {"top": 148.0}])]), patch(
             "extractor.tables._extract_tables_from_crop",
-            return_value=[([["Escalation lane summary"], ["Owner confirmed"], ["Backup approver"]], table_bbox)],
+            return_value=[([["Escalation lane summary"], ["Owner confirmed"]], table_bbox)],
         ):
             tables = _extract_tables(page)
 
-        self.assertEqual([([["Escalation lane summary\nOwner confirmed\nBackup approver"]], (40.0, 121.0, 540.0, 148.0))], tables)
+        self.assertEqual([([["Escalation lane summary"]], (40.0, 121.0, 540.0, 148.0))], tables)
 
     def test_table_text_from_rows_collapses_two_header_rows_into_single_markdown_header(self) -> None:
         rows = [
@@ -280,26 +271,17 @@ class TableModuleTests(unittest.TestCase):
                 },
                 {
                     "x0": 40.0,
+                    "x1": 290.0,
+                    "top": 121.0,
+                    "bottom": 148.0,
+                    "fill": True,
+                    "stroke": False,
+                    "non_stroking_color": 1,
+                },
+                {
+                    "x0": 290.0,
                     "x1": 540.0,
                     "top": 121.0,
-                    "bottom": 130.0,
-                    "fill": True,
-                    "stroke": False,
-                    "non_stroking_color": 1,
-                },
-                {
-                    "x0": 40.0,
-                    "x1": 540.0,
-                    "top": 130.0,
-                    "bottom": 139.0,
-                    "fill": True,
-                    "stroke": False,
-                    "non_stroking_color": 1,
-                },
-                {
-                    "x0": 40.0,
-                    "x1": 540.0,
-                    "top": 139.0,
                     "bottom": 148.0,
                     "fill": True,
                     "stroke": False,
