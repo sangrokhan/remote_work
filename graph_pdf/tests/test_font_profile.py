@@ -50,13 +50,16 @@ class FontProfileTests(unittest.TestCase):
             "Blue accent line marks a separate style bucket for font profile review.",
             styles[(11.0, "0.000,0.300,0.700")]["sample_texts"],
         )
+        self.assertEqual(1, styles[(11.0, "0.000,0.300,0.700")]["sample_page"])
+        self.assertGreaterEqual(styles[(11.0, "0.000,0.300,0.700")]["page_count"], 1)
+        self.assertNotIn("Laptop 12 $120", styles[(11.0, "0.000,0.000,0.000")]["sample_texts"])
 
         with result["csv_file"].open(encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle))
 
         self.assertTrue(rows)
         self.assertEqual(
-            {"font_size", "font_color", "line_count", "page_count", "sample_pages", "sample_texts"},
+            {"font_size", "font_color", "line_count", "page_count", "sample_page", "sample_texts"},
             set(rows[0].keys()),
         )
 

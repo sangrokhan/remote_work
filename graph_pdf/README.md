@@ -87,7 +87,7 @@ python3 -m extractor sample.pdf \
   - `font_color`
   - `line_count`
   - `page_count`
-  - `sample_pages`
+  - `sample_page`
   - `sample_texts`
 
 대용량 문서에서 먼저 어떤 스타일 조합이 존재하는지 확인한 뒤, 이후 구조화 규칙에서 `h1`~`h6` 기준을 잡는 용도로 사용할 수 있습니다.
