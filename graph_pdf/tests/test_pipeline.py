@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pdfplumber
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
 from extractor import extract_pdf_to_outputs
 from extractor.debug import _collect_rotated_text_debug, _collect_table_drawing_debug
@@ -16,6 +18,34 @@ from extractor.images import _extract_embedded_images
 from sample_fixture import load_demo_fixture
 from sample_generator import create_demo_pdf
 from verify import _extract_markdown_tables
+
+
+def _build_flow_diagram_pdf(pdf_path: Path) -> tuple[str, tuple[str, ...]]:
+    outside_text = "Flow diagram paragraph should remain visible in extracted markdown."
+    hidden_text = (
+        "HIDDEN_START_NODE",
+        "HIDDEN_DECISION",
+        "HIDDEN_PROCESS",
+    )
+
+    c = canvas.Canvas(str(pdf_path), pagesize=letter)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 700, outside_text)
+    c.drawString(72, 680, "Visible context text before the embedded flow drawing.")
+
+    c.setLineWidth(1.0)
+    c.rect(140.0, 260.0, 300.0, 240.0)
+    c.line(160.0, 280.0, 340.0, 480.0)
+    c.line(160.0, 480.0, 420.0, 280.0)
+    c.bezier(140.0, 390.0, 140.0, 250.0, 440.0, 470.0, 440.0, 270.0)
+
+    c.setFont("Helvetica", 10)
+    c.drawString(170.0, 392.0, hidden_text[0])
+    c.drawString(300.0, 392.0, hidden_text[1])
+    c.drawString(260.0, 352.0, hidden_text[2])
+    c.save()
+
+    return outside_text, hidden_text
 
 
 class PipelineExtractionTests(unittest.TestCase):
@@ -157,6 +187,28 @@ class PipelineExtractionTests(unittest.TestCase):
 
         self.assertEqual(1, len(image_files))
         self.assertEqual("sample_page_02_image_01.png", image_files[0].name)
+
+    def test_flow_diagram_text_is_filtered_and_rendered_as_drawing(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        pdf_path = root / "flow_diagram.pdf"
+        outside_text, hidden_labels = _build_flow_diagram_pdf(pdf_path)
+
+        result = extract_pdf_to_outputs(
+            pdf_path=pdf_path,
+            out_md_dir=root / "md",
+            out_image_dir=root / "images",
+            stem="flow_diagram",
+        )
+
+        self.assertIn(outside_text, result["markdown"])
+        for hidden_label in hidden_labels:
+            self.assertNotIn(hidden_label, result["markdown"])
+
+        drawing_images = [Path(path) for path in result["image_files"] if "_drawing_" in Path(path).name]
+        self.assertEqual(1, len(drawing_images))
+        self.assertTrue(drawing_images[0].exists())
 
     def test_spanning_stage_table_merges_into_one_block(self) -> None:
         markdown = self._extract_table_markdown()
