@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfReader
 
 from .shared import _bboxes_intersect, _char_rotation_degrees
-from .text import _detect_body_bounds, _is_non_watermark_obj
+from .text import _detect_body_bounds, _is_non_watermark_obj, _selected_drawing_image_groups
 
 
 def _crop_page_region(
@@ -56,6 +56,42 @@ def _bbox_for_obj(obj: dict) -> Tuple[float, float, float, float]:
         float(obj.get("x1", obj.get("x0", 0.0))),
         float(obj.get("bottom", obj.get("top", 0.0))),
     )
+
+
+def _union_bboxes(bboxes: Sequence[Tuple[float, float, float, float]]) -> Tuple[float, float, float, float]:
+    return (
+        min(bbox[0] for bbox in bboxes),
+        min(bbox[1] for bbox in bboxes),
+        max(bbox[2] for bbox in bboxes),
+        max(bbox[3] for bbox in bboxes),
+    )
+
+
+def _expanded_drawing_render_bbox(
+    page: "pdfplumber.page.Page",
+    image_bbox: Tuple[float, float, float, float],
+    header_margin: float,
+    footer_margin: float,
+) -> Tuple[float, float, float, float]:
+    groups = _selected_drawing_image_groups(
+        page=page,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+    )
+    for group in groups:
+        if not _bboxes_intersect(group["image_bbox"], image_bbox):
+            continue
+        object_bboxes = [tuple(obj["bbox"]) for obj in group["objects"]]
+        render_bbox = _union_bboxes(object_bboxes)
+        text_bboxes = [
+            _bbox_for_obj(char)
+            for char in getattr(page, "chars", [])
+            if _is_non_watermark_obj(char) and _bboxes_intersect(_bbox_for_obj(char), render_bbox)
+        ]
+        if text_bboxes:
+            render_bbox = _union_bboxes([render_bbox, *text_bboxes])
+        return render_bbox
+    return image_bbox
 
 
 def _pdf_color_to_rgb(color: object, default: Tuple[int, int, int] = (0, 0, 0)) -> Tuple[int, int, int]:
@@ -284,10 +320,12 @@ def _extract_embedded_images(
             if selected_pages and page_idx not in selected_pages:
                 continue
 
+            header_margin = 90.0
+            footer_margin = 40.0
             body_top, body_bottom = _detect_body_bounds(
                 plumber_page,
-                header_margin=90.0,
-                footer_margin=40.0,
+                header_margin=header_margin,
+                footer_margin=footer_margin,
             )
             allowed_names = {
                 str(image_meta.get("name") or "")
@@ -319,10 +357,22 @@ def _extract_embedded_images(
                 bottom_y = max(0.0, min(float(bottom), height))
                 if right <= left or bottom_y <= top_y:
                     continue
+                render_left, render_top, render_right, render_bottom = _expanded_drawing_render_bbox(
+                    page=plumber_page,
+                    image_bbox=(left, top_y, right, bottom_y),
+                    header_margin=header_margin,
+                    footer_margin=footer_margin,
+                )
+                render_left = max(0.0, min(float(render_left), width))
+                render_right = max(0.0, min(float(render_right), width))
+                render_top = max(0.0, min(float(render_top), height))
+                render_bottom = max(0.0, min(float(render_bottom), height))
+                if render_right <= render_left or render_bottom <= render_top:
+                    continue
                 try:
                     region_image = _render_drawing_region_image(
                         page=plumber_page,
-                        bbox=(left, top_y, right, bottom_y),
+                        bbox=(render_left, render_top, render_right, render_bottom),
                         resolution=180.0,
                     )
                     drawing_image_idx += 1
