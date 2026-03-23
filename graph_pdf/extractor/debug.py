@@ -28,7 +28,7 @@ def _build_text_profile(line_payloads: List[dict]) -> dict:
         for fontname in line.get("fontnames", []):
             if str(fontname):
                 fontname_counter[str(fontname)] += 1
-        color_key = str(line.get("dominant_font_color") or "")
+        color_key = str(line.get("font_color") or "")
         if color_key:
             font_color_counter[color_key] += 1
 
@@ -145,7 +145,7 @@ def _collect_table_drawing_debug(
 
     line_payloads = _extract_body_word_lines(page=page, header_margin=header_margin, footer_margin=footer_margin)
     for line in line_payloads:
-        line["dominant_font_color"] = _color_key(line.get("color"))
+        line["font_color"] = _color_key(line.get("color"))
     raw_text_lines, normalized_text_lines = _extract_body_text_lines(page, header_margin=header_margin, footer_margin=footer_margin)
     text_profile = _build_text_profile(line_payloads)
 
@@ -182,7 +182,7 @@ def _collect_table_drawing_debug(
                     "fontname": str(line.get("fontname") or ""),
                     "fontnames": list(line.get("fontnames", [])),
                     "dominant_font_size": round(float(line.get("dominant_font_size", 0.0)), 2),
-                    "dominant_font_color": str(line.get("dominant_font_color") or ""),
+                    "font_color": str(line.get("font_color") or ""),
                     "font_size_candidates": [
                         round(float(size), 2) for size in line.get("font_size_candidates", [])
                     ],

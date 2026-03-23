@@ -13,6 +13,7 @@ from .shared import (
     WATERMARK_ROTATION_MIN_DEGREES,
     _bboxes_intersect,
     _char_rotation_degrees,
+    _normalize_debug_color,
     _normalize_text,
 )
 
@@ -303,6 +304,7 @@ def _extract_body_word_lines(
         return (float(word.get("x0", 0.0)), top, float(word.get("x1", 0.0)), bottom)
 
     filtered_words = []
+    filtered_chars = list(getattr(filtered_page, "chars", []) or [])
     for word in words:
         bbox = _word_bbox(word)
         # Excluded bboxes are used to suppress table text when generating the final body output.
@@ -339,12 +341,28 @@ def _extract_body_word_lines(
         size_candidates = [round(float(word.get("size", 0.0)), 2) for word in ordered if float(word.get("size", 0.0)) > 0.0]
         size_counter = Counter(size_candidates)
         dominant_font_size = max(size_counter, key=size_counter.get) if size_counter else 0.0
-        colors = [word.get("non_stroking_color") or word.get("stroking_color") for word in ordered]
-        normalized_colors = [color for color in colors if isinstance(color, tuple) and len(color) >= 3]
-        dominant_color = None
-        if normalized_colors:
-            color_keys = [tuple(round(float(value), 3) for value in color[:3]) for color in normalized_colors]
-            dominant_color = max(color_keys, key=color_keys.count)
+        line_top = min(float(word.get("top", 0.0)) for word in ordered)
+        line_bottom = max(float(word.get("bottom", 0.0)) for word in ordered)
+        line_x0 = float(ordered[0].get("x0", 0.0))
+        line_x1 = float(ordered[-1].get("x1", 0.0))
+        line_chars = [
+            char
+            for char in filtered_chars
+            if float(char.get("x1", 0.0)) > line_x0
+            and float(char.get("x0", 0.0)) < line_x1
+            and float(char.get("bottom", 0.0)) > line_top
+            and float(char.get("top", 0.0)) < line_bottom
+        ]
+        colors = [
+            _normalize_debug_color(char.get("non_stroking_color") or char.get("stroking_color"))
+            for char in line_chars
+        ]
+        color_keys = [
+            tuple(color) if isinstance(color, list) else color
+            for color in colors
+            if color not in (None, "")
+        ]
+        dominant_color = max(color_keys, key=color_keys.count) if color_keys else None
 
         first_cleaned = _repair_watermark_bleed(str(ordered[0].get("text") or "").strip())
         second_word = ordered[1] if len(ordered) > 1 else ordered[0]
