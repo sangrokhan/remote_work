@@ -16,7 +16,7 @@ def _crop_page_region(
     resolution: float,
 ) -> "Image":
     # `PageImage` removed `.crop()` in current versions, so crop via Pillow with
-    # explicit point-to-pixel conversion using the same PDF coordinate system.
+    # explicit point-to-pixel conversion using pdfplumber's top-origin coordinates.
     x0, top, x1, bottom = bbox
     left = float(min(x0, x1))
     right = float(max(x0, x1))
@@ -27,11 +27,10 @@ def _crop_page_region(
     image_width, image_height = page_image.original.size
     left_px = max(0, min(int(round(left * scale)), image_width))
     right_px = max(0, min(int(round(right * scale)), image_width))
-    top_px = max(0, min(int(round((page_height - y1) * scale)), image_height))
-    bottom_px = max(0, min(int(round((page_height - y0) * scale)), image_height))
+    top_px = max(0, min(int(round(y0 * scale)), image_height))
+    bottom_px = max(0, min(int(round(y1 * scale)), image_height))
 
-    # The `PageImage.original` coordinate origin is top-left, so we convert from
-    # PDF y-coordinates (bottom-origin) accordingly.
+    # `PageImage.original` uses top-left origin, matching pdfplumber `top`/`bottom`.
     return page_image.original.crop((left_px, top_px, right_px, bottom_px))
 
 
