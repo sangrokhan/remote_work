@@ -85,3 +85,33 @@ class CropPageRegionTests(unittest.TestCase):
         self.assertEqual(clean_image.size, watermark_image.size)
         self.assertLess(watermark_image.getextrema()[0], 255)
         self.assertIsNone(ImageChops.difference(clean_image, watermark_image).getbbox())
+
+    def test_extract_embedded_images_expands_curve_bbox_to_connected_line_bounds(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        pdf_path = root / "group_bounds.pdf"
+        _build_flow_label_pdf(pdf_path, include_watermark=False)
+
+        curve_region = (140.0, 402.0, 440.0, 522.0)
+        full_group_region = (140.0, 292.0, 440.0, 532.0)
+
+        curve_files = _extract_embedded_images(
+            pdf_path=pdf_path,
+            out_image_dir=root / "images_curve",
+            stem="curve_region",
+            drawing_regions_by_page={1: [curve_region]},
+        )
+        full_group_files = _extract_embedded_images(
+            pdf_path=pdf_path,
+            out_image_dir=root / "images_full",
+            stem="full_region",
+            drawing_regions_by_page={1: [full_group_region]},
+        )
+
+        self.assertEqual(1, len(curve_files))
+        self.assertEqual(1, len(full_group_files))
+        curve_image = Image.open(curve_files[0]).convert("L")
+        full_group_image = Image.open(full_group_files[0]).convert("L")
+        self.assertEqual(full_group_image.size, curve_image.size)
+        self.assertIsNone(ImageChops.difference(curve_image, full_group_image).getbbox())
