@@ -18,6 +18,94 @@ from .shared import (
 )
 
 
+def _merge_touching_shape_rects(rects: Sequence[dict]) -> List[Tuple[float, float, float, float]]:
+    merged: List[Tuple[float, float, float, float]] = []
+    candidates = sorted(
+        (
+            (
+                float(rect.get("x0", 0.0)),
+                float(rect.get("top", 0.0)),
+                float(rect.get("x1", rect.get("x0", 0.0))),
+                float(rect.get("bottom", rect.get("top", 0.0))),
+            )
+            for rect in rects
+        ),
+        key=lambda bbox: (bbox[1], bbox[0]),
+    )
+    for candidate in candidates:
+        if not merged:
+            merged.append(candidate)
+            continue
+        prev_x0, prev_top, prev_x1, prev_bottom = merged[-1]
+        cur_x0, cur_top, cur_x1, cur_bottom = candidate
+        overlaps_vertically = cur_top <= prev_bottom + 1.5 and cur_bottom >= prev_top - 1.5
+        touches_horizontally = cur_x0 <= prev_x1 + 1.5 and cur_x1 >= prev_x0 - 1.5
+        if overlaps_vertically and touches_horizontally:
+            merged[-1] = (
+                min(prev_x0, cur_x0),
+                min(prev_top, cur_top),
+                max(prev_x1, cur_x1),
+                max(prev_bottom, cur_bottom),
+            )
+            continue
+        merged.append(candidate)
+    return merged
+
+
+def _shape_text_regions(page: "pdfplumber.page.Page") -> List[Tuple[float, float, float, float]]:
+    # Box-like filled regions represent diagram containers whose labels should be tagged separately.
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
+    fill_rects = [
+        rect
+        for rect in getattr(page, "rects", [])
+        if bool(rect.get("fill"))
+        and float(rect.get("bottom", 0.0)) > body_top
+        and float(rect.get("top", 0.0)) < body_bottom
+    ]
+    boundary_rects = [
+        rect
+        for rect in fill_rects
+        if float(rect.get("bottom", 0.0)) - float(rect.get("top", 0.0)) <= 1.5
+    ]
+    content_rects = [
+        rect
+        for rect in fill_rects
+        if rect not in boundary_rects and not bool(rect.get("stroke"))
+    ]
+    regions: List[Tuple[float, float, float, float]] = []
+    for x0, top, x1, bottom in _merge_touching_shape_rects(content_rects):
+        if x1 - x0 < 120.0:
+            continue
+        has_top_strip = any(
+            float(rect.get("x0", 0.0)) <= x0 + 1.0
+            and float(rect.get("x1", 0.0)) >= x1 - 1.0
+            and abs(float(rect.get("bottom", 0.0)) - top) <= 1.5
+            for rect in boundary_rects
+        )
+        has_bottom_strip = any(
+            float(rect.get("x0", 0.0)) <= x0 + 1.0
+            and float(rect.get("x1", 0.0)) >= x1 - 1.0
+            and abs(float(rect.get("top", 0.0)) - bottom) <= 1.5
+            for rect in boundary_rects
+        )
+        if has_top_strip and has_bottom_strip:
+            regions.append((x0, top, x1, bottom))
+    return regions
+
+
+def _is_shape_text_line(
+    line: dict,
+    shape_regions: Sequence[Tuple[float, float, float, float]],
+) -> bool:
+    bbox = (
+        float(line.get("x0", 0.0)),
+        float(line.get("top", 0.0)),
+        float(line.get("x1", line.get("x0", 0.0))),
+        float(line.get("bottom", line.get("top", 0.0))),
+    )
+    return any(_bboxes_intersect(bbox, region) for region in shape_regions)
+
+
 def _repair_watermark_bleed(text: str) -> str:
     # Rotated watermark glyphs can leak as a trailing single character in extracted words.
     text = re.sub(r"\s+[A-Za-z]$", "", text)
@@ -291,6 +379,7 @@ def _extract_body_word_lines(
     # Convert word-level extraction into line payloads enriched with the signals later heuristics need.
     filtered_page = _filter_page_for_extraction(page)
     body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
+    shape_regions = _shape_text_regions(page)
     words = filtered_page.extract_words(
         x_tolerance=1.5,
         y_tolerance=2.0,
@@ -398,30 +487,30 @@ def _extract_body_word_lines(
                     normalized_color,
                 )
             )
-        lines.append(
-            {
-                "text": text,
-                "x0": float(ordered[0].get("x0", 0.0)),
-                "x1": float(ordered[-1].get("x1", 0.0)),
-                "top": min(float(word.get("top", 0.0)) for word in ordered),
-                "bottom": max(float(word.get("bottom", 0.0)) for word in ordered),
-                "size": sum(float(word.get("size", 0.0)) for word in ordered) / max(len(ordered), 1),
-                "fontname": dominant_font,
-                "fontnames": sorted(set(fontnames)),
-                "dominant_font_size": dominant_font_size,
-                "font_size_candidates": sorted(size_counter),
-                "color": dominant_color,
-                "is_bold": bool(re.search(r"bold", dominant_font, flags=re.IGNORECASE)),
-                "is_italic": bool(re.search(r"(italic|oblique)", dominant_font, flags=re.IGNORECASE)),
-                "marker_candidate": marker_candidate,
-                "text_start_x": float(first_non_bullet_word.get("x0", ordered[0].get("x0", 0.0))),
-                "first_word_width": float(first_non_bullet_word.get("x1", 0.0)) - float(first_non_bullet_word.get("x0", 0.0)),
-                "body_right": float(getattr(page, "width", 0.0)),
-                "word_count": len(ordered),
-                "has_mixed_styles": len(set(word_style_signatures)) > 1,
-                "first_word_style_signature": word_style_signatures[0] if word_style_signatures else None,
-            }
-        )
+        line_payload = {
+            "text": text,
+            "x0": float(ordered[0].get("x0", 0.0)),
+            "x1": float(ordered[-1].get("x1", 0.0)),
+            "top": min(float(word.get("top", 0.0)) for word in ordered),
+            "bottom": max(float(word.get("bottom", 0.0)) for word in ordered),
+            "size": sum(float(word.get("size", 0.0)) for word in ordered) / max(len(ordered), 1),
+            "fontname": dominant_font,
+            "fontnames": sorted(set(fontnames)),
+            "dominant_font_size": dominant_font_size,
+            "font_size_candidates": sorted(size_counter),
+            "color": dominant_color,
+            "is_bold": bool(re.search(r"bold", dominant_font, flags=re.IGNORECASE)),
+            "is_italic": bool(re.search(r"(italic|oblique)", dominant_font, flags=re.IGNORECASE)),
+            "marker_candidate": marker_candidate,
+            "text_start_x": float(first_non_bullet_word.get("x0", ordered[0].get("x0", 0.0))),
+            "first_word_width": float(first_non_bullet_word.get("x1", 0.0)) - float(first_non_bullet_word.get("x0", 0.0)),
+            "body_right": float(getattr(page, "width", 0.0)),
+            "word_count": len(ordered),
+            "has_mixed_styles": len(set(word_style_signatures)) > 1,
+            "first_word_style_signature": word_style_signatures[0] if word_style_signatures else None,
+        }
+        line_payload["is_shape_text"] = _is_shape_text_line(line_payload, shape_regions)
+        lines.append(line_payload)
     return lines
 
 

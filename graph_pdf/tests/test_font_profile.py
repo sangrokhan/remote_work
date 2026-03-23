@@ -6,7 +6,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from extractor import profile_pdf_fonts
 from extractor.__main__ import main as cli_main
@@ -62,6 +63,46 @@ class FontProfileTests(unittest.TestCase):
             {"font_size", "font_color", "line_count", "page_count", "sample_page", "sample_texts"},
             set(rows[0].keys()),
         )
+
+    def test_profile_pdf_fonts_skips_lines_marked_as_shape_text(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        pdf_path = root / "sample.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+
+        fake_pdf = SimpleNamespace(pages=[SimpleNamespace()])
+        fake_open = MagicMock()
+        fake_open.__enter__.return_value = fake_pdf
+        fake_open.__exit__.return_value = None
+
+        with patch("extractor.font_profile.pdfplumber.open", return_value=fake_open), patch(
+            "extractor.font_profile._extract_tables", return_value=[]
+        ), patch(
+            "extractor.font_profile._extract_body_word_lines",
+            return_value=[
+                {
+                    "text": "Visible body line",
+                    "dominant_font_size": 11.0,
+                    "color": [0.0, 0.0, 0.0],
+                    "is_shape_text": False,
+                },
+                {
+                    "text": "Diagram label",
+                    "dominant_font_size": 11.0,
+                    "color": [0.0, 0.0, 0.0],
+                    "is_shape_text": True,
+                },
+            ],
+        ):
+            result = profile_pdf_fonts(
+                pdf_path=pdf_path,
+                out_dir=root / "md",
+                stem="sample",
+            )
+
+        payload = json.loads(result["json_file"].read_text(encoding="utf-8"))
+        self.assertEqual(1, payload["styles"][0]["line_count"])
+        self.assertEqual(["Visible body line"], payload["styles"][0]["sample_texts"])
 
     def test_cli_profile_fonts_option_writes_profile_outputs(self) -> None:
         root, pdf_path = self._build_pdf()

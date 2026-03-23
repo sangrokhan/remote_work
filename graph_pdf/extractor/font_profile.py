@@ -56,6 +56,8 @@ def profile_pdf_fonts(
                 excluded_bboxes=excluded_bboxes,
             )
             for line in line_payloads:
+                if bool(line.get("is_shape_text")):
+                    continue
                 font_size, font_color = _style_key(line)
                 if font_size <= 0.0:
                     continue
