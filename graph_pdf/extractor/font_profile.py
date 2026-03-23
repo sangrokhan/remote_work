@@ -66,13 +66,15 @@ def profile_pdf_fonts(
                         "font_size": font_size,
                         "font_color": font_color,
                         "line_count": 0,
-                        "sample_pages": [],
+                        "sample_page": 0,
                         "sample_texts": [],
+                        "seen_pages": set(),
                     },
                 )
                 style["line_count"] += 1
-                if page_no not in style["sample_pages"]:
-                    style["sample_pages"].append(page_no)
+                style["seen_pages"].add(page_no)
+                if not style["sample_page"]:
+                    style["sample_page"] = page_no
                 text = str(line.get("text") or "").strip()
                 if text and text not in style["sample_texts"] and len(style["sample_texts"]) < sample_limit:
                     style["sample_texts"].append(text)
@@ -87,8 +89,8 @@ def profile_pdf_fonts(
                 "font_size": float(entry["font_size"]),
                 "font_color": str(entry["font_color"]),
                 "line_count": int(entry["line_count"]),
-                "page_count": len(entry["sample_pages"]),
-                "sample_pages": list(entry["sample_pages"]),
+                "page_count": len(entry["seen_pages"]),
+                "sample_page": int(entry["sample_page"]),
                 "sample_texts": list(entry["sample_texts"]),
             }
         )
@@ -107,7 +109,7 @@ def profile_pdf_fonts(
     with csv_file.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["font_size", "font_color", "line_count", "page_count", "sample_pages", "sample_texts"],
+            fieldnames=["font_size", "font_color", "line_count", "page_count", "sample_page", "sample_texts"],
         )
         writer.writeheader()
         for entry in styles:
@@ -117,7 +119,7 @@ def profile_pdf_fonts(
                     "font_color": str(entry["font_color"]),
                     "line_count": int(entry["line_count"]),
                     "page_count": int(entry["page_count"]),
-                    "sample_pages": ",".join(str(page_no) for page_no in entry["sample_pages"]),
+                    "sample_page": int(entry["sample_page"]),
                     "sample_texts": " || ".join(entry["sample_texts"]),
                 }
             )
