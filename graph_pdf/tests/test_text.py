@@ -9,6 +9,7 @@ from extractor.text import (
     _build_body_blocks,
     _detect_body_bounds,
     _extract_body_word_lines,
+    _extract_drawing_image_bboxes,
     _is_gray_color,
     _is_non_watermark_obj,
     _is_shape_text_line,
@@ -113,6 +114,62 @@ class TextModuleTests(unittest.TestCase):
 
         self.assertEqual(1, len(lines))
         self.assertTrue(lines[0]["is_shape_text"])
+
+    def test_extract_drawing_image_bboxes_selects_largest_curve_as_region(self) -> None:
+        page = SimpleNamespace(
+            curves=[
+                {"object_type": "curve", "x0": 20.0, "top": 60.0, "x1": 220.0, "bottom": 190.0},
+                {"object_type": "curve", "x0": 40.0, "top": 80.0, "x1": 180.0, "bottom": 170.0},
+            ],
+            lines=[
+                {"object_type": "line", "x0": 20.0, "top": 50.0, "x1": 220.0, "bottom": 55.0},
+                {"object_type": "line", "x0": 20.0, "top": 190.0, "x1": 220.0, "bottom": 195.0},
+            ],
+            rects=[
+                {"object_type": "rect", "x0": 18.0, "top": 58.0, "x1": 222.0, "bottom": 192.0},
+            ],
+        )
+
+        with patch("extractor.text._detect_body_bounds", return_value=(40.0, 700.0)):
+            regions = _extract_drawing_image_bboxes(page=page, header_margin=90.0, footer_margin=40.0)
+
+        self.assertEqual(1, len(regions))
+        self.assertEqual((20.0, 60.0, 220.0, 190.0), regions[0])
+
+    def test_extract_drawing_image_bboxes_uses_excluded_bboxes(self) -> None:
+        page = SimpleNamespace(
+            curves=[
+                {"object_type": "curve", "x0": 20.0, "top": 60.0, "x1": 120.0, "bottom": 150.0},
+            ],
+            lines=[
+                {"object_type": "line", "x0": 20.0, "top": 55.0, "x1": 120.0, "bottom": 60.0},
+            ],
+            rects=[],
+        )
+        with patch("extractor.text._detect_body_bounds", return_value=(40.0, 700.0)):
+            regions = _extract_drawing_image_bboxes(
+                page=page,
+                header_margin=90.0,
+                footer_margin=40.0,
+                excluded_bboxes=[(15.0, 55.0, 130.0, 160.0)],
+            )
+
+        self.assertEqual([], regions)
+
+    def test_extract_drawing_image_bboxes_empty_when_no_curve(self) -> None:
+        page = SimpleNamespace(
+            curves=[],
+            lines=[
+                {"object_type": "line", "x0": 20.0, "top": 60.0, "x1": 220.0, "bottom": 190.0},
+            ],
+            rects=[
+                {"object_type": "rect", "x0": 20.0, "top": 60.0, "x1": 220.0, "bottom": 190.0},
+            ],
+        )
+        with patch("extractor.text._detect_body_bounds", return_value=(40.0, 700.0)):
+            regions = _extract_drawing_image_bboxes(page=page, header_margin=90.0, footer_margin=40.0)
+
+        self.assertEqual([], regions)
 
     def test_is_shape_text_line_returns_false_when_line_is_outside_shape_regions(self) -> None:
         self.assertFalse(

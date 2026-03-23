@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 import pdfplumber
 from pypdf import PdfReader
@@ -25,12 +25,14 @@ def _extract_embedded_images(
     out_image_dir: Path,
     stem: str,
     pages: Optional[Sequence[int]] = None,
+    drawing_regions_by_page: Optional[dict[int, Sequence[Tuple[float, float, float, float]]]] = None,
 ) -> List[Path]:
     # Image extraction is intentionally independent from table/text extraction so it can be reused or debugged separately.
     out_image_dir.mkdir(parents=True, exist_ok=True)
 
     image_files: List[Path] = []
     selected_pages = set(int(page_no) for page_no in (pages or []))
+    drawing_regions_by_page = drawing_regions_by_page or {}
     reader = PdfReader(str(pdf_path))
     with pdfplumber.open(str(pdf_path)) as plumber_pdf:
         for page_idx, (page, plumber_page) in enumerate(zip(reader.pages, plumber_pdf.pages), start=1):
@@ -60,5 +62,26 @@ def _extract_embedded_images(
                 out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_image_{kept_idx:02d}{suffix}"
                 out_path.write_bytes(image_file.data)
                 image_files.append(out_path)
+
+            drawing_image_idx = 0
+            for region in drawing_regions_by_page.get(page_idx, []):
+                x0, top, x1, bottom = region
+                width = float(plumber_page.width or 0.0)
+                height = float(plumber_page.height or 0.0)
+                left = max(0.0, min(float(x0), width))
+                right = max(0.0, min(float(x1), width))
+                top_y = max(0.0, min(float(top), height))
+                bottom_y = max(0.0, min(float(bottom), height))
+                if right <= left or bottom_y <= top_y:
+                    continue
+                try:
+                    page_image = plumber_page.to_image(resolution=180)
+                    region_image = page_image.crop((left, top_y, right, bottom_y), relative=False)
+                    drawing_image_idx += 1
+                    out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_drawing_{drawing_image_idx:02d}.png"
+                    region_image.save(str(out_path), format="PNG")
+                    image_files.append(out_path)
+                except Exception:
+                    continue
 
     return image_files
