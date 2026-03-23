@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 from typing import List, Optional, Sequence, Tuple
 
 import pdfplumber
+from PIL import ImageDraw
 from pypdf import PdfReader
 
-from .text import _detect_body_bounds
+from .text import _detect_body_bounds, _is_non_watermark_obj
 
 
 def _crop_page_region(
@@ -43,6 +45,29 @@ def _image_intersects_body(
     top = float(image_meta.get("top", 0.0))
     bottom = float(image_meta.get("bottom", top))
     return bottom > body_top and top < body_bottom
+
+
+def _erase_watermark_chars_from_page_image(
+    page_image: "pdfplumber.display.PageImage",
+    page: "pdfplumber.page.Page",
+    resolution: float,
+) -> None:
+    # pdfplumber filtered pages still rasterize the original PDF content, so mask watermark chars directly.
+    watermark_chars = [char for char in getattr(page, "chars", []) if not _is_non_watermark_obj(char)]
+    if not watermark_chars:
+        return
+
+    scale = float(resolution) / 72.0
+    draw = ImageDraw.Draw(page_image.original)
+    image_width, image_height = page_image.original.size
+    for char in watermark_chars:
+        left_px = max(0, min(int(math.floor(float(char.get("x0", 0.0)) * scale)) - 1, image_width))
+        top_px = max(0, min(int(math.floor(float(char.get("top", 0.0)) * scale)) - 1, image_height))
+        right_px = max(0, min(int(math.ceil(float(char.get("x1", char.get("x0", 0.0))) * scale)) + 1, image_width))
+        bottom_px = max(0, min(int(math.ceil(float(char.get("bottom", char.get("top", 0.0))) * scale)) + 1, image_height))
+        if right_px <= left_px or bottom_px <= top_px:
+            continue
+        draw.rectangle((left_px, top_px, right_px, bottom_px), fill="white")
 
 
 def _extract_embedded_images(
@@ -101,6 +126,11 @@ def _extract_embedded_images(
                     continue
                 try:
                     page_image = plumber_page.to_image(resolution=180)
+                    _erase_watermark_chars_from_page_image(
+                        page_image=page_image,
+                        page=plumber_page,
+                        resolution=180.0,
+                    )
                     region_image = _crop_page_region(
                         page_image=page_image,
                         page_height=height,
