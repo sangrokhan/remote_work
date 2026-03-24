@@ -45,7 +45,7 @@ python3 extractor/__main__.py sample.pdf \
 - `--debug-watermark`: 회전 문자 디버그 JSON 생성
 - `--profile-fonts`: body text 기준 `font_size + font_color` 조합 프로파일 JSON/CSV 생성
 - `--add-heading <path>`: 외부 JSON의 `font_size -> h1~h6` 규칙으로 body markdown heading 추가
-- `--raw <path>`: 선택 페이지 기준 원본 PDF raw dump 파일 생성
+- `--raw <path>`: 선택 페이지 기준 문서 PDF base64만 저장하는 최소 raw dump 생성
 - `--from-raw <path>`: raw dump 파일을 입력으로 읽어 기존 추출 파이프라인 실행
 
 ### 직접 실행 예시
@@ -87,7 +87,7 @@ python3 -m extractor sample.pdf \
   --raw artifacts/manual/raw/sample.raw.dump
 ```
 
-raw dump에는 문서 PDF 자체의 base64와 함께 페이지별 `content stream`, `resources`, `embedded images`, `chars`, `lines`, `rects`, `curves`, `images`, `horizontal_edges`, `vertical_edges`, `words`가 포함됩니다.
+raw dump에는 문서 PDF 바이트를 `document_pdf_base64`로 저장한 최소 payload(`schema_version`, `document_pdf_base64`)만 포함됩니다.
 
 PDF 대신 raw dump를 입력으로 재실행하려면 `--from-raw`를 사용합니다. 이 경우 positional `pdf_path` 없이 실행할 수 있습니다.
 
