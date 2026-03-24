@@ -168,6 +168,16 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertEqual(2, result["summary"]["table_count"])
         self.assertEqual(1, len(result["image_files"]))
 
+    def test_markdown_includes_table_references_for_detected_tables(self) -> None:
+        markdown = self._extract_result()["markdown"]
+
+        self.assertIn("[Table reference: Page 1 table 1]", markdown)
+        self.assertEqual(3, markdown.count("[Table reference: Page 1 table 2]"))
+        self.assertIn("[Table reference: Page 3 table 3]", markdown)
+        self.assertIn("[Table reference: Page 4 table 4]", markdown)
+        self.assertIn("### Page 2", markdown)
+        self.assertIn("### Page 4", markdown)
+
     def test_extract_embedded_images_respects_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

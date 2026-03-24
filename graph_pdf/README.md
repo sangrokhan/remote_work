@@ -78,7 +78,7 @@ python3 -m extractor sample.pdf \
   --add-heading fixtures/font_heading_profile.sample.json
 ```
 
-샘플 heading JSON은 `fixtures/font_heading_profile.sample.json`에 있습니다. 현재는 `heading_rules[].match.font_size`와 `assign.tag` 또는 `assign.markdown_prefix`만 사용하며, 매칭되지 않는 font size는 일반 문단으로 유지됩니다.
+샘플 heading JSON은 `fixtures/font_heading_profile.sample.json`에 있습니다. 구조는 `heading_rules[].match.font_size`와 `heading_rules[].assign.tag`/`heading_rules[].assign.markdown_prefix`만 남긴 최소 형태이며, 매칭되지 않는 font size는 일반 문단으로 유지됩니다.
 
 문서 전체를 raw dump로 저장하려면 `--raw`를 사용합니다.
 
@@ -133,7 +133,7 @@ python3 -m extractor \
 - `sample_generator.py`: 본문, 표, 워터마크, 이미지가 포함된 테스트용 샘플 PDF 생성기
 - `sample_fixture.py`: 샘플 PDF 검증용 fixture 로더
 - `fixtures/demo_document.json`: 샘플 문서의 기대 본문/표 데이터 fixture
-- `fixtures/font_heading_profile.sample.json`: `--add-heading`용 font size 기반 heading 규칙 샘플
+- `fixtures/font_heading_profile.sample.json`: `--add-heading`용 최소 heading 규칙 샘플
 - `extractor/__init__.py`: 외부에서 사용하는 공개 진입점 export
 - `extractor/__main__.py`: CLI 실행용 entrypoint
 - `extractor/font_profile.py`: body text 기준 `font_size + font_color` 프로파일 생성과 JSON/CSV 기록
@@ -179,7 +179,7 @@ python3 -m extractor \
 5. `--from-raw`가 주어지면 raw dump의 문서 PDF base64를 임시 PDF로 복원한 뒤 같은 파이프라인을 재사용합니다.
 6. `extractor.tables._extract_tables(...)`가 현재 페이지의 표 후보를 찾고 행 데이터를 정규화합니다.
 7. `extractor.text._extract_body_text(...)`가 전체 body text를 구합니다.
-8. `--add-heading`이 있으면 외부 JSON의 `font_size -> heading level` 규칙으로 markdown heading prefix를 추가합니다.
+8. `--add-heading`이 있으면 외부 JSON의 `heading_rules[].match.font_size -> assign.tag/assign.markdown_prefix` 규칙으로 markdown heading prefix를 추가합니다.
 9. 표 bbox를 제외한 body text를 다시 계산해 최종 본문 markdown에 사용합니다.
 10. 표가 있으면 이전 페이지의 pending table과 이어붙일 수 있는지 검사합니다.
 11. 이어붙일 수 있으면 pending table을 확장하고, 아니면 이전 pending table을 flush한 뒤 현재 표를 새 pending 상태로 둡니다.

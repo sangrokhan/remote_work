@@ -46,8 +46,6 @@ def _load_heading_levels(add_heading: Path | None) -> dict[float, int] | None:
     payload = json.loads(Path(add_heading).read_text(encoding="utf-8"))
     heading_levels: dict[float, int] = {}
     for rule in payload.get("heading_rules", []):
-        if not bool(rule.get("enabled", True)):
-            continue
         match = rule.get("match") or {}
         if "font_size" not in match:
             continue
@@ -108,6 +106,10 @@ def _body_excluded_bboxes(
     return excluded
 
 
+def _table_reference_text(page_no: int, table_no: int) -> str:
+    return f"[Table reference: Page {page_no} table {table_no}]"
+
+
 def extract_pdf_to_outputs(
     pdf_path: Path | None,
     out_md_dir: Path,
@@ -155,18 +157,21 @@ def extract_pdf_to_outputs(
     pending_page: Optional[int] = None
     pending_last_page: Optional[int] = None
     pending_bbox: Optional[Tuple[float, float, float, float]] = None
+    pending_table_no: Optional[int] = None
     pending_axes: List[float] = []
     pending_gap_text_boxes: List[Tuple[float, float, float, float]] = []
+    next_table_no = 1
 
     def _flush_pending() -> None:
         # Tables are emitted only after we know the next page will not extend them.
-        nonlocal pending_table, pending_page, pending_last_page, pending_bbox, pending_axes, pending_gap_text_boxes
-        if pending_table is not None and pending_page is not None:
-            _append_output_table(output_tables, pending_page, len(output_tables) + 1, pending_table)
+        nonlocal pending_table, pending_page, pending_last_page, pending_bbox, pending_table_no, pending_axes, pending_gap_text_boxes
+        if pending_table is not None and pending_page is not None and pending_table_no is not None:
+            _append_output_table(output_tables, pending_page, pending_table_no, pending_table)
         pending_table = None
         pending_page = None
         pending_last_page = None
         pending_bbox = None
+        pending_table_no = None
         pending_axes = []
         pending_gap_text_boxes = []
 
@@ -195,23 +200,26 @@ def extract_pdf_to_outputs(
             )
             drawing_regions_by_page[page_idx] = image_regions
             full_page_text = _extract_body_text(page, header_margin=header_margin, footer_margin=footer_margin)
-            # Body text for the final page output excludes table areas so prose does not duplicate table content.
-            page_text = _extract_body_text(
-                page,
-                header_margin=header_margin,
-                footer_margin=footer_margin,
-                excluded_bboxes=_body_excluded_bboxes(
-                    pending_table=pending_table,
-                    tables=tables,
-                    image_regions=image_regions,
-                    body_top=footer_margin,
-                ),
-                heading_levels=heading_levels,
+            page_pending_table = pending_table
+            page_excluded_bboxes = _body_excluded_bboxes(
+                pending_table=page_pending_table,
+                tables=tables,
+                image_regions=image_regions,
+                body_top=footer_margin,
             )
-            if page_text.strip():
-                output_text.append(f"### Page {page_idx}\n{page_text}")
+            page_table_references: List[dict] = []
 
             if not tables:
+                page_text = _extract_body_text(
+                    page,
+                    header_margin=header_margin,
+                    footer_margin=footer_margin,
+                    excluded_bboxes=page_excluded_bboxes,
+                    reference_lines=page_table_references,
+                    heading_levels=heading_levels,
+                )
+                if page_text.strip():
+                    output_text.append(f"### Page {page_idx}\n{page_text}")
                 continue
 
             body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
@@ -231,6 +239,13 @@ def extract_pdf_to_outputs(
                         full_page_text,
                     )
                 if merged_missing_first is not None:
+                    if pending_page is not None and pending_table_no is not None:
+                        page_table_references.append(
+                            {
+                                "text": _table_reference_text(pending_page, pending_table_no),
+                                "bbox": bbox,
+                            }
+                        )
                     pending_table = merged_missing_first
                     pending_last_page = page_idx
                     pending_bbox = bbox
@@ -243,6 +258,13 @@ def extract_pdf_to_outputs(
                     # Repeated headers should not be duplicated when the next page is clearly part of the same table.
                     continuation_rows = _split_repeated_header(pending_table or [], table_rows)
                     if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
+                        if pending_page is not None and pending_table_no is not None:
+                            page_table_references.append(
+                                {
+                                    "text": _table_reference_text(pending_page, pending_table_no),
+                                    "bbox": bbox,
+                                }
+                            )
                         pending_table.extend(continuation_rows)
                         pending_last_page = page_idx
                         if pending_bbox is not None:
@@ -275,6 +297,13 @@ def extract_pdf_to_outputs(
                         gap_text_boxes=[*pending_gap_text_boxes, *current_gap_text_boxes],
                     )
                 ):
+                    if pending_page is not None and pending_table_no is not None:
+                        page_table_references.append(
+                            {
+                                "text": _table_reference_text(pending_page, pending_table_no),
+                                "bbox": bbox,
+                            }
+                        )
                     pending_table.extend(continuation_rows)
                     pending_last_page = page_idx
                     pending_bbox = (
@@ -289,12 +318,39 @@ def extract_pdf_to_outputs(
 
                 # Once continuation checks fail, the previous pending table is finalized and a new table starts.
                 _flush_pending()
+                current_table_no = next_table_no
+                next_table_no += 1
+                page_table_references.append(
+                    {
+                        "text": _table_reference_text(page_idx, current_table_no),
+                        "bbox": bbox,
+                    }
+                )
                 pending_table = table_rows
                 pending_page = page_idx
                 pending_last_page = page_idx
                 pending_bbox = bbox
+                pending_table_no = current_table_no
                 pending_axes = current_axes
                 pending_gap_text_boxes = _gap_text_boxes_after_bbox(page, bbox, table_bboxes, header_margin=header_margin, footer_margin=footer_margin)
+
+            effective_table_bboxes = page_excluded_bboxes[: len(tables)]
+            page_text = _extract_body_text(
+                page,
+                header_margin=header_margin,
+                footer_margin=footer_margin,
+                excluded_bboxes=page_excluded_bboxes,
+                reference_lines=[
+                    {
+                        "text": entry["text"],
+                        "bbox": effective_bbox,
+                    }
+                    for entry, effective_bbox in zip(page_table_references, effective_table_bboxes)
+                ],
+                heading_levels=heading_levels,
+            )
+            if page_text.strip():
+                output_text.append(f"### Page {page_idx}\n{page_text}")
 
         _flush_pending()
 
