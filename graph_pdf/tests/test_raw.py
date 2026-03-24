@@ -7,8 +7,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pypdf.generic import BooleanObject
-
 from extractor.__main__ import main as cli_main
 from extractor.pipeline import extract_pdf_to_outputs
 from sample_generator import create_demo_pdf
@@ -23,7 +21,7 @@ class RawDumpTests(unittest.TestCase):
         create_demo_pdf(pdf_path)
         return root, pdf_path
 
-    def test_dump_pdf_to_raw_file_writes_document_base64_and_page_payloads(self) -> None:
+    def test_dump_pdf_to_raw_file_writes_minimal_payload(self) -> None:
         from extractor.raw import dump_pdf_to_raw_file
 
         root, pdf_path = self._build_pdf()
@@ -32,27 +30,9 @@ class RawDumpTests(unittest.TestCase):
         dump_pdf_to_raw_file(pdf_path=pdf_path, raw_path=raw_path, pages=[1, 2])
 
         payload = json.loads(raw_path.read_text(encoding="utf-8"))
-        self.assertEqual("1.0", payload["schema_version"])
-        self.assertEqual(str(pdf_path), payload["source_pdf"])
-        self.assertEqual([1, 2], payload["selected_pages"])
+        self.assertEqual("1.1", payload["schema_version"])
         self.assertTrue(payload["document_pdf_base64"])
-        self.assertEqual(2, len(payload["pages"]))
-        self.assertIn("chars", payload["pages"][0]["objects"])
-        self.assertIn("lines", payload["pages"][0]["objects"])
-        self.assertIn("rects", payload["pages"][0]["objects"])
-        self.assertIn("curves", payload["pages"][0]["objects"])
-        self.assertIn("images", payload["pages"][0]["objects"])
-        self.assertIn("content_stream_base64", payload["pages"][0])
-        self.assertIn("resources", payload["pages"][0])
-
-    def test_serialize_pdf_object_converts_boolean_object_to_plain_bool(self) -> None:
-        from extractor.raw import _serialize_pdf_object
-
-        payload = {"flag": _serialize_pdf_object(BooleanObject(True))}
-
-        encoded = json.dumps(payload)
-
-        self.assertEqual('{"flag": true}', encoded)
+        self.assertEqual(2, len(payload))
 
     def test_extract_pdf_to_outputs_from_raw_matches_pdf_text_outputs(self) -> None:
         from extractor.raw import dump_pdf_to_raw_file
