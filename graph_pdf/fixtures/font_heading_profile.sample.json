@@ -2,7 +2,7 @@
   "heading_rules": [
     {
       "match": {
-        "font_size": 20.0
+        "font_size": 27.96
       },
       "assign": {
         "tag": "h1",
@@ -11,7 +11,7 @@
     },
     {
       "match": {
-        "font_size": 16.0
+        "font_size": 21.96
       },
       "assign": {
         "tag": "h2",
@@ -20,11 +20,20 @@
     },
     {
       "match": {
-        "font_size": 13.0
+        "font_size": 15.96
       },
       "assign": {
         "tag": "h3",
         "markdown_prefix": "### "
+      }
+    },
+    {
+      "match": {
+        "font_size": 12.0
+      },
+      "assign": {
+        "tag": "h4",
+        "markdown_prefix": "#### "
       }
     }
   ]
