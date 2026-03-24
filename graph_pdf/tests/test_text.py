@@ -8,6 +8,7 @@ from extractor.shared import _parse_pages_spec
 from extractor.text import (
     _build_body_blocks,
     _detect_body_bounds,
+    _extract_body_text_lines,
     _extract_body_word_lines,
     _extract_drawing_image_bboxes,
     _is_gray_color,
@@ -59,6 +60,25 @@ class TextModuleTests(unittest.TestCase):
             ["This line introduces the uncommon term", "ProtoLexeme expands into explanation"],
             [line["text"] for line in blocks[1]["lines"]],
         )
+
+    def test_extract_body_text_lines_applies_font_size_heading_map_and_leaves_unmapped_sizes_as_paragraph(self) -> None:
+        page = SimpleNamespace()
+        line_payloads = [
+            {"text": "Sized Title", "top": 90.0, "bottom": 102.0, "dominant_font_size": 20.0, "size": 20.0},
+            {"text": "Body line", "top": 120.0, "bottom": 132.0, "dominant_font_size": 11.0, "size": 11.0},
+            {"text": "continues here", "top": 134.0, "bottom": 146.0, "dominant_font_size": 11.0, "size": 11.0},
+        ]
+
+        with patch("extractor.text._extract_body_word_lines", return_value=line_payloads):
+            raw_lines, normalized_lines = _extract_body_text_lines(
+                page=page,
+                header_margin=90.0,
+                footer_margin=40.0,
+                heading_levels={20.0: 1},
+            )
+
+        self.assertEqual(["Sized Title", "Body line", "continues here"], raw_lines)
+        self.assertEqual(["# Sized Title", "Body line continues here"], normalized_lines)
 
     def test_extract_body_word_lines_marks_marker_candidate_and_text_start(self) -> None:
         filtered_page = SimpleNamespace(

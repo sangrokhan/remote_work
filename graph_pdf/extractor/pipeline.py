@@ -9,6 +9,7 @@ import pdfplumber
 
 from .debug import _collect_page_edge_debug, _collect_rotated_text_debug, _collect_table_drawing_debug
 from .images import _extract_embedded_images
+from .raw import materialize_raw_dump
 from .shared import TableRows, _merge_numeric_positions
 from .tables import (
     _append_output_table,
@@ -23,6 +24,38 @@ from .tables import (
     _vertical_axes_for_bbox,
 )
 from .text import _detect_body_bounds, _extract_body_text, _extract_drawing_image_bboxes
+
+
+def _heading_level_from_rule(rule: dict) -> int | None:
+    assign = rule.get("assign") or {}
+    tag = str(assign.get("tag") or "").strip().lower()
+    if len(tag) == 2 and tag.startswith("h") and tag[1].isdigit():
+        level = int(tag[1])
+        if 1 <= level <= 6:
+            return level
+
+    markdown_prefix = str(assign.get("markdown_prefix") or "")
+    sharp_count = len(markdown_prefix.strip())
+    return sharp_count if 1 <= sharp_count <= 6 else None
+
+
+def _load_heading_levels(add_heading: Path | None) -> dict[float, int] | None:
+    if add_heading is None:
+        return None
+
+    payload = json.loads(Path(add_heading).read_text(encoding="utf-8"))
+    heading_levels: dict[float, int] = {}
+    for rule in payload.get("heading_rules", []):
+        if not bool(rule.get("enabled", True)):
+            continue
+        match = rule.get("match") or {}
+        if "font_size" not in match:
+            continue
+        level = _heading_level_from_rule(rule)
+        if level is None:
+            continue
+        heading_levels[round(float(match["font_size"]), 2)] = level
+    return heading_levels
 
 
 def _document_text_profile(debug_pages: Sequence[dict]) -> dict:
@@ -76,7 +109,7 @@ def _body_excluded_bboxes(
 
 
 def extract_pdf_to_outputs(
-    pdf_path: Path,
+    pdf_path: Path | None,
     out_md_dir: Path,
     out_image_dir: Path,
     stem: str,
@@ -86,7 +119,27 @@ def extract_pdf_to_outputs(
     force_table: bool = False,
     debug: bool = False,
     debug_watermark: bool = False,
+    add_heading: Path | None = None,
+    from_raw: Path | None = None,
 ) -> dict:
+    if from_raw is not None:
+        with materialize_raw_dump(from_raw) as (materialized_pdf_path, _raw_payload):
+            return extract_pdf_to_outputs(
+                pdf_path=materialized_pdf_path,
+                out_md_dir=out_md_dir,
+                out_image_dir=out_image_dir,
+                stem=stem,
+                header_margin=header_margin,
+                footer_margin=footer_margin,
+                pages=pages,
+                force_table=force_table,
+                debug=debug,
+                debug_watermark=debug_watermark,
+                add_heading=add_heading,
+                from_raw=None,
+            )
+    if pdf_path is None:
+        raise ValueError("pdf_path is required when from_raw is not provided")
     out_md_dir.mkdir(parents=True, exist_ok=True)
 
     output_text: List[str] = []
@@ -96,6 +149,7 @@ def extract_pdf_to_outputs(
     rotated_debug: List[dict] = []
     selected_pages = set(int(page_no) for page_no in (pages or []))
     drawing_regions_by_page: dict[int, list[Tuple[float, float, float, float]]] = {}
+    heading_levels = _load_heading_levels(add_heading)
 
     pending_table: Optional[TableRows] = None
     pending_page: Optional[int] = None
@@ -152,6 +206,7 @@ def extract_pdf_to_outputs(
                     image_regions=image_regions,
                     body_top=footer_margin,
                 ),
+                heading_levels=heading_levels,
             )
             if page_text.strip():
                 output_text.append(f"### Page {page_idx}\n{page_text}")

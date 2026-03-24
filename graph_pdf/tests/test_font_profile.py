@@ -122,6 +122,31 @@ class FontProfileTests(unittest.TestCase):
         self.assertTrue((root / "md" / "sample_font_profile.json").exists())
         self.assertTrue((root / "md" / "sample_font_profile.csv").exists())
 
+    def test_cli_add_heading_option_passes_heading_json_to_pipeline(self) -> None:
+        root, pdf_path = self._build_pdf()
+        heading_json = root / "heading.json"
+        heading_json.write_text(
+            json.dumps({"heading_rules": [{"match": {"font_size": 20.0}, "assign": {"tag": "h1"}}]}),
+            encoding="utf-8",
+        )
+
+        argv = [
+            "extractor",
+            str(pdf_path),
+            "--out-md-dir",
+            str(root / "md"),
+            "--out-image-dir",
+            str(root / "images"),
+            "--stem",
+            "sample",
+            "--add-heading",
+            str(heading_json),
+        ]
+        with patch.object(sys, "argv", argv), patch("extractor.__main__.extract_pdf_to_outputs") as mock_extract:
+            cli_main()
+
+        self.assertEqual(heading_json, mock_extract.call_args.kwargs["add_heading"])
+
 
 if __name__ == "__main__":
     unittest.main()

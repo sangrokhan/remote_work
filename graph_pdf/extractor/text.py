@@ -389,6 +389,7 @@ def _extract_body_text(
     header_margin: float,
     footer_margin: float,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
+    heading_levels: dict[float, int] | None = None,
 ) -> str:
     # Most callers want page text as joined logical lines rather than raw line payloads.
     _raw_lines, normalized_lines = _extract_body_text_lines(
@@ -396,6 +397,7 @@ def _extract_body_text(
         header_margin=header_margin,
         footer_margin=footer_margin,
         excluded_bboxes=excluded_bboxes,
+        heading_levels=heading_levels,
     )
     return "\n".join(normalized_lines)
 
@@ -405,6 +407,7 @@ def _extract_body_text_lines(
     header_margin: float,
     footer_margin: float,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
+    heading_levels: dict[float, int] | None = None,
 ) -> Tuple[List[str], List[str]]:
     # Return both the raw visual lines and the normalized logical lines for debug and downstream reuse.
     line_payloads = _extract_body_word_lines(
@@ -414,13 +417,20 @@ def _extract_body_text_lines(
         excluded_bboxes=excluded_bboxes,
     )
     raw_lines = [str(line["text"]) for line in line_payloads]
-    blocks = _build_body_blocks(line_payloads)
+    blocks = _build_body_blocks(line_payloads, heading_levels=heading_levels)
 
     normalized_lines: List[str] = []
     for block in blocks:
         block_lines = [str(line["text"]) for line in block["lines"]]
         if block["kind"] == "heading":
-            normalized_lines.extend(block_lines)
+            if heading_levels is None:
+                normalized_lines.extend(block_lines)
+                continue
+            for line in block["lines"]:
+                text = str(line.get("text") or "").strip()
+                level = _line_heading_level(line, heading_levels)
+                if text and level is not None:
+                    normalized_lines.append(f"{'#' * level} {text}")
             continue
         joined = _join_non_heading_block_lines(block_lines)
         if joined:
@@ -468,8 +478,24 @@ def _is_body_heading_line(line: str) -> bool:
     return bool(re.match(r"^(?:chapter|section|appendix)\b", text, flags=re.IGNORECASE))
 
 
-def _line_kind(line: dict) -> str:
+def _line_font_size(line: dict) -> float:
+    return round(float(line.get("dominant_font_size", line.get("size", 0.0)) or 0.0), 2)
+
+
+def _line_heading_level(line: dict, heading_levels: dict[float, int] | None = None) -> int | None:
+    if heading_levels is None:
+        return None
+    level = heading_levels.get(_line_font_size(line))
+    if level is None:
+        return None
+    level = int(level)
+    return level if 1 <= level <= 6 else None
+
+
+def _line_kind(line: dict, heading_levels: dict[float, int] | None = None) -> str:
     # The current body flow distinguishes only headings and paragraphs.
+    if heading_levels is not None:
+        return "heading" if _line_heading_level(line, heading_levels) is not None else "paragraph"
     if _is_body_heading_line(str(line.get("text") or "").strip()):
         return "heading"
     return "paragraph"
@@ -481,7 +507,7 @@ def _should_merge_paragraph_lines(previous: dict, line: dict) -> bool:
     return line_gap <= 5.0
 
 
-def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
+def _build_body_blocks(lines: Sequence[dict], heading_levels: dict[float, int] | None = None) -> List[dict]:
     # Collapse adjacent body lines into coarse logical blocks before converting them to page text.
     if not lines:
         return []
@@ -489,7 +515,7 @@ def _build_body_blocks(lines: Sequence[dict]) -> List[dict]:
     blocks: List[dict] = []
     current_block: dict | None = None
     for line in lines:
-        kind = _line_kind(line)
+        kind = _line_kind(line, heading_levels=heading_levels)
         if current_block is None:
             current_block = {"kind": kind, "lines": [line]}
             continue

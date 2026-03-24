@@ -48,6 +48,21 @@ def _build_flow_diagram_pdf(pdf_path: Path) -> tuple[str, tuple[str, ...]]:
     return outside_text, hidden_text
 
 
+def _build_heading_pdf(pdf_path: Path) -> tuple[str, str]:
+    title = "Sized Heading Title"
+    paragraph = "This paragraph should remain normal body text."
+
+    c = canvas.Canvas(str(pdf_path), pagesize=letter)
+    c.setFont("Helvetica-Bold", 20)
+    c.drawString(72, 700, title)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 672, paragraph)
+    c.drawString(72, 656, "Continuation line for the body paragraph.")
+    c.save()
+
+    return title, paragraph
+
+
 class PipelineExtractionTests(unittest.TestCase):
     def _build_pdf(self) -> Path:
         tmp = tempfile.TemporaryDirectory()
@@ -209,6 +224,39 @@ class PipelineExtractionTests(unittest.TestCase):
         drawing_images = [Path(path) for path in result["image_files"] if "_drawing_" in Path(path).name]
         self.assertEqual(1, len(drawing_images))
         self.assertTrue(drawing_images[0].exists())
+
+    def test_add_heading_uses_external_font_size_mapping_for_markdown(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        pdf_path = root / "heading.pdf"
+        title, paragraph = _build_heading_pdf(pdf_path)
+        heading_json = root / "heading.json"
+        heading_json.write_text(
+            json.dumps(
+                {
+                    "heading_rules": [
+                        {
+                            "match": {"font_size": 20.0},
+                            "assign": {"tag": "h1"},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = extract_pdf_to_outputs(
+            pdf_path=pdf_path,
+            out_md_dir=root / "md",
+            out_image_dir=root / "images",
+            stem="heading",
+            add_heading=heading_json,
+        )
+
+        self.assertIn(f"# {title}", result["markdown"])
+        self.assertIn(paragraph, result["markdown"])
+        self.assertNotIn(f"# {paragraph}", result["markdown"])
 
     def test_spanning_stage_table_merges_into_one_block(self) -> None:
         markdown = self._extract_table_markdown()
