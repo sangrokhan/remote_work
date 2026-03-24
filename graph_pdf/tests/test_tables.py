@@ -47,7 +47,18 @@ class TableModuleTests(unittest.TestCase):
             ["note", "Docs", "", "", "READY", "", "", "Finalize", ""],
         ]
         self.assertEqual(
-            [["", "Area", "", "Status", "Action"], ["note", "Docs", "", "READY", "Finalize"]],
+            [["", "Area", "Status", "Action"], ["note", "Docs", "READY", "Finalize"]],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_removes_empty_vertical_columns(self) -> None:
+        table = [
+            ["A", "", "B", ""],
+            ["C", "", "D", ""],
+            ["E", "", "F"],
+        ]
+        self.assertEqual(
+            [["A", "B"], ["C", "D"], ["E", "F"]],
             _collapse_structural_triplet_columns(table),
         )
 

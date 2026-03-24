@@ -30,26 +30,23 @@ def _merge_cells(table: Sequence[Sequence[str]]) -> List[List[str]]:
 
 
 def _collapse_structural_triplet_columns(table: Sequence[Sequence[str]]) -> List[List[str]]:
-    # Some sample tables use [blank, value, blank] triples to simulate merged columns; collapse only those empty side columns.
+    # Remove vertically empty columns that are likely structural artifacts from extraction.
     rows = [list(row) for row in table]
     if not rows:
         return []
 
     col_count = max((len(row) for row in rows), default=0)
-    if col_count == 0 or col_count % 3 != 0:
-        return [list(row) for row in rows]
-
     padded_rows = [list(row) + [""] * (col_count - len(row)) for row in rows]
-    collapsed_indices: List[int] = []
-    for start in range(0, col_count, 3):
-        left_values = [_normalize_text(row[start]) for row in padded_rows]
-        right_values = [_normalize_text(row[start + 2]) for row in padded_rows]
-        if any(left_values) or any(right_values):
-            collapsed_indices.extend([start, start + 1, start + 2])
-            continue
-        collapsed_indices.append(start + 1)
+    kept_indices = [
+        idx
+        for idx in range(col_count)
+        if any(_normalize_text(str(padded_rows[row_idx][idx]).strip()) for row_idx in range(len(padded_rows)))
+    ]
 
-    return [[row[idx] for idx in collapsed_indices] for row in padded_rows]
+    if not kept_indices:
+        return [[] for _ in padded_rows]
+
+    return [[row[idx] for idx in kept_indices] for row in padded_rows]
 
 
 def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]]:
@@ -60,7 +57,7 @@ def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]
         for cell in row:
             normalized_row.append("\n".join(_normalize_cell_lines(str(cell or ""))))
         normalized.append(normalized_row)
-    return _collapse_structural_triplet_columns(normalized)
+    return normalized
 
 
 def _table_rejection_reason(table: Sequence[Sequence[str]]) -> str | None:
@@ -823,6 +820,8 @@ def _merge_split_rows(rows: TableRows) -> TableRows:
 
 def _append_output_table(output_tables: List[str], page_no: int, table_no: int, table_rows: TableRows) -> None:
     # Table numbering is derived at append time so merged cross-page tables keep one output block.
-    table_text = _table_text_from_rows(_merge_split_rows(table_rows))
+    merged_rows = _merge_split_rows(table_rows)
+    collapsed_rows = _collapse_structural_triplet_columns(merged_rows)
+    table_text = _table_text_from_rows(collapsed_rows)
     if table_text:
         output_tables.append(f"### Page {page_no} table {table_no}\n{table_text}")

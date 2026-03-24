@@ -13,6 +13,132 @@ from .shared import _bboxes_intersect, _char_rotation_degrees
 from .text import _detect_body_bounds, _is_non_watermark_obj, _selected_drawing_image_groups
 
 
+def _normalize_pdf_image_name(image_name: object) -> str:
+    return Path(str(image_name or "")).name
+
+
+def _normalize_pdf_image_stem(image_name: object) -> str:
+    normalized = _normalize_pdf_image_name(image_name)
+    lower = normalized.lower()
+    for suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"):
+        if lower.endswith(suffix):
+            return normalized[: -len(suffix)]
+    return normalized
+
+
+def _image_ref_bbox(image_meta: dict) -> Tuple[float, float, float, float] | None:
+    if not image_meta:
+        return None
+    x0 = image_meta.get("x0")
+    top = image_meta.get("top")
+    x1 = image_meta.get("x1")
+    bottom = image_meta.get("bottom")
+    if x0 is None or top is None or x1 is None or bottom is None:
+        return None
+    try:
+        return float(x0), float(top), float(x1), float(bottom)
+    except (TypeError, ValueError):
+        return None
+
+
+def _match_embedded_image_by_name(
+    image_name: str,
+    image_stem: str,
+    candidates: Sequence[object],
+) -> dict | None:
+    for candidate in candidates:
+        candidate_name = _normalize_pdf_image_name(
+            candidate.get("name") if isinstance(candidate, dict) else getattr(candidate, "name", "")
+        )
+        candidate_stem = _normalize_pdf_image_stem(candidate_name)
+        if candidate_name == image_name or candidate_stem == image_stem:
+            if isinstance(candidate, dict):
+                return dict(candidate)
+            return {
+                "name": str(getattr(candidate, "name", image_name)),
+                "data": getattr(candidate, "data", None),
+            }
+    return None
+
+
+def _collect_embedded_image_refs(
+    pdf_path: Path,
+    pages: Optional[Sequence[int]] = None,
+    header_margin: float = 90.0,
+    footer_margin: float = 40.0,
+) -> dict[int, list[dict]]:
+    # Shared helper for content-flow reference generation and image extraction.
+    selected_pages = set(int(page_no) for page_no in (pages or []))
+    refs_by_page: dict[int, list[dict]] = {}
+
+    reader = PdfReader(str(pdf_path))
+    with pdfplumber.open(str(pdf_path)) as plumber_pdf:
+        for page_idx, (page, plumber_page) in enumerate(zip(reader.pages, plumber_pdf.pages), start=1):
+            if selected_pages and page_idx not in selected_pages:
+                continue
+
+            body_top, body_bottom = _detect_body_bounds(
+                plumber_page,
+                header_margin=header_margin,
+                footer_margin=footer_margin,
+            )
+            plumber_images = [
+                image
+                for image in getattr(plumber_page, "images", [])
+                if _image_intersects_body(image, body_top=body_top, body_bottom=body_bottom)
+            ]
+            if not plumber_images:
+                continue
+
+            allowed_names = {
+                _normalize_pdf_image_name(image.get("name"))
+                for image in plumber_images
+                if str(image.get("name") or "").strip()
+            }
+            allowed_stems = {_normalize_pdf_image_stem(name) for name in allowed_names}
+
+            entries: list[dict] = []
+            image_entries = []
+            for image_file in page.images:
+                image_name = _normalize_pdf_image_name(getattr(image_file, "name", None))
+                image_stem = _normalize_pdf_image_stem(image_name)
+                if not image_name:
+                    continue
+                if image_stem not in allowed_stems and image_name not in allowed_names:
+                    continue
+
+                matched = _match_embedded_image_by_name(image_name, image_stem, plumber_images)
+                if matched is None:
+                    continue
+                bbox = _image_ref_bbox(matched)
+                if bbox is None:
+                    continue
+
+                image_entries.append(
+                    {
+                        "name": image_name,
+                        "name_stem": image_stem,
+                        "suffix": Path(image_name).suffix or ".bin",
+                        "bbox": bbox,
+                        "pdf_name": str(getattr(image_file, "name", "")),
+                    }
+                )
+
+            # Stable order matches page rendering order and keeps index assignment deterministic.
+            image_entries = sorted(
+                image_entries,
+                key=lambda entry: (float(entry["bbox"][1]), float(entry["bbox"][0])),
+            )
+            for index, entry in enumerate(image_entries, start=1):
+                copied = dict(entry)
+                copied["index"] = index
+                entries.append(copied)
+            if entries:
+                refs_by_page[page_idx] = entries
+
+    return refs_by_page
+
+
 def _crop_page_region(
     page_image: "pdfplumber.display.PageImage",
     page_height: float,
@@ -307,6 +433,7 @@ def _extract_embedded_images(
     stem: str,
     pages: Optional[Sequence[int]] = None,
     drawing_regions_by_page: Optional[dict[int, Sequence[Tuple[float, float, float, float]]]] = None,
+    image_refs_by_page: Optional[dict[int, Sequence[dict]]] = None,
 ) -> List[Path]:
     # Image extraction is intentionally independent from table/text extraction so it can be reused or debugged separately.
     out_image_dir.mkdir(parents=True, exist_ok=True)
@@ -334,17 +461,35 @@ def _extract_embedded_images(
             }
 
             kept_idx = 0
-            for image_file in page.images:
-                # pypdf and pdfplumber expose image identifiers slightly differently, so compare both forms.
-                image_name = Path(image_file.name or "").name
-                image_stem = Path(image_name).stem
-                if image_stem not in allowed_names and image_name not in allowed_names:
-                    continue
-                kept_idx += 1
-                suffix = Path(image_name).suffix or ".bin"
-                out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_image_{kept_idx:02d}{suffix}"
-                out_path.write_bytes(image_file.data)
-                image_files.append(out_path)
+            if image_refs_by_page is None:
+                for image_file in page.images:
+                    # pypdf and pdfplumber expose image identifiers slightly differently, so compare both forms.
+                    image_name = _normalize_pdf_image_name(image_file.name or "")
+                    image_stem = _normalize_pdf_image_stem(image_name)
+                    if image_stem not in allowed_names and image_name not in allowed_names:
+                        continue
+                    kept_idx += 1
+                    suffix = Path(image_name).suffix or ".bin"
+                    out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_image_{kept_idx:02d}{suffix}"
+                    out_path.write_bytes(image_file.data)
+                    image_files.append(out_path)
+            else:
+                for image_ref in image_refs_by_page.get(page_idx, []):
+                    image_name = str(image_ref.get("name") or "")
+                    image_stem = str(image_ref.get("name_stem") or _normalize_pdf_image_stem(image_name))
+                    if image_stem not in allowed_names and image_name not in allowed_names:
+                        continue
+                    kept_idx += 1
+                    suffix = str(image_ref.get("suffix") or Path(image_name).suffix or ".bin")
+                    out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_image_{kept_idx:02d}{suffix}"
+                    image_payload = _match_embedded_image_by_name(image_name, image_stem, page.images)
+                    if image_payload is None:
+                        continue
+                    image_data = image_payload.get("data")
+                    if image_data is None:
+                        continue
+                    out_path.write_bytes(image_data)
+                    image_files.append(out_path)
 
             drawing_image_idx = 0
             for region in drawing_regions_by_page.get(page_idx, []):
