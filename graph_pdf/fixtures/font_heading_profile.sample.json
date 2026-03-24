@@ -1,0 +1,174 @@
+{
+  "schema_version": "1.0",
+  "description": "Sample dynamic mapping from font profile styles to markdown heading tags.",
+  "profile_source": {
+    "pdf": "sample.pdf",
+    "font_profile_json": "artifacts/manual/md/sample_font_profile.json",
+    "grouping_key": [
+      "font_size"
+    ],
+    "generated_at": "2026-03-24T00:00:00+09:00"
+  },
+  "defaults": {
+    "body_tag": null,
+    "emit_unmapped_as_paragraph": true,
+    "unknown_profile_action": "keep_text"
+  },
+  "heading_rules": [
+    {
+      "rule_id": "title-black-20",
+      "enabled": true,
+      "priority": 100,
+      "match": {
+        "font_size": 20.0
+      },
+      "assign": {
+        "tag": "h1",
+        "markdown_prefix": "# ",
+        "semantic_role": "document_title"
+      },
+      "notes": "Main chapter title style."
+    },
+    {
+      "rule_id": "section-black-16",
+      "enabled": true,
+      "priority": 90,
+      "match": {
+        "font_size": 16.0
+      },
+      "assign": {
+        "tag": "h2",
+        "markdown_prefix": "## ",
+        "semantic_role": "section_heading"
+      },
+      "notes": "Section heading style."
+    },
+    {
+      "rule_id": "subsection-black-13",
+      "enabled": true,
+      "priority": 80,
+      "match": {
+        "font_size": 13.0
+      },
+      "assign": {
+        "tag": "h3",
+        "markdown_prefix": "### ",
+        "semantic_role": "subsection_heading"
+      },
+      "notes": "Subsection heading style."
+    }
+  ],
+  "fallback_rules": [
+    {
+      "rule_id": "fallback-h1",
+      "enabled": true,
+      "priority": 50,
+      "match": {
+        "min_font_size": 18.0
+      },
+      "assign": {
+        "tag": "h1",
+        "markdown_prefix": "# ",
+        "semantic_role": "large_heading"
+      }
+    },
+    {
+      "rule_id": "fallback-h2",
+      "enabled": true,
+      "priority": 40,
+      "match": {
+        "min_font_size": 15.0,
+        "max_font_size": 17.99
+      },
+      "assign": {
+        "tag": "h2",
+        "markdown_prefix": "## ",
+        "semantic_role": "medium_heading"
+      }
+    },
+    {
+      "rule_id": "fallback-h3",
+      "enabled": true,
+      "priority": 30,
+      "match": {
+        "min_font_size": 12.0,
+        "max_font_size": 14.99
+      },
+      "assign": {
+        "tag": "h3",
+        "markdown_prefix": "### ",
+        "semantic_role": "small_heading"
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "profile_id": "20.00",
+      "font_size": 20.0,
+      "line_count": 1,
+      "page_count": 1,
+      "sample_page": 1,
+      "sample_texts": [
+        "Chapter 1: Deep Structure Verification"
+      ],
+      "assigned_tag": "h1",
+      "assignment_source": "exact_rule",
+      "matched_rule_id": "title-black-20"
+    },
+    {
+      "profile_id": "16.00",
+      "font_size": 16.0,
+      "line_count": 4,
+      "page_count": 2,
+      "sample_page": 1,
+      "sample_texts": [
+        "Overview",
+        "Data Sources"
+      ],
+      "assigned_tag": "h2",
+      "assignment_source": "exact_rule",
+      "matched_rule_id": "section-black-16"
+    },
+    {
+      "profile_id": "13.00",
+      "font_size": 13.0,
+      "line_count": 7,
+      "page_count": 3,
+      "sample_page": 2,
+      "sample_texts": [
+        "Normalization Notes",
+        "Fallback Logic"
+      ],
+      "assigned_tag": "h3",
+      "assignment_source": "exact_rule",
+      "matched_rule_id": "subsection-black-13"
+    },
+    {
+      "profile_id": "11.00",
+      "font_size": 11.0,
+      "line_count": 128,
+      "page_count": 5,
+      "sample_page": 1,
+      "sample_texts": [
+        "This paragraph remains body text.",
+        "The extractor keeps this as normal prose."
+      ],
+      "assigned_tag": null,
+      "assignment_source": "default_body",
+      "matched_rule_id": null
+    },
+    {
+      "profile_id": "11.00-accent",
+      "font_size": 11.0,
+      "line_count": 9,
+      "page_count": 2,
+      "sample_page": 1,
+      "sample_texts": [
+        "Blue accent line marks a separate style bucket for font profile review."
+      ],
+      "assigned_tag": null,
+      "assignment_source": "default_body",
+      "matched_rule_id": null
+    }
+  ]
+}
