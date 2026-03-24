@@ -37,6 +37,8 @@ def _serialize_pdf_object(
     seen = seen or set()
     if depth > max_depth:
         return {"type": "max_depth"}
+    if isinstance(value, BooleanObject):
+        return bool(value)
     if value is None or isinstance(value, (bool, int, float, str, BooleanObject, FloatObject, NumberObject, NameObject, TextStringObject)):
         if isinstance(value, (FloatObject, NumberObject)):
             return float(value)

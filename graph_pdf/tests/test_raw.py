@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from pypdf.generic import BooleanObject
+
 from extractor.__main__ import main as cli_main
 from extractor.pipeline import extract_pdf_to_outputs
 from sample_generator import create_demo_pdf
@@ -42,6 +44,15 @@ class RawDumpTests(unittest.TestCase):
         self.assertIn("images", payload["pages"][0]["objects"])
         self.assertIn("content_stream_base64", payload["pages"][0])
         self.assertIn("resources", payload["pages"][0])
+
+    def test_serialize_pdf_object_converts_boolean_object_to_plain_bool(self) -> None:
+        from extractor.raw import _serialize_pdf_object
+
+        payload = {"flag": _serialize_pdf_object(BooleanObject(True))}
+
+        encoded = json.dumps(payload)
+
+        self.assertEqual('{"flag": true}', encoded)
 
     def test_extract_pdf_to_outputs_from_raw_matches_pdf_text_outputs(self) -> None:
         from extractor.raw import dump_pdf_to_raw_file
