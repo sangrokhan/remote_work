@@ -8,7 +8,7 @@ from typing import List, Optional, Sequence, Tuple
 import pdfplumber
 
 from .debug import _collect_page_edge_debug, _collect_rotated_text_debug, _collect_table_drawing_debug
-from .images import _extract_embedded_images
+from .images import _collect_embedded_image_refs, _extract_embedded_images
 from .raw import materialize_raw_dump
 from .shared import TableRows, _merge_numeric_positions
 from .tables import (
@@ -106,6 +106,50 @@ def _body_excluded_bboxes(
     return excluded
 
 
+def _content_ref_text(content_type: str, page_no: int, index: int, continued: bool = False) -> str:
+    label = f"[{content_type} reference: Page {page_no} {content_type.lower()} {index}]"
+    if continued:
+        label += " (continued)"
+    return label
+
+
+def _should_continue_content_region(
+    prev_bbox: Tuple[float, float, float, float],
+    curr_bbox: Tuple[float, float, float, float],
+    _prev_body_top: float,
+    prev_body_bottom: float,
+    curr_body_top: float,
+    min_x_overlap_ratio: float = 0.35,
+    edge_tolerance: float = 24.0,
+) -> bool:
+    prev_x0, _prev_top, prev_x1, prev_bottom = prev_bbox
+    curr_x0, curr_top, curr_x1, _curr_bottom = curr_bbox
+    if abs(prev_bottom - prev_body_bottom) > edge_tolerance:
+        return False
+    if abs(curr_top - curr_body_top) > edge_tolerance:
+        return False
+
+    overlap = min(prev_x1, curr_x1) - max(prev_x0, curr_x0)
+    if overlap <= 0:
+        return False
+
+    prev_width = max(0.0, prev_x1 - prev_x0)
+    curr_width = max(0.0, curr_x1 - curr_x0)
+    if prev_width <= 0.0 or curr_width <= 0.0:
+        return False
+    return overlap / min(prev_width, curr_width) >= min_x_overlap_ratio
+
+
+def _is_edge_candidate_for_continuation(
+    bbox: Tuple[float, float, float, float],
+    body_top: float,
+    body_bottom: float,
+    edge_tolerance: float = 24.0,
+) -> bool:
+    _x0, _top, _x1, bottom = bbox
+    return abs(bottom - body_bottom) <= edge_tolerance
+
+
 def _table_reference_text(page_no: int, table_no: int) -> str:
     return f"[Table reference: Page {page_no} table {table_no}]"
 
@@ -161,6 +205,19 @@ def extract_pdf_to_outputs(
     pending_axes: List[float] = []
     pending_gap_text_boxes: List[Tuple[float, float, float, float]] = []
     next_table_no = 1
+    pending_image_ref_bbox: Optional[Tuple[float, float, float, float]] = None
+    pending_image_body_top: Optional[float] = None
+    pending_image_body_bottom: Optional[float] = None
+    pending_drawing_ref_bbox: Optional[Tuple[float, float, float, float]] = None
+    pending_drawing_body_top: Optional[float] = None
+    pending_drawing_body_bottom: Optional[float] = None
+
+    embedded_image_refs_by_page = _collect_embedded_image_refs(
+        pdf_path=pdf_path,
+        pages=pages,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+    )
 
     def _flush_pending() -> None:
         # Tables are emitted only after we know the next page will not extend them.
@@ -179,6 +236,12 @@ def extract_pdf_to_outputs(
         for page_idx, page in enumerate(pdf.pages, start=1):
             if selected_pages and page_idx not in selected_pages:
                 _flush_pending()
+                pending_image_ref_bbox = None
+                pending_image_body_top = None
+                pending_image_body_bottom = None
+                pending_drawing_ref_bbox = None
+                pending_drawing_body_top = None
+                pending_drawing_body_bottom = None
                 continue
 
             if debug:
@@ -192,6 +255,7 @@ def extract_pdf_to_outputs(
                 rotated_debug.extend(_collect_rotated_text_debug(page, page_no=page_idx))
 
             tables = _extract_tables(page, force_table=force_table)
+            body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
             image_regions = _extract_drawing_image_bboxes(
                 page=page,
                 header_margin=header_margin,
@@ -199,30 +263,79 @@ def extract_pdf_to_outputs(
                 excluded_bboxes=[bbox for _rows, bbox in tables],
             )
             drawing_regions_by_page[page_idx] = image_regions
+            embedded_image_refs = embedded_image_refs_by_page.get(page_idx, [])
+            embedded_image_regions = [
+                tuple(entry.get("bbox", ()))
+                for entry in embedded_image_refs
+                if isinstance(entry, dict) and len(entry.get("bbox", ())) == 4
+            ]
             full_page_text = _extract_body_text(page, header_margin=header_margin, footer_margin=footer_margin)
             page_pending_table = pending_table
             page_excluded_bboxes = _body_excluded_bboxes(
                 pending_table=page_pending_table,
                 tables=tables,
-                image_regions=image_regions,
+                image_regions=[
+                    *image_regions,
+                    *embedded_image_regions,
+                ],
                 body_top=footer_margin,
             )
             page_table_references: List[dict] = []
+            page_content_references: List[dict] = []
 
             if not tables:
+                for image_idx, entry in enumerate(embedded_image_refs, start=1):
+                    bbox_obj = entry.get("bbox") if isinstance(entry, dict) else None
+                    if not bbox_obj or len(bbox_obj) != 4:
+                        continue
+                    bbox = tuple(bbox_obj)
+                    is_cont = False
+                    if (
+                        pending_image_ref_bbox is not None
+                        and pending_image_body_top is not None
+                        and pending_image_body_bottom is not None
+                    ):
+                        is_cont = _should_continue_content_region(
+                            prev_bbox=pending_image_ref_bbox,
+                            curr_bbox=bbox,
+                            prev_body_top=pending_image_body_top,
+                            prev_body_bottom=pending_image_body_bottom,
+                            curr_body_top=body_top,
+                        )
+                    page_content_references.append(
+                        {
+                            "text": _content_ref_text("Image", page_idx, image_idx, continued=is_cont),
+                            "bbox": bbox,
+                        }
+                    )
+                    if _is_edge_candidate_for_continuation(bbox=bbox, body_top=body_top, body_bottom=body_bottom):
+                        pending_image_ref_bbox = bbox
+                        pending_image_body_top = body_top
+                        pending_image_body_bottom = body_bottom
+                    else:
+                        pending_image_ref_bbox = None
+                        pending_image_body_top = None
+                        pending_image_body_bottom = None
+
                 page_text = _extract_body_text(
                     page,
                     header_margin=header_margin,
                     footer_margin=footer_margin,
                     excluded_bboxes=page_excluded_bboxes,
-                    reference_lines=page_table_references,
+                    reference_lines=page_table_references
+                    + [
+                        {
+                            "text": entry["text"],
+                            "bbox": entry["bbox"],
+                        }
+                        for entry in page_content_references
+                    ],
                     heading_levels=heading_levels,
                 )
                 if page_text.strip():
                     output_text.append(f"### Page {page_idx}\n{page_text}")
                 continue
 
-            body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
             table_bboxes = [table_bbox for _table_rows, table_bbox in tables]
             for table_rows, bbox in tables:
                 cross_page_continuation = _should_try_table_continuation_merge(
@@ -335,6 +448,41 @@ def extract_pdf_to_outputs(
                 pending_gap_text_boxes = _gap_text_boxes_after_bbox(page, bbox, table_bboxes, header_margin=header_margin, footer_margin=footer_margin)
 
             effective_table_bboxes = page_excluded_bboxes[: len(tables)]
+            for image_idx, entry in enumerate(embedded_image_refs, start=1):
+                bbox_obj = entry.get("bbox") if isinstance(entry, dict) else None
+                if not bbox_obj or len(bbox_obj) != 4:
+                    continue
+                bbox = tuple(bbox_obj)
+                is_cont = False
+                if (
+                    pending_image_ref_bbox is not None
+                    and pending_image_body_top is not None
+                    and pending_image_body_bottom is not None
+                ):
+                    is_cont = _should_continue_content_region(
+                        prev_bbox=pending_image_ref_bbox,
+                        curr_bbox=bbox,
+                        prev_body_top=pending_image_body_top,
+                        prev_body_bottom=pending_image_body_bottom,
+                        curr_body_top=body_top,
+                    )
+
+                page_content_references.append(
+                    {
+                        "text": _content_ref_text("Image", page_idx, image_idx, continued=is_cont),
+                        "bbox": bbox,
+                    }
+                )
+
+                if _is_edge_candidate_for_continuation(bbox=bbox, body_top=body_top, body_bottom=body_bottom):
+                    pending_image_ref_bbox = bbox
+                    pending_image_body_top = body_top
+                    pending_image_body_bottom = body_bottom
+                else:
+                    pending_image_ref_bbox = None
+                    pending_image_body_top = None
+                    pending_image_body_bottom = None
+
             page_text = _extract_body_text(
                 page,
                 header_margin=header_margin,
@@ -346,7 +494,15 @@ def extract_pdf_to_outputs(
                         "bbox": effective_bbox,
                     }
                     for entry, effective_bbox in zip(page_table_references, effective_table_bboxes)
-                ],
+                ] 
+                + ([
+                    {
+                        "text": entry["text"],
+                        "bbox": entry["bbox"],
+                    }
+                    for entry in page_content_references
+                    if isinstance(entry.get("bbox"), tuple)
+                ]),
                 heading_levels=heading_levels,
             )
             if page_text.strip():
@@ -371,6 +527,7 @@ def extract_pdf_to_outputs(
         stem=stem,
         pages=pages,
         drawing_regions_by_page=drawing_regions_by_page,
+        image_refs_by_page=embedded_image_refs_by_page,
     )
 
     summary = {
