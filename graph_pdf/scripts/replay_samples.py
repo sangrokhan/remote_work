@@ -17,6 +17,7 @@ TABLE_HEADER_PATTERN = re.compile(r"^### .+ table \d+$", re.MULTILINE)
 NOTE_MAX_ROW_COUNT = 12
 NOTE_MAX_VERTICAL_GAP = 40.0
 NOTE_MIN_X_OVERLAP = 20.0
+DEFAULT_ADD_HEADING = Path(__file__).resolve().parent.parent / "fixtures" / "font_heading_profile.sample.json"
 
 
 def _decode_raw_to_pdf(raw_path: Path, output_pdf: Path, force: bool) -> Path:
@@ -48,6 +49,7 @@ def _run_parser(
     out_root: Path,
     stem: str,
     debug: bool = False,
+    add_heading: Path | None = None,
 ) -> dict[str, Any]:
     if raw_path is None and pdf_path is None:
         raise ValueError("pdf_path or raw_path is required")
@@ -61,6 +63,7 @@ def _run_parser(
         stem=stem,
         from_raw=raw_path,
         debug=debug,
+        add_heading=add_heading,
     )
     return {
         "text_chars": len((result["text_file"]).read_text(encoding="utf-8")),
@@ -373,6 +376,16 @@ def main() -> None:
         help="동일 샘플을 --from-raw로 다시 파싱해 PDF 파싱 결과와 비교",
     )
     parser.add_argument(
+        "--add-heading",
+        default=str(DEFAULT_ADD_HEADING),
+        help="헤더 정보 json 경로(기본값 fixtures/font_heading_profile.sample.json).",
+    )
+    parser.add_argument(
+        "--remove-heading",
+        action="store_true",
+        help="기본/지정 heading 적용을 비활성화합니다.",
+    )
+    parser.add_argument(
         "--analyze-note-overlap",
         action="store_true",
         help="[legacy] 표/노트 레이아웃 판정 후보 분석(기존 옵션 호환)",
@@ -435,6 +448,10 @@ def main() -> None:
     samples_dir = Path(args.samples_dir).resolve()
     pdf_dir = Path(args.pdf_dir).resolve()
     out_root = Path(args.out_dir).resolve()
+    add_heading = None if args.remove_heading else Path(args.add_heading)
+    if add_heading is not None and not add_heading.exists():
+        print(f"warning: heading file not found: {add_heading}")
+        add_heading = None
 
     raw_paths = sorted(samples_dir.glob(args.pattern))
     if not raw_paths:
@@ -464,6 +481,7 @@ def main() -> None:
             out_root=sample_root / "pdf_path",
             stem=stem,
             debug=args.compare_from_raw or analyze_layout,
+            add_heading=add_heading,
         )
         print(f"  visual pdf: {pdf_path} ({page_count} pages)")
         print(f"  parsed (pdf): {parse_direct['text_chars']} chars, tables={parse_direct['table_count']}")
@@ -564,6 +582,7 @@ def main() -> None:
                 out_root=sample_root / "from_raw",
                 stem=f"{stem}_from_raw",
                 debug=analyze_layout,
+                add_heading=add_heading,
             )
             markdown_eq = parse_direct["markdown"] == parse_from_raw["markdown"]
             table_markdown_eq = parse_direct["table_markdown"] == parse_from_raw["table_markdown"]
