@@ -221,6 +221,7 @@ def extract_pdf_to_outputs(
     pending_drawing_ref_bbox: Optional[Tuple[float, float, float, float]] = None
     pending_drawing_body_top: Optional[float] = None
     pending_drawing_body_bottom: Optional[float] = None
+    emitted_table_references: set[tuple[int, int]] = set()
 
     embedded_image_refs_by_page = _collect_embedded_image_refs(
         pdf_path=pdf_path,
@@ -242,6 +243,18 @@ def extract_pdf_to_outputs(
         pending_axes = []
         pending_gap_text_boxes = []
         pending_page_height = None
+
+    def _append_table_reference(
+        refs: List[dict],
+        page_no: int,
+        table_no: int,
+        bbox: Tuple[float, float, float, float],
+    ) -> None:
+        key = (page_no, table_no)
+        if key in emitted_table_references:
+            return
+        emitted_table_references.add(key)
+        refs.append({"text": _table_reference_text(page_no, table_no), "bbox": bbox})
 
     with pdfplumber.open(str(pdf_path)) as pdf:
         for page_idx, page in enumerate(pdf.pages, start=1):
@@ -409,11 +422,11 @@ def extract_pdf_to_outputs(
                     )
                 if merged_missing_first is not None:
                     if pending_page is not None and pending_table_no is not None:
-                        page_table_references.append(
-                            {
-                                "text": _table_reference_text(pending_page, pending_table_no),
-                                "bbox": bbox,
-                            }
+                        _append_table_reference(
+                            refs=page_table_references,
+                            page_no=pending_page,
+                            table_no=pending_table_no,
+                            bbox=bbox,
                         )
                     pending_table = merged_missing_first
                     pending_last_page = page_idx
@@ -430,14 +443,14 @@ def extract_pdf_to_outputs(
                         continuation_rows = table_rows
                     else:
                         continuation_rows = _split_repeated_header(pending_table or [], table_rows)
-                        if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
-                            if pending_page is not None and pending_table_no is not None:
-                                page_table_references.append(
-                                    {
-                                        "text": _table_reference_text(pending_page, pending_table_no),
-                                        "bbox": bbox,
-                                    }
-                                )
+                    if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
+                        if pending_page is not None and pending_table_no is not None:
+                            _append_table_reference(
+                                refs=page_table_references,
+                                page_no=pending_page,
+                                table_no=pending_table_no,
+                                bbox=bbox,
+                            )
                             pending_table.extend(continuation_rows)
                             pending_last_page = page_idx
                             if pending_bbox is not None:
@@ -472,11 +485,11 @@ def extract_pdf_to_outputs(
                     )
                 ):
                     if pending_page is not None and pending_table_no is not None:
-                        page_table_references.append(
-                            {
-                                "text": _table_reference_text(pending_page, pending_table_no),
-                                "bbox": bbox,
-                            }
+                        _append_table_reference(
+                            refs=page_table_references,
+                            page_no=pending_page,
+                            table_no=pending_table_no,
+                            bbox=bbox,
                         )
                     pending_table.extend(continuation_rows)
                     pending_last_page = page_idx
@@ -495,11 +508,11 @@ def extract_pdf_to_outputs(
                 _flush_pending()
                 current_table_no = next_table_no
                 next_table_no += 1
-                page_table_references.append(
-                    {
-                        "text": _table_reference_text(page_idx, current_table_no),
-                        "bbox": bbox,
-                    }
+                _append_table_reference(
+                    refs=page_table_references,
+                    page_no=page_idx,
+                    table_no=current_table_no,
+                    bbox=bbox,
                 )
                 pending_table = table_rows
                 pending_page = page_idx
@@ -510,7 +523,6 @@ def extract_pdf_to_outputs(
                 pending_axes = current_axes
                 pending_gap_text_boxes = _gap_text_boxes_after_bbox(page, bbox, table_bboxes, header_margin=header_margin, footer_margin=footer_margin)
 
-            effective_table_bboxes = [bbox for _rows, bbox in tables]
             for image_idx, entry in enumerate(embedded_image_refs, start=1):
                 bbox_obj = entry.get("bbox") if isinstance(entry, dict) else None
                 if not bbox_obj or len(bbox_obj) != 4:
@@ -554,10 +566,10 @@ def extract_pdf_to_outputs(
                 reference_lines=[
                     {
                         "text": entry["text"],
-                        "bbox": effective_bbox,
+                        "bbox": entry["bbox"],
                     }
-                    for entry, effective_bbox in zip(page_table_references, effective_table_bboxes)
-                ] 
+                    for entry in page_table_references
+                ]
                 + ([
                     {
                         "text": entry["text"],
