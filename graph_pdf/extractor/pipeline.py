@@ -28,6 +28,19 @@ from .tables import (
 from .text import _detect_body_bounds, _extract_body_text, _extract_drawing_image_bboxes
 
 
+def _to_float_bbox(raw_bbox: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(raw_bbox, Sequence) or len(raw_bbox) != 4:
+        return None
+    try:
+        return tuple(float(value) for value in raw_bbox)
+    except (TypeError, ValueError):
+        return None
+
+
+def _rounded_bbox(raw_bbox: Sequence[float] | tuple[float, float, float, float]) -> list[float]:
+    return [round(float(value), 2) for value in raw_bbox]
+
+
 def _heading_level_from_rule(rule: dict) -> int | None:
     assign = rule.get("assign") or {}
     tag = str(assign.get("tag") or "").strip().lower()
@@ -167,10 +180,8 @@ def _document_text_profile(debug_pages: Sequence[dict]) -> dict:
 
 
 def _body_excluded_bboxes(
-    pending_table: Optional[TableRows],
     tables: Sequence[Tuple[TableRows, Tuple[float, float, float, float]]],
     image_regions: Sequence[Tuple[float, float, float, float]],
-    body_top: float,
 ) -> List[Tuple[float, float, float, float]]:
     excluded = [bbox for _rows, bbox in tables]
     excluded.extend(list(image_regions))
@@ -187,7 +198,6 @@ def _content_ref_text(content_type: str, document_id: str, index: int, continued
 def _should_continue_content_region(
     prev_bbox: Tuple[float, float, float, float],
     curr_bbox: Tuple[float, float, float, float],
-    _prev_body_top: float,
     prev_body_bottom: float,
     curr_body_top: float,
     min_x_overlap_ratio: float = 0.35,
@@ -271,14 +281,12 @@ class _DocumentOutputState:
     next_table_no: int = 1
     next_image_no: int = 1
     pending_image_ref_bbox: Optional[Tuple[float, float, float, float]] = None
-    pending_image_body_top: Optional[float] = None
     pending_image_body_bottom: Optional[float] = None
     emitted_table_references: set[int] = field(default_factory=set)
     pages: List[int] = field(default_factory=list)
 
     def clear_transient_content_state(self) -> None:
         self.pending_image_ref_bbox = None
-        self.pending_image_body_top = None
         self.pending_image_body_bottom = None
 
 
@@ -303,16 +311,18 @@ def _strip_repeated_headers_by_chunk(chunks: Sequence[TableRows]) -> TableRows:
     return normalized_rows
 
 
-def _has_intervening_regions_before_table(
+def _has_intervening_regions(
     page_regions: dict[str, Any],
     table_bbox: Tuple[float, float, float, float],
+    after_table_bottom: bool,
 ) -> bool:
     table_top = float(table_bbox[1])
+    table_bottom = float(table_bbox[3])
     table_bbox_tuple = (
         float(table_bbox[0]),
-        float(table_bbox[1]),
+        table_top,
         float(table_bbox[2]),
-        float(table_bbox[3]),
+        table_bottom,
     )
     for region_key in ("text", "tables", "images"):
         entries = page_regions.get(region_key)
@@ -320,51 +330,39 @@ def _has_intervening_regions_before_table(
             continue
         for entry in entries:
             raw_bbox = entry.get("bbox") if isinstance(entry, dict) else entry
-            if not isinstance(raw_bbox, Sequence) or len(raw_bbox) != 4:
+            bbox = _to_float_bbox(raw_bbox)
+            if bbox is None:
                 continue
-            bbox = (
-                float(raw_bbox[0]),
-                float(raw_bbox[1]),
-                float(raw_bbox[2]),
-                float(raw_bbox[3]),
-            )
             if bbox == table_bbox_tuple:
                 continue
-            if bbox[3] <= table_top - 1.0:
+            if after_table_bottom:
+                if bbox[1] >= table_bottom + 1.0:
+                    return True
+            elif bbox[3] <= table_top - 1.0:
                 return True
     return False
+
+
+def _has_intervening_regions_before_table(
+    page_regions: dict[str, Any],
+    table_bbox: Tuple[float, float, float, float],
+) -> bool:
+    return _has_intervening_regions(
+        page_regions=page_regions,
+        table_bbox=table_bbox,
+        after_table_bottom=False,
+    )
 
 
 def _has_intervening_regions_after_table(
     page_regions: dict[str, Any],
     table_bbox: Tuple[float, float, float, float],
 ) -> bool:
-    table_bottom = float(table_bbox[3])
-    table_bbox_tuple = (
-        float(table_bbox[0]),
-        float(table_bbox[1]),
-        float(table_bbox[2]),
-        float(table_bbox[3]),
+    return _has_intervening_regions(
+        page_regions=page_regions,
+        table_bbox=table_bbox,
+        after_table_bottom=True,
     )
-    for region_key in ("text", "tables", "images"):
-        entries = page_regions.get(region_key)
-        if not entries:
-            continue
-        for entry in entries:
-            raw_bbox = entry.get("bbox") if isinstance(entry, dict) else entry
-            if not isinstance(raw_bbox, Sequence) or len(raw_bbox) != 4:
-                continue
-            bbox = (
-                float(raw_bbox[0]),
-                float(raw_bbox[1]),
-                float(raw_bbox[2]),
-                float(raw_bbox[3]),
-            )
-            if bbox == table_bbox_tuple:
-                continue
-            if bbox[1] >= table_bottom + 1.0:
-                return True
-    return False
 
 
 def _has_cross_page_gap_blocked(
@@ -434,6 +432,7 @@ def extract_pdf_to_outputs(
 
     selected_pages = set(int(page_no) for page_no in (pages or []))
     drawing_regions_by_page: dict[int, list[Tuple[float, float, float, float]]] = {}
+    note_regions_by_page: dict[int, list[Tuple[float, float, float, float]]] = {}
     region_map: dict[int, dict[str, Any]] = {}
     heading_levels = _load_heading_levels(add_heading)
     initial_document_id = _safe_document_id(stem)
@@ -475,6 +474,50 @@ def extract_pdf_to_outputs(
         state.emitted_table_references.add(key)
         refs.append({"text": _table_reference_text(state.document_id, table_no), "bbox": bbox})
 
+    def _collect_embedded_image_references(
+        embedded_refs: Sequence[dict],
+        body_top: float,
+        body_bottom: float,
+    ) -> List[dict]:
+        page_content_references: list[dict] = []
+        for entry in embedded_refs:
+            bbox = _to_float_bbox(entry.get("bbox") if isinstance(entry, dict) else None)
+            if bbox is None:
+                continue
+
+            is_cont = False
+            if (
+                current_document_state.pending_image_ref_bbox is not None
+                and current_document_state.pending_image_body_bottom is not None
+            ):
+                is_cont = _should_continue_content_region(
+                    prev_bbox=current_document_state.pending_image_ref_bbox,
+                    curr_bbox=bbox,
+                    prev_body_bottom=current_document_state.pending_image_body_bottom,
+                    curr_body_top=body_top,
+                )
+
+            page_content_references.append(
+                {
+                    "text": _content_ref_text(
+                        "Image",
+                        current_document_state.document_id,
+                        current_document_state.next_image_no,
+                        continued=is_cont,
+                    ),
+                    "bbox": bbox,
+                }
+            )
+            current_document_state.next_image_no += 1
+
+            if _is_edge_candidate_for_continuation(bbox=bbox, body_top=body_top, body_bottom=body_bottom):
+                current_document_state.pending_image_ref_bbox = bbox
+                current_document_state.pending_image_body_bottom = body_bottom
+            else:
+                current_document_state.pending_image_ref_bbox = None
+                current_document_state.pending_image_body_bottom = None
+        return page_content_references
+
     def _flush_current_document(state: _DocumentOutputState) -> dict:
         nonlocal total_table_count
         _flush_pending_table(state)
@@ -499,6 +542,7 @@ def extract_pdf_to_outputs(
             pages=state.pages,
             drawing_regions_by_page=drawing_regions_by_page,
             image_refs_by_page=embedded_image_refs_by_page,
+            excluded_regions_by_page=note_regions_by_page,
         )
         image_files.extend(document_images)
 
@@ -573,7 +617,12 @@ def extract_pdf_to_outputs(
             if debug_watermark:
                 rotated_debug.extend(_collect_rotated_text_debug(page, page_no=page_idx))
 
-            detected_tables = _extract_tables(page, force_table=force_table)
+            strategy_debug: list[dict] | None = [] if debug else None
+            detected_tables = _extract_tables(
+                page,
+                force_table=force_table,
+                strategy_debug=strategy_debug,
+            )
             tables: List[Tuple[TableRows, Tuple[float, float, float, float]]] = []
             note_references: List[dict] = []
             detected_table_payloads: List[dict] = []
@@ -588,6 +637,7 @@ def extract_pdf_to_outputs(
                     bbox=bbox,
                 )
                 if is_note:
+                    note_regions_by_page.setdefault(page_idx, []).append(bbox)
                     detected_table_payloads.append(
                         {
                             "kind": "note",
@@ -604,13 +654,15 @@ def extract_pdf_to_outputs(
                 detected_table_payloads.append(
                     {
                         "kind": "table",
-                        "bbox": [round(float(value), 2) for value in bbox],
+                        "bbox": _rounded_bbox(bbox),
                         "row_count": int(len(table_rows)),
                         "col_count": int(max((len(row) for row in table_rows), default=0)),
                     }
                 )
             if debug and table_debug_pages:
                 table_debug_pages[-1]["detected_tables"] = detected_table_payloads
+                if strategy_debug is not None:
+                    table_debug_pages[-1]["strategy_debug"] = strategy_debug
 
             body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
             image_regions = _extract_drawing_image_bboxes(
@@ -621,11 +673,14 @@ def extract_pdf_to_outputs(
             )
             drawing_regions_by_page[page_idx] = image_regions
             embedded_image_refs = embedded_image_refs_by_page.get(page_idx, [])
-            embedded_image_regions = [
-                tuple(entry.get("bbox", ()))
-                for entry in embedded_image_refs
-                if isinstance(entry, dict) and len(entry.get("bbox", ())) == 4
-            ]
+            embedded_image_regions: list[Tuple[float, float, float, float]] = []
+            for image_ref in embedded_image_refs:
+                if not isinstance(image_ref, dict):
+                    continue
+                image_bbox = _to_float_bbox(image_ref.get("bbox"))
+                if image_bbox is None:
+                    continue
+                embedded_image_regions.append(image_bbox)
             body_text_regions = _body_text_boxes(
                 page=page,
                 header_margin=header_margin,
@@ -634,20 +689,25 @@ def extract_pdf_to_outputs(
             )
             table_regions = list(table_exclusion_regions)
             if region_log is not None:
-                embedded_regions_payload = [
-                    {
-                        "kind": "image",
-                        "source": "embedded",
-                        "bbox": [round(float(v), 2) for v in entry.get("bbox", ())],
-                        "page_index": image_idx,
-                    }
-                    for image_idx, entry in enumerate(embedded_image_refs, start=1)
-                    if isinstance(entry, dict) and len(entry.get("bbox", ())) == 4
-                ]
+                embedded_regions_payload = []
+                for image_idx, entry in enumerate(embedded_image_refs, start=1):
+                    if not isinstance(entry, dict):
+                        continue
+                    image_bbox = _to_float_bbox(entry.get("bbox"))
+                    if image_bbox is None:
+                        continue
+                    embedded_regions_payload.append(
+                        {
+                            "kind": "image",
+                            "source": "embedded",
+                            "bbox": _rounded_bbox(image_bbox),
+                            "page_index": image_idx,
+                        }
+                    )
                 tables_regions_payload = [
                     {
                         "kind": entry["kind"],
-                        "bbox": [round(float(value), 2) for value in entry["bbox"]],
+                        "bbox": _rounded_bbox(entry["bbox"]),
                         "row_count": int(entry["row_count"]),
                         "col_count": int(entry["col_count"]),
                     }
@@ -664,9 +724,9 @@ def extract_pdf_to_outputs(
 
                 region_map[page_idx] = {
                     "tables": unique_tables_regions,
-                    "text": [{"bbox": [round(float(v), 2) for v in bbox]} for bbox in body_text_regions],
+                    "text": [{"bbox": _rounded_bbox(bbox)} for bbox in body_text_regions],
                     "images": embedded_regions_payload
-                    + [{"kind": "image", "source": "drawing", "bbox": [round(float(v), 2) for v in image_bbox]} for image_bbox in image_regions],
+                    + [{"kind": "image", "source": "drawing", "bbox": _rounded_bbox(image_bbox)} for image_bbox in image_regions],
                     "body_top": float(body_top),
                     "body_bottom": float(body_bottom),
                     "header_margin": float(header_margin),
@@ -682,54 +742,23 @@ def extract_pdf_to_outputs(
                 for obsolete_page in [p for p in region_map.keys() if p < obsolete_page_threshold]:
                     region_map.pop(obsolete_page, None)
 
-            page_pending_table = current_document_state.pending_table_state.flattened_rows() if current_document_state.pending_table_state.is_active() else None
             page_excluded_bboxes = _body_excluded_bboxes(
-                pending_table=page_pending_table,
                 tables=tables,
                 image_regions=[
                     *image_regions,
                     *embedded_image_regions,
                 ],
-                body_top=footer_margin,
             )
             page_excluded_bboxes.extend(table_exclusion_regions)
             page_table_references: List[dict] = []
             page_content_references: List[dict] = []
 
             if not tables:
-                for image_idx, entry in enumerate(embedded_image_refs, start=1):
-                    bbox_obj = entry.get("bbox") if isinstance(entry, dict) else None
-                    if not bbox_obj or len(bbox_obj) != 4:
-                        continue
-                    bbox = tuple(bbox_obj)
-                    is_cont = False
-                    if (
-                        current_document_state.pending_image_ref_bbox is not None
-                        and current_document_state.pending_image_body_top is not None
-                        and current_document_state.pending_image_body_bottom is not None
-                    ):
-                        is_cont = _should_continue_content_region(
-                            prev_bbox=current_document_state.pending_image_ref_bbox,
-                            curr_bbox=bbox,
-                            prev_body_top=current_document_state.pending_image_body_top,
-                            prev_body_bottom=current_document_state.pending_image_body_bottom,
-                            curr_body_top=body_top,
-                        )
-                    page_content_references.append(
-                        {
-                            "text": _content_ref_text("Image", current_document_state.document_id, current_document_state.next_image_no, continued=is_cont),
-                            "bbox": bbox,
-                        }
-                    )
-                    current_document_state.next_image_no += 1
-                    if _is_edge_candidate_for_continuation(bbox=bbox, body_top=body_top, body_bottom=body_bottom):
-                        current_document_state.pending_image_ref_bbox = bbox
-                        current_document_state.pending_image_body_top = body_top
-                        current_document_state.pending_image_body_bottom = body_bottom
-                    else:
-                        current_document_state.pending_image_ref_bbox = None
-                        current_document_state.pending_image_body_top = None
-                        current_document_state.pending_image_body_bottom = None
+                page_content_references = _collect_embedded_image_references(
+                    embedded_refs=embedded_image_refs,
+                    body_top=body_top,
+                    body_bottom=body_bottom,
+                )
 
                 page_text = _extract_body_text(
                     page,
@@ -831,41 +860,11 @@ def extract_pdf_to_outputs(
                     bbox,
                 )
 
-            for image_idx, entry in enumerate(embedded_image_refs, start=1):
-                bbox_obj = entry.get("bbox") if isinstance(entry, dict) else None
-                if not bbox_obj or len(bbox_obj) != 4:
-                    continue
-                bbox = tuple(bbox_obj)
-                is_cont = False
-                if (
-                    current_document_state.pending_image_ref_bbox is not None
-                    and current_document_state.pending_image_body_top is not None
-                    and current_document_state.pending_image_body_bottom is not None
-                ):
-                    is_cont = _should_continue_content_region(
-                        prev_bbox=current_document_state.pending_image_ref_bbox,
-                        curr_bbox=bbox,
-                        prev_body_top=current_document_state.pending_image_body_top,
-                        prev_body_bottom=current_document_state.pending_image_body_bottom,
-                        curr_body_top=body_top,
-                    )
-
-                page_content_references.append(
-                    {
-                        "text": _content_ref_text("Image", current_document_state.document_id, current_document_state.next_image_no, continued=is_cont),
-                        "bbox": bbox,
-                    }
-                )
-                current_document_state.next_image_no += 1
-
-                if _is_edge_candidate_for_continuation(bbox=bbox, body_top=body_top, body_bottom=body_bottom):
-                    current_document_state.pending_image_ref_bbox = bbox
-                    current_document_state.pending_image_body_top = body_top
-                    current_document_state.pending_image_body_bottom = body_bottom
-                else:
-                    current_document_state.pending_image_ref_bbox = None
-                    current_document_state.pending_image_body_top = None
-                    current_document_state.pending_image_body_bottom = None
+            page_content_references = _collect_embedded_image_references(
+                embedded_refs=embedded_image_refs,
+                body_top=body_top,
+                body_bottom=body_bottom,
+            )
 
             page_text = _extract_body_text(
                 page,
