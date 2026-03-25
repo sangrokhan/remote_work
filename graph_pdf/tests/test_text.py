@@ -15,6 +15,7 @@ from extractor.text import (
     _is_non_watermark_obj,
     _is_shape_text_line,
     _normalize_cell_lines,
+    _join_non_heading_block_lines,
     _should_merge_paragraph_lines,
 )
 
@@ -38,6 +39,10 @@ class TextModuleTests(unittest.TestCase):
             ],
             _normalize_cell_lines(cell),
         )
+
+    def test_join_non_heading_block_lines_joins_hyphenated_wrap_without_space(self) -> None:
+        lines = ["An example of hyphen-", "ated words and normal continuation"]
+        self.assertEqual("An example of hyphen-ated words and normal continuation", _join_non_heading_block_lines(lines))
 
     def test_should_merge_paragraph_lines_uses_fixed_gap_threshold(self) -> None:
         previous = {"bottom": 132.0}

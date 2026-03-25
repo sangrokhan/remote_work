@@ -801,7 +801,15 @@ def _extract_body_word_lines(
 def _join_non_heading_block_lines(lines: Sequence[str]) -> str:
     # Paragraph blocks are intentionally flattened into one logical line for downstream indexing.
     joined = [str(raw_line or "").strip() for raw_line in lines if str(raw_line or "").strip()]
-    return " ".join(joined).strip()
+    if not joined:
+        return ""
+    merged: List[str] = [joined[0]]
+    for line in joined[1:]:
+        if merged[-1].endswith("-"):
+            merged[-1] = f"{merged[-1]}{line}"
+        else:
+            merged.append(line)
+    return " ".join(merged).strip()
 
 
 def _normalize_cell_lines(cell: str) -> List[str]:
