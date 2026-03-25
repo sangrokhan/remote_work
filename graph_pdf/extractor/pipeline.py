@@ -744,11 +744,8 @@ def extract_pdf_to_outputs(
                     current_page=page_idx,
                 )
                 current_gap_text_boxes = _gap_text_boxes_before_bbox(
-                    page,
+                    body_text_regions,
                     bbox,
-                    table_bboxes,
-                    header_margin=header_margin,
-                    footer_margin=footer_margin,
                 )
                 current_axes = _vertical_axes_for_bbox(page, bbox)
 
@@ -794,11 +791,8 @@ def extract_pdf_to_outputs(
                         current_document_state.pending_table_state.page_height = float(page.height)
                         current_document_state.pending_table_state.axes = _merge_numeric_positions([*current_document_state.pending_table_state.axes, *current_axes], tolerance=1.0)
                         current_document_state.pending_table_state.gap_text_boxes = _gap_text_boxes_after_bbox(
-                            page,
+                            body_text_regions,
                             bbox,
-                            table_bboxes,
-                            header_margin=header_margin,
-                            footer_margin=footer_margin,
                         )
                         continue
                 _flush_pending_table(current_document_state)
@@ -819,11 +813,8 @@ def extract_pdf_to_outputs(
                 current_document_state.pending_table_state.axes = current_axes
                 current_document_state.pending_table_state.page_height = float(page.height)
                 current_document_state.pending_table_state.gap_text_boxes = _gap_text_boxes_after_bbox(
-                    page,
+                    body_text_regions,
                     bbox,
-                    table_bboxes,
-                    header_margin=header_margin,
-                    footer_margin=footer_margin,
                 )
 
             for image_idx, entry in enumerate(embedded_image_refs, start=1):
