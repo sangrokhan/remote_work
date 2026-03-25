@@ -638,10 +638,22 @@ def _reference_line_payload(entry: dict) -> dict | None:
 
 def _merge_reference_lines(lines: Sequence[dict], reference_lines: Sequence[dict]) -> List[dict]:
     merged = list(lines)
+    seen_reference_keys: set[tuple[str, float, float, float, float]] = set()
     for entry in reference_lines:
         payload = _reference_line_payload(entry)
-        if payload is not None:
-            merged.append(payload)
+        if payload is None:
+            continue
+        reference_key = (
+            payload["text"],
+            round(payload["x0"], 2),
+            round(payload["top"], 2),
+            round(payload["x1"], 2),
+            round(payload["bottom"], 2),
+        )
+        if reference_key in seen_reference_keys:
+            continue
+        seen_reference_keys.add(reference_key)
+        merged.append(payload)
     merged.sort(key=lambda line: (float(line.get("top", 0.0)), float(line.get("x0", 0.0)), float(line.get("bottom", 0.0))))
     return merged
 

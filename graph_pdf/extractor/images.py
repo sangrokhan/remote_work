@@ -434,6 +434,7 @@ def _extract_embedded_images(
     pages: Optional[Sequence[int]] = None,
     drawing_regions_by_page: Optional[dict[int, Sequence[Tuple[float, float, float, float]]]] = None,
     image_refs_by_page: Optional[dict[int, Sequence[dict]]] = None,
+    excluded_regions_by_page: Optional[dict[int, Sequence[Tuple[float, float, float, float]]]] = None,
 ) -> List[Path]:
     # Image extraction is intentionally independent from table/text extraction so it can be reused or debugged separately.
     out_image_dir.mkdir(parents=True, exist_ok=True)
@@ -442,7 +443,13 @@ def _extract_embedded_images(
     image_no = 1
     selected_pages = set(int(page_no) for page_no in (pages or []))
     drawing_regions_by_page = drawing_regions_by_page or {}
+    excluded_regions_by_page = excluded_regions_by_page or {}
     reader = PdfReader(str(pdf_path))
+
+    def _is_excluded_region(bbox: Tuple[float, float, float, float], page_no: int) -> bool:
+        excluded_regions = excluded_regions_by_page.get(page_no, ())
+        return any(_bboxes_intersect(region, bbox) for region in excluded_regions)
+
     with pdfplumber.open(str(pdf_path)) as plumber_pdf:
         for page_idx, (page, plumber_page) in enumerate(zip(reader.pages, plumber_pdf.pages), start=1):
             if selected_pages and page_idx not in selected_pages:
@@ -459,6 +466,7 @@ def _extract_embedded_images(
                 str(image_meta.get("name") or "")
                 for image_meta in plumber_page.images
                 if _image_intersects_body(image_meta, body_top=body_top, body_bottom=body_bottom)
+                and not _is_excluded_region(_bbox_for_obj(image_meta), page_idx)
             }
 
             if image_refs_by_page is None:
@@ -479,6 +487,13 @@ def _extract_embedded_images(
                     image_stem = str(image_ref.get("name_stem") or _normalize_pdf_image_stem(image_name))
                     if image_stem not in allowed_names and image_name not in allowed_names:
                         continue
+                    image_bbox = image_ref.get("bbox")
+                    if (
+                        not isinstance(image_bbox, Sequence)
+                        or len(image_bbox) != 4
+                        or _is_excluded_region((float(image_bbox[0]), float(image_bbox[1]), float(image_bbox[2]), float(image_bbox[3])), page_idx)
+                    ):
+                        continue
                     suffix = str(image_ref.get("suffix") or Path(image_name).suffix or ".bin")
                     out_path = out_image_dir / f"{stem}_image_{image_no:02d}{suffix}"
                     image_no += 1
@@ -493,6 +508,8 @@ def _extract_embedded_images(
 
             for region in drawing_regions_by_page.get(page_idx, []):
                 x0, top, x1, bottom = region
+                if _is_excluded_region((x0, top, x1, bottom), page_idx):
+                    continue
                 width = float(plumber_page.width or 0.0)
                 height = float(plumber_page.height or 0.0)
                 left = max(0.0, min(float(x0), width))
