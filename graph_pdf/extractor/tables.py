@@ -638,38 +638,6 @@ def _is_continuation_chunk(prev_rows: TableRows, curr_rows: TableRows) -> bool:
     return any(_normalize_text(cell) for cell in first[1:])
 
 
-def _extract_continuation_lines(
-    page_text: str,
-    repeated_header: str,
-    next_row_label: str,
-) -> List[str]:
-    # Missing-first-column continuation rows borrow prose lines from the surrounding page text.
-    lines = [line.strip() for line in str(page_text or "").splitlines() if line.strip()]
-    if not lines:
-        return []
-    try:
-        start_idx = next(i for i, line in enumerate(lines) if _normalize_text(line) == _normalize_text(repeated_header))
-    except StopIteration:
-        return []
-
-    tail = lines[start_idx + 1 :]
-    if not tail:
-        return []
-
-    stop_idx = len(tail)
-    normalized_label = _normalize_text(next_row_label)
-    for i, line in enumerate(tail):
-        if _normalize_text(line).startswith(normalized_label):
-            stop_idx = i
-            break
-    return tail[:stop_idx]
-
-
-def _normalize_two_col_continuation_rows(rows: TableRows) -> TableRows:
-    # Reconstruct a 3-column shape when a continuation fragment drops the first column entirely.
-    return [["", str(row[0] or "").strip(), str(row[1] or "").strip()] for row in rows if row]
-
-
 def _should_try_table_continuation_merge(
     pending_page: int | None,
     current_page: int,
@@ -798,37 +766,6 @@ def _continuation_regions_should_merge(
     # of the previous page. A large geometric jump is likely a new table block, not a split.
     gap_across_pages = (float(prev_page_height) - prev_bottom) + (curr_top - body_top)
     return gap_across_pages <= 220.0
-
-
-def _maybe_merge_missing_first_column_chunk(
-    pending_table: TableRows | None,
-    current_rows: TableRows,
-    page_text: str,
-) -> TableRows | None:
-    # Some PDFs drop the leading column when a long row spills to the next page.
-    if not pending_table or not current_rows:
-        return None
-    if len(pending_table[0]) != 3:
-        return None
-    if any(len(row) != 2 for row in current_rows):
-        return None
-
-    last_row = pending_table[-1]
-    if len(last_row) < 3 or not _normalize_text(last_row[1]):
-        return None
-
-    repeated_header = " ".join(str(cell or "").strip() for cell in pending_table[0]).strip()
-    continuation_lines = _extract_continuation_lines(page_text, repeated_header, str(current_rows[0][0] or ""))
-    if continuation_lines:
-        joiner = "\n" if str(last_row[2] or "").strip() else ""
-        last_row[2] = f"{last_row[2]}{joiner}" + "\n".join(continuation_lines)
-
-    normalized_rows = _normalize_two_col_continuation_rows(current_rows)
-    if not normalized_rows:
-        return None
-
-    pending_table.extend(normalized_rows)
-    return pending_table
 
 
 def _format_markdown_cell(value: str) -> str:
@@ -1936,6 +1873,10 @@ def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
     return "\n".join([header_line, divider_line, *body_lines])
 
 
+def _format_page_comment(page_no: int) -> str:
+    return f"[//]: # (Page {page_no})"
+
+
 def _merge_split_rows(rows: TableRows) -> TableRows:
     # Post-process rows that were extracted as separate fragments even though they belong to the same logical row.
     if not rows:
@@ -1961,10 +1902,21 @@ def _merge_split_rows(rows: TableRows) -> TableRows:
     return merged
 
 
-def _append_output_table(output_tables: List[str], page_no: int, table_no: int, table_rows: TableRows) -> None:
+def _append_output_table(
+    output_tables: List[str],
+    document_id: str,
+    table_no: int,
+    table_rows: TableRows,
+    *,
+    page_no: int | None = None,
+) -> None:
     # Table numbering is derived at append time so merged cross-page tables keep one output block.
     merged_rows = _merge_split_rows(table_rows)
     collapsed_rows = _collapse_structural_triplet_columns(merged_rows)
     table_text = _table_text_from_rows(collapsed_rows)
     if table_text:
-        output_tables.append(f"### Page {page_no} table {table_no}\n{table_text}")
+        block = f"### {document_id} table {table_no}\n{table_text}"
+        if page_no is not None:
+            output_tables.append(f"{_format_page_comment(page_no)}\n{block}")
+        else:
+            output_tables.append(block)

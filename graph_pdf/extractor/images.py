@@ -439,6 +439,7 @@ def _extract_embedded_images(
     out_image_dir.mkdir(parents=True, exist_ok=True)
 
     image_files: List[Path] = []
+    image_no = 1
     selected_pages = set(int(page_no) for page_no in (pages or []))
     drawing_regions_by_page = drawing_regions_by_page or {}
     reader = PdfReader(str(pdf_path))
@@ -460,7 +461,6 @@ def _extract_embedded_images(
                 if _image_intersects_body(image_meta, body_top=body_top, body_bottom=body_bottom)
             }
 
-            kept_idx = 0
             if image_refs_by_page is None:
                 for image_file in page.images:
                     # pypdf and pdfplumber expose image identifiers slightly differently, so compare both forms.
@@ -468,9 +468,9 @@ def _extract_embedded_images(
                     image_stem = _normalize_pdf_image_stem(image_name)
                     if image_stem not in allowed_names and image_name not in allowed_names:
                         continue
-                    kept_idx += 1
                     suffix = Path(image_name).suffix or ".bin"
-                    out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_image_{kept_idx:02d}{suffix}"
+                    out_path = out_image_dir / f"{stem}_image_{image_no:02d}{suffix}"
+                    image_no += 1
                     out_path.write_bytes(image_file.data)
                     image_files.append(out_path)
             else:
@@ -479,9 +479,9 @@ def _extract_embedded_images(
                     image_stem = str(image_ref.get("name_stem") or _normalize_pdf_image_stem(image_name))
                     if image_stem not in allowed_names and image_name not in allowed_names:
                         continue
-                    kept_idx += 1
                     suffix = str(image_ref.get("suffix") or Path(image_name).suffix or ".bin")
-                    out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_image_{kept_idx:02d}{suffix}"
+                    out_path = out_image_dir / f"{stem}_image_{image_no:02d}{suffix}"
+                    image_no += 1
                     image_payload = _match_embedded_image_by_name(image_name, image_stem, page.images)
                     if image_payload is None:
                         continue
@@ -491,7 +491,6 @@ def _extract_embedded_images(
                     out_path.write_bytes(image_data)
                     image_files.append(out_path)
 
-            drawing_image_idx = 0
             for region in drawing_regions_by_page.get(page_idx, []):
                 x0, top, x1, bottom = region
                 width = float(plumber_page.width or 0.0)
@@ -520,8 +519,8 @@ def _extract_embedded_images(
                         bbox=(render_left, render_top, render_right, render_bottom),
                         resolution=180.0,
                     )
-                    drawing_image_idx += 1
-                    out_path = out_image_dir / f"{stem}_page_{page_idx:02d}_drawing_{drawing_image_idx:02d}.png"
+                    out_path = out_image_dir / f"{stem}_image_{image_no:02d}.png"
+                    image_no += 1
                     region_image.save(str(out_path), format="PNG")
                     image_files.append(out_path)
                 except Exception:

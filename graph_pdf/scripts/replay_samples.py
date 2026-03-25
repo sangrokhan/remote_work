@@ -12,8 +12,8 @@ from pypdf import PdfReader
 from extractor.pipeline import extract_pdf_to_outputs
 from extractor.raw import load_raw_payload
 
-TABLE_REF_PATTERN = re.compile(r"\[Table reference:\s*Page\s+\d+\s+table\s+\d+\]")
-TABLE_HEADER_PATTERN = re.compile(r"^### Page \d+ table \d+$", re.MULTILINE)
+TABLE_REF_PATTERN = re.compile(r"\[Table reference:\s*\S+\s+table\s+\d+\]")
+TABLE_HEADER_PATTERN = re.compile(r"^### .+ table \d+$", re.MULTILINE)
 NOTE_MAX_ROW_COUNT = 12
 NOTE_MAX_VERTICAL_GAP = 40.0
 NOTE_MIN_X_OVERLAP = 20.0
