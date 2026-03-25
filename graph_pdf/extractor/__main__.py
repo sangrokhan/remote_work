@@ -22,6 +22,7 @@ def main() -> None:
     parser.add_argument("--debug-watermark", action="store_true")
     parser.add_argument("--profile-fonts", action="store_true")
     parser.add_argument("--add-heading")
+    parser.add_argument("--page-write", action="store_true")
     parser.add_argument("--raw")
     parser.add_argument("--from-raw")
     args = parser.parse_args()
@@ -70,6 +71,7 @@ def main() -> None:
         debug=args.debug,
         debug_watermark=args.debug_watermark,
         add_heading=Path(args.add_heading) if args.add_heading else None,
+        page_write=args.page_write,
         from_raw=Path(args.from_raw) if args.from_raw else None,
     )
 

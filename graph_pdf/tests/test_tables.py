@@ -704,6 +704,14 @@ class TableModuleTests(unittest.TestCase):
         rows = [["Status"], ["Ready"]]
         self.assertFalse(_looks_like_single_column_note(rows))
 
+    def test_parameter_description_rows_are_not_treated_as_note(self) -> None:
+        rows = [
+            ["", "Parameter", "", "", "Description", ""],
+            ["", "ue-timer-poll-retransmit", "", "", "This parameter is the UE timer to retransmit the poll in a transmitting AM RLC entity.", ""],
+            ["", "qci", "", "", "This parameter is the QoS Class Identifier(QCI).", ""],
+        ]
+        self.assertFalse(_looks_like_single_column_note(rows))
+
     def test_table_text_from_rows_preserves_single_column_header_when_short(self) -> None:
         rows = [
             ["Status"],

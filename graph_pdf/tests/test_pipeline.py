@@ -71,7 +71,7 @@ class PipelineExtractionTests(unittest.TestCase):
         create_demo_pdf(pdf_path)
         return pdf_path
 
-    def _extract_result(self) -> dict:
+    def _extract_result(self, *, page_write: bool = False) -> dict:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
@@ -82,6 +82,7 @@ class PipelineExtractionTests(unittest.TestCase):
             out_md_dir=root / "md",
             out_image_dir=root / "images",
             stem="sample",
+            page_write=page_write,
         )
 
     def _extract_table_markdown(self) -> str:
@@ -209,6 +210,7 @@ class PipelineExtractionTests(unittest.TestCase):
             out_image_dir=root / "images",
             stem="sample",
             pages=[1],
+            page_write=True,
         )
 
         self.assertIn("[//]: # (Page 1)", result["markdown"])
@@ -218,7 +220,7 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertEqual(1, len(result["image_files"]))
 
     def test_markdown_includes_table_references_for_detected_tables(self) -> None:
-        markdown = self._extract_result()["markdown"]
+        markdown = self._extract_result(page_write=True)["markdown"]
 
         self.assertIn("[Table reference: Page 1 table 1]", markdown)
         self.assertEqual(3, markdown.count("[Table reference: Page 1 table 2]"))

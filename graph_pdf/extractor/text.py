@@ -20,6 +20,9 @@ from .shared import (
 _DRAWING_OBJECT_TOLERANCE = 3.0
 _MIN_DRAWING_IMAGE_AREA = 2500.0
 _MIN_DRAWING_IMAGE_SPAN = 16.0
+_PARAGRAPH_GAP_FONT_RATIO = 0.45
+_PARAGRAPH_GAP_MIN_PX = 4.0
+_PARAGRAPH_GAP_FALLBACK = 5.0
 
 
 def _object_bbox(obj: dict) -> Tuple[float, float, float, float]:
@@ -433,11 +436,13 @@ def _extract_body_text_lines(
             if heading_levels is None:
                 normalized_lines.extend(block_lines)
                 continue
-            for line in block["lines"]:
-                text = str(line.get("text") or "").strip()
-                level = _line_heading_level(line, heading_levels)
-                if text and level is not None:
-                    normalized_lines.append(f"{'#' * level} {text}")
+            level = _line_heading_level(block["lines"][0], heading_levels)
+            if level is None:
+                normalized_lines.extend(block_lines)
+                continue
+            heading_text = _join_non_heading_block_lines(block_lines)
+            if heading_text:
+                normalized_lines.append(f"{'#' * level} {heading_text}")
             continue
         joined = _join_non_heading_block_lines(block_lines)
         if joined:
@@ -511,10 +516,42 @@ def _line_kind(line: dict, heading_levels: dict[float, int] | None = None) -> st
     return "paragraph"
 
 
-def _should_merge_paragraph_lines(previous: dict, line: dict) -> bool:
-    # Paragraph grouping intentionally uses a simple fixed gap rule after legacy heuristics were removed.
+def _paragraph_line_size_hint(line: dict) -> float:
+    # Use the current line's explicit font size, fallback to line height.
+    size = float(line.get("size", 0.0) or 0.0)
+    if size > 0:
+        return size
+
+    top = float(line.get("top", 0.0))
+    bottom = float(line.get("bottom", top))
+    height = max(0.0, bottom - top)
+    return height
+
+
+def _should_merge_paragraph_lines(
+    previous: dict,
+    line: dict,
+    same_kind: str,
+    heading_levels: dict[float, int] | None = None,
+) -> bool:
+    # Scale gap tolerance by font-size/line-height for large headings.
     line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
-    return line_gap <= 5.0
+    if line_gap <= 0.0:
+        return True
+
+    if same_kind == "heading" and heading_levels is not None:
+        prev_level = _line_heading_level(previous, heading_levels)
+        cur_level = _line_heading_level(line, heading_levels)
+        if prev_level is None or cur_level is None or prev_level != cur_level:
+            return False
+
+    # Decide with the target (current) line as the reference for wrap behavior.
+    line_size_hint = _paragraph_line_size_hint(line)
+    if line_size_hint <= 0:
+        return line_gap <= _PARAGRAPH_GAP_FALLBACK
+
+    merge_gap_threshold = max(_PARAGRAPH_GAP_MIN_PX, line_size_hint * _PARAGRAPH_GAP_FONT_RATIO)
+    return line_gap <= merge_gap_threshold
 
 
 def _build_body_blocks(lines: Sequence[dict], heading_levels: dict[float, int] | None = None) -> List[dict]:
@@ -532,8 +569,12 @@ def _build_body_blocks(lines: Sequence[dict], heading_levels: dict[float, int] |
 
         previous = current_block["lines"][-1]
         same_kind = current_block["kind"] == kind
-        if same_kind and kind == "paragraph" and _should_merge_paragraph_lines(previous, line):
-            # Paragraphs are the only block type that can absorb the next visual line.
+        if same_kind and kind in {"paragraph", "heading"} and _should_merge_paragraph_lines(
+            previous,
+            line,
+            same_kind=kind,
+            heading_levels=heading_levels,
+        ):
             current_block["lines"].append(line)
             continue
 
