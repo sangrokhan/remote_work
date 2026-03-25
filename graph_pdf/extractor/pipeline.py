@@ -54,8 +54,16 @@ def _load_heading_levels(add_heading: Path | None) -> dict[float, int] | None:
         level = _heading_level_from_rule(rule)
         if level is None:
             continue
-        heading_levels[round(float(match["font_size"]), 2)] = level
+        font_size = round(float(match["font_size"]), 2)
+        # Prevent markdown h4 headings from being inferred from compact body text size.
+        if level == 4 and font_size == 12.0:
+            continue
+        heading_levels[font_size] = level
     return heading_levels
+
+
+def _format_page_comment(page_no: int) -> str:
+    return f"[//]: # (Page {page_no})"
 
 
 def _document_text_profile(debug_pages: Sequence[dict]) -> dict:
@@ -365,7 +373,7 @@ def extract_pdf_to_outputs(
                     heading_levels=heading_levels,
                 )
                 if page_text.strip():
-                    output_text.append(f"### Page {page_idx}\n{page_text}")
+                    output_text.append(f"{_format_page_comment(page_idx)}\n{page_text}")
                 continue
 
             table_bboxes = [table_bbox for _table_rows, table_bbox in tables]
@@ -539,7 +547,7 @@ def extract_pdf_to_outputs(
                 heading_levels=heading_levels,
             )
             if page_text.strip():
-                output_text.append(f"### Page {page_idx}\n{page_text}")
+                output_text.append(f"{_format_page_comment(page_idx)}\n{page_text}")
 
         _flush_pending()
 
