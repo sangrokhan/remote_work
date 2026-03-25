@@ -85,7 +85,12 @@ def _extract_document_id_from_markdown_line(line: str) -> str | None:
     if not match:
         return None
     doc_id = match.group("doc_id").strip()
-    return doc_id or None
+    if not doc_id:
+        return None
+    first_token = doc_id.split(maxsplit=1)[0]
+    if not first_token:
+        return None
+    return first_token[:10] if len(first_token) >= 10 else first_token
 
 
 def _safe_document_id(document_id: str) -> str:
