@@ -23,6 +23,8 @@ from .text import (
     _repair_watermark_bleed,
 )
 
+_THIN_FILL_RECT_MAX_HEIGHT = 2.0
+
 
 def _merge_cells(table: Sequence[Sequence[str]]) -> List[List[str]]:
     # pdfplumber can yield `None` cells, so normalize early to simple stripped strings.
@@ -343,11 +345,232 @@ def _internal_grid_counts(
     return internal_vertical, internal_horizontal
 
 
+def _line_color_key(line: dict[str, Any]) -> tuple[Any, ...] | int | float | None:
+    # Line colors from PDF objects are used to detect note envelopes.
+    color = line.get("stroking_color")
+    if color is None:
+        color = line.get("non_stroking_color")
+    if color is None:
+        return None
+    if isinstance(color, (int, float)):
+        return round(float(color), 3)
+    if isinstance(color, (list, tuple)):
+        return tuple(round(float(value), 3) for value in color[:3])
+    return None
+
+
+def _note_border_signature(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+) -> tuple[bool, dict[str, Any]]:
+    # Note-like candidates are often bounded by top/bottom horizontal lines
+    # that share color and mostly overlap each other in X coordinates.
+    x0, y0, x1, y1 = bbox
+    width = max(0.0, x1 - x0)
+    height = max(0.0, y1 - y0)
+    if width <= 0.0 or height <= 0.0:
+        return False, {"reason": "invalid_bbox"}
+
+    overlap_threshold = max(1, width * 0.55)
+    top_band = y0 + height * 0.22
+    bottom_band = y1 - height * 0.22
+    min_edge_length = max(8.0, width * 0.45)
+    start_tolerance = max(2.0, width * 0.02)
+    inner_fill_tol = max(1.0, width * 0.02)
+
+    def is_blue_color(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return False
+        if isinstance(value, (list, tuple)) and len(value) >= 3:
+            r = float(value[0])
+            g = float(value[1])
+            b = float(value[2])
+            return b > 0.45 and r < 0.35 and g < 0.35
+        return False
+
+    top_candidates = []
+    bottom_candidates = []
+    interior_lines = 0
+    for edge in getattr(page, "horizontal_edges", []):
+        edge_top = float(edge.get("top", 0.0))
+        edge_bottom = float(edge.get("bottom", edge_top))
+        if edge_bottom < y0 - 2.0 or edge_top > y1 + 2.0:
+            continue
+
+        edge_x0 = float(edge.get("x0", 0.0))
+        edge_x1 = float(edge.get("x1", edge_x0))
+        overlap = min(edge_x1, x1) - max(edge_x0, x0)
+        if overlap < overlap_threshold:
+            continue
+        if edge_x1 - edge_x0 < min_edge_length:
+            continue
+        if edge_top < top_band:
+            top_candidates.append(edge)
+        elif edge_top > bottom_band:
+            bottom_candidates.append(edge)
+        else:
+            interior_lines += 1
+
+    # Some PDFs emit top/bottom separators as very thin filled rects rather than line edges.
+    rects = getattr(page, "rects", []) or []
+    for rect in rects:
+        if not bool(rect.get("fill")):
+            continue
+        if bool(rect.get("stroke")):
+            continue
+        rect_top = float(rect.get("top", 0.0))
+        rect_bottom = float(rect.get("bottom", rect_top))
+        rect_height = rect_bottom - rect_top
+        if abs(rect_height) > _THIN_FILL_RECT_MAX_HEIGHT:
+            continue
+
+        edge_top = float(rect_top)
+        edge_bottom = float(rect_bottom)
+        if edge_bottom < y0 - 2.0 or edge_top > y1 + 2.0:
+            continue
+
+        edge_x0 = float(rect.get("x0", 0.0))
+        edge_x1 = float(rect.get("x1", edge_x0))
+        overlap = min(edge_x1, x1) - max(edge_x0, x0)
+        if overlap < overlap_threshold:
+            continue
+        if edge_x1 - edge_x0 < min_edge_length:
+            continue
+        # Keep blue-only border segments as note candidates.
+        color = rect.get("non_stroking_color")
+        if color is None:
+            color = rect.get("stroking_color")
+        if not is_blue_color(color):
+            continue
+        if edge_top < top_band:
+            top_candidates.append(rect)
+        elif edge_top > bottom_band:
+            bottom_candidates.append(rect)
+        else:
+            interior_lines += 1
+
+    top_meta = [{"color": _line_color_key(edge)} for edge in top_candidates]
+    bottom_meta = [{"color": _line_color_key(edge)} for edge in bottom_candidates]
+
+    if not top_candidates or not bottom_candidates:
+        return False, {
+            "reason": "missing_border_lines",
+            "top_candidate_count": len(top_candidates),
+            "bottom_candidate_count": len(bottom_candidates),
+            "interior_line_count": interior_lines,
+            "top_colors": top_meta,
+            "bottom_colors": bottom_meta,
+        }
+
+    for top_edge in top_candidates:
+        top_color = _line_color_key(top_edge)
+        top_x0 = float(top_edge.get("x0", 0.0))
+        top_x1 = float(top_edge.get("x1", top_x0))
+        top_y0 = float(top_edge.get("top", 0.0))
+        top_y1 = float(top_edge.get("bottom", top_y0))
+        top_w = abs(top_x1 - top_x0)
+        for bottom_edge in bottom_candidates:
+            bottom_color = _line_color_key(bottom_edge)
+            if not _normalize_color_match(top_color, bottom_color):
+                continue
+            bottom_x0 = float(bottom_edge.get("x0", 0.0))
+            bottom_x1 = float(bottom_edge.get("x1", bottom_x0))
+            bottom_y0 = float(bottom_edge.get("top", 0.0))
+            bottom_y1 = float(bottom_edge.get("bottom", bottom_y0))
+            if abs(top_x0 - bottom_x0) > start_tolerance:
+                continue
+            if abs(top_x1 - bottom_x1) > start_tolerance:
+                continue
+
+            # Additional note signal:
+            # There is a filled rect spanning the same width between the two horizontal blue lines.
+            inner_full_width_fill = False
+            gap_top = min(top_y1, top_y0, bottom_y0, bottom_y1)
+            gap_bottom = max(top_y1, top_y0, bottom_y0, bottom_y1)
+            for rect in rects:
+                if not bool(rect.get("fill")):
+                    continue
+                if bool(rect.get("stroke")):
+                    continue
+                interior_left = float(rect.get("x0", 0.0))
+                interior_right = float(rect.get("x1", interior_left))
+                interior_top = float(rect.get("top", 0.0))
+                interior_bottom = float(rect.get("bottom", interior_top))
+                interior_w = interior_right - interior_left
+                if interior_bottom <= gap_top or interior_top >= gap_bottom:
+                    continue
+                if interior_top <= gap_top + 0.05 or interior_bottom >= gap_bottom - 0.05:
+                    continue
+                if abs(interior_w - top_w) > inner_fill_tol:
+                    continue
+                x_overlap = min(interior_right, max(top_x1, bottom_x1)) - max(interior_left, min(top_x0, bottom_x0))
+                if x_overlap < 0.0:
+                    continue
+                if x_overlap < width * 0.88:
+                    continue
+                if abs((interior_right - interior_left) - (top_x1 - top_x0)) <= inner_fill_tol:
+                    inner_full_width_fill = True
+                    break
+
+            return True, {
+                "reason": "matched_border_lines",
+                "color": top_color,
+                "top_line_y": float(top_edge.get("top", 0.0)),
+                "bottom_line_y": float(bottom_edge.get("top", 0.0)),
+                "top_line_x0": float(top_edge.get("x0", 0.0)),
+                "top_line_x1": float(top_edge.get("x1", 0.0)),
+                "bottom_line_x0": float(bottom_edge.get("x0", 0.0)),
+                "bottom_line_x1": float(bottom_edge.get("x1", 0.0)),
+                "inner_full_width_fill": inner_full_width_fill,
+                "inner_full_width_fill_count": int(inner_full_width_fill),
+            }
+
+    return False, {
+        "reason": "unmatched_border_colors",
+        "top_candidate_count": len(top_candidates),
+        "bottom_candidate_count": len(bottom_candidates),
+        "interior_line_count": interior_lines,
+        "top_colors": top_meta,
+        "bottom_colors": bottom_meta,
+    }
+
+
+def _content_width_ratio(
+    region_words: Sequence[dict[str, Any]],
+    fallback_width: float | None = None,
+    bbox: Tuple[float, float, float, float] | None = None,
+) -> float:
+    if not region_words:
+        if fallback_width is not None and fallback_width > 0.0:
+            return 1.0
+        return 0.0
+
+    min_x0 = min(float(word.get("x0", 0.0)) for word in region_words)
+    max_x1 = max(float(word.get("x1", 0.0)) for word in region_words)
+    text_width = max(0.0, max_x1 - min_x0)
+    if text_width <= 0.0:
+        return 0.0
+
+    if bbox is None:
+        if fallback_width is None or fallback_width <= 0.0:
+            return 1.0
+        return text_width / fallback_width
+
+    region_width = max(0.0, float(bbox[2]) - float(bbox[0]))
+    if region_width <= 0.0:
+        return 1.0
+    return text_width / region_width
+
+
 def _estimate_region_kind(
     table_rows: Sequence[Sequence[str]],
     region_words: Sequence[dict[str, Any]],
     internal_grid: tuple[int, int],
     *,
+    page: Optional[pdfplumber.page.PageObject] = None,
+    bbox: Optional[Tuple[float, float, float, float]] = None,
     min_long_line_words: int = 6,
     min_total_chars: int = 80,
 ) -> tuple[str, dict[str, Any]]:
@@ -382,12 +605,10 @@ def _estimate_region_kind(
     max_words = max(line_word_counts)
     max_chars = max(line_char_counts)
     total_chars = sum(line_char_counts)
-    long_lines = sum(1 for count in line_word_counts if count >= min_long_line_words)
-    punctuation_ratio = sum(1 for line in text_lines if any(ch in line for ch in [".", ",", ";", ":", "(", ")"])) / len(text_lines)
+    # Deprecated scoring inputs kept to avoid changing function call sites.
+    # long_lines = sum(1 for count in line_word_counts if count >= min_long_line_words)
+    # punctuation_ratio = sum(1 for line in text_lines if any(ch in line for ch in [".", ",", ";", ":", "(", ")"])) / len(text_lines)
     internal_vertical, internal_horizontal = internal_grid
-    table_score = 0.0
-    note_score = 0.0
-
     # Note routing is intentionally single-column-first.
     if not is_single_column_like:
         return "table", {
@@ -396,41 +617,86 @@ def _estimate_region_kind(
             "effective_col_count": len(_effective_non_empty_column_indices(table_rows)),
         }
 
-    if row_count <= 3 and max(line_word_counts) <= 4 and total_chars < min_total_chars:
-        table_score += 2.0
-    if max_words <= 4 and long_lines == 0:
-        table_score += 1.0
-    if internal_vertical + internal_horizontal >= 2:
-        table_score += 2.0
-    if punctuation_ratio >= 0.2 and total_chars <= min_total_chars:
-        table_score += 1.0
+    # NOTE: score-based routing below is intentionally disabled; keep for easy rollback.
+    # NOTE: previous table_score/note_score rule block kept as comments for traceability.
+    # table_score = 0.0
+    # note_score = 0.0
+    # if row_count <= 3 and max(line_word_counts) <= 4 and total_chars < min_total_chars:
+    #     table_score += 2.0
+    # if max_words <= 4 and long_lines == 0:
+    #     table_score += 1.0
+    # if internal_vertical + internal_horizontal >= 2:
+    #     table_score += 2.0
+    # if punctuation_ratio >= 0.2 and total_chars <= min_total_chars:
+    #     table_score += 1.0
+    # if row_count >= 2 and (avg_words >= 5 or max_chars >= 90 or total_chars >= min_total_chars):
+    #     note_score += 2.0
+    # if long_lines >= 2:
+    #     note_score += 2.0
+    # if avg_words >= 7 and total_chars >= min_total_chars:
+    #     note_score += 1.0
+    # if note_score > table_score: ...
 
-    # Prose-like dense lines indicate note-style single-column content.
-    if row_count >= 2 and (avg_words >= 5 or max_chars >= 90 or total_chars >= min_total_chars):
-        note_score += 2.0
-    if long_lines >= 2:
-        note_score += 2.0
-    if avg_words >= 7 and total_chars >= min_total_chars:
-        note_score += 1.0
+    # New rule-based routing:
+    # 1) explicit border-line signature (top+bottom line with same color/align)
+    # 2) narrow content span inside the bbox (note tends to be narrow)
+    # 3) explicit internal grid and dense single-column content => table
+    bbox_width = float(bbox[2]) - float(bbox[0]) if bbox is not None else None
+    text_ratio = _content_width_ratio(region_words=region_words, fallback_width=bbox_width)
+    if bbox is not None and page is not None:
+        is_note_border, border_meta = _note_border_signature(page=page, bbox=bbox)
+    else:
+        is_note_border = False
+        border_meta = {"reason": "no_geometry_context"}
 
-    if note_score > table_score:
+    # 2) Visible note-like border makes the region a note.
+    if is_note_border:
         return "note", {
-            "reason": "prose_score",
-            "note_score": note_score,
-            "table_score": table_score,
+            "reason": "note_border_signature",
+            "text_width_ratio": text_ratio,
+            "line_count": len(text_lines),
             "avg_words": avg_words,
             "max_words": max_words,
-            "line_count": len(text_lines),
             "total_chars": total_chars,
+            "internal_grid": internal_grid,
+            "border": border_meta,
         }
-    return "table", {
-        "reason": "table_score",
-        "note_score": note_score,
-        "table_score": table_score,
+
+    # 3) Table-like regions are determined by visible internal grid lines.
+    if internal_vertical + internal_horizontal >= 2:
+        return "table", {
+            "reason": "table_grid_signature",
+            "text_width_ratio": text_ratio,
+            "line_count": len(text_lines),
+            "avg_words": avg_words,
+            "max_words": max_words,
+            "total_chars": total_chars,
+            "internal_grid": internal_grid,
+            "border": border_meta,
+        }
+
+    # 4) Fallback for short, header-like content chunks.
+    if row_count <= 3 and max_words <= 4 and total_chars <= min_total_chars:
+        return "table", {
+            "reason": "short_rows_without_border",
+            "text_width_ratio": text_ratio,
+            "line_count": len(text_lines),
+            "avg_words": avg_words,
+            "max_words": max_words,
+            "total_chars": total_chars,
+            "internal_grid": internal_grid,
+            "border": border_meta,
+        }
+
+    return "note", {
+        "reason": "note_fallback",
+        "text_width_ratio": text_ratio,
+        "line_count": len(text_lines),
         "avg_words": avg_words,
         "max_words": max_words,
-        "line_count": len(text_lines),
         "total_chars": total_chars,
+        "internal_grid": internal_grid,
+        "border": border_meta,
     }
 
 
@@ -459,8 +725,6 @@ def _classify_single_column_region(
         # because it's structurally a table row/header regardless of prose-like length.
         return "table", {
             "reason": "single_row_grid",
-            "table_score": 3.0,
-            "note_score": 0.0,
             "internal_vertical": internal_vertical,
             "internal_horizontal": internal_horizontal,
         }
@@ -468,6 +732,8 @@ def _classify_single_column_region(
         table_rows=table_rows,
         region_words=region_words,
         internal_grid=internal_grid,
+        page=page,
+        bbox=bbox,
     )
 
 
@@ -511,40 +777,33 @@ def _classify_single_column_rows_only(
     total_chars = sum(line_char_counts)
     avg_words = sum(line_word_counts) / len(line_word_counts)
     avg_chars = total_chars / max(1, len(line_char_counts))
-    punctuation_ratio = sum(
-        1 for line in normalized_lines if any(ch in line for ch in [".", ",", ";", ":", "(", ")"])
-    ) / len(normalized_lines)
-    short_rows = sum(1 for count in line_word_counts if count <= 4)
+    # NOTE: legacy score-based fallback is intentionally disabled.
 
-    note_score = 0.0
-    table_score = 0.0
-    if len(normalized_lines) <= 2 and short_rows >= len(normalized_lines):
-        table_score += 2.0
-    if avg_chars >= 30 and total_chars >= 45:
-        note_score += 1.5
-    if avg_words >= 6:
-        note_score += 1.5
-    if total_chars >= 90:
-        note_score += 1.0
-    if punctuation_ratio >= 0.2:
-        note_score += 0.5
-    if table_score >= note_score:
+    short_rows = sum(1 for count in line_word_counts if count <= 4)
+    if len(normalized_lines) <= 2 and short_rows == len(normalized_lines):
         return "table", {
             "reason": "single_column_fallback",
-            "note_score": note_score,
-            "table_score": table_score,
+            "line_count": len(normalized_lines),
+            "max_chars": max(line_char_counts),
+            "max_words": max(line_word_counts),
+            "avg_words": avg_words,
+        }
+
+    if len(normalized_lines) >= 3 and avg_chars >= 32 and avg_words >= 4.5:
+        return "note", {
+            "reason": "single_column_fallback",
             "line_count": len(normalized_lines),
             "avg_chars": avg_chars,
             "total_chars": total_chars,
+            "avg_words": avg_words,
         }
 
     return "note", {
         "reason": "single_column_fallback",
-        "note_score": note_score,
-        "table_score": table_score,
         "line_count": len(normalized_lines),
         "avg_chars": avg_chars,
         "total_chars": total_chars,
+        "avg_words": avg_words,
     }
 
 
@@ -594,6 +853,40 @@ def _header_row_count(rows: Sequence[Sequence[str]], max_header_rows: int = 2) -
             break
         count += 1
     return count
+
+
+def _is_single_cell_fragment_row(row: Sequence[str]) -> tuple[bool, int, str]:
+    # True only when the row is effectively one cell and that cell is header-like.
+    non_empty = [(idx, _normalize_text(cell)) for idx, cell in enumerate(row) if _normalize_text(cell)]
+    if len(non_empty) != 1:
+        return False, -1, ""
+    idx, text = non_empty[0]
+    if not _looks_like_header_row([text]):
+        return False, -1, ""
+    return True, idx, text
+
+
+def _can_merge_header_split_rows(
+    previous_row: Sequence[str],
+    current_row: Sequence[str],
+    merged_row_count: int,
+) -> tuple[bool, int, str]:
+    # Merge only short header fragments in the leading rows of a table.
+    if merged_row_count > 4:
+        return False, -1, ""
+
+    prev_is_single, prev_idx, prev_text = _is_single_cell_fragment_row(previous_row)
+    curr_is_single, curr_idx, curr_text = _is_single_cell_fragment_row(current_row)
+    if not (prev_is_single and curr_is_single):
+        return False, -1, ""
+    if prev_idx != curr_idx:
+        return False, -1, ""
+
+    joiner = " "
+    # Preserve broken words like "Displa" + "y Name" without inserting extra space.
+    if prev_text[-1].isalnum() and curr_text[0].islower():
+        joiner = ""
+    return True, prev_idx, joiner
 
 
 def _collapse_header_rows(header_rows: Sequence[Sequence[str]]) -> List[str]:
@@ -783,6 +1076,33 @@ def _format_header_markdown_cell(value: str) -> str:
     return "<br>".join(parts)
 
 
+def _is_colored_line(edge: dict[str, Any]) -> bool:
+    # Explicit color lines are treated as strong table boundary signals.
+    color = edge.get("stroking_color")
+    if color is None:
+        color = edge.get("non_stroking_color")
+    if color is None:
+        return False
+
+    # Single-channel colors are considered colored only when not white-like and not near-black.
+    if isinstance(color, (int, float)):
+        value = float(color)
+        if value <= 0.01 or value >= 0.99:
+            return False
+        return True
+
+    # RGB-like values: accept non-gray or non-binary black/white channels.
+    if isinstance(color, (list, tuple)) and len(color) >= 3:
+        values = [float(v) for v in color[:3]]
+        if all(0.95 <= value <= 1.02 for value in values):
+            return False
+        if max(values) - min(values) <= 0.02 and max(values) <= 0.20:
+            return False
+        return True
+
+    return False
+
+
 def _table_regions(
     page: pdfplumber.page.PageObject,
     y_tolerance: float = 65.0,
@@ -795,8 +1115,7 @@ def _table_regions(
     horizontal_edges = [
         edge
         for edge in page.horizontal_edges
-        if float(edge["x1"]) - float(edge["x0"]) >= 50.0
-        and float(edge["bottom"]) > body_top
+        if float(edge["bottom"]) > body_top
         and float(edge["top"]) < body_bottom
     ]
     vertical_edges = [
@@ -859,8 +1178,21 @@ def _table_regions(
             stack.extend(graph[idx] - visited)
 
         component_lines = [merged_h[idx] for idx in component]
-        # Ignore weak components that do not look like a stable table grid.
-        if len(component_lines) < min_lines or not shared_verticals:
+        # 기본 규칙: 수평선 3개 + 수직 연결. 색이 있는 선분이 있으면
+        # 수평선 2개 + 수직 1개 조합도 테이블 후보로 허용.
+        if not shared_verticals:
+            continue
+
+        has_color_line = any(_is_colored_line(edge) for edge in component_lines)
+        has_color_line = has_color_line or any(
+            _is_colored_line(merged_v[idx])
+            for idx in shared_verticals
+        )
+        if len(component_lines) < min_lines and not (
+            len(component_lines) >= 2
+            and len(shared_verticals) >= 1
+            and has_color_line
+        ):
             continue
 
         x0 = min(float(edge["x0"]) for edge in component_lines)
@@ -1054,7 +1386,7 @@ def _dedupe_redundant_rectangles(
     return kept
 
 
-def _thin_strip_rects(rects: Sequence[dict], max_height: float = 1.5) -> List[dict]:
+def _thin_strip_rects(rects: Sequence[dict], max_height: float = _THIN_FILL_RECT_MAX_HEIGHT) -> List[dict]:
     # Some PDFs use filled rect strips instead of stroked lines for box boundaries.
     return [
         rect
@@ -1621,6 +1953,9 @@ def _extract_tables_from_crop(
     crop_bbox: Tuple[float, float, float, float],
     *,
     fallback_to_text_rows: bool = False,
+    strategy_debug: list[dict] | None = None,
+    strategy_source: str = "crop",
+    strategy_source_name: str | None = None,
 ) -> List[TableChunk]:
     # Crop-level extraction gives table_settings a tighter region and improves recovery of border-light tables.
     x0, y0, x1, y1 = crop_bbox
@@ -1658,21 +1993,66 @@ def _extract_tables_from_crop(
         },
     ]
 
-    for settings in candidates:
+    source_name = strategy_source_name
+    for settings_index, settings in enumerate(candidates):
         # Try line-driven extraction first, then a text-assisted fallback inside the same crop.
         tables = crop.extract_tables(table_settings=settings) or []
         cleaned = []
+        rejected = []
         for table in tables:
             reason = _table_rejection_reason(table)
             if reason is not None:
+                rejected.append(
+                    {
+                        "rows": len(table),
+                        "cols": max((len(row) for row in table), default=0),
+                        "reason": reason,
+                    }
+                )
                 _log_rejected_table(table, crop_bbox, reason)
                 continue
             cleaned.append(_merge_cells(table))
+        if strategy_debug is not None:
+            strategy_debug.append(
+                {
+                    "source": strategy_source,
+                    "source_name": source_name,
+                    "crop_bbox": [round(float(value), 2) for value in crop_bbox],
+                    "strategy_index": settings_index,
+                    "mode": "crop_candidate",
+                    "vertical_strategy": settings.get("vertical_strategy"),
+                    "horizontal_strategy": settings.get("horizontal_strategy"),
+                    "raw_table_count": len(tables),
+                    "raw_row_count": sum(len(table) for table in tables),
+                    "kept_table_count": len(cleaned),
+                    "kept_row_count": sum(len(row) for row in cleaned),
+                    "rejected_count": len(rejected),
+                    "rejections": rejected,
+                    "used_fallback_to_text_rows": False,
+                }
+            )
         if cleaned:
             return [(table, crop_bbox) for table in cleaned]
 
     if fallback_to_text_rows:
         line_rows = _compact_fallback_rows(_extract_region_line_rows(page, crop_bbox))
+        if strategy_debug is not None:
+            strategy_debug.append(
+                {
+                    "source": strategy_source,
+                    "source_name": source_name,
+                    "crop_bbox": [round(float(value), 2) for value in crop_bbox],
+                    "strategy_index": len(candidates),
+                    "mode": "line_fallback",
+                    "raw_table_count": 1 if line_rows else 0,
+                    "raw_row_count": len(line_rows),
+                    "kept_table_count": 1 if line_rows else 0,
+                    "kept_row_count": len(line_rows),
+                    "rejected_count": 0,
+                    "rejections": [],
+                    "used_fallback_to_text_rows": True,
+                }
+            )
         if line_rows:
             return [(line_rows, crop_bbox)]
 
@@ -1682,6 +2062,7 @@ def _extract_tables_from_crop(
 def _extract_tables(
     page: pdfplumber.page.PageObject,
     force_table: bool = False,
+    strategy_debug: list[dict] | None = None,
 ) -> List[TableChunk]:
     # Region-based extraction is preferred because full-page fallback tends to over-merge adjacent content.
     page = _filter_page_for_extraction(page)
@@ -1689,6 +2070,17 @@ def _extract_tables(
     merged: List[TableChunk] = []
     candidate_rows = _collect_single_column_candidates_for_notes(page)
     table_regions = _table_regions(page)
+
+    def _table_key(
+        rows: Sequence[Sequence[str]],
+        bbox: Tuple[float, float, float, float],
+    ) -> tuple[tuple[tuple[str, ...], ...], tuple[float, float, float, float]]:
+        normalized_rows = tuple(
+            tuple(_normalize_text(str(cell)) for cell in row) for row in rows
+        )
+        normalized_bbox = tuple(round(float(v), 2) for v in bbox)
+        return normalized_rows, normalized_bbox
+
     note_exclusion_bands: List[Tuple[float, float, float, float]] = []
     for candidate in candidate_rows:
         if candidate["is_white_content"] or not candidate.get("is_note_like", False):
@@ -1707,70 +2099,54 @@ def _extract_tables(
             )
         )
 
-    for x0, x1, lines in table_regions:
+    for region_index, (x0, x1, lines) in enumerate(table_regions):
         y0 = min(edge["top"] for edge in lines) - 2
         y1 = max(edge["top"] for edge in lines) + 2
         crop_bbox = (max(0.0, x0), max(0.0, y0), min(page.width, x1), min(page.height, y1))
         split_regions = _split_crop_bbox_by_excluded_bands(crop_bbox, note_exclusion_bands)
-        for split_bbox in split_regions:
+        for split_index, split_bbox in enumerate(split_regions):
             for table, crop_box in _extract_tables_from_crop(
-                page, split_bbox, fallback_to_text_rows=False
+                page,
+                split_bbox,
+                fallback_to_text_rows=False,
+                strategy_debug=strategy_debug,
+                strategy_source="table_region",
+                strategy_source_name=f"table_region#{region_index}:split#{split_index}",
             ):
                 table = _normalize_extracted_table(table)
-                rows_key = tuple(tuple(row) for row in table)
-                bbox_key = tuple(round(v, 2) for v in crop_box)
-                key = (rows_key, bbox_key)
+                key = _table_key(table, crop_box)
                 if key not in seen_keys:
                     seen_keys.add(key)
                     merged.append((table, crop_box))
 
     if not table_regions:
         # Some documents render callout-like notes as filled boxes without explicit borders.
-        for entry in _single_column_box_region_candidates(page):
+        single_column_candidates = _single_column_box_region_candidates(page)
+        for candidate_index, entry in enumerate(single_column_candidates):
             x0, y0, x1, y1 = entry["bbox"]
             crop_box = (x0, y0, x1, y1)
             for table, _crop_box in _extract_tables_from_crop(
                 page,
                 crop_box,
                 fallback_to_text_rows=True,
+                strategy_debug=strategy_debug,
+                strategy_source="single_column_box_candidate",
+                strategy_source_name=f"single_col#{candidate_index}",
             ):
-                rows_key = tuple(tuple(row) for row in table)
-                key = (rows_key, tuple(round(v, 2) for v in _crop_box))
+                key = _table_key(table, _crop_box)
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
                 merged.append((table, _crop_box))
 
     merged_candidates = candidate_rows
-    if table_regions:
-        removed_indices: set[int] = set()
-        for candidate in merged_candidates:
-            if candidate["is_white_content"] or not candidate.get("is_note_like", False):
-                continue
-            for idx, (rows, table_bbox) in enumerate(merged):
-                if idx in removed_indices:
-                    continue
-                if not _looks_like_single_column_note(rows=rows, page=page, bbox=table_bbox):
-                    continue
-                if not _single_column_boxes_share_index(table_bbox, candidate["bbox"]):
-                    continue
-                candidate_overlap_bbox = (
-                    candidate["raw_bbox"]
-                    if candidate.get("note_band") is not None
-                    else candidate["bbox"]
-                )
-                if _bbox_overlap_ratio(table_bbox, candidate_overlap_bbox) < 0.8:
-                    continue
-                removed_indices.add(idx)
-
-        if removed_indices:
-            merged = [entry for idx, entry in enumerate(merged) if idx not in removed_indices]
+    # 강한 겹침 기반 제거는 오탐으로 인한 유효 데이터 손실이 있어 보류.
+    # 노트/테이블 후보가 같은 영역에 존재해도 둘 다 후보군에서 유지한다.
 
     # Single-column callout-like boxes can represent prose notes even when table geometry exists.
     # Treat note-like non-overlapping box candidates as standalone notes so they are rendered
     # as note references instead of being silently dropped from output.
     if merged_candidates:
-        merged_table_bboxes = [table_bbox for _rows, table_bbox in merged]
         for candidate in merged_candidates:
             if candidate["is_white_content"] or not candidate.get("is_note_like", False):
                 continue
@@ -1780,13 +2156,11 @@ def _extract_tables(
                 if candidate.get("note_band") is not None
                 else candidate["bbox"]
             )
-            overlaps_with_table = any(
-                _bbox_overlap_ratio(candidate_bbox, table_bbox) >= 0.25
-                for table_bbox in merged_table_bboxes
-            )
-            if overlaps_with_table and candidate.get("note_band") is None:
+            # overlap 자체는 제거 사유로 사용하지 않는다. 서로 다른 타입이라도 병합 대상에 둘 다 남겨둔다.
+            key = _table_key(candidate["rows"], candidate_bbox)
+            if key in seen_keys:
                 continue
-
+            seen_keys.add(key)
             merged.append((candidate["rows"], candidate_bbox))
 
     if merged or not force_table:
@@ -1824,15 +2198,42 @@ def _extract_tables(
         },
     ]
 
-    for settings in fallback_settings:
+    for settings_index, settings in enumerate(fallback_settings):
         tables = page.extract_tables(table_settings=settings) or []
         cleaned = []
+        rejected = []
         for table in tables:
             reason = _table_rejection_reason(table)
             if reason is not None:
+                rejected.append(
+                    {
+                        "rows": len(table),
+                        "cols": max((len(row) for row in table), default=0),
+                        "reason": reason,
+                    }
+                )
                 _log_rejected_table(table, full_bbox, reason)
                 continue
             cleaned.append(_merge_cells(table))
+        if strategy_debug is not None:
+            strategy_debug.append(
+                {
+                    "source": "full_page_fallback",
+                    "source_name": None,
+                    "crop_bbox": [round(float(value), 2) for value in full_bbox],
+                    "strategy_index": settings_index,
+                    "mode": "full_page_candidate",
+                    "vertical_strategy": settings.get("vertical_strategy"),
+                    "horizontal_strategy": settings.get("horizontal_strategy"),
+                    "raw_table_count": len(tables),
+                    "raw_row_count": sum(len(table) for table in tables),
+                    "kept_table_count": len(cleaned),
+                    "kept_row_count": sum(len(row) for row in cleaned),
+                    "rejected_count": len(rejected),
+                    "rejections": rejected,
+                    "used_fallback_to_text_rows": False,
+                }
+            )
         if cleaned:
             for table in cleaned:
                 table = _normalize_extracted_table(table)
@@ -1884,6 +2285,15 @@ def _merge_split_rows(rows: TableRows) -> TableRows:
 
     merged: TableRows = [list(rows[0])]
     for row in rows[1:]:
+        can_merge_header, header_idx, joiner = _can_merge_header_split_rows(
+            merged[-1],
+            row,
+            len(merged),
+        )
+        if can_merge_header:
+            merged[-1][header_idx] = f"{merged[-1][header_idx]}{joiner}{_normalize_text(row[header_idx])}"
+            continue
+
         non_empty = [idx for idx, cell in enumerate(row) if _normalize_text(cell)]
         if len(merged) > 1 and row and not _normalize_text(row[0]):
             previous = merged[-1]
