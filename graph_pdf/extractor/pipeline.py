@@ -173,6 +173,7 @@ def extract_pdf_to_outputs(
     debug: bool = False,
     debug_watermark: bool = False,
     add_heading: Path | None = None,
+    page_write: bool = False,
     from_raw: Path | None = None,
 ) -> dict:
     if from_raw is not None:
@@ -189,6 +190,7 @@ def extract_pdf_to_outputs(
                 debug=debug,
                 debug_watermark=debug_watermark,
                 add_heading=add_heading,
+                page_write=page_write,
                 from_raw=None,
             )
     if pdf_path is None:
@@ -211,6 +213,7 @@ def extract_pdf_to_outputs(
     pending_table_no: Optional[int] = None
     pending_axes: List[float] = []
     pending_gap_text_boxes: List[Tuple[float, float, float, float]] = []
+    pending_page_height: Optional[float] = None
     next_table_no = 1
     pending_image_ref_bbox: Optional[Tuple[float, float, float, float]] = None
     pending_image_body_top: Optional[float] = None
@@ -228,7 +231,7 @@ def extract_pdf_to_outputs(
 
     def _flush_pending() -> None:
         # Tables are emitted only after we know the next page will not extend them.
-        nonlocal pending_table, pending_page, pending_last_page, pending_bbox, pending_table_no, pending_axes, pending_gap_text_boxes
+        nonlocal pending_table, pending_page, pending_last_page, pending_bbox, pending_table_no, pending_axes, pending_gap_text_boxes, pending_page_height
         if pending_table is not None and pending_page is not None and pending_table_no is not None:
             _append_output_table(output_tables, pending_page, pending_table_no, pending_table)
         pending_table = None
@@ -238,6 +241,7 @@ def extract_pdf_to_outputs(
         pending_table_no = None
         pending_axes = []
         pending_gap_text_boxes = []
+        pending_page_height = None
 
     with pdfplumber.open(str(pdf_path)) as pdf:
         for page_idx, page in enumerate(pdf.pages, start=1):
@@ -370,7 +374,10 @@ def extract_pdf_to_outputs(
                     heading_levels=heading_levels,
                 )
                 if page_text.strip():
-                    output_text.append(f"{_format_page_comment(page_idx)}\n{page_text}")
+                    if page_write:
+                        output_text.append(f"{_format_page_comment(page_idx)}\n{page_text}")
+                    else:
+                        output_text.append(page_text)
                 continue
 
             table_bboxes = [table_bbox for _table_rows, table_bbox in tables]
@@ -379,10 +386,22 @@ def extract_pdf_to_outputs(
                     pending_page=pending_last_page,
                     current_page=page_idx,
                 )
+                current_gap_text_boxes = _gap_text_boxes_before_bbox(
+                    page,
+                    bbox,
+                    table_bboxes,
+                    header_margin=header_margin,
+                    footer_margin=footer_margin,
+                )
+                current_axes = _vertical_axes_for_bbox(page, bbox)
 
                 # Some continuation fragments lose the first column and need a specialized merge path.
                 merged_missing_first = None
-                if cross_page_continuation:
+                if (
+                    cross_page_continuation
+                    and not pending_gap_text_boxes
+                    and not current_gap_text_boxes
+                ):
                     merged_missing_first = _maybe_merge_missing_first_column_chunk(
                         pending_table,
                         table_rows,
@@ -398,6 +417,7 @@ def extract_pdf_to_outputs(
                         )
                     pending_table = merged_missing_first
                     pending_last_page = page_idx
+                    pending_page_height = float(page.height)
                     pending_bbox = bbox
                     pending_axes = _vertical_axes_for_bbox(page, bbox)
                     pending_gap_text_boxes = _gap_text_boxes_after_bbox(page, bbox, table_bboxes, header_margin=header_margin, footer_margin=footer_margin)
@@ -406,32 +426,35 @@ def extract_pdf_to_outputs(
                 continuation_rows = table_rows
                 if cross_page_continuation:
                     # Repeated headers should not be duplicated when the next page is clearly part of the same table.
-                    continuation_rows = _split_repeated_header(pending_table or [], table_rows)
-                    if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
-                        if pending_page is not None and pending_table_no is not None:
-                            page_table_references.append(
-                                {
-                                    "text": _table_reference_text(pending_page, pending_table_no),
-                                    "bbox": bbox,
-                                }
-                            )
-                        pending_table.extend(continuation_rows)
-                        pending_last_page = page_idx
-                        if pending_bbox is not None:
-                            pending_bbox = (
-                                min(pending_bbox[0], bbox[0]),
-                                min(pending_bbox[1], bbox[1]),
-                                max(pending_bbox[2], bbox[2]),
-                                max(pending_bbox[3], bbox[3]),
-                            )
-                        else:
-                            pending_bbox = bbox
-                        pending_axes = _merge_numeric_positions([*pending_axes, *_vertical_axes_for_bbox(page, bbox)], tolerance=1.0)
-                        pending_gap_text_boxes = _gap_text_boxes_after_bbox(page, bbox, table_bboxes, header_margin=header_margin, footer_margin=footer_margin)
-                        continue
+                    if pending_gap_text_boxes or current_gap_text_boxes:
+                        continuation_rows = table_rows
+                    else:
+                        continuation_rows = _split_repeated_header(pending_table or [], table_rows)
+                        if pending_table is not None and _is_continuation_chunk(pending_table, continuation_rows):
+                            if pending_page is not None and pending_table_no is not None:
+                                page_table_references.append(
+                                    {
+                                        "text": _table_reference_text(pending_page, pending_table_no),
+                                        "bbox": bbox,
+                                    }
+                                )
+                            pending_table.extend(continuation_rows)
+                            pending_last_page = page_idx
+                            if pending_bbox is not None:
+                                pending_bbox = (
+                                    min(pending_bbox[0], bbox[0]),
+                                    min(pending_bbox[1], bbox[1]),
+                                    max(pending_bbox[2], bbox[2]),
+                                    max(pending_bbox[3], bbox[3]),
+                                )
+                            else:
+                                pending_bbox = bbox
+                            pending_page_height = float(page.height)
+                            pending_axes = _merge_numeric_positions([*pending_axes, *_vertical_axes_for_bbox(page, bbox)], tolerance=1.0)
+                            pending_gap_text_boxes = _gap_text_boxes_after_bbox(page, bbox, table_bboxes, header_margin=header_margin, footer_margin=footer_margin)
+                            continue
 
-                current_axes = _vertical_axes_for_bbox(page, bbox)
-                current_gap_text_boxes = _gap_text_boxes_before_bbox(page, bbox, table_bboxes, header_margin=header_margin, footer_margin=footer_margin)
+                # current_axes is intentionally reused by both continuation and non-continuation paths below.
                 if (
                     pending_table is not None
                     and pending_bbox is not None
@@ -445,6 +468,7 @@ def extract_pdf_to_outputs(
                         body_top=body_top,
                         body_bottom=body_bottom,
                         gap_text_boxes=[*pending_gap_text_boxes, *current_gap_text_boxes],
+                        prev_page_height=pending_page_height,
                     )
                 ):
                     if pending_page is not None and pending_table_no is not None:
@@ -462,6 +486,7 @@ def extract_pdf_to_outputs(
                         max(pending_bbox[2], bbox[2]),
                         max(pending_bbox[3], bbox[3]),
                     )
+                    pending_page_height = float(page.height)
                     pending_axes = _merge_numeric_positions([*pending_axes, *current_axes], tolerance=1.0)
                     pending_gap_text_boxes = _gap_text_boxes_after_bbox(page, bbox, table_bboxes, header_margin=header_margin, footer_margin=footer_margin)
                     continue
@@ -479,6 +504,7 @@ def extract_pdf_to_outputs(
                 pending_table = table_rows
                 pending_page = page_idx
                 pending_last_page = page_idx
+                pending_page_height = float(page.height)
                 pending_bbox = bbox
                 pending_table_no = current_table_no
                 pending_axes = current_axes
@@ -544,7 +570,10 @@ def extract_pdf_to_outputs(
                 heading_levels=heading_levels,
             )
             if page_text.strip():
-                output_text.append(f"{_format_page_comment(page_idx)}\n{page_text}")
+                if page_write:
+                    output_text.append(f"{_format_page_comment(page_idx)}\n{page_text}")
+                else:
+                    output_text.append(page_text)
 
         _flush_pending()
 

@@ -109,6 +109,97 @@ def _effective_non_empty_column_indices(
     return sorted(column_indexes)
 
 
+def _is_parameter_description_layout(rows: Sequence[Sequence[str]]) -> bool:
+    if not rows:
+        return False
+
+    header = [
+        _normalize_text(cell)
+        for cell in rows[0]
+        if _normalize_text(cell)
+    ]
+    if len(header) < 2:
+        return False
+    header_text = " ".join(header).lower()
+    if "parameter" not in header_text or "description" not in header_text:
+        return False
+
+    col_indexes = _effective_non_empty_column_indices(rows)
+    if len(col_indexes) < 2 or len(col_indexes) > 3:
+        return False
+
+    for row in rows[1:]:
+        active = [
+            (idx, _normalize_text(cell))
+            for idx, cell in enumerate(row)
+            if _normalize_text(cell)
+        ]
+        if not active:
+            continue
+        if len(active) != 2:
+            return False
+
+        key_text = active[0][1]
+        value_text = active[1][1]
+        if not key_text or len(key_text) > 28:
+            return False
+        if len(value_text) < 20:
+            return False
+
+    return True
+
+
+def _is_key_value_layout(rows: Sequence[Sequence[str]]) -> bool:
+    if len(rows) < 2:
+        return False
+
+    col_indexes = _effective_non_empty_column_indices(rows)
+    if len(col_indexes) < 2 or len(col_indexes) > 3:
+        return False
+
+    qualified_rows = 0
+    two_or_three_cell_rows = 0
+    short_key_rows = 0
+
+    for row in rows:
+        active = [
+            (idx, _normalize_text(cell))
+            for idx, cell in enumerate(row)
+            if _normalize_text(cell)
+        ]
+        if not active:
+            continue
+
+        qualified_rows += 1
+        if len(active) > 3:
+            return False
+
+        if len(active) in (2, 3):
+            two_or_three_cell_rows += 1
+            key_text = active[0][1]
+            value_cells = [item[1] for item in active[1:]]
+            if not key_text or len(key_text) > 40:
+                return False
+            if all(len(value_text) < 2 for value_text in value_cells):
+                return False
+            if len(key_text) <= 30:
+                short_key_rows += 1
+
+        if len(active) == 1:
+            value_text = active[0][1]
+            if len(value_text) > 3:
+                return False
+
+    if qualified_rows == 0 or two_or_three_cell_rows == 0:
+        return False
+    if two_or_three_cell_rows / qualified_rows < 0.7:
+        return False
+    if short_key_rows == 0:
+        return False
+
+    return True
+
+
 def _is_single_column_like_rows(rows: Sequence[Sequence[str]]) -> bool:
     return len(_effective_non_empty_column_indices(rows)) <= 1
 
@@ -169,7 +260,7 @@ def _extract_region_line_rows(
 def _compact_fallback_rows(rows: list[list[str]]) -> list[list[str]]:
     compacted: list[list[str]] = []
     for row in rows:
-        normalized = _line_text_from_words([{"text": _normalize_text(cell)} for cell in row]).strip()
+        normalized = " ".join(_normalize_text(cell) for cell in row if _normalize_text(cell)).strip()
         if not normalized:
             continue
         if compacted and compacted[-1] == [normalized]:
@@ -265,9 +356,22 @@ def _estimate_region_kind(
     min_total_chars: int = 80,
 ) -> tuple[str, dict[str, Any]]:
     # Return "table" or "note" with lightweight, explainable signals.
+    if _is_parameter_description_layout(table_rows):
+        return "table", {
+            "reason": "parameter_description_layout",
+            "effective_col_count": len(_effective_non_empty_column_indices(table_rows)),
+        }
+
     is_single_column_like = _is_single_column_like_rows(table_rows)
     row_count = len(table_rows)
     col_count = max((len(row) for row in table_rows), default=0)
+    if row_count <= 1:
+        fallback_kind, fallback_meta = _classify_single_column_rows_only(table_rows)
+        if fallback_kind == "note":
+            return fallback_kind, {
+                "reason": "single_row_fallback",
+                **fallback_meta,
+            }
     if col_count <= 0 or not region_words:
         return "table", {"reason": "empty_content"}
 
@@ -288,7 +392,7 @@ def _estimate_region_kind(
     table_score = 0.0
     note_score = 0.0
 
-    # Note routing is intentionally single-column-first; key-value tables with structural blanks stay table.
+    # Note routing is intentionally single-column-first.
     if not is_single_column_like:
         return "table", {
             "reason": "not_single_column_like",
@@ -296,7 +400,6 @@ def _estimate_region_kind(
             "effective_col_count": len(_effective_non_empty_column_indices(table_rows)),
         }
 
-    # Structured short rows indicate key/value style tables or metadata blocks.
     if row_count <= 3 and max(line_word_counts) <= 4 and total_chars < min_total_chars:
         table_score += 2.0
     if max_words <= 4 and long_lines == 0:
@@ -663,6 +766,7 @@ def _continuation_regions_should_merge(
     gap_text_boxes: Sequence[Tuple[float, float, float, float]],
     edge_tolerance: float = 24.0,
     axis_tolerance: float = 1.0,
+    prev_page_height: float | None = None,
 ) -> bool:
     # Merge only when geometry matches and no body text sits between the two fragments.
     _prev_x0, _prev_top, _prev_x1, prev_bottom = prev_bbox
@@ -676,8 +780,17 @@ def _continuation_regions_should_merge(
     prev_near_footer = abs(body_bottom - prev_bottom) <= edge_tolerance
     curr_near_header = abs(curr_top - body_top) <= edge_tolerance
     if prev_near_footer or curr_near_header:
+        # Keep current continuation behavior when the fragments are aligned near page edges.
+        # This covers the usual table-break pattern while still allowing occasional header/footers offsets.
         return True
-    return True
+
+    if prev_page_height is None:
+        return True
+
+    # Cross-page continuation usually occurs near the top of the next page and near the bottom
+    # of the previous page. A large geometric jump is likely a new table block, not a split.
+    gap_across_pages = (float(prev_page_height) - prev_bottom) + (curr_top - body_top)
+    return gap_across_pages <= 220.0
 
 
 def _maybe_merge_missing_first_column_chunk(
@@ -1361,8 +1474,9 @@ def _extract_tables(
     page = _filter_page_for_extraction(page)
     seen_keys = set()
     merged: List[TableChunk] = []
+    table_regions = _table_regions(page)
 
-    for x0, x1, lines in _table_regions(page):
+    for x0, x1, lines in table_regions:
         y0 = min(edge["top"] for edge in lines) - 2
         y1 = max(edge["top"] for edge in lines) + 2
         crop_bbox = (max(0.0, x0), max(0.0, y0), min(page.width, x1), min(page.height, y1))
@@ -1376,6 +1490,23 @@ def _extract_tables(
             if key not in seen_keys:
                 seen_keys.add(key)
                 merged.append((table, crop_box))
+
+    if not table_regions:
+        # Some documents render callout-like notes as filled boxes without explicit borders.
+        for entry in _single_column_box_region_candidates(page):
+            x0, y0, x1, y1 = entry["bbox"]
+            crop_box = (x0, y0, x1, y1)
+            for table, _crop_box in _extract_tables_from_crop(
+                page,
+                crop_box,
+                fallback_to_text_rows=True,
+            ):
+                rows_key = tuple(tuple(row) for row in table)
+                key = (rows_key, tuple(round(v, 2) for v in _crop_box))
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                merged.append((table, _crop_box))
 
     # Notes drawn as single-column box regions should stay in body text, not table output.
     # Merge nearby fragments with shared index to avoid dropping partial text by accident.
@@ -1431,23 +1562,24 @@ def _extract_tables(
         if not merged_into_existing:
             merged_candidates.append(candidate)
 
-    removed_indices: set[int] = set()
-    for candidate in merged_candidates:
-        if candidate["is_white_content"] or not candidate.get("is_note_like", False):
-            continue
-        for idx, (rows, table_bbox) in enumerate(merged):
-            if idx in removed_indices:
+    if table_regions:
+        removed_indices: set[int] = set()
+        for candidate in merged_candidates:
+            if candidate["is_white_content"] or not candidate.get("is_note_like", False):
                 continue
-            if not _looks_like_single_column_note(rows=rows, page=page, bbox=table_bbox):
-                continue
-            if not _single_column_boxes_share_index(table_bbox, candidate["bbox"]):
-                continue
-            if _bbox_overlap_ratio(table_bbox, candidate["bbox"]) < 0.8:
-                continue
-            removed_indices.add(idx)
+            for idx, (rows, table_bbox) in enumerate(merged):
+                if idx in removed_indices:
+                    continue
+                if not _looks_like_single_column_note(rows=rows, page=page, bbox=table_bbox):
+                    continue
+                if not _single_column_boxes_share_index(table_bbox, candidate["bbox"]):
+                    continue
+                if _bbox_overlap_ratio(table_bbox, candidate["bbox"]) < 0.8:
+                    continue
+                removed_indices.add(idx)
 
-    if removed_indices:
-        merged = [entry for idx, entry in enumerate(merged) if idx not in removed_indices]
+        if removed_indices:
+            merged = [entry for idx, entry in enumerate(merged) if idx not in removed_indices]
 
     if merged or not force_table:
         return merged

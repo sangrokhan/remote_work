@@ -74,6 +74,7 @@ class SampleRawDumpTests(unittest.TestCase):
                         out_md_dir=root / "from_raw" / "md",
                         out_image_dir=root / "from_raw" / "images",
                         stem=f"{raw_path.stem}_from_raw",
+                        page_write=True,
                         from_raw=raw_path,
                     )
 
@@ -83,6 +84,7 @@ class SampleRawDumpTests(unittest.TestCase):
                             out_md_dir=root / "direct" / "md",
                             out_image_dir=root / "direct" / "images",
                             stem=raw_path.stem,
+                            page_write=True,
                         )
 
                     self.assertEqual(

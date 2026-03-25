@@ -43,8 +43,58 @@ class TextModuleTests(unittest.TestCase):
         previous = {"bottom": 132.0}
         close_line = {"top": 136.0}
         far_line = {"top": 139.0}
-        self.assertTrue(_should_merge_paragraph_lines(previous, close_line))
-        self.assertFalse(_should_merge_paragraph_lines(previous, far_line))
+        self.assertTrue(_should_merge_paragraph_lines(previous, close_line, same_kind="paragraph"))
+        self.assertFalse(_should_merge_paragraph_lines(previous, far_line, same_kind="paragraph"))
+
+    def test_should_merge_paragraph_lines_scales_with_font_size(self) -> None:
+        previous = {"top": 90.0, "bottom": 102.0, "size": 20.0}
+        large_gap_wrapped_heading = {"top": 110.0, "bottom": 122.0, "size": 20.0}
+        large_gap_paragraph_break = {"top": 114.0, "bottom": 126.0, "size": 20.0}
+        self.assertTrue(_should_merge_paragraph_lines(previous, large_gap_wrapped_heading, same_kind="paragraph"))
+        self.assertFalse(_should_merge_paragraph_lines(previous, large_gap_paragraph_break, same_kind="paragraph"))
+
+    def test_should_merge_heading_lines_requires_same_heading_level(self) -> None:
+        previous = {"top": 135.35, "bottom": 157.31, "size": 21.96}
+        wrapped_heading = {"top": 160.31, "bottom": 182.27, "size": 21.96}
+        next_level_heading = {"top": 185.31, "bottom": 207.27, "size": 15.96}
+        heading_levels = {21.96: 2, 15.96: 3}
+        self.assertTrue(
+            _should_merge_paragraph_lines(
+                previous,
+                wrapped_heading,
+                same_kind="heading",
+                heading_levels=heading_levels,
+            )
+        )
+        self.assertFalse(
+            _should_merge_paragraph_lines(
+                wrapped_heading,
+                next_level_heading,
+                same_kind="heading",
+                heading_levels=heading_levels,
+            )
+        )
+
+    def test_extract_body_text_lines_merges_wrapped_heading_text_into_single_markdown_line(self) -> None:
+        page = SimpleNamespace()
+        line_payloads = [
+            {"text": "FGR-BC0008, DSCP Based Scheduling", "top": 135.35, "bottom": 157.31, "size": 21.96},
+            {"text": "Adjustment", "top": 160.31, "bottom": 182.27, "size": 21.96},
+        ]
+
+        with patch("extractor.text._extract_body_word_lines", return_value=line_payloads):
+            raw_lines, normalized_lines = _extract_body_text_lines(
+                page=page,
+                header_margin=90.0,
+                footer_margin=40.0,
+                heading_levels={21.96: 2},
+            )
+
+        self.assertEqual(
+            ["FGR-BC0008, DSCP Based Scheduling", "Adjustment"],
+            raw_lines,
+        )
+        self.assertEqual(["## FGR-BC0008, DSCP Based Scheduling Adjustment"], normalized_lines)
 
     def test_build_body_blocks_groups_adjacent_paragraph_lines(self) -> None:
         lines = [
