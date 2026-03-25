@@ -515,7 +515,7 @@ def _line_heading_level(line: dict, heading_levels: dict[float, dict[str, float 
         return None
 
     if max_x0 is not None:
-        text_x0 = float(line.get("x0", line.get("text_start_x", 0.0)) or 0.0)
+        text_x0 = round(float(line.get("x0", line.get("text_start_x", 0.0)) or 0.0), 2)
         if text_x0 > max_x0:
             return None
     return level
