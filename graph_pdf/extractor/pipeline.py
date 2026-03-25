@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 import json
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 import pdfplumber
 
@@ -41,12 +41,22 @@ def _heading_level_from_rule(rule: dict) -> int | None:
     return sharp_count if 1 <= sharp_count <= 6 else None
 
 
-def _load_heading_levels(add_heading: Path | None) -> dict[float, int] | None:
+def _heading_max_x0_from_rule(match: dict[str, Any]) -> float | None:
+    if "max_x0" not in match:
+        return None
+    try:
+        max_x0 = float(match["max_x0"])
+    except (TypeError, ValueError):
+        return None
+    return max_x0 if max_x0 >= 0 else None
+
+
+def _load_heading_levels(add_heading: Path | None) -> dict[float, dict[str, float | int]] | None:
     if add_heading is None:
         return None
 
     payload = json.loads(Path(add_heading).read_text(encoding="utf-8"))
-    heading_levels: dict[float, int] = {}
+    heading_levels: dict[float, dict[str, float | int]] = {}
     for rule in payload.get("heading_rules", []):
         match = rule.get("match") or {}
         if "font_size" not in match:
@@ -55,7 +65,10 @@ def _load_heading_levels(add_heading: Path | None) -> dict[float, int] | None:
         if level is None:
             continue
         font_size = round(float(match["font_size"]), 2)
-        heading_levels[font_size] = level
+        heading_levels[font_size] = {
+            "level": level,
+            "max_x0": _heading_max_x0_from_rule(match),
+        }
     return heading_levels
 
 
