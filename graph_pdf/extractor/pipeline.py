@@ -18,8 +18,8 @@ from .tables import (
     _body_text_boxes,
     _continuation_regions_should_merge,
     _extract_tables,
-    _gap_text_boxes_after_bbox,
-    _gap_text_boxes_before_bbox,
+    _has_gap_text_after_bbox,
+    _has_gap_text_before_bbox,
     _looks_like_single_column_note,
     _should_try_table_continuation_merge,
     _single_column_note_body_text,
@@ -229,7 +229,7 @@ class _PendingTableState:
     last_page: int | None = None
     bbox: Tuple[float, float, float, float] | None = None
     axes: List[float] = field(default_factory=list)
-    gap_text_boxes: List[Tuple[float, float, float, float]] = field(default_factory=list)
+    has_gap_text: bool = False
     page_height: float | None = None
 
     def is_active(self) -> bool:
@@ -242,7 +242,7 @@ class _PendingTableState:
         self.last_page = None
         self.bbox = None
         self.axes.clear()
-        self.gap_text_boxes.clear()
+        self.has_gap_text = False
         self.page_height = None
 
     def append_chunk(self, rows: TableRows) -> None:
@@ -304,53 +304,71 @@ def _strip_repeated_headers_by_chunk(chunks: Sequence[TableRows]) -> TableRows:
 
 
 def _has_intervening_regions_before_table(
-    page_regions: dict[str, list[dict[str, Any]]],
+    page_regions: dict[str, Any],
     table_bbox: Tuple[float, float, float, float],
 ) -> bool:
     table_top = float(table_bbox[1])
+    table_bbox_tuple = (
+        float(table_bbox[0]),
+        float(table_bbox[1]),
+        float(table_bbox[2]),
+        float(table_bbox[3]),
+    )
     for region_key in ("text", "tables", "images"):
-        entries = page_regions.get(region_key, [])
-        if not isinstance(entries, list):
+        entries = page_regions.get(region_key)
+        if not entries:
             continue
         for entry in entries:
-            raw_bbox = entry.get("bbox") if isinstance(entry, dict) else None
-            if not isinstance(raw_bbox, list) and not isinstance(raw_bbox, tuple):
+            raw_bbox = entry.get("bbox") if isinstance(entry, dict) else entry
+            if not isinstance(raw_bbox, Sequence) or len(raw_bbox) != 4:
                 continue
-            if len(raw_bbox) != 4:
+            bbox = (
+                float(raw_bbox[0]),
+                float(raw_bbox[1]),
+                float(raw_bbox[2]),
+                float(raw_bbox[3]),
+            )
+            if bbox == table_bbox_tuple:
                 continue
-            bbox = [float(v) for v in raw_bbox]
-            if tuple(bbox) == tuple(table_bbox):
-                continue
-            if float(bbox[3]) <= table_top - 1.0:
+            if bbox[3] <= table_top - 1.0:
                 return True
     return False
 
 
 def _has_intervening_regions_after_table(
-    page_regions: dict[str, list[dict[str, Any]]],
+    page_regions: dict[str, Any],
     table_bbox: Tuple[float, float, float, float],
 ) -> bool:
     table_bottom = float(table_bbox[3])
+    table_bbox_tuple = (
+        float(table_bbox[0]),
+        float(table_bbox[1]),
+        float(table_bbox[2]),
+        float(table_bbox[3]),
+    )
     for region_key in ("text", "tables", "images"):
-        entries = page_regions.get(region_key, [])
-        if not isinstance(entries, list):
+        entries = page_regions.get(region_key)
+        if not entries:
             continue
         for entry in entries:
-            raw_bbox = entry.get("bbox") if isinstance(entry, dict) else None
-            if not isinstance(raw_bbox, list) and not isinstance(raw_bbox, tuple):
+            raw_bbox = entry.get("bbox") if isinstance(entry, dict) else entry
+            if not isinstance(raw_bbox, Sequence) or len(raw_bbox) != 4:
                 continue
-            if len(raw_bbox) != 4:
+            bbox = (
+                float(raw_bbox[0]),
+                float(raw_bbox[1]),
+                float(raw_bbox[2]),
+                float(raw_bbox[3]),
+            )
+            if bbox == table_bbox_tuple:
                 continue
-            bbox = [float(v) for v in raw_bbox]
-            if tuple(bbox) == tuple(table_bbox):
-                continue
-            if float(bbox[1]) >= table_bottom + 1.0:
+            if bbox[1] >= table_bottom + 1.0:
                 return True
     return False
 
 
 def _has_cross_page_gap_blocked(
-    region_map: dict[int, dict[str, list[dict[str, Any]]]],
+    region_map: dict[int, dict[str, Any]],
     previous_page: int,
     previous_table_bbox: Tuple[float, float, float, float],
     current_page: int,
@@ -358,10 +376,14 @@ def _has_cross_page_gap_blocked(
 ) -> bool:
     previous_regions = region_map.get(previous_page, {})
     current_regions = region_map.get(current_page, {})
-    if previous_regions and _has_intervening_regions_after_table(previous_regions, previous_table_bbox):
+    if not previous_regions:
+        return False
+    if _has_intervening_regions_after_table(previous_regions, previous_table_bbox):
         return True
 
-    if current_regions and _has_intervening_regions_before_table(current_regions, current_table_bbox):
+    if not current_regions:
+        return True
+    if _has_intervening_regions_before_table(current_regions, current_table_bbox):
         return True
 
     return False
@@ -412,15 +434,15 @@ def extract_pdf_to_outputs(
 
     selected_pages = set(int(page_no) for page_no in (pages or []))
     drawing_regions_by_page: dict[int, list[Tuple[float, float, float, float]]] = {}
-    region_map: dict[int, dict[str, list[dict[str, Any]]]] = {}
+    region_map: dict[int, dict[str, Any]] = {}
     heading_levels = _load_heading_levels(add_heading)
     initial_document_id = _safe_document_id(stem)
     current_document_state = _DocumentOutputState(document_id=initial_document_id)
     document_artifacts: list[dict] = []
     image_files: list[Path] = []
-    table_debug_pages: List[dict] = []
-    edge_debug_pages: List[dict] = []
-    rotated_debug: List[dict] = []
+    table_debug_pages: List[dict] | None = [] if debug else None
+    edge_debug_pages: List[dict] | None = [] if debug else None
+    rotated_debug: List[dict] | None = [] if debug_watermark else None
     total_table_count = 0
 
     embedded_image_refs_by_page = _collect_embedded_image_refs(
@@ -555,7 +577,9 @@ def extract_pdf_to_outputs(
             tables: List[Tuple[TableRows, Tuple[float, float, float, float]]] = []
             note_references: List[dict] = []
             detected_table_payloads: List[dict] = []
+            table_exclusion_regions: list[Tuple[float, float, float, float]] = []
             for table_rows, bbox in detected_tables:
+                table_exclusion_regions.append(bbox)
                 row_count = len(table_rows)
                 col_count = max((len(row) for row in table_rows), default=0)
                 is_note = _looks_like_single_column_note(
@@ -593,7 +617,7 @@ def extract_pdf_to_outputs(
                 page=page,
                 header_margin=header_margin,
                 footer_margin=footer_margin,
-                excluded_bboxes=[bbox for _rows, bbox in detected_tables],
+                excluded_bboxes=table_exclusion_regions,
             )
             drawing_regions_by_page[page_idx] = image_regions
             embedded_image_refs = embedded_image_refs_by_page.get(page_idx, [])
@@ -602,68 +626,62 @@ def extract_pdf_to_outputs(
                 for entry in embedded_image_refs
                 if isinstance(entry, dict) and len(entry.get("bbox", ())) == 4
             ]
-            embedded_regions_payload = [
-                {
-                    "kind": "image",
-                    "source": "embedded",
-                    "bbox": [round(float(v), 2) for v in entry.get("bbox", ())],
-                    "page_index": image_idx,
-                }
-                for image_idx, entry in enumerate(embedded_image_refs, start=1)
-                if isinstance(entry, dict) and len(entry.get("bbox", ())) == 4
-            ]
-            full_page_text = _extract_body_text(page, header_margin=header_margin, footer_margin=footer_margin)
             body_text_regions = _body_text_boxes(
                 page=page,
                 header_margin=header_margin,
                 footer_margin=footer_margin,
-                excluded_bboxes=[bbox for _rows, bbox in detected_tables],
+                excluded_bboxes=table_exclusion_regions,
             )
-            body_regions_payload = [
-                {
-                    "bbox": [round(float(v), 2) for v in bbox],
+            table_regions = list(table_exclusion_regions)
+            if region_log is not None:
+                embedded_regions_payload = [
+                    {
+                        "kind": "image",
+                        "source": "embedded",
+                        "bbox": [round(float(v), 2) for v in entry.get("bbox", ())],
+                        "page_index": image_idx,
+                    }
+                    for image_idx, entry in enumerate(embedded_image_refs, start=1)
+                    if isinstance(entry, dict) and len(entry.get("bbox", ())) == 4
+                ]
+                tables_regions_payload = [
+                    {
+                        "kind": entry["kind"],
+                        "bbox": [round(float(value), 2) for value in entry["bbox"]],
+                        "row_count": int(entry["row_count"]),
+                        "col_count": int(entry["col_count"]),
+                    }
+                    for entry in detected_table_payloads
+                ]
+                unique_tables_regions: list[dict[str, Any]] = []
+                table_region_keys: set[tuple[Any, ...]] = set()
+                for entry in tables_regions_payload:
+                    key = (entry["kind"], tuple(entry["bbox"]), int(entry["row_count"]), int(entry["col_count"]))
+                    if key in table_region_keys:
+                        continue
+                    table_region_keys.add(key)
+                    unique_tables_regions.append(entry)
+
+                region_map[page_idx] = {
+                    "tables": unique_tables_regions,
+                    "text": [{"bbox": [round(float(v), 2) for v in bbox]} for bbox in body_text_regions],
+                    "images": embedded_regions_payload
+                    + [{"kind": "image", "source": "drawing", "bbox": [round(float(v), 2) for v in image_bbox]} for image_bbox in image_regions],
+                    "body_top": float(body_top),
+                    "body_bottom": float(body_bottom),
+                    "header_margin": float(header_margin),
+                    "footer_margin": float(footer_margin),
                 }
-                for bbox in body_text_regions
-            ]
-            drawing_regions_payload = [
-                {
-                    "kind": "image",
-                    "source": "drawing",
-                    "bbox": [round(float(v), 2) for v in image_bbox],
+            else:
+                region_map[page_idx] = {
+                    "tables": table_regions,
+                    "text": body_text_regions,
+                    "images": [*embedded_image_regions, *image_regions],
                 }
-                for image_bbox in image_regions
-            ]
-            tables_regions_payload = [
-                {
-                    "kind": entry["kind"],
-                    "bbox": [round(float(value), 2) for value in entry["bbox"]],
-                    "row_count": int(entry["row_count"]),
-                    "col_count": int(entry["col_count"]),
-                }
-                for entry in detected_table_payloads
-            ]
-            unique_tables_regions: list[dict[str, Any]] = []
-            table_region_keys: set[tuple[Any, ...]] = set()
-            for entry in tables_regions_payload:
-                key = (
-                    entry["kind"],
-                    tuple(entry["bbox"]),
-                    int(entry["row_count"]),
-                    int(entry["col_count"]),
-                )
-                if key in table_region_keys:
-                    continue
-                table_region_keys.add(key)
-                unique_tables_regions.append(entry)
-            region_map[page_idx] = {
-                "tables": unique_tables_regions,
-                "text": body_regions_payload,
-                "images": embedded_regions_payload + drawing_regions_payload,
-                "body_top": float(body_top),
-                "body_bottom": float(body_bottom),
-                "header_margin": float(header_margin),
-                "footer_margin": float(footer_margin),
-            }
+                obsolete_page_threshold = page_idx - 1
+                for obsolete_page in [p for p in region_map.keys() if p < obsolete_page_threshold]:
+                    region_map.pop(obsolete_page, None)
+
             page_pending_table = current_document_state.pending_table_state.flattened_rows() if current_document_state.pending_table_state.is_active() else None
             page_excluded_bboxes = _body_excluded_bboxes(
                 pending_table=page_pending_table,
@@ -674,7 +692,7 @@ def extract_pdf_to_outputs(
                 ],
                 body_top=footer_margin,
             )
-            page_excluded_bboxes.extend([bbox for _rows, bbox in detected_tables])
+            page_excluded_bboxes.extend(table_exclusion_regions)
             page_table_references: List[dict] = []
             page_content_references: List[dict] = []
 
@@ -737,13 +755,12 @@ def extract_pdf_to_outputs(
                 continue
 
             tables = sorted(tables, key=lambda item: item[1][1])
-            table_bboxes = [table_bbox for _table_rows, table_bbox in tables]
             for table_index, (table_rows, bbox) in enumerate(tables):
                 cross_page_continuation = _should_try_table_continuation_merge(
                     pending_page=current_document_state.pending_table_state.last_page,
                     current_page=page_idx,
                 )
-                current_gap_text_boxes = _gap_text_boxes_before_bbox(
+                has_current_gap_text = _has_gap_text_before_bbox(
                     body_text_regions,
                     bbox,
                 )
@@ -770,7 +787,7 @@ def extract_pdf_to_outputs(
                         curr_axes=current_axes,
                         body_top=body_top,
                         body_bottom=body_bottom,
-                        gap_text_boxes=[*current_document_state.pending_table_state.gap_text_boxes, *current_gap_text_boxes],
+                        has_gap_text=current_document_state.pending_table_state.has_gap_text or has_current_gap_text,
                         prev_page_height=current_document_state.pending_table_state.page_height,
                     ):
                         if current_document_state.pending_table_state.start_page is not None and current_document_state.pending_table_state.table_no is not None:
@@ -790,10 +807,7 @@ def extract_pdf_to_outputs(
                         )
                         current_document_state.pending_table_state.page_height = float(page.height)
                         current_document_state.pending_table_state.axes = _merge_numeric_positions([*current_document_state.pending_table_state.axes, *current_axes], tolerance=1.0)
-                        current_document_state.pending_table_state.gap_text_boxes = _gap_text_boxes_after_bbox(
-                            body_text_regions,
-                            bbox,
-                        )
+                        current_document_state.pending_table_state.has_gap_text = _has_gap_text_after_bbox(body_text_regions, bbox)
                         continue
                 _flush_pending_table(current_document_state)
 
@@ -812,7 +826,7 @@ def extract_pdf_to_outputs(
                 current_document_state.pending_table_state.bbox = bbox
                 current_document_state.pending_table_state.axes = current_axes
                 current_document_state.pending_table_state.page_height = float(page.height)
-                current_document_state.pending_table_state.gap_text_boxes = _gap_text_boxes_after_bbox(
+                current_document_state.pending_table_state.has_gap_text = _has_gap_text_after_bbox(
                     body_text_regions,
                     bbox,
                 )
@@ -922,7 +936,10 @@ def extract_pdf_to_outputs(
             encoding="utf-8",
         )
         debug_edges_file = out_md_dir / f"{_safe_document_id(stem)}_edges_debug.json"
-        debug_edges_file.write_text(json.dumps({"pdf": str(pdf_path), "pages": edge_debug_pages}, ensure_ascii=False, indent=2), encoding="utf-8")
+        debug_edges_file.write_text(
+            json.dumps({"pdf": str(pdf_path), "pages": edge_debug_pages}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     debug_watermark_file: Optional[Path] = None
     if debug_watermark:
