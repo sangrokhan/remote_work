@@ -76,18 +76,16 @@ def _format_page_comment(page_no: int) -> str:
     return f"[//]: # (Page {page_no})"
 
 
-_DOC_ID_HEADING_PREFIX_RE = re.compile(r"^##\s+(?P<doc_id>\S{10})(?:\s|$)")
-_DOC_ID_PLAIN_PREFIX_RE = re.compile(r"^(?P<doc_id>[A-Za-z0-9._-]{10})(?:\s|$)")
+_DOC_ID_HEADING_PREFIX_RE = re.compile(r"^##\s+(?P<doc_id>.+?)\s*$")
 _UNSAFE_DOC_ID_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def _extract_document_id_from_markdown_line(line: str) -> str | None:
     match = _DOC_ID_HEADING_PREFIX_RE.match(line.strip())
     if not match:
-        match = _DOC_ID_PLAIN_PREFIX_RE.match(line.strip())
-        if not match:
-            return None
-    return match.group("doc_id")
+        return None
+    doc_id = match.group("doc_id").strip()
+    return doc_id or None
 
 
 def _safe_document_id(document_id: str) -> str:
