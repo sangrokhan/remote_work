@@ -310,7 +310,7 @@ def _internal_grid_counts(
     page: pdfplumber.page.PageObject,
     bbox: Tuple[float, float, float, float],
 ) -> tuple[int, int]:
-    # Internal stroke edges are a strong table shape signal compared with prose boxes.
+    # Internal edges are a table-structure signal compared with prose boxes.
     x0, y0, x1, y1 = bbox
     width = max(0.0, x1 - x0)
     height = max(0.0, y1 - y0)
@@ -319,8 +319,6 @@ def _internal_grid_counts(
 
     internal_vertical = 0
     for edge in getattr(page, "vertical_edges", []):
-        if not bool(edge.get("stroke")):
-            continue
         edge_x0 = float(edge.get("x0", 0.0))
         edge_top = float(edge.get("top", 0.0))
         edge_bottom = float(edge.get("bottom", 0.0))
@@ -333,8 +331,6 @@ def _internal_grid_counts(
 
     internal_horizontal = 0
     for edge in getattr(page, "horizontal_edges", []):
-        if not bool(edge.get("stroke")):
-            continue
         edge_top = float(edge.get("top", 0.0))
         edge_x0 = float(edge.get("x0", 0.0))
         edge_x1 = float(edge.get("x1", 0.0))
@@ -457,6 +453,17 @@ def _classify_single_column_region(
 
     region_words = _extract_region_words(page=page, bbox=bbox)
     internal_grid = _internal_grid_counts(page=page, bbox=bbox)
+    internal_vertical, internal_horizontal = internal_grid
+    if len(table_rows) <= 1 and internal_vertical + internal_horizontal >= 2:
+        # A one-line block that already has a visible cell grid is treated as table metadata,
+        # because it's structurally a table row/header regardless of prose-like length.
+        return "table", {
+            "reason": "single_row_grid",
+            "table_score": 3.0,
+            "note_score": 0.0,
+            "internal_vertical": internal_vertical,
+            "internal_horizontal": internal_horizontal,
+        }
     return _estimate_region_kind(
         table_rows=table_rows,
         region_words=region_words,
@@ -1351,6 +1358,126 @@ def _single_column_box_regions(
     return [entry["bbox"] for entry in _single_column_box_region_candidates(page)]
 
 
+def _candidate_image_regions_for_notes(
+    page: pdfplumber.page.PageObject,
+    min_width: float = 12.0,
+    min_height: float = 10.0,
+) -> List[Tuple[float, float, float, float]]:
+    # Image anchors are used as optional boundaries for prose-like one-column regions.
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
+    regions: List[Tuple[float, float, float, float]] = []
+    for image in getattr(page, "images", []) or []:
+        x0 = float(image.get("x0", 0.0))
+        top = float(image.get("top", 0.0))
+        x1 = float(image.get("x1", x0))
+        bottom = float(image.get("bottom", top))
+        if x1 <= x0 or bottom <= top:
+            continue
+        if (x1 - x0) < min_width or (bottom - top) < min_height:
+            continue
+        if bottom <= body_top or top >= body_bottom:
+            continue
+        regions.append((x0, top, x1, bottom))
+    regions.sort(key=lambda bbox: (bbox[1], bbox[0]))
+    return regions
+
+
+def _horizontal_separator_lines(
+    page: pdfplumber.page.PageObject,
+    min_length: float = 90.0,
+) -> List[Tuple[float, float, float, float]]:
+    # Use horizontal separators as hard stop points for single-column note merging.
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
+    lines: List[Tuple[float, float, float, float]] = []
+    for edge in getattr(page, "horizontal_edges", []):
+        x0 = float(edge.get("x0", 0.0))
+        x1 = float(edge.get("x1", x0))
+        y = float(edge.get("top", edge.get("y0", 0.0)))
+        if y <= body_top or y >= body_bottom:
+            continue
+        if x1 - x0 >= min_length:
+            lines.append((x0, y, x1, y))
+    lines.sort(key=lambda line: (line[1], line[0]))
+    return lines
+
+
+def _select_note_anchor_for_bbox(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+    image_regions: Sequence[Tuple[float, float, float, float]] | None = None,
+) -> Tuple[float, float, float, float] | None:
+    image_regions = list(image_regions or _candidate_image_regions_for_notes(page))
+    if not image_regions:
+        return None
+
+    note_y0, note_y1 = bbox[1], bbox[3]
+    note_x0, note_x1 = bbox[0], bbox[2]
+    note_center_y = (note_y0 + note_y1) / 2.0
+    best_anchor: Tuple[float, float, float, float] | None = None
+    best_score = -1.0
+
+    for region in image_regions:
+        image_x0, image_top, image_x1, image_bottom = region
+        x_overlap = _bbox_x_overlap_ratio(region, bbox)
+        if x_overlap < 0.10:
+            if image_x1 <= note_x0:
+                gap = note_x0 - image_x1
+            elif image_x0 >= note_x1:
+                gap = image_x0 - note_x1
+            else:
+                gap = 0.0
+            if gap > 24.0:
+                continue
+            x_overlap = max(0.1, 0.5 - (gap / 48.0))
+
+        if x_overlap < 0.10:
+            continue
+        if image_bottom < note_y0 - 24.0 or image_top > note_y1 + 24.0:
+            continue
+
+        image_center_y = (image_top + image_bottom) / 2.0
+        score = x_overlap * 100.0 - abs(note_center_y - image_center_y)
+        if score > best_score:
+            best_score = score
+            best_anchor = region
+
+    return best_anchor
+
+
+def _candidate_note_band_for_bbox(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+) -> Tuple[float, float] | None:
+    # Extend a note candidate from anchor image to nearest horizontal separators.
+    image_regions = _candidate_image_regions_for_notes(page)
+    if not image_regions:
+        return None
+
+    anchor = _select_note_anchor_for_bbox(page, bbox, image_regions=image_regions)
+    if anchor is None:
+        return None
+
+    anchor_x0, anchor_top, anchor_x1, anchor_bottom = anchor
+    anchor_area = (anchor_x0, anchor_top, anchor_x1, anchor_bottom)
+    separator_lines = _horizontal_separator_lines(page)
+    top_boundary = float("-inf")
+    bottom_boundary = float("inf")
+
+    for line_x0, line_y, line_x1, _line_bottom in separator_lines:
+        if _bbox_x_overlap_ratio(anchor_area, (line_x0, line_y, line_x1, line_y)) < 0.35:
+            continue
+        if line_y <= anchor_top:
+            top_boundary = max(top_boundary, line_y)
+        else:
+            bottom_boundary = min(bottom_boundary, line_y)
+
+    if top_boundary == float("-inf"):
+        top_boundary = anchor_top
+    if bottom_boundary == float("inf"):
+        return (anchor_top, anchor_bottom)
+    return (max(0.0, top_boundary), min(page.height, bottom_boundary))
+
+
 def _single_column_boxes_share_index(
     a_bbox: Tuple[float, float, float, float],
     b_bbox: Tuple[float, float, float, float],
@@ -1364,6 +1491,26 @@ def _single_column_boxes_share_index(
     b_width = b_x1 - b_x0
     return abs(a_width - b_width) <= 6.0 or abs(a_x0 - b_x0) <= 3.0
 
+
+
+
+def _note_bands_are_adjacent_or_overlapping(
+    a_band: tuple[float, float] | None,
+    b_band: tuple[float, float] | None,
+    *,
+    gap_tolerance: float = 2.0,
+) -> bool:
+    if a_band is None or b_band is None:
+        return False
+
+    a_top, a_bottom = a_band
+    b_top, b_bottom = b_band
+    if a_top > a_bottom:
+        a_top, a_bottom = a_bottom, a_top
+    if b_top > b_bottom:
+        b_top, b_bottom = b_bottom, b_top
+
+    return max(a_top, b_top) <= min(a_bottom, b_bottom) + gap_tolerance
 
 def _merge_single_column_fragment_rows(
     top_bbox: Tuple[float, float, float, float],
@@ -1511,17 +1658,36 @@ def _extract_tables(
     # Notes drawn as single-column box regions should stay in body text, not table output.
     # Merge nearby fragments with shared index to avoid dropping partial text by accident.
     candidate_rows: List[dict] = []
+    image_regions = _candidate_image_regions_for_notes(page)
     for entry in _single_column_box_region_candidates(page):
         rows = [[_extract_text_from_box_region(page, entry["bbox"])]]
         if not rows[0][0]:
             continue
+        raw_bbox = entry["bbox"]
         is_note_like = _looks_like_single_column_note(rows=rows, page=page, bbox=entry["bbox"])
+        note_anchor = _select_note_anchor_for_bbox(page, raw_bbox, image_regions=image_regions)
+        note_band = _candidate_note_band_for_bbox(page, raw_bbox) if note_anchor is not None else None
+        if is_note_like and note_band is not None:
+            raw_bbox = (
+                entry["bbox"][0],
+                min(entry["bbox"][1], note_band[0]),
+                entry["bbox"][2],
+                max(entry["bbox"][3], note_band[1]),
+            )
+
         candidate_rows.append(
             {
-                "bbox": entry["bbox"],
+                "bbox": raw_bbox,
+                "raw_bbox": entry["bbox"],
                 "rows": rows,
                 "is_white_content": bool(entry.get("is_white_content")),
                 "is_note_like": is_note_like,
+                "note_anchor": (
+                    tuple(round(value, 2) for value in note_anchor)
+                    if note_anchor is not None
+                    else None
+                ),
+                "note_band": note_band,
             }
         )
 
@@ -1537,12 +1703,17 @@ def _extract_tables(
                 continue
             if not _single_column_boxes_share_index(existing["bbox"], candidate["bbox"]):
                 continue
-            # Merge vertically adjacent or overlapping fragments that are likely the same logical box.
-            if (
-                abs(candidate["bbox"][1] - existing["bbox"][3]) <= 90.0
-                or abs(existing["bbox"][1] - candidate["bbox"][3]) <= 90.0
-                or _bbox_overlap_ratio(existing["bbox"], candidate["bbox"]) > 0.0
-            ):
+            # Merge vertically adjacent or separator-defined fragments that are likely the same logical box.
+            same_anchor = (
+                existing.get("note_anchor") is not None
+                and existing["note_anchor"] == candidate.get("note_anchor")
+            )
+            same_band = _note_bands_are_adjacent_or_overlapping(
+                existing.get("note_band"),
+                candidate.get("note_band"),
+            )
+
+            if same_anchor or same_band or _bbox_overlap_ratio(existing["bbox"], candidate["bbox"]) > 0.0:
                 merged_rows, merged_bbox = _merge_single_column_fragment_rows(
                     existing["bbox"],
                     existing["rows"],
@@ -1574,12 +1745,40 @@ def _extract_tables(
                     continue
                 if not _single_column_boxes_share_index(table_bbox, candidate["bbox"]):
                     continue
-                if _bbox_overlap_ratio(table_bbox, candidate["bbox"]) < 0.8:
+                candidate_overlap_bbox = (
+                    candidate["raw_bbox"]
+                    if candidate.get("note_band") is not None
+                    else candidate["bbox"]
+                )
+                if _bbox_overlap_ratio(table_bbox, candidate_overlap_bbox) < 0.8:
                     continue
                 removed_indices.add(idx)
 
         if removed_indices:
             merged = [entry for idx, entry in enumerate(merged) if idx not in removed_indices]
+
+    # Single-column callout-like boxes can represent prose notes even when table geometry exists.
+    # Treat note-like non-overlapping box candidates as standalone notes so they are rendered
+    # as note references instead of being silently dropped from output.
+    if merged_candidates:
+        merged_table_bboxes = [table_bbox for _rows, table_bbox in merged]
+        for candidate in merged_candidates:
+            if candidate["is_white_content"] or not candidate.get("is_note_like", False):
+                continue
+
+            candidate_bbox = (
+                candidate["raw_bbox"]
+                if candidate.get("note_band") is not None
+                else candidate["bbox"]
+            )
+            overlaps_with_table = any(
+                _bbox_overlap_ratio(candidate_bbox, table_bbox) >= 0.25
+                for table_bbox in merged_table_bboxes
+            )
+            if overlaps_with_table and candidate.get("note_band") is None:
+                continue
+
+            merged.append((candidate["rows"], candidate_bbox))
 
     if merged or not force_table:
         return merged
