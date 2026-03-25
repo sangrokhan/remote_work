@@ -47,6 +47,7 @@ python3 extractor/__main__.py sample.pdf \
 - `--add-heading <path>`: 외부 JSON의 `font_size -> h1~h6` 규칙으로 body markdown heading 추가
 - `--raw <path>`: 선택 페이지 기준 문서 PDF base64만 저장하는 최소 raw dump 생성
 - `--from-raw <path>`: raw dump 파일을 입력으로 읽어 기존 추출 파이프라인 실행
+- `--page-write`: 기본 md 출력에서 페이지 구분 주석(`[//]: # (Page N)`) 생략을 해제하고 페이지 주석을 출력
 
 ### 직접 실행 예시
 ```bash
