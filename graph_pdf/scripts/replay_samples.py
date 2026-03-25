@@ -261,7 +261,7 @@ def _find_layout_candidates(
 
 
 def _count_table_references(markdown_text: str) -> int:
-    return len(set(TABLE_REF_PATTERN.findall(markdown_text)))
+    return len(TABLE_REF_PATTERN.findall(markdown_text))
 
 
 def _count_table_sections(markdown_text: str) -> int:

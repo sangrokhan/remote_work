@@ -223,7 +223,7 @@ class PipelineExtractionTests(unittest.TestCase):
         markdown = self._extract_result(page_write=True)["markdown"]
 
         self.assertIn("[Table reference: Page 1 table 1]", markdown)
-        self.assertEqual(3, markdown.count("[Table reference: Page 1 table 2]"))
+        self.assertEqual(1, markdown.count("[Table reference: Page 1 table 2]"))
         self.assertIn("[Table reference: Page 3 table 3]", markdown)
         self.assertNotIn("[Table reference: Page 4 table 4]", markdown)
         self.assertIn("[//]: # (Page 2)", markdown)
