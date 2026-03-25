@@ -690,6 +690,30 @@ def _gap_text_boxes_before_bbox(
     return [text_bbox for text_bbox in body_text_boxes if float(text_bbox[3]) <= float(bbox[1])]
 
 
+def _has_gap_text_after_bbox(
+    body_text_boxes: Sequence[Tuple[float, float, float, float]],
+    bbox: Tuple[float, float, float, float],
+) -> bool:
+    # Fast predicate version used by cross-page merge checks.
+    threshold = float(bbox[3])
+    for text_bbox in body_text_boxes:
+        if float(text_bbox[1]) >= threshold:
+            return True
+    return False
+
+
+def _has_gap_text_before_bbox(
+    body_text_boxes: Sequence[Tuple[float, float, float, float]],
+    bbox: Tuple[float, float, float, float],
+) -> bool:
+    # Fast predicate version used by cross-page merge checks.
+    threshold = float(bbox[1])
+    for text_bbox in body_text_boxes:
+        if float(text_bbox[3]) <= threshold:
+            return True
+    return False
+
+
 def _vertical_axes_for_bbox(
     page: pdfplumber.page.PageObject,
     bbox: Tuple[float, float, float, float],
@@ -714,7 +738,7 @@ def _continuation_regions_should_merge(
     curr_axes: Sequence[float],
     body_top: float,
     body_bottom: float,
-    gap_text_boxes: Sequence[Tuple[float, float, float, float]],
+    has_gap_text: bool | Sequence[Tuple[float, float, float, float]],
     edge_tolerance: float = 24.0,
     axis_tolerance: float = 1.0,
     prev_page_height: float | None = None,
@@ -724,7 +748,7 @@ def _continuation_regions_should_merge(
     _curr_x0, curr_top, _curr_x1, _curr_bottom = curr_bbox
 
     shared_axes = [axis for axis in prev_axes if any(abs(axis - other) <= axis_tolerance for other in curr_axes)]
-    if not shared_axes or gap_text_boxes:
+    if not shared_axes or bool(has_gap_text):
         return False
 
     # Near-footer / near-header placement is the common continuation pattern, but shared axes already make this permissive.
