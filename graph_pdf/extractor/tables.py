@@ -675,43 +675,19 @@ def _body_text_boxes(
 
 
 def _gap_text_boxes_after_bbox(
-    page: pdfplumber.page.PageObject,
+    body_text_boxes: Sequence[Tuple[float, float, float, float]],
     bbox: Tuple[float, float, float, float],
-    table_bboxes: Sequence[Tuple[float, float, float, float]],
-    header_margin: float,
-    footer_margin: float,
 ) -> List[Tuple[float, float, float, float]]:
     # Text after a table candidate can block continuation into the next page.
-    return [
-        text_bbox
-        for text_bbox in _body_text_boxes(
-            page,
-            header_margin=header_margin,
-            footer_margin=footer_margin,
-            excluded_bboxes=table_bboxes,
-        )
-        if float(text_bbox[1]) >= float(bbox[3])
-    ]
+    return [text_bbox for text_bbox in body_text_boxes if float(text_bbox[1]) >= float(bbox[3])]
 
 
 def _gap_text_boxes_before_bbox(
-    page: pdfplumber.page.PageObject,
+    body_text_boxes: Sequence[Tuple[float, float, float, float]],
     bbox: Tuple[float, float, float, float],
-    table_bboxes: Sequence[Tuple[float, float, float, float]],
-    header_margin: float,
-    footer_margin: float,
 ) -> List[Tuple[float, float, float, float]]:
     # Text before a table candidate can mean the new page starts with prose rather than a continuation table.
-    return [
-        text_bbox
-        for text_bbox in _body_text_boxes(
-            page,
-            header_margin=header_margin,
-            footer_margin=footer_margin,
-            excluded_bboxes=table_bboxes,
-        )
-        if float(text_bbox[3]) <= float(bbox[1])
-    ]
+    return [text_bbox for text_bbox in body_text_boxes if float(text_bbox[3]) <= float(bbox[1])]
 
 
 def _vertical_axes_for_bbox(
