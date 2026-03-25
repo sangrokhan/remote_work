@@ -1512,6 +1512,135 @@ def _note_bands_are_adjacent_or_overlapping(
 
     return max(a_top, b_top) <= min(a_bottom, b_bottom) + gap_tolerance
 
+
+def _collect_single_column_candidates_for_notes(
+    page: pdfplumber.page.PageObject,
+) -> List[dict]:
+    # Build reusable merged single-column box candidates once and share across table/note steps.
+    candidate_rows: List[dict] = []
+    image_regions = _candidate_image_regions_for_notes(page)
+    for entry in _single_column_box_region_candidates(page):
+        rows = [[_extract_text_from_box_region(page, entry["bbox"])]]
+        if not rows[0][0]:
+            continue
+        raw_bbox = entry["bbox"]
+        is_note_like = _looks_like_single_column_note(rows=rows, page=page, bbox=entry["bbox"])
+        note_anchor = _select_note_anchor_for_bbox(page, raw_bbox, image_regions=image_regions)
+        note_band = _candidate_note_band_for_bbox(page, raw_bbox) if note_anchor is not None else None
+        if is_note_like and note_band is not None:
+            raw_bbox = (
+                entry["bbox"][0],
+                min(entry["bbox"][1], note_band[0]),
+                entry["bbox"][2],
+                max(entry["bbox"][3], note_band[1]),
+            )
+
+        candidate_rows.append(
+            {
+                "bbox": raw_bbox,
+                "raw_bbox": entry["bbox"],
+                "rows": rows,
+                "is_white_content": bool(entry.get("is_white_content")),
+                "is_note_like": is_note_like,
+                "note_anchor": (
+                    tuple(round(value, 2) for value in note_anchor)
+                    if note_anchor is not None
+                    else None
+                ),
+                "note_band": note_band,
+            }
+        )
+
+    merged_candidates: List[dict] = []
+    for candidate in sorted(candidate_rows, key=lambda item: float(item["bbox"][1])):
+        if candidate["is_white_content"]:
+            merged_candidates.append(candidate)
+            continue
+
+        merged_into_existing = False
+        for existing in merged_candidates:
+            if existing["is_white_content"]:
+                continue
+            if not _single_column_boxes_share_index(existing["bbox"], candidate["bbox"]):
+                continue
+            # Merge vertically adjacent or separator-defined fragments that are likely the same logical box.
+            same_anchor = (
+                existing.get("note_anchor") is not None
+                and existing["note_anchor"] == candidate.get("note_anchor")
+            )
+            same_band = _note_bands_are_adjacent_or_overlapping(
+                existing.get("note_band"),
+                candidate.get("note_band"),
+            )
+            if same_anchor or same_band or _bbox_overlap_ratio(existing["bbox"], candidate["bbox"]) > 0.0:
+                merged_rows, merged_bbox = _merge_single_column_fragment_rows(
+                    existing["bbox"],
+                    existing["rows"],
+                    candidate["bbox"],
+                    candidate["rows"],
+                )
+                existing["rows"] = merged_rows
+                existing["bbox"] = merged_bbox
+                existing["is_note_like"] = _looks_like_single_column_note(
+                    rows=merged_rows,
+                    page=page,
+                    bbox=merged_bbox,
+                )
+                merged_into_existing = True
+                break
+
+        if not merged_into_existing:
+            merged_candidates.append(candidate)
+
+    return merged_candidates
+
+
+def _split_crop_bbox_by_excluded_bands(
+    crop_bbox: Tuple[float, float, float, float],
+    excluded_bands: Sequence[Tuple[float, float, float, float]],
+    *,
+    min_x_overlap_ratio: float = 0.20,
+    y_merge_tolerance: float = 1.0,
+    min_region_height: float = 3.5,
+) -> List[Tuple[float, float, float, float]]:
+    # Remove vertical note-like bands from a table crop to avoid parsing note content as table rows.
+    x0, y0, x1, y1 = crop_bbox
+    if not excluded_bands:
+        return [crop_bbox]
+
+    intervals: List[Tuple[float, float]] = []
+    for band_x0, band_x1, band_top, band_bottom in excluded_bands:
+        if _bbox_x_overlap_ratio((band_x0, band_top, band_x1, band_bottom), crop_bbox) < min_x_overlap_ratio:
+            continue
+        top = max(y0, band_top)
+        bottom = min(y1, band_bottom)
+        if bottom - top <= 0.0:
+            continue
+        intervals.append((top, bottom))
+
+    if not intervals:
+        return [crop_bbox]
+
+    intervals.sort()
+    merged: List[Tuple[float, float]] = []
+    for top, bottom in intervals:
+        if not merged or top > merged[-1][1] + y_merge_tolerance:
+            merged.append((top, bottom))
+        else:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], bottom))
+
+    pieces: List[Tuple[float, float, float, float]] = []
+    cursor = y0
+    for top, bottom in merged:
+        if top - cursor >= min_region_height:
+            pieces.append((x0, cursor, x1, top))
+        cursor = max(cursor, bottom)
+
+    if y1 - cursor >= min_region_height:
+        pieces.append((x0, cursor, x1, y1))
+
+    return pieces
+
 def _merge_single_column_fragment_rows(
     top_bbox: Tuple[float, float, float, float],
     top_rows: List[List[str]],
@@ -1621,22 +1750,42 @@ def _extract_tables(
     page = _filter_page_for_extraction(page)
     seen_keys = set()
     merged: List[TableChunk] = []
+    candidate_rows = _collect_single_column_candidates_for_notes(page)
     table_regions = _table_regions(page)
+    note_exclusion_bands: List[Tuple[float, float, float, float]] = []
+    for candidate in candidate_rows:
+        if candidate["is_white_content"] or not candidate.get("is_note_like", False):
+            continue
+        band_top, band_bottom = (
+            candidate.get("note_band")
+            if candidate.get("note_band") is not None
+            else (candidate["bbox"][1], candidate["bbox"][3])
+        )
+        note_exclusion_bands.append(
+            (
+                candidate["bbox"][0],
+                candidate["bbox"][2],
+                band_top,
+                band_bottom,
+            )
+        )
 
     for x0, x1, lines in table_regions:
         y0 = min(edge["top"] for edge in lines) - 2
         y1 = max(edge["top"] for edge in lines) + 2
         crop_bbox = (max(0.0, x0), max(0.0, y0), min(page.width, x1), min(page.height, y1))
-        for table, crop_box in _extract_tables_from_crop(
-            page, crop_bbox, fallback_to_text_rows=True
-        ):
-            table = _normalize_extracted_table(table)
-            rows_key = tuple(tuple(row) for row in table)
-            bbox_key = tuple(round(v, 2) for v in crop_box)
-            key = (rows_key, bbox_key)
-            if key not in seen_keys:
-                seen_keys.add(key)
-                merged.append((table, crop_box))
+        split_regions = _split_crop_bbox_by_excluded_bands(crop_bbox, note_exclusion_bands)
+        for split_bbox in split_regions:
+            for table, crop_box in _extract_tables_from_crop(
+                page, split_bbox, fallback_to_text_rows=False
+            ):
+                table = _normalize_extracted_table(table)
+                rows_key = tuple(tuple(row) for row in table)
+                bbox_key = tuple(round(v, 2) for v in crop_box)
+                key = (rows_key, bbox_key)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    merged.append((table, crop_box))
 
     if not table_regions:
         # Some documents render callout-like notes as filled boxes without explicit borders.
@@ -1655,84 +1804,7 @@ def _extract_tables(
                 seen_keys.add(key)
                 merged.append((table, _crop_box))
 
-    # Notes drawn as single-column box regions should stay in body text, not table output.
-    # Merge nearby fragments with shared index to avoid dropping partial text by accident.
-    candidate_rows: List[dict] = []
-    image_regions = _candidate_image_regions_for_notes(page)
-    for entry in _single_column_box_region_candidates(page):
-        rows = [[_extract_text_from_box_region(page, entry["bbox"])]]
-        if not rows[0][0]:
-            continue
-        raw_bbox = entry["bbox"]
-        is_note_like = _looks_like_single_column_note(rows=rows, page=page, bbox=entry["bbox"])
-        note_anchor = _select_note_anchor_for_bbox(page, raw_bbox, image_regions=image_regions)
-        note_band = _candidate_note_band_for_bbox(page, raw_bbox) if note_anchor is not None else None
-        if is_note_like and note_band is not None:
-            raw_bbox = (
-                entry["bbox"][0],
-                min(entry["bbox"][1], note_band[0]),
-                entry["bbox"][2],
-                max(entry["bbox"][3], note_band[1]),
-            )
-
-        candidate_rows.append(
-            {
-                "bbox": raw_bbox,
-                "raw_bbox": entry["bbox"],
-                "rows": rows,
-                "is_white_content": bool(entry.get("is_white_content")),
-                "is_note_like": is_note_like,
-                "note_anchor": (
-                    tuple(round(value, 2) for value in note_anchor)
-                    if note_anchor is not None
-                    else None
-                ),
-                "note_band": note_band,
-            }
-        )
-
-    merged_candidates: List[dict] = []
-    for candidate in sorted(candidate_rows, key=lambda item: float(item["bbox"][1])):
-        if candidate["is_white_content"]:
-            merged_candidates.append(candidate)
-            continue
-
-        merged_into_existing = False
-        for existing in merged_candidates:
-            if existing["is_white_content"]:
-                continue
-            if not _single_column_boxes_share_index(existing["bbox"], candidate["bbox"]):
-                continue
-            # Merge vertically adjacent or separator-defined fragments that are likely the same logical box.
-            same_anchor = (
-                existing.get("note_anchor") is not None
-                and existing["note_anchor"] == candidate.get("note_anchor")
-            )
-            same_band = _note_bands_are_adjacent_or_overlapping(
-                existing.get("note_band"),
-                candidate.get("note_band"),
-            )
-
-            if same_anchor or same_band or _bbox_overlap_ratio(existing["bbox"], candidate["bbox"]) > 0.0:
-                merged_rows, merged_bbox = _merge_single_column_fragment_rows(
-                    existing["bbox"],
-                    existing["rows"],
-                    candidate["bbox"],
-                    candidate["rows"],
-                )
-                existing["rows"] = merged_rows
-                existing["bbox"] = merged_bbox
-                existing["is_note_like"] = _looks_like_single_column_note(
-                    rows=merged_rows,
-                    page=page,
-                    bbox=merged_bbox,
-                )
-                merged_into_existing = True
-                break
-
-        if not merged_into_existing:
-            merged_candidates.append(candidate)
-
+    merged_candidates = candidate_rows
     if table_regions:
         removed_indices: set[int] = set()
         for candidate in merged_candidates:
