@@ -27,5 +27,14 @@
         "markdown_prefix": "### "
       }
     },
+    {
+      "match": {
+        "font_size": 12.0
+      },
+      "assign": {
+        "tag": "h4",
+        "markdown_prefix": "#### "
+      }
+    }
   ]
 }

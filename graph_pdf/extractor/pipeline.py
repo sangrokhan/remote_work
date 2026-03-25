@@ -55,9 +55,6 @@ def _load_heading_levels(add_heading: Path | None) -> dict[float, int] | None:
         if level is None:
             continue
         font_size = round(float(match["font_size"]), 2)
-        # Prevent markdown h4 headings from being inferred from compact body text size.
-        if level == 4 and font_size == 12.0:
-            continue
         heading_levels[font_size] = level
     return heading_levels
 
