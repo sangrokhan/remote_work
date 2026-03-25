@@ -2,7 +2,8 @@
   "heading_rules": [
     {
       "match": {
-        "font_size": 27.96
+        "font_size": 27.96,
+        "max_x0": -1
       },
       "assign": {
         "tag": "h1",
@@ -11,7 +12,8 @@
     },
     {
       "match": {
-        "font_size": 21.96
+        "font_size": 21.96,
+        "max_x0": 72.02
       },
       "assign": {
         "tag": "h2",
@@ -20,7 +22,8 @@
     },
     {
       "match": {
-        "font_size": 15.96
+        "font_size": 15.96,
+        "max_x0": 72.02
       },
       "assign": {
         "tag": "h3",
@@ -29,7 +32,8 @@
     },
     {
       "match": {
-        "font_size": 12.0
+        "font_size": 12.0,
+        "max_x0": 72.02
       },
       "assign": {
         "tag": "h4",

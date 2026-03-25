@@ -494,17 +494,34 @@ def _line_font_size(line: dict) -> float:
     return round(float(line.get("dominant_font_size", line.get("size", 0.0)) or 0.0), 2)
 
 
-def _line_heading_level(line: dict, heading_levels: dict[float, int] | None = None) -> int | None:
+def _line_heading_level(line: dict, heading_levels: dict[float, dict[str, float | int] | int] | None = None) -> int | None:
     if heading_levels is None:
         return None
-    level = heading_levels.get(_line_font_size(line))
-    if level is None:
+    rule = heading_levels.get(_line_font_size(line))
+    if rule is None:
         return None
-    level = int(level)
-    return level if 1 <= level <= 6 else None
+
+    max_x0 = None
+    level: int | None
+    if isinstance(rule, dict):
+        level = int(rule.get("level", 0))
+        rule_max_x0 = rule.get("max_x0")
+        if isinstance(rule_max_x0, (int, float)):
+            max_x0 = float(rule_max_x0)
+    else:
+        level = int(rule) if isinstance(rule, (int, float)) else None
+
+    if level is None or not 1 <= level <= 6:
+        return None
+
+    if max_x0 is not None:
+        text_x0 = float(line.get("x0", line.get("text_start_x", 0.0)) or 0.0)
+        if text_x0 > max_x0:
+            return None
+    return level
 
 
-def _line_kind(line: dict, heading_levels: dict[float, int] | None = None) -> str:
+def _line_kind(line: dict, heading_levels: dict[float, dict[str, float | int] | int] | None = None) -> str:
     # The current body flow distinguishes only headings and paragraphs.
     explicit_kind = str(line.get("line_kind") or "").strip().lower()
     if explicit_kind in {"reference", "heading", "paragraph"}:
@@ -532,7 +549,7 @@ def _should_merge_paragraph_lines(
     previous: dict,
     line: dict,
     same_kind: str,
-    heading_levels: dict[float, int] | None = None,
+    heading_levels: dict[float, dict[str, float | int] | int] | None = None,
 ) -> bool:
     # Scale gap tolerance by font-size/line-height for large headings.
     line_gap = float(line.get("top", 0.0)) - float(previous.get("bottom", 0.0))
@@ -554,7 +571,7 @@ def _should_merge_paragraph_lines(
     return line_gap <= merge_gap_threshold
 
 
-def _build_body_blocks(lines: Sequence[dict], heading_levels: dict[float, int] | None = None) -> List[dict]:
+def _build_body_blocks(lines: Sequence[dict], heading_levels: dict[float, dict[str, float | int] | int] | None = None) -> List[dict]:
     # Collapse adjacent body lines into coarse logical blocks before converting them to page text.
     if not lines:
         return []
