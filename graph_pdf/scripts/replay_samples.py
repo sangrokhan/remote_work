@@ -73,7 +73,7 @@ def _run_parser(
     }
 
 
-def _bbox_overlap_x(a: list[float], b: list[float]) -> float:
+def _horizontal_overlap_length(a: list[float], b: list[float]) -> float:
     a0, a1 = a[0], a[2]
     b0, b1 = b[0], b[2]
     return max(0.0, min(a1, b1) - max(a0, b0))
@@ -89,54 +89,109 @@ def _is_single_column_note(table_meta: dict[str, Any]) -> bool:
     return col_count == 1 and 1 <= row_count <= NOTE_MAX_ROW_COUNT and width > NOTE_MIN_X_OVERLAP
 
 
-def _find_overlap_candidates(
+def _layout_region_kind(table_meta: dict[str, Any]) -> str:
+    kind = str(table_meta.get("kind", "")).strip().lower()
+    if kind in {"table", "note"}:
+        return kind
+    return "note" if _is_single_column_note(table_meta) else "table"
+
+
+def _find_layout_candidates(
     debug_file: Path | None,
     max_vertical_gap: float = NOTE_MAX_VERTICAL_GAP,
     min_x_overlap: float = NOTE_MIN_X_OVERLAP,
 ) -> dict[str, Any]:
     if debug_file is None:
         return {
-            "note_overlap_candidates": [],
-            "table_overlap_candidates": [],
-            "overlap_pages": [],
+            "note_region_links": [],
+            "table_region_links": [],
+            "note_region_pairs": [],
+            "table_region_pairs": [],
+            "note_single_regions": [],
+            "table_single_regions": [],
+            "candidate_pages": [],
             "note_pages": [],
-            "table_overlap_pages": [],
+            "table_pages": [],
+            "note_single_pages": [],
+            "table_single_pages": [],
         }
 
     path = Path(debug_file)
     if not path.exists():
         return {
-            "note_overlap_candidates": [],
-            "table_overlap_candidates": [],
-            "overlap_pages": [],
+            "note_region_links": [],
+            "table_region_links": [],
+            "note_region_pairs": [],
+            "table_region_pairs": [],
+            "note_single_regions": [],
+            "table_single_regions": [],
+            "candidate_pages": [],
             "note_pages": [],
-            "table_overlap_pages": [],
+            "table_pages": [],
+            "note_single_pages": [],
+            "table_single_pages": [],
         }
 
     payload = json.loads(path.read_text(encoding="utf-8"))
-    note_overlap_candidates: list[dict[str, Any]] = []
-    table_overlap_candidates: list[dict[str, Any]] = []
-    overlap_pages: set[int] = set()
+    note_region_pairs: list[dict[str, Any]] = []
+    table_region_pairs: list[dict[str, Any]] = []
+    note_region_links = note_region_pairs
+    table_region_links = table_region_pairs
+    note_single_regions: list[dict[str, Any]] = []
+    table_single_regions: list[dict[str, Any]] = []
+    candidate_pages: set[int] = set()
     note_pages: set[int] = set()
-    table_overlap_pages: set[int] = set()
+    table_pages: set[int] = set()
+    note_single_pages: set[int] = set()
+    table_single_pages: set[int] = set()
 
     for page_payload in payload.get("pages", []):
         page_no = int(page_payload.get("page", 0))
-        tables: list[dict[str, Any]] = [
-            table for table in page_payload.get("tables", [])
+        table_regions = page_payload.get("detected_tables")
+        if not isinstance(table_regions, list) or not table_regions:
+            table_regions = page_payload.get("tables", [])
+        tables = [
+            table
+            for table in table_regions
             if len(table.get("bbox", [])) == 4
         ]
-        if len(tables) < 2:
-            continue
 
         sorted_tables = sorted(
             tables,
             key=lambda table: float(table.get("bbox", [0, 0, 0, 0])[1]),
         )
+        if sorted_tables:
+            for table in sorted_tables:
+                kind = _layout_region_kind(table)
+                table_entry = {
+                    "kind": kind,
+                    "col_count": int(table.get("col_count", 0) or 0),
+                    "row_count": int(table.get("row_count", 0) or 0),
+                    "bbox": [
+                        round(float(table.get("bbox", [0, 0, 0, 0])[0]), 2),
+                        round(float(table.get("bbox", [0, 0, 0, 0])[1]), 2),
+                        round(float(table.get("bbox", [0, 0, 0, 0])[2]), 2),
+                        round(float(table.get("bbox", [0, 0, 0, 0])[3]), 2),
+                    ],
+                    "page": page_no,
+                }
+                if kind == "note":
+                    note_single_regions.append(table_entry)
+                    note_pages.add(page_no)
+                    note_single_pages.add(page_no)
+                else:
+                    table_single_regions.append(table_entry)
+                    table_pages.add(page_no)
+                    table_single_pages.add(page_no)
+                candidate_pages.add(page_no)
+
+        if len(sorted_tables) < 2:
+            continue
 
         for idx, upper in enumerate(sorted_tables):
             upper_bbox = list(map(float, upper.get("bbox", [0, 0, 0, 0])))
             upper_bottom = upper_bbox[3]
+            upper_kind = _layout_region_kind(upper)
             for lower in sorted_tables[idx + 1 :]:
                 lower_bbox = list(map(float, lower.get("bbox", [0, 0, 0, 0])))
                 lower_top = lower_bbox[1]
@@ -146,13 +201,17 @@ def _find_overlap_candidates(
                 if gap > max_vertical_gap:
                     break
 
-                x_overlap = _bbox_overlap_x(upper_bbox, lower_bbox)
+                x_overlap = _horizontal_overlap_length(upper_bbox, lower_bbox)
                 if x_overlap < min_x_overlap:
                     continue
+
+                lower_kind = _layout_region_kind(lower)
+                pair_kind = "note" if "note" in (upper_kind, lower_kind) else "table"
 
                 candidate = {
                     "page": page_no,
                     "upper": {
+                        "kind": upper_kind,
                         "col_count": int(upper.get("col_count", 0) or 0),
                         "row_count": int(upper.get("row_count", 0) or 0),
                         "bbox": [
@@ -163,6 +222,7 @@ def _find_overlap_candidates(
                         ],
                     },
                     "lower": {
+                        "kind": lower_kind,
                         "col_count": int(lower.get("col_count", 0) or 0),
                         "row_count": int(lower.get("row_count", 0) or 0),
                         "bbox": [
@@ -173,25 +233,30 @@ def _find_overlap_candidates(
                         ],
                     },
                     "vertical_gap": round(gap, 2),
-                    "x_overlap": round(x_overlap, 2),
+                    "x_contact_length": round(x_overlap, 2),
+                    "pair_kind": pair_kind,
                 }
 
-                upper_is_note = _is_single_column_note(upper)
-                lower_is_note = _is_single_column_note(lower)
-                if upper_is_note or lower_is_note:
-                    note_overlap_candidates.append(candidate)
+                if pair_kind == "note":
+                    note_region_pairs.append(candidate)
                     note_pages.add(page_no)
                 else:
-                    table_overlap_candidates.append(candidate)
-                    table_overlap_pages.add(page_no)
-                overlap_pages.add(page_no)
+                    table_region_pairs.append(candidate)
+                    table_pages.add(page_no)
+                candidate_pages.add(page_no)
 
     return {
-        "note_overlap_candidates": note_overlap_candidates,
-        "table_overlap_candidates": table_overlap_candidates,
-        "overlap_pages": sorted(overlap_pages),
+        "note_region_pairs": note_region_pairs,
+        "table_region_pairs": table_region_pairs,
+        "note_region_links": note_region_links,
+        "table_region_links": table_region_links,
+        "note_single_regions": note_single_regions,
+        "table_single_regions": table_single_regions,
+        "candidate_pages": sorted(candidate_pages),
         "note_pages": sorted(note_pages),
-        "table_overlap_pages": sorted(table_overlap_pages),
+        "table_pages": sorted(table_pages),
+        "note_single_pages": sorted(note_single_pages),
+        "table_single_pages": sorted(table_single_pages),
     }
 
 
@@ -310,19 +375,60 @@ def main() -> None:
     parser.add_argument(
         "--analyze-note-overlap",
         action="store_true",
-        help="debug 기반으로 겹침 후보를 분석해 single-column(note) 후보와 table 겹침을 분리 출력",
+        help="[legacy] 표/노트 레이아웃 판정 후보 분석(기존 옵션 호환)",
+    )
+    parser.add_argument(
+        "--analyze-layout",
+        action="store_true",
+        help="표/노트 레이아웃 판정 후보 분석(권장)",
+    )
+    parser.add_argument(
+        "--analyze-layout-regions",
+        action="store_true",
+        dest="analyze_table_layout",
+        help="debug 기반으로 표/노트 레이아웃 후보를 분리 출력",
+    )
+    parser.add_argument(
+        "--analyze-table-layout",
+        action="store_true",
+        dest="analyze_table_layout",
+        help="[alias] 기존 옵션과 동일 동작",
     )
     parser.add_argument(
         "--max-overlap-gap",
         type=float,
         default=NOTE_MAX_VERTICAL_GAP,
-        help="겹침 후보 판별에서 상단/하단 블록 간 최대 간격(기본값: 40.0)",
+        help="[legacy] 상하 인접 레이아웃 후보 간 최대 간격(기본값: 40.0)",
+    )
+    parser.add_argument(
+        "--max-layout-gap",
+        type=float,
+        default=NOTE_MAX_VERTICAL_GAP,
+        help="[alias] --max-overlap-gap과 동일 동작",
     )
     parser.add_argument(
         "--min-x-overlap",
         type=float,
         default=NOTE_MIN_X_OVERLAP,
-        help="겹침 후보 판별에서 최소 x 축 교차 길이(기본값: 20.0)",
+        help="[legacy] 레이아웃 후보 x축 접촉 길이 최소값(기본값: 20.0)",
+    )
+    parser.add_argument(
+        "--min-x-contact-length",
+        type=float,
+        default=NOTE_MIN_X_OVERLAP,
+        help="[alias] --min-x-overlap과 동일 동작",
+    )
+    parser.add_argument(
+        "--max-region-gap",
+        type=float,
+        default=NOTE_MAX_VERTICAL_GAP,
+        help="레이아웃 후보 상하 인접 영역 간 최대 간격(기본값: 40.0)",
+    )
+    parser.add_argument(
+        "--min-x-contact",
+        type=float,
+        default=NOTE_MIN_X_OVERLAP,
+        help="레이아웃 후보 x축 접촉 길이 최소값(기본값: 20.0)",
     )
     args = parser.parse_args()
 
@@ -347,12 +453,17 @@ def main() -> None:
         pdf_path = _decode_raw_to_pdf(raw_path, output_pdf, force=args.force)
         page_count = _page_count(pdf_path)
 
+        analyze_layout = (
+            args.analyze_note_overlap
+            or args.analyze_table_layout
+            or args.analyze_layout
+        )
         parse_direct = _run_parser(
             pdf_path=pdf_path,
             raw_path=None,
             out_root=sample_root / "pdf_path",
             stem=stem,
-            debug=args.compare_from_raw or args.analyze_note_overlap,
+            debug=args.compare_from_raw or analyze_layout,
         )
         print(f"  visual pdf: {pdf_path} ({page_count} pages)")
         print(f"  parsed (pdf): {parse_direct['text_chars']} chars, tables={parse_direct['table_count']}")
@@ -367,43 +478,62 @@ def main() -> None:
             "table_md_file": str(parse_direct["table_md_file"]),
         }
 
-        if args.analyze_note_overlap:
-            overlap = _find_overlap_candidates(
+        if analyze_layout:
+            max_gap = args.max_region_gap
+            if args.max_region_gap == NOTE_MAX_VERTICAL_GAP and args.max_overlap_gap != NOTE_MAX_VERTICAL_GAP:
+                max_gap = args.max_overlap_gap
+            if args.max_layout_gap != NOTE_MAX_VERTICAL_GAP:
+                max_gap = args.max_layout_gap
+            min_overlap = args.min_x_contact
+            if args.min_x_contact == NOTE_MIN_X_OVERLAP and args.min_x_overlap != NOTE_MIN_X_OVERLAP:
+                min_overlap = args.min_x_overlap
+            if args.min_x_contact_length != NOTE_MIN_X_OVERLAP:
+                min_overlap = args.min_x_contact_length
+            type_candidates = _find_layout_candidates(
                 debug_file=parse_direct.get("debug_file"),
-                max_vertical_gap=args.max_overlap_gap,
-                min_x_overlap=args.min_x_overlap,
+                max_vertical_gap=max_gap,
+                min_x_overlap=min_overlap,
             )
             print(
-                f"  overlap candidates: "
-                f"note={len(overlap['note_overlap_candidates'])}, "
-                f"table={len(overlap['table_overlap_candidates'])}"
+                "  판정 후보: "
+                f"note_links={len(type_candidates['note_region_links'])}, "
+                f"table_links={len(type_candidates['table_region_links'])}, "
+                f"note_regions={len(type_candidates['note_single_regions'])}, "
+                f"table_regions={len(type_candidates['table_single_regions'])}"
             )
             sample_root.mkdir(parents=True, exist_ok=True)
-            overlap_cases_path = sample_root / f"{stem}_overlap_cases.json"
-            overlap_cases_path.write_text(
+            type_candidates_path = sample_root / f"{stem}_type_candidates.json"
+            type_candidates_path.write_text(
                 json.dumps(
                     {
                         "sample": raw_path.name,
                         "pdf": str(pdf_path),
-                        "note_overlap_candidates": overlap["note_overlap_candidates"],
-                        "table_overlap_candidates": overlap["table_overlap_candidates"],
-                        "overlap_pages": overlap["overlap_pages"],
-                        "note_pages": overlap["note_pages"],
-                        "table_overlap_pages": overlap["table_overlap_pages"],
+                        "note_region_links": type_candidates["note_region_links"],
+                        "table_region_links": type_candidates["table_region_links"],
+                        "note_region_pairs": type_candidates["note_region_pairs"],
+                        "table_region_pairs": type_candidates["table_region_pairs"],
+                        "note_single_regions": type_candidates["note_single_regions"],
+                        "table_single_regions": type_candidates["table_single_regions"],
+                        "candidate_pages": type_candidates["candidate_pages"],
+                        "note_pages": type_candidates["note_pages"],
+                        "table_pages": type_candidates["table_pages"],
+                        "note_single_pages": type_candidates["note_single_pages"],
+                        "table_single_pages": type_candidates["table_single_pages"],
                     },
                     ensure_ascii=False,
                     indent=2,
                 ),
                 encoding="utf-8",
             )
-            note_only_path = sample_root / f"{stem}_note_only.json"
+            note_only_path = sample_root / f"{stem}_note_candidates.json"
             note_only_path.write_text(
                 json.dumps(
                     {
                         "sample": raw_path.name,
                         "pdf": str(pdf_path),
-                        "note_candidates": overlap["note_overlap_candidates"],
-                        "note_pages": overlap["note_pages"],
+                        "note_region_links": type_candidates["note_region_links"],
+                        "note_region_pairs": type_candidates["note_region_pairs"],
+                        "note_pages": type_candidates["note_pages"],
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -411,13 +541,19 @@ def main() -> None:
                 encoding="utf-8",
             )
             entry.update(
-                {
-                    "overlap_candidates": overlap,
-                    "note_overlap_candidates": overlap["note_overlap_candidates"],
-                    "table_overlap_candidates": overlap["table_overlap_candidates"],
-                    "overlap_pages": overlap["overlap_pages"],
-                    "note_overlap_pages": overlap["note_pages"],
-                    "table_overlap_pages": overlap["table_overlap_pages"],
+                    {
+                    "type_candidates": type_candidates,
+                    "note_region_links": type_candidates["note_region_links"],
+                    "table_region_links": type_candidates["table_region_links"],
+                    "note_region_pairs": type_candidates["note_region_pairs"],
+                    "table_region_pairs": type_candidates["table_region_pairs"],
+                    "note_single_regions": type_candidates["note_single_regions"],
+                    "table_single_regions": type_candidates["table_single_regions"],
+                    "candidate_pages": type_candidates["candidate_pages"],
+                    "note_pages": type_candidates["note_pages"],
+                    "table_pages": type_candidates["table_pages"],
+                    "note_single_pages": type_candidates["note_single_pages"],
+                    "table_single_pages": type_candidates["table_single_pages"],
                 }
             )
 
@@ -427,7 +563,7 @@ def main() -> None:
                 raw_path=raw_path,
                 out_root=sample_root / "from_raw",
                 stem=f"{stem}_from_raw",
-                debug=args.analyze_note_overlap,
+                debug=analyze_layout,
             )
             markdown_eq = parse_direct["markdown"] == parse_from_raw["markdown"]
             table_markdown_eq = parse_direct["table_markdown"] == parse_from_raw["table_markdown"]

@@ -17,9 +17,11 @@ from .tables import (
     _extract_tables,
     _gap_text_boxes_after_bbox,
     _gap_text_boxes_before_bbox,
+    _looks_like_single_column_note,
     _maybe_merge_missing_first_column_chunk,
     _is_continuation_chunk,
     _should_try_table_continuation_merge,
+    _single_column_note_body_text,
     _split_repeated_header,
     _vertical_axes_for_bbox,
 )
@@ -254,13 +256,41 @@ def extract_pdf_to_outputs(
             if debug_watermark:
                 rotated_debug.extend(_collect_rotated_text_debug(page, page_no=page_idx))
 
-            tables = _extract_tables(page, force_table=force_table)
+            detected_tables = _extract_tables(page, force_table=force_table)
+            tables: List[Tuple[TableRows, Tuple[float, float, float, float]]] = []
+            note_references: List[dict] = []
+            detected_table_payloads: List[dict] = []
+            for table_rows, bbox in detected_tables:
+                row_count = len(table_rows)
+                col_count = max((len(row) for row in table_rows), default=0)
+                is_note = _looks_like_single_column_note(
+                    rows=table_rows,
+                    page=page,
+                    bbox=bbox,
+                )
+                detected_table_payloads.append(
+                    {
+                        "kind": "note" if is_note else "table",
+                        "bbox": [round(float(value), 2) for value in bbox],
+                        "row_count": int(row_count),
+                        "col_count": int(col_count),
+                    }
+                )
+                if is_note:
+                    note_text = _single_column_note_body_text(table_rows)
+                    if note_text:
+                        note_references.append({"text": note_text, "bbox": bbox})
+                    continue
+                tables.append((table_rows, bbox))
+            if debug and table_debug_pages:
+                table_debug_pages[-1]["detected_tables"] = detected_table_payloads
+
             body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
             image_regions = _extract_drawing_image_bboxes(
                 page=page,
                 header_margin=header_margin,
                 footer_margin=footer_margin,
-                excluded_bboxes=[bbox for _rows, bbox in tables],
+                excluded_bboxes=[bbox for _rows, bbox in detected_tables],
             )
             drawing_regions_by_page[page_idx] = image_regions
             embedded_image_refs = embedded_image_refs_by_page.get(page_idx, [])
@@ -280,6 +310,7 @@ def extract_pdf_to_outputs(
                 ],
                 body_top=footer_margin,
             )
+            page_excluded_bboxes.extend([bbox for _rows, bbox in detected_tables])
             page_table_references: List[dict] = []
             page_content_references: List[dict] = []
 
@@ -323,6 +354,7 @@ def extract_pdf_to_outputs(
                     footer_margin=footer_margin,
                     excluded_bboxes=page_excluded_bboxes,
                     reference_lines=page_table_references
+                    + note_references
                     + [
                         {
                             "text": entry["text"],
@@ -447,7 +479,7 @@ def extract_pdf_to_outputs(
                 pending_axes = current_axes
                 pending_gap_text_boxes = _gap_text_boxes_after_bbox(page, bbox, table_bboxes, header_margin=header_margin, footer_margin=footer_margin)
 
-            effective_table_bboxes = page_excluded_bboxes[: len(tables)]
+            effective_table_bboxes = [bbox for _rows, bbox in tables]
             for image_idx, entry in enumerate(embedded_image_refs, start=1):
                 bbox_obj = entry.get("bbox") if isinstance(entry, dict) else None
                 if not bbox_obj or len(bbox_obj) != 4:
@@ -502,7 +534,8 @@ def extract_pdf_to_outputs(
                     }
                     for entry in page_content_references
                     if isinstance(entry.get("bbox"), tuple)
-                ]),
+                ])
+                + note_references,
                 heading_levels=heading_levels,
             )
             if page_text.strip():

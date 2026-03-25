@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 import pdfplumber
 
@@ -93,6 +93,380 @@ def _looks_like_header_row(row: Sequence[str]) -> bool:
     alpha_like = sum(1 for token in tokens if re.fullmatch(r"[A-Za-z][A-Za-z0-9\s/&._:-]*", token))
     short = sum(1 for token in tokens if len(token) <= 24)
     return alpha_like >= len(tokens) * 0.8 and short >= len(tokens) * 0.8
+
+
+def _effective_non_empty_column_indices(
+    rows: Sequence[Sequence[str]],
+) -> list[int]:
+    # Ignore empty cells introduced by renderer artifacts when deciding if a region is really one-column.
+    column_indexes: set[int] = set()
+    for row in rows:
+        if not row:
+            continue
+        for idx, value in enumerate(row):
+            if _normalize_text(value):
+                column_indexes.add(idx)
+    return sorted(column_indexes)
+
+
+def _is_single_column_like_rows(rows: Sequence[Sequence[str]]) -> bool:
+    return len(_effective_non_empty_column_indices(rows)) <= 1
+
+
+def _extract_region_words(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+) -> list[dict[str, Any]]:
+    # Region words are used to infer text flow independent of table cell extraction.
+    filtered_page = _filter_page_for_extraction(page)
+    x0, top, x1, bottom = bbox
+    words = (
+        filtered_page
+        .crop((x0, top, x1, bottom))
+        .extract_words(x_tolerance=1.5, y_tolerance=2.0, keep_blank_chars=False)
+        or []
+    )
+
+    normalized: list[dict[str, Any]] = []
+    for word in words:
+        text = _repair_watermark_bleed(_normalize_text(str(word.get("text") or "")))
+        if not text or _is_layout_artifact(text):
+            continue
+        normalized.append({
+            "text": text,
+            "x0": float(word.get("x0", 0.0)),
+            "x1": float(word.get("x1", 0.0)),
+            "top": float(word.get("top", 0.0)),
+            "bottom": float(word.get("bottom", 0.0)),
+        })
+    return normalized
+
+
+def _extract_region_lines(words: Sequence[dict[str, Any]], y_tolerance: float = 2.5) -> list[list[dict[str, Any]]]:
+    lines: list[list[dict[str, Any]]] = []
+    for word in sorted(words, key=lambda item: (float(item["top"]), float(item["x0"]))):
+        if not lines or abs(float(word["top"]) - float(lines[-1][0]["top"])) > y_tolerance:
+            lines.append([word])
+            continue
+        lines[-1].append(word)
+    return lines
+
+
+def _extract_region_line_rows(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+) -> list[list[str]]:
+    lines = _extract_region_lines(_extract_region_words(page, bbox))
+    rows: list[list[str]] = []
+    for words_in_line in lines:
+        text = _line_text_from_words(words_in_line)
+        if not text:
+            continue
+        rows.append([text])
+    return rows
+
+
+def _compact_fallback_rows(rows: list[list[str]]) -> list[list[str]]:
+    compacted: list[list[str]] = []
+    for row in rows:
+        normalized = _line_text_from_words([{"text": _normalize_text(cell)} for cell in row]).strip()
+        if not normalized:
+            continue
+        if compacted and compacted[-1] == [normalized]:
+            continue
+        compacted.append([normalized])
+    return compacted
+
+
+def _line_text_from_words(words_in_line: Sequence[dict[str, Any]]) -> str:
+    return " ".join(str(word.get("text") or "").strip() for word in sorted(words_in_line, key=lambda item: float(item["x0"]))).strip()
+
+
+def _first_non_empty_cell_value(row: Sequence[str]) -> str:
+    for value in row:
+        normalized = _normalize_text(value)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _rect_fill_color_key(rect: dict[str, Any]) -> tuple[Any, ...] | int | float | None:
+    color = rect.get("non_stroking_color")
+    if color is None:
+        color = rect.get("stroking_color")
+    if color is None:
+        return None
+    if isinstance(color, (int, float)):
+        return round(float(color), 3)
+    if isinstance(color, (list, tuple)):
+        return tuple(round(float(value), 3) for value in color[:3])
+    return None
+
+
+def _normalize_color_match(left: object, right: object, tolerance: float = 0.02) -> bool:
+    if left is None and right is None:
+        return True
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return abs(float(left) - float(right)) <= tolerance
+    if isinstance(left, tuple) and isinstance(right, tuple):
+        if len(left) != len(right):
+            return False
+        return all(abs(float(l) - float(r)) <= tolerance for l, r in zip(left, right))
+    return False
+
+
+def _internal_grid_counts(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+) -> tuple[int, int]:
+    # Internal stroke edges are a strong table shape signal compared with prose boxes.
+    x0, y0, x1, y1 = bbox
+    width = max(0.0, x1 - x0)
+    height = max(0.0, y1 - y0)
+    if width <= 0.0 or height <= 0.0:
+        return (0, 0)
+
+    internal_vertical = 0
+    for edge in getattr(page, "vertical_edges", []):
+        if not bool(edge.get("stroke")):
+            continue
+        edge_x0 = float(edge.get("x0", 0.0))
+        edge_top = float(edge.get("top", 0.0))
+        edge_bottom = float(edge.get("bottom", 0.0))
+        if edge_top > y1 or edge_bottom < y0:
+            continue
+        if edge_x0 <= x0 + 2.0 or edge_x0 >= x1 - 2.0:
+            continue
+        if edge_bottom - edge_top >= height * 0.35:
+            internal_vertical += 1
+
+    internal_horizontal = 0
+    for edge in getattr(page, "horizontal_edges", []):
+        if not bool(edge.get("stroke")):
+            continue
+        edge_top = float(edge.get("top", 0.0))
+        edge_x0 = float(edge.get("x0", 0.0))
+        edge_x1 = float(edge.get("x1", 0.0))
+        if edge_top <= y0 + 2.0 or edge_top >= y1 - 2.0:
+            continue
+        edge_length = edge_x1 - edge_x0
+        if edge_length >= width * 0.35 and edge_x0 < x1 and edge_x1 > x0:
+            internal_horizontal += 1
+
+    return internal_vertical, internal_horizontal
+
+
+def _estimate_region_kind(
+    table_rows: Sequence[Sequence[str]],
+    region_words: Sequence[dict[str, Any]],
+    internal_grid: tuple[int, int],
+    *,
+    min_long_line_words: int = 6,
+    min_total_chars: int = 80,
+) -> tuple[str, dict[str, Any]]:
+    # Return "table" or "note" with lightweight, explainable signals.
+    is_single_column_like = _is_single_column_like_rows(table_rows)
+    row_count = len(table_rows)
+    col_count = max((len(row) for row in table_rows), default=0)
+    if col_count <= 0 or not region_words:
+        return "table", {"reason": "empty_content"}
+
+    text_lines = [_normalize_text(_line_text_from_words(words)) for words in _extract_region_lines(region_words)]
+    text_lines = [line for line in text_lines if line]
+    if not text_lines:
+        return "table", {"reason": "empty_lines"}
+
+    line_word_counts = [len(line.split()) for line in text_lines]
+    line_char_counts = [len(line) for line in text_lines]
+    avg_words = sum(line_word_counts) / len(line_word_counts)
+    max_words = max(line_word_counts)
+    max_chars = max(line_char_counts)
+    total_chars = sum(line_char_counts)
+    long_lines = sum(1 for count in line_word_counts if count >= min_long_line_words)
+    punctuation_ratio = sum(1 for line in text_lines if any(ch in line for ch in [".", ",", ";", ":", "(", ")"])) / len(text_lines)
+    internal_vertical, internal_horizontal = internal_grid
+    table_score = 0.0
+    note_score = 0.0
+
+    # Note routing is intentionally single-column-first; key-value tables with structural blanks stay table.
+    if not is_single_column_like:
+        return "table", {
+            "reason": "not_single_column_like",
+            "col_count": col_count,
+            "effective_col_count": len(_effective_non_empty_column_indices(table_rows)),
+        }
+
+    # Structured short rows indicate key/value style tables or metadata blocks.
+    if row_count <= 3 and max(line_word_counts) <= 4 and total_chars < min_total_chars:
+        table_score += 2.0
+    if max_words <= 4 and long_lines == 0:
+        table_score += 1.0
+    if internal_vertical + internal_horizontal >= 2:
+        table_score += 2.0
+    if punctuation_ratio >= 0.2 and total_chars <= min_total_chars:
+        table_score += 1.0
+
+    # Prose-like dense lines indicate note-style single-column content.
+    if row_count >= 2 and (avg_words >= 5 or max_chars >= 90 or total_chars >= min_total_chars):
+        note_score += 2.0
+    if long_lines >= 2:
+        note_score += 2.0
+    if avg_words >= 7 and total_chars >= min_total_chars:
+        note_score += 1.0
+
+    if note_score > table_score:
+        return "note", {
+            "reason": "prose_score",
+            "note_score": note_score,
+            "table_score": table_score,
+            "avg_words": avg_words,
+            "max_words": max_words,
+            "line_count": len(text_lines),
+            "total_chars": total_chars,
+        }
+    return "table", {
+        "reason": "table_score",
+        "note_score": note_score,
+        "table_score": table_score,
+        "avg_words": avg_words,
+        "max_words": max_words,
+        "line_count": len(text_lines),
+        "total_chars": total_chars,
+    }
+
+
+def _classify_single_column_region(
+    table_rows: Sequence[Sequence[str]],
+    page: Optional[pdfplumber.page.PageObject] = None,
+    bbox: Optional[Tuple[float, float, float, float]] = None,
+) -> tuple[str, dict[str, Any]]:
+    # Public wrapper used by both table filtering and debug reporting.
+    col_count = max((len(row) for row in table_rows), default=0)
+    if not _is_single_column_like_rows(table_rows):
+        effective_cols = _effective_non_empty_column_indices(table_rows)
+        return "table", {
+            "reason": "not_single_column_like",
+            "col_count": col_count,
+            "effective_col_count": len(effective_cols),
+        }
+    if not page or not bbox:
+        return _classify_single_column_rows_only(table_rows)
+
+    region_words = _extract_region_words(page=page, bbox=bbox)
+    internal_grid = _internal_grid_counts(page=page, bbox=bbox)
+    return _estimate_region_kind(
+        table_rows=table_rows,
+        region_words=region_words,
+        internal_grid=internal_grid,
+    )
+
+
+def _classify_single_column_rows_only(
+    rows: Sequence[Sequence[str]],
+) -> tuple[str, dict[str, Any]]:
+    # Geometry-independent fallback for tests and call-sites that only have cells.
+    if not rows:
+        return "table", {"reason": "empty_row_region"}
+    effective_col_count = len(_effective_non_empty_column_indices(rows))
+    if effective_col_count != 1:
+        return "table", {"reason": "not_single_column_like", "effective_col_count": effective_col_count}
+    normalized_lines = []
+    for row in rows:
+        line = ""
+        for cell in row:
+            value = _normalize_text(cell)
+            if value:
+                line = value
+                break
+        if line:
+            normalized_lines.append(line)
+    normalized_lines = [line for line in normalized_lines if line]
+    if not normalized_lines:
+        return "table", {"reason": "empty_line_region"}
+
+    if len(rows) == 1:
+        max_chars = max(len(line) for line in normalized_lines)
+        return (
+            "note" if max_chars >= 30 else "table",
+            {
+                "reason": "single_line_row_length",
+                "line_count": 1,
+                "max_chars": max_chars,
+                "max_words": max(len(line.split()) for line in normalized_lines),
+            },
+        )
+
+    line_word_counts = [len(line.split()) for line in normalized_lines]
+    line_char_counts = [len(line) for line in normalized_lines]
+    total_chars = sum(line_char_counts)
+    avg_words = sum(line_word_counts) / len(line_word_counts)
+    avg_chars = total_chars / max(1, len(line_char_counts))
+    punctuation_ratio = sum(
+        1 for line in normalized_lines if any(ch in line for ch in [".", ",", ";", ":", "(", ")"])
+    ) / len(normalized_lines)
+    short_rows = sum(1 for count in line_word_counts if count <= 4)
+
+    note_score = 0.0
+    table_score = 0.0
+    if len(normalized_lines) <= 2 and short_rows >= len(normalized_lines):
+        table_score += 2.0
+    if avg_chars >= 30 and total_chars >= 45:
+        note_score += 1.5
+    if avg_words >= 6:
+        note_score += 1.5
+    if total_chars >= 90:
+        note_score += 1.0
+    if punctuation_ratio >= 0.2:
+        note_score += 0.5
+    if table_score >= note_score:
+        return "table", {
+            "reason": "single_column_fallback",
+            "note_score": note_score,
+            "table_score": table_score,
+            "line_count": len(normalized_lines),
+            "avg_chars": avg_chars,
+            "total_chars": total_chars,
+        }
+
+    return "note", {
+        "reason": "single_column_fallback",
+        "note_score": note_score,
+        "table_score": table_score,
+        "line_count": len(normalized_lines),
+        "avg_chars": avg_chars,
+        "total_chars": total_chars,
+    }
+
+
+def _looks_like_single_column_note(
+    rows: Sequence[Sequence[str]],
+    page: Optional[pdfplumber.page.PageObject] = None,
+    bbox: Optional[Tuple[float, float, float, float]] = None,
+) -> bool:
+    # Backward-compatible API used by tests. Spatial hints are optional.
+    kind, _ = _classify_single_column_region(table_rows=rows, page=page, bbox=bbox)
+    return kind == "note"
+
+
+def _single_column_note_body_text(rows: Sequence[Sequence[str]]) -> str:
+    # Convert multi-line note-like rows into a single body sentence.
+    parts: List[str] = []
+    for row in rows:
+        if not row:
+            continue
+        leading_text = ""
+        for cell in row:
+            normalized = _normalize_text(cell)
+            if normalized:
+                leading_text = normalized
+                break
+        if not leading_text:
+            continue
+        for line in _normalize_cell_lines(str(leading_text)):
+            normalized = _normalize_text(line)
+            if normalized:
+                parts.append(normalized)
+    return re.sub(r"\s+", " ", " ".join(parts)).strip()
 
 
 def _rows_match(a: Sequence[str], b: Sequence[str]) -> bool:
@@ -482,6 +856,147 @@ def _merge_touching_fill_rects(
     return merged
 
 
+def _merge_touching_fill_rects_by_color(
+    rects: Sequence[dict[str, Any]],
+    tolerance: float = 1.0,
+    color_tolerance: float = 0.02,
+) -> List[Tuple[float, float, float, float]]:
+    color_groups: dict[tuple[Any, ...] | int | float | None, list[dict[str, Any]]] = {}
+    for rect in rects:
+        key = _rect_fill_color_key(rect)
+        color_groups.setdefault(key, []).append(rect)
+
+    merged: List[Tuple[float, float, float, float]] = []
+    for key, group_rects in color_groups.items():
+        merged.extend(_merge_touching_fill_rects(group_rects, tolerance=tolerance))
+    return merged
+
+
+def _strip_coverage_ratio(
+    bbox: Tuple[float, float, float, float],
+    strip_rects: Sequence[dict[str, Any]],
+    line_y: float,
+    tolerance: float = 2.0,
+) -> float:
+    x0, _top, x1, _bottom = bbox
+    if x1 <= x0:
+        return 0.0
+
+    intervals: List[tuple[float, float]] = []
+    for rect in strip_rects:
+        rect_top = float(rect.get("top", 0.0))
+        rect_bottom = float(rect.get("bottom", 0.0))
+        if rect_bottom < line_y - tolerance or rect_top > line_y + tolerance:
+            continue
+
+        rx0 = float(rect.get("x0", 0.0))
+        rx1 = float(rect.get("x1", 0.0))
+        interval_x0 = max(x0, rx0)
+        interval_x1 = min(x1, rx1)
+        if interval_x1 - interval_x0 > 0.0:
+            intervals.append((interval_x0, interval_x1))
+
+    if not intervals:
+        return 0.0
+
+    intervals.sort(key=lambda item: item[0])
+    merged: list[tuple[float, float]] = [intervals[0]]
+    for left, right in intervals[1:]:
+        last_left, last_right = merged[-1]
+        if left <= last_right + 1.5:
+            merged[-1] = (last_left, max(last_right, right))
+        else:
+            merged.append((left, right))
+
+    covered = sum(right - left for left, right in merged)
+    return covered / (x1 - x0)
+
+
+def _contains_bbox(outer: Tuple[float, float, float, float], inner: Tuple[float, float, float, float], *, overlap_ratio: float = 0.98) -> bool:
+    ox0, oy0, ox1, oy1 = outer
+    ix0, iy0, ix1, iy1 = inner
+    if ix0 < ox0 or ix1 > ox1 or iy0 < oy0 or iy1 > oy1:
+        return False
+
+    intersection = (min(ox1, ix1) - max(ox0, ix0)) * (min(oy1, iy1) - max(oy0, iy0))
+    if intersection <= 0.0:
+        return False
+
+    inner_area = (ix1 - ix0) * (iy1 - iy0)
+    if inner_area <= 0.0:
+        return False
+    return intersection / inner_area >= overlap_ratio
+
+
+def _to_rect_entry(rect: dict[str, Any] | tuple[float, float, float, float]) -> dict[str, Any]:
+    if isinstance(rect, dict):
+        return {
+            "x0": float(rect.get("x0", 0.0)),
+            "top": float(rect.get("top", rect.get("y0", 0.0))),
+            "x1": float(rect.get("x1", 0.0)),
+            "bottom": float(rect.get("bottom", rect.get("y1", 0.0))),
+            "fill": bool(rect.get("fill", True)),
+            "stroke": bool(rect.get("stroke", False)),
+            "non_stroking_color": rect.get("non_stroking_color"),
+            "stroking_color": rect.get("stroking_color"),
+        }
+
+    if len(rect) == 4:
+        x0, top, x1, bottom = rect
+        return {
+            "x0": float(x0),
+            "top": float(top),
+            "x1": float(x1),
+            "bottom": float(bottom),
+            "fill": True,
+            "stroke": False,
+            "non_stroking_color": None,
+            "stroking_color": None,
+        }
+
+    raise TypeError(f"unsupported rect type: {type(rect)!r}")
+
+
+def _dedupe_redundant_rectangles(
+    rects: Sequence[dict[str, Any] | tuple[float, float, float, float]],
+) -> List[dict[str, Any]]:
+    if len(rects) <= 1:
+        return [_to_rect_entry(rect) for rect in rects]
+
+    converted = [_to_rect_entry(rect) for rect in rects]
+    ordered = sorted(
+        converted,
+        key=lambda rect: -(rect["x1"] - rect["x0"]) * (rect["bottom"] - rect["top"]),
+    )
+
+    kept: List[dict[str, Any]] = []
+    for rect in ordered:
+        if not bool(rect.get("fill")):
+            continue
+        candidate = (
+            float(rect.get("x0", 0.0)),
+            float(rect.get("top", 0.0)),
+            float(rect.get("x1", 0.0)),
+            float(rect.get("bottom", 0.0)),
+        )
+        keep = True
+        for existing in kept:
+            existing_bbox = (
+                float(existing.get("x0", 0.0)),
+                float(existing.get("top", 0.0)),
+                float(existing.get("x1", 0.0)),
+                float(existing.get("bottom", 0.0)),
+            )
+            if not _is_nearly_white_color(rect.get("non_stroking_color", rect.get("stroking_color"))):
+                continue
+            if _contains_bbox(existing_bbox, candidate):
+                keep = False
+                break
+        if keep:
+            kept.append(rect)
+    return kept
+
+
 def _thin_strip_rects(rects: Sequence[dict], max_height: float = 1.5) -> List[dict]:
     # Some PDFs use filled rect strips instead of stroked lines for box boundaries.
     return [
@@ -509,22 +1024,22 @@ def _single_column_box_regions(page: pdfplumber.page.PageObject) -> List[Tuple[f
         if rect not in boundary_rects and not bool(rect.get("stroke"))
     ]
     candidates: List[Tuple[float, float, float, float]] = []
-    for bbox in _merge_touching_fill_rects(content_rects):
+    for bbox in _merge_touching_fill_rects_by_color(content_rects):
         x0, top, x1, bottom = bbox
         width = x1 - x0
         if width < 120.0:
             continue
 
         top_strip = any(
-            float(rect.get("x0", 0.0)) <= x0 + 1.0
-            and float(rect.get("x1", 0.0)) >= x1 - 1.0
-            and abs(float(rect.get("bottom", 0.0)) - top) <= 1.5
+            float(rect.get("x0", 0.0)) <= x0 + 4.0
+            and float(rect.get("x1", 0.0)) >= x1 - 4.0
+            and abs(float(rect.get("bottom", 0.0)) - top) <= 2.5
             for rect in boundary_rects
         )
         bottom_strip = any(
-            float(rect.get("x0", 0.0)) <= x0 + 1.0
-            and float(rect.get("x1", 0.0)) >= x1 - 1.0
-            and abs(float(rect.get("top", 0.0)) - bottom) <= 1.5
+            float(rect.get("x0", 0.0)) <= x0 + 4.0
+            and float(rect.get("x1", 0.0)) >= x1 - 4.0
+            and abs(float(rect.get("top", 0.0)) - bottom) <= 2.5
             for rect in boundary_rects
         )
         if not top_strip or not bottom_strip:
@@ -602,21 +1117,184 @@ def _bbox_overlap_ratio(
     return intersection / max(min(_bbox_area(a), _bbox_area(b)), 1.0)
 
 
-def _looks_like_single_column_box_misclassification(rows: TableRows) -> bool:
-    # Reclassify only sparse one-column outputs that are likely a visual box broken into multiple table rows.
-    if not rows or len(rows) < 2:
+def _bbox_x_overlap_ratio(
+    a: Tuple[float, float, float, float],
+    b: Tuple[float, float, float, float],
+) -> float:
+    ax0, _, ax1, _ = a
+    bx0, _, bx1, _ = b
+    intersection = max(0.0, min(ax1, bx1) - max(ax0, bx0))
+    min_width = max(1.0, min(ax1 - ax0, bx1 - bx0))
+    return intersection / min_width
+
+
+def _is_nearly_white_color(value: object) -> bool:
+    if value is None:
         return False
-    column_count = max((len(row) for row in rows), default=0)
-    if column_count != 1:
+
+    if isinstance(value, (int, float)):
+        return float(value) >= 0.98
+
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        components = [float(component) for component in value[:3]]
+        return all(0.95 <= component <= 1.02 for component in components)
+
+    return False
+
+
+def _single_column_box_region_candidates(
+    page: pdfplumber.page.PageObject,
+) -> List[dict]:
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
+    fill_rects = [
+        rect
+        for rect in getattr(page, "rects", [])
+        if bool(rect.get("fill"))
+        and float(rect.get("bottom", 0.0)) > body_top
+        and float(rect.get("top", 0.0)) < body_bottom
+    ]
+    merged_fill_rects = _dedupe_redundant_rectangles(_merge_touching_fill_rects_by_color(fill_rects, tolerance=1.0))
+    boundary_rects = _thin_strip_rects(merged_fill_rects)
+    content_rects = [
+        rect
+        for rect in merged_fill_rects
+        if rect not in boundary_rects and not bool(rect.get("stroke"))
+    ]
+
+    candidates: List[dict] = []
+    if not content_rects:
+        return candidates
+
+    for bbox in _merge_touching_fill_rects_by_color(content_rects, tolerance=1.0):
+        x0, top, x1, bottom = bbox
+        width = x1 - x0
+        if width < 120.0:
+            continue
+
+        top_strip_ratio = _strip_coverage_ratio((x0, top, x1, bottom), boundary_rects, top, tolerance=2.8)
+        bottom_strip_ratio = _strip_coverage_ratio((x0, top, x1, bottom), boundary_rects, bottom, tolerance=2.8)
+        if top_strip_ratio < 0.45 and bottom_strip_ratio < 0.45:
+            continue
+
+        overlapping_content = [
+            rect
+            for rect in content_rects
+            if not (
+                float(rect.get("x1", 0.0)) < x0
+                or float(rect.get("x0", 0.0)) > x1
+                or float(rect.get("bottom", 0.0)) < top
+                or float(rect.get("top", 0.0)) > bottom
+            )
+        ]
+        content_colors: List[object] = []
+        border_colors: List[object] = []
+        for rect in overlapping_content:
+            color = rect.get("non_stroking_color") if rect.get("non_stroking_color") is not None else rect.get("stroking_color")
+            content_colors.append(color)
+        for rect in boundary_rects:
+            if not (
+                float(rect.get("x1", 0.0)) < x0
+                or float(rect.get("x0", 0.0)) > x1
+                or float(rect.get("bottom", 0.0)) < top
+                or float(rect.get("top", 0.0)) > bottom
+            ):
+                color = rect.get("non_stroking_color") if rect.get("non_stroking_color") is not None else rect.get("stroking_color")
+                border_colors.append(color)
+
+        has_non_white_border = any(not _is_nearly_white_color(color) for color in border_colors if color is not None)
+        is_white_content = (
+            bool(content_colors)
+            and all(_is_nearly_white_color(color) for color in content_colors)
+            and not has_non_white_border
+        )
+
+        internal_verticals = _merge_numeric_positions(
+            [
+                float(edge["x0"])
+                for edge in page.vertical_edges
+                if bool(edge.get("stroke"))
+                and float(edge.get("x0", 0.0)) > x0 + 2.0
+                and float(edge.get("x0", 0.0)) < x1 - 2.0
+                and float(edge.get("top", 0.0)) <= bottom
+                and float(edge.get("bottom", 0.0)) >= top
+            ],
+            tolerance=1.0,
+        )
+        if internal_verticals:
+            continue
+
+        candidates.append({
+            "bbox": bbox,
+            "is_white_content": is_white_content,
+        })
+
+    return candidates
+
+
+def _single_column_box_regions(
+    page: pdfplumber.page.PageObject,
+) -> List[Tuple[float, float, float, float]]:
+    # Keep public behavior for existing callers that only need candidate bboxes.
+    return [entry["bbox"] for entry in _single_column_box_region_candidates(page)]
+
+
+def _single_column_boxes_share_index(
+    a_bbox: Tuple[float, float, float, float],
+    b_bbox: Tuple[float, float, float, float],
+) -> bool:
+    a_x0, a_y0, a_x1, a_y1 = a_bbox
+    b_x0, b_y0, b_x1, b_y1 = b_bbox
+    if _bbox_x_overlap_ratio(a_bbox, b_bbox) < 0.65:
         return False
-    if any(not _normalize_text(row[0]) for row in rows if row):
-        return False
-    return True
+
+    a_width = a_x1 - a_x0
+    b_width = b_x1 - b_x0
+    return abs(a_width - b_width) <= 6.0 or abs(a_x0 - b_x0) <= 3.0
+
+
+def _merge_single_column_fragment_rows(
+    top_bbox: Tuple[float, float, float, float],
+    top_rows: List[List[str]],
+    bottom_bbox: Tuple[float, float, float, float],
+    bottom_rows: List[List[str]],
+) -> Tuple[List[List[str]], Tuple[float, float, float, float]]:
+    # Preserve source order by vertical location and avoid accidental duplicated prose rows.
+    if top_bbox[1] <= bottom_bbox[1]:
+        ordered_rows = [
+            [row[:] for row in top_rows],
+            [row[:] for row in bottom_rows],
+        ]
+    else:
+        ordered_rows = [
+            [row[:] for row in bottom_rows],
+            [row[:] for row in top_rows],
+        ]
+
+    merged_rows: List[List[str]] = []
+    for row in (ordered_rows[0] + ordered_rows[1]):
+        if not row:
+            continue
+        normalized = _first_non_empty_cell_value(row)
+        if not normalized:
+            continue
+        if merged_rows and _first_non_empty_cell_value(merged_rows[-1]) == normalized:
+            continue
+        merged_rows.append(row)
+
+    merged_bbox = (
+        min(top_bbox[0], bottom_bbox[0]),
+        min(top_bbox[1], bottom_bbox[1]),
+        max(top_bbox[2], bottom_bbox[2]),
+        max(top_bbox[3], bottom_bbox[3]),
+    )
+    return merged_rows, merged_bbox
 
 
 def _extract_tables_from_crop(
     page: pdfplumber.page.PageObject,
     crop_bbox: Tuple[float, float, float, float],
+    *,
+    fallback_to_text_rows: bool = False,
 ) -> List[TableChunk]:
     # Crop-level extraction gives table_settings a tighter region and improves recovery of border-light tables.
     x0, y0, x1, y1 = crop_bbox
@@ -666,6 +1344,12 @@ def _extract_tables_from_crop(
             cleaned.append(_merge_cells(table))
         if cleaned:
             return [(table, crop_bbox) for table in cleaned]
+
+    if fallback_to_text_rows:
+        line_rows = _compact_fallback_rows(_extract_region_line_rows(page, crop_bbox))
+        if line_rows:
+            return [(line_rows, crop_bbox)]
+
     return []
 
 
@@ -682,7 +1366,9 @@ def _extract_tables(
         y0 = min(edge["top"] for edge in lines) - 2
         y1 = max(edge["top"] for edge in lines) + 2
         crop_bbox = (max(0.0, x0), max(0.0, y0), min(page.width, x1), min(page.height, y1))
-        for table, crop_box in _extract_tables_from_crop(page, crop_bbox):
+        for table, crop_box in _extract_tables_from_crop(
+            page, crop_bbox, fallback_to_text_rows=True
+        ):
             table = _normalize_extracted_table(table)
             rows_key = tuple(tuple(row) for row in table)
             bbox_key = tuple(round(v, 2) for v in crop_box)
@@ -691,28 +1377,77 @@ def _extract_tables(
                 seen_keys.add(key)
                 merged.append((table, crop_box))
 
-    reclassified: List[TableChunk] = []
-    for crop_bbox in _single_column_box_regions(page):
-        cell_text = _extract_text_from_box_region(page, crop_bbox)
-        if not cell_text:
+    # Notes drawn as single-column box regions should stay in body text, not table output.
+    # Merge nearby fragments with shared index to avoid dropping partial text by accident.
+    candidate_rows: List[dict] = []
+    for entry in _single_column_box_region_candidates(page):
+        rows = [[_extract_text_from_box_region(page, entry["bbox"])]]
+        if not rows[0][0]:
             continue
-        replacement = [[cell_text]]
-        merged = [
-            (rows, bbox)
-            for rows, bbox in merged
-            if not (
-                _bbox_overlap_ratio(bbox, crop_bbox) >= 0.8
-                and _looks_like_single_column_box_misclassification(rows)
-            )
-        ]
-        rows_key = tuple(tuple(row) for row in replacement)
-        bbox_key = tuple(round(v, 2) for v in crop_bbox)
-        key = (rows_key, bbox_key)
-        if key not in seen_keys:
-            seen_keys.add(key)
-            reclassified.append((replacement, crop_bbox))
+        is_note_like = _looks_like_single_column_note(rows=rows, page=page, bbox=entry["bbox"])
+        candidate_rows.append(
+            {
+                "bbox": entry["bbox"],
+                "rows": rows,
+                "is_white_content": bool(entry.get("is_white_content")),
+                "is_note_like": is_note_like,
+            }
+        )
 
-    merged.extend(reclassified)
+    merged_candidates: List[dict] = []
+    for candidate in sorted(candidate_rows, key=lambda item: float(item["bbox"][1])):
+        if candidate["is_white_content"]:
+            merged_candidates.append(candidate)
+            continue
+
+        merged_into_existing = False
+        for existing in merged_candidates:
+            if existing["is_white_content"]:
+                continue
+            if not _single_column_boxes_share_index(existing["bbox"], candidate["bbox"]):
+                continue
+            # Merge vertically adjacent or overlapping fragments that are likely the same logical box.
+            if (
+                abs(candidate["bbox"][1] - existing["bbox"][3]) <= 90.0
+                or abs(existing["bbox"][1] - candidate["bbox"][3]) <= 90.0
+                or _bbox_overlap_ratio(existing["bbox"], candidate["bbox"]) > 0.0
+            ):
+                merged_rows, merged_bbox = _merge_single_column_fragment_rows(
+                    existing["bbox"],
+                    existing["rows"],
+                    candidate["bbox"],
+                    candidate["rows"],
+                )
+                existing["rows"] = merged_rows
+                existing["bbox"] = merged_bbox
+                existing["is_note_like"] = _looks_like_single_column_note(
+                    rows=merged_rows,
+                    page=page,
+                    bbox=merged_bbox,
+                )
+                merged_into_existing = True
+                break
+
+        if not merged_into_existing:
+            merged_candidates.append(candidate)
+
+    removed_indices: set[int] = set()
+    for candidate in merged_candidates:
+        if candidate["is_white_content"] or not candidate.get("is_note_like", False):
+            continue
+        for idx, (rows, table_bbox) in enumerate(merged):
+            if idx in removed_indices:
+                continue
+            if not _looks_like_single_column_note(rows=rows, page=page, bbox=table_bbox):
+                continue
+            if not _single_column_boxes_share_index(table_bbox, candidate["bbox"]):
+                continue
+            if _bbox_overlap_ratio(table_bbox, candidate["bbox"]) < 0.8:
+                continue
+            removed_indices.add(idx)
+
+    if removed_indices:
+        merged = [entry for idx, entry in enumerate(merged) if idx not in removed_indices]
 
     if merged or not force_table:
         return merged
@@ -776,13 +1511,18 @@ def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
     if not rows:
         return ""
 
-    header_row_count = _header_row_count(rows)
-    header_rows = rows[:header_row_count] if header_row_count else rows[:1]
-    header = _collapse_header_rows(header_rows)
-    body = rows[header_row_count:] if header_row_count else rows[1:]
-    if not body:
-        body = rows
+    note_like = _looks_like_single_column_note(rows)
+    if note_like:
         header = [f"Column {idx}" for idx in range(1, len(rows[0]) + 1)]
+        body = rows
+    else:
+        header_row_count = _header_row_count(rows)
+        header_rows = rows[:header_row_count] if header_row_count else rows[:1]
+        header = _collapse_header_rows(header_rows)
+        body = rows[header_row_count:] if header_row_count else rows[1:]
+        if not body:
+            body = rows
+            header = [f"Column {idx}" for idx in range(1, len(rows[0]) + 1)]
 
     header_line = "| " + " | ".join(_format_header_markdown_cell(cell or f"Column {idx + 1}") for idx, cell in enumerate(header)) + " |"
     divider_line = "| " + " | ".join("---" for _ in header) + " |"

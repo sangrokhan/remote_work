@@ -107,8 +107,9 @@ class PipelineExtractionTests(unittest.TestCase):
         markdown = self._extract_table_markdown()
         extracted_tables = _extract_markdown_tables(markdown)
         extracted_by_index = {idx: rows for idx, rows in enumerate(extracted_tables)}
+        expected_tables = [table for table in fixture["tables"] if table.get("id") != "callout"]
 
-        for idx, table in enumerate(fixture["tables"]):
+        for idx, table in enumerate(expected_tables):
             self.assertIn(idx, extracted_by_index)
             self.assertEqual(table["rows"], extracted_by_index[idx], table["id"])
 
@@ -137,15 +138,63 @@ class PipelineExtractionTests(unittest.TestCase):
             markdown,
         )
 
-    def test_single_column_box_like_region_is_emitted_as_one_cell_table(self) -> None:
-        markdown = self._extract_table_markdown()
-        self.assertIn("| Column 1 |", markdown)
+    def test_single_column_box_like_region_is_routed_to_body_text(self) -> None:
+        result = self._extract_result()
+        table_markdown = result["table_markdown"]
+        markdown = result["markdown"]
+        self.assertNotIn("| Column 1 |", table_markdown)
         self.assertIn(
-            "| Escalation lane summary Owner confirmed for regional review and exception routing.<br>Backup approver stays on the same visual box and must not become a second table row. |",
+            "Escalation lane summary Owner confirmed for regional review and exception routing.",
             markdown,
         )
-        self.assertNotIn("| Escalation lane summary |", markdown)
-        self.assertNotIn("| Owner confirmed for regional review and exception routing. |", markdown)
+        self.assertIn(
+            "Backup approver stays on the same visual box and must not become a second table row.",
+            markdown,
+        )
+
+    def test_note_like_single_column_tables_are_routed_to_body_text(self) -> None:
+        pdf_path = self._build_pdf()
+        call_index = 0
+
+        def fake_extract_tables(page: object, force_table: bool = False):
+            nonlocal call_index
+            call_index += 1
+            if call_index == 1:
+                return [
+                    (
+                        [
+                            ["F1-U path is not present in the integrated CU-DU shape. Hence, the counters for"],
+                            ["F1-U are not provided in this shape."],
+                        ],
+                        (40.0, 121.0, 540.0, 160.0),
+                    )
+                ]
+            return []
+
+        captured_refs: dict[str, list[tuple[str, tuple]]] = {"refs": []}
+
+        def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
+            captured_refs["refs"].extend(
+                (str(entry.get("text") or ""), tuple(entry.get("bbox", ())) )
+                for entry in reference_lines
+                if isinstance(entry, dict) and entry.get("text")
+            )
+            return "BODY BLOCK"
+
+        with patch("extractor.pipeline._extract_tables", side_effect=fake_extract_tables), patch(
+            "extractor.pipeline._extract_body_text", side_effect=fake_extract_body_text
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_root = Path(temp_dir)
+                result = extract_pdf_to_outputs(
+                    pdf_path=pdf_path,
+                    out_md_dir=temp_root / "md",
+                    out_image_dir=temp_root / "images",
+                    stem="note-routing",
+                )
+
+        self.assertIn("F1-U path is not present in the integrated CU-DU shape. Hence, the counters for F1-U are not provided in this shape.", "".join(ref_text for ref_text, _ in captured_refs["refs"]))
+        self.assertNotIn("### Page 1 table", result["table_markdown"])
 
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -174,7 +223,7 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertIn("[Table reference: Page 1 table 1]", markdown)
         self.assertEqual(3, markdown.count("[Table reference: Page 1 table 2]"))
         self.assertIn("[Table reference: Page 3 table 3]", markdown)
-        self.assertIn("[Table reference: Page 4 table 4]", markdown)
+        self.assertNotIn("[Table reference: Page 4 table 4]", markdown)
         self.assertIn("### Page 2", markdown)
         self.assertIn("### Page 4", markdown)
 
@@ -271,7 +320,7 @@ class PipelineExtractionTests(unittest.TestCase):
     def test_spanning_stage_table_merges_into_one_block(self) -> None:
         markdown = self._extract_table_markdown()
         blocks = self._table_blocks(markdown)
-        self.assertEqual(4, len(blocks))
+        self.assertEqual(3, len(blocks))
         stage_block = next((block for block in blocks if "Phase A" in block), "")
         self.assertTrue(stage_block)
         self.assertIn("Release Notes", stage_block)
