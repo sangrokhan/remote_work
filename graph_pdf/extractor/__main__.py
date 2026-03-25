@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--page-write", action="store_true")
     parser.add_argument("--raw")
     parser.add_argument("--from-raw")
+    parser.add_argument("--region-log")
     args = parser.parse_args()
 
     selected_pages = _parse_pages_spec(args.pages) if args.pages else None
@@ -73,6 +74,7 @@ def main() -> None:
         add_heading=Path(args.add_heading) if args.add_heading else None,
         page_write=args.page_write,
         from_raw=Path(args.from_raw) if args.from_raw else None,
+        region_log=Path(args.region_log) if args.region_log else None,
     )
 
 

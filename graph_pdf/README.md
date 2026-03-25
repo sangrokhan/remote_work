@@ -189,13 +189,13 @@ python3 -m extractor \
 14. 마지막으로 body 영역과 겹치는 embedded image만 별도 파일로 저장합니다.
 
 ## 산출물 예시 위치
-- 텍스트/마크다운: `graph_pdf/artifacts/run_demo/md/demo.txt`, `demo.md`
-- 이미지: `graph_pdf/artifacts/run_demo/images/demo_page_01.png`, `demo_page_02.png`
+- 텍스트/마크다운: `graph_pdf/artifacts/run_demo/md/demo.txt`, `demo.md`, `demo_table.md`
+- 이미지: `graph_pdf/artifacts/run_demo/images/demo_image_01.png`, `demo_image_02.png`
 
 `demo.txt`의 표 출력은 마크다운 테이블이 아니라 아래와 같은 행 블록 구조입니다.
 
 ```text
-### Page 1 table 1
+### demo table 1
 - Row 1
   Item: Laptop
   Qty: 12

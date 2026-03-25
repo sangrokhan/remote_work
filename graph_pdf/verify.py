@@ -25,13 +25,13 @@ def _extract_markdown_tables(markdown_text: str) -> List[List[List[str]]]:
     i = 0
     while i < len(lines):
         line = lines[i]
-        if not line.startswith("### Page ") or " table " not in line:
+        if not re.match(r"^### .+ table \d+$", line):
             i += 1
             continue
 
         i += 1
         table_lines: List[str] = []
-        while i < len(lines) and not lines[i].startswith("### Page "):
+        while i < len(lines) and not re.match(r"^### .+ table \d+$", lines[i]):
             table_lines.append(lines[i])
             i += 1
 
@@ -142,7 +142,7 @@ def run_checks() -> int:
         if _normalize(token) not in normalized_text:
             raise AssertionError(f"missing expected body text: {token}")
 
-    if re.search(r"^### Page \d+ table \d+$", markdown_text, flags=re.MULTILINE):
+    if re.search(r"^### .+ table \d+$", markdown_text, flags=re.MULTILINE):
         raise AssertionError("body markdown still contains embedded table blocks")
 
     extracted_tables = _extract_markdown_tables(table_markdown)
