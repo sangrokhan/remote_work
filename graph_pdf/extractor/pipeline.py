@@ -37,8 +37,63 @@ def _to_float_bbox(raw_bbox: object) -> tuple[float, float, float, float] | None
         return None
 
 
+def _x_overlap_width(
+    bbox_a: Tuple[float, float, float, float],
+    bbox_b: Tuple[float, float, float, float],
+) -> float:
+    return max(0.0, min(float(bbox_a[2]), float(bbox_b[2])) - max(float(bbox_a[0]), float(bbox_b[0])))
+
+
+def _has_x_overlap(
+    candidate: Tuple[float, float, float, float],
+    reference: Tuple[float, float, float, float],
+    *,
+    min_ratio: float,
+    min_width: float,
+) -> bool:
+    overlap = _x_overlap_width(candidate, reference)
+    if overlap <= 0.0:
+        return False
+    if min_width > 0.0 and overlap >= min_width:
+        return True
+    candidate_width = max(1.0, float(candidate[2]) - float(candidate[0]))
+    reference_width = max(1.0, float(reference[2]) - float(reference[0]))
+    return overlap / min(candidate_width, reference_width) >= min_ratio
+
+
 def _rounded_bbox(raw_bbox: Sequence[float] | tuple[float, float, float, float]) -> list[float]:
     return [round(float(value), 2) for value in raw_bbox]
+
+
+def _table_shape_signature(rows: Sequence[Sequence[str]]) -> tuple[int, int]:
+    row_count = len(rows)
+    if not rows:
+        return (0, 0)
+    col_count = max(len(row) for row in rows)
+    return (row_count, col_count)
+
+
+def _table_shapes_compatible(
+    previous_shape: tuple[int, int],
+    current_shape: tuple[int, int],
+) -> bool:
+    previous_row_count, previous_col_count = previous_shape
+    current_row_count, current_col_count = current_shape
+    if previous_col_count <= 0 or current_col_count <= 0:
+        return False
+    if previous_row_count <= 0 or current_row_count <= 0:
+        return False
+    if previous_col_count == 1 or current_col_count == 1:
+        return previous_col_count == current_col_count
+    return abs(previous_col_count - current_col_count) <= 1
+
+
+def _continuation_gap_tolerance(body_top: float, body_bottom: float, *, min_gap: float = 28.0, max_gap: float = 80.0) -> float:
+    # Use a body-height-scaled continuation window so large-format and compact pages behave consistently.
+    span = max(0.0, float(body_bottom) - float(body_top))
+    if span <= 0.0:
+        return min_gap
+    return max(min_gap, min(max_gap, span * 0.06))
 
 
 def _heading_level_from_rule(rule: dict) -> int | None:
@@ -221,14 +276,17 @@ def _should_continue_content_region(
     return overlap / min(prev_width, curr_width) >= min_x_overlap_ratio
 
 
-def _is_edge_candidate_for_continuation(
+def _is_cross_page_continuation_candidate(
     bbox: Tuple[float, float, float, float],
-    body_top: float,
     body_bottom: float,
+    continuation_gap: float | None = None,
     edge_tolerance: float = 24.0,
 ) -> bool:
     _x0, _top, _x1, bottom = bbox
-    return abs(bottom - body_bottom) <= edge_tolerance
+    tolerance = float(edge_tolerance)
+    if continuation_gap is not None and continuation_gap > 0:
+        tolerance = max(tolerance, float(continuation_gap))
+    return abs(bottom - body_bottom) <= tolerance
 
 
 @dataclass
@@ -270,6 +328,19 @@ class _PendingTableState:
 
 
 @dataclass
+class _CrossPageTableCandidate:
+    table_no: int
+    start_page: int
+    last_page: int
+    bbox: Tuple[float, float, float, float]
+    rows: TableRows
+    shape_signature: tuple[int, int]
+    axes: List[float] = field(default_factory=list)
+    has_gap_text: bool = False
+    page_height: float | None = None
+
+
+@dataclass
 class _DocumentOutputState:
     document_id: str
     output_text: List[str] = field(default_factory=list)
@@ -278,6 +349,7 @@ class _DocumentOutputState:
     edge_debug_pages: List[dict] = field(default_factory=list)
     rotated_debug: List[dict] = field(default_factory=list)
     pending_table_state: _PendingTableState = field(default_factory=_PendingTableState)
+    cross_page_candidates: List[_CrossPageTableCandidate] = field(default_factory=list)
     next_table_no: int = 1
     next_image_no: int = 1
     pending_image_ref_bbox: Optional[Tuple[float, float, float, float]] = None
@@ -288,6 +360,117 @@ class _DocumentOutputState:
     def clear_transient_content_state(self) -> None:
         self.pending_image_ref_bbox = None
         self.pending_image_body_bottom = None
+        self.cross_page_candidates = []
+
+
+def _to_cross_page_candidate(state: _PendingTableState) -> _CrossPageTableCandidate:
+    return _CrossPageTableCandidate(
+        table_no=int(state.table_no or 0),
+        start_page=int(state.start_page or 0),
+        last_page=int(state.last_page or 0),
+        bbox=(
+            float(state.bbox[0]),
+            float(state.bbox[1]),
+            float(state.bbox[2]),
+            float(state.bbox[3]),
+        ),
+        rows=[list(row) for row in state.flattened_rows()],
+        shape_signature=_table_shape_signature(state.flattened_rows()),
+        axes=list(state.axes),
+        has_gap_text=bool(state.has_gap_text),
+        page_height=state.page_height,
+    )
+
+
+def _load_cross_page_candidate(
+    state: _DocumentOutputState,
+    candidate: _CrossPageTableCandidate,
+) -> None:
+    state.pending_table_state.chunks = [list(row) for row in candidate.rows]
+    state.pending_table_state.table_no = candidate.table_no
+    state.pending_table_state.start_page = candidate.start_page
+    state.pending_table_state.last_page = candidate.last_page
+    state.pending_table_state.bbox = candidate.bbox
+    state.pending_table_state.axes = list(candidate.axes)
+    state.pending_table_state.has_gap_text = bool(candidate.has_gap_text)
+    state.pending_table_state.page_height = candidate.page_height
+
+
+def _pick_cross_page_anchor(
+    current_bbox: Tuple[float, float, float, float],
+    current_axes: Sequence[float],
+    current_shape: tuple[int, int],
+    body_top: float,
+    body_bottom: float,
+    continuation_gap: float,
+    region_map: dict[int, dict[str, Any]],
+    anchors: Sequence[_CrossPageTableCandidate],
+    current_page: int,
+) -> _CrossPageTableCandidate | None:
+    if not anchors or not current_bbox:
+        return None
+
+    best_anchor: _CrossPageTableCandidate | None = None
+    best_score = -1.0
+
+    for anchor in anchors:
+        has_x_overlap = _has_x_overlap(
+            candidate=anchor.bbox,
+            reference=current_bbox,
+            min_ratio=0.22,
+            min_width=8.0,
+        )
+        has_axis_overlap = any(
+            abs(axis - current_axis) <= 1.0
+            for axis in anchor.axes
+            for current_axis in current_axes
+        )
+        if not has_x_overlap and not has_axis_overlap:
+            continue
+
+        if not _table_shapes_compatible(anchor.shape_signature, current_shape):
+            continue
+
+        if _has_cross_page_gap_blocked(
+            region_map=region_map,
+            previous_page=anchor.last_page,
+            previous_table_bbox=anchor.bbox,
+            current_page=current_page,
+            current_table_bbox=current_bbox,
+            continuation_gap=continuation_gap,
+            previous_axes=anchor.axes,
+            current_axes=current_axes,
+        ):
+            continue
+
+        if not _continuation_regions_should_merge(
+            prev_bbox=anchor.bbox,
+            curr_bbox=current_bbox,
+            prev_axes=anchor.axes,
+            curr_axes=current_axes,
+            body_top=body_top,
+            body_bottom=body_bottom,
+            has_gap_text=anchor.has_gap_text,
+            prev_page_height=anchor.page_height,
+        ):
+            continue
+
+        overlap_width = _x_overlap_width(anchor.bbox, current_bbox)
+        if overlap_width <= 0.0 and has_axis_overlap:
+            overlap_width = 5.0
+        current_width = max(1.0, float(current_bbox[2]) - float(current_bbox[0]))
+        anchor_width = max(1.0, float(anchor.bbox[2]) - float(anchor.bbox[0]))
+        overlap_ratio = overlap_width / min(current_width, anchor_width)
+        shape_bonus = 0.0
+        if abs(anchor.shape_signature[1] - current_shape[1]) <= 1:
+            shape_bonus = 0.5
+        score = overlap_ratio + (overlap_width / 1000.0) + shape_bonus
+        if score <= best_score:
+            continue
+        best_score = score
+        best_anchor = anchor
+
+    return best_anchor
 
 
 def _first_table_row_signature(table_rows: Sequence[Sequence[str]]) -> tuple[str, ...]:
@@ -315,6 +498,10 @@ def _has_intervening_regions(
     page_regions: dict[str, Any],
     table_bbox: Tuple[float, float, float, float],
     after_table_bottom: bool,
+    max_vertical_gap: float | None = None,
+    overlap_bbox: Tuple[float, float, float, float] | None = None,
+    min_x_overlap_ratio: float = 0.0,
+    min_x_overlap: float = 0.0,
 ) -> bool:
     table_top = float(table_bbox[1])
     table_bottom = float(table_bbox[3])
@@ -324,7 +511,7 @@ def _has_intervening_regions(
         float(table_bbox[2]),
         table_bottom,
     )
-    for region_key in ("text", "tables", "images"):
+    for region_key in ("text", "tables", "images", "notes"):
         entries = page_regions.get(region_key)
         if not entries:
             continue
@@ -335,8 +522,26 @@ def _has_intervening_regions(
                 continue
             if bbox == table_bbox_tuple:
                 continue
+            if overlap_bbox is not None and not _has_x_overlap(
+                candidate=bbox,
+                reference=overlap_bbox,
+                min_ratio=min_x_overlap_ratio,
+                min_width=min_x_overlap,
+            ):
+                continue
+            if max_vertical_gap is not None:
+                if after_table_bottom:
+                    if bbox[1] > table_bottom + max_vertical_gap:
+                        continue
+                    if bbox[1] <= table_bottom + 1.0:
+                        continue
+                else:
+                    if bbox[3] < table_top - max_vertical_gap:
+                        continue
+                    if bbox[3] > table_top:
+                        continue
             if after_table_bottom:
-                if bbox[1] >= table_bottom + 1.0:
+                if bbox[1] > table_bottom + 1.0:
                     return True
             elif bbox[3] <= table_top - 1.0:
                 return True
@@ -346,22 +551,38 @@ def _has_intervening_regions(
 def _has_intervening_regions_before_table(
     page_regions: dict[str, Any],
     table_bbox: Tuple[float, float, float, float],
+    max_vertical_gap: float | None = None,
+    overlap_bbox: Tuple[float, float, float, float] | None = None,
+    min_x_overlap_ratio: float = 0.0,
+    min_x_overlap: float = 0.0,
 ) -> bool:
     return _has_intervening_regions(
         page_regions=page_regions,
         table_bbox=table_bbox,
         after_table_bottom=False,
+        max_vertical_gap=max_vertical_gap,
+        overlap_bbox=overlap_bbox,
+        min_x_overlap_ratio=min_x_overlap_ratio,
+        min_x_overlap=min_x_overlap,
     )
 
 
 def _has_intervening_regions_after_table(
     page_regions: dict[str, Any],
     table_bbox: Tuple[float, float, float, float],
+    max_vertical_gap: float | None = None,
+    overlap_bbox: Tuple[float, float, float, float] | None = None,
+    min_x_overlap_ratio: float = 0.0,
+    min_x_overlap: float = 0.0,
 ) -> bool:
     return _has_intervening_regions(
         page_regions=page_regions,
         table_bbox=table_bbox,
         after_table_bottom=True,
+        max_vertical_gap=max_vertical_gap,
+        overlap_bbox=overlap_bbox,
+        min_x_overlap_ratio=min_x_overlap_ratio,
+        min_x_overlap=min_x_overlap,
     )
 
 
@@ -371,17 +592,79 @@ def _has_cross_page_gap_blocked(
     previous_table_bbox: Tuple[float, float, float, float],
     current_page: int,
     current_table_bbox: Tuple[float, float, float, float],
+    continuation_gap: float | None = None,
+    previous_axes: Sequence[float] | None = None,
+    current_axes: Sequence[float] | None = None,
 ) -> bool:
     previous_regions = region_map.get(previous_page, {})
     current_regions = region_map.get(current_page, {})
     if not previous_regions:
         return False
-    if _has_intervening_regions_after_table(previous_regions, previous_table_bbox):
+    previous_body_top = float(previous_regions.get("body_top", 0.0))
+    previous_body_bottom = float(previous_regions.get("body_bottom", 0.0))
+    current_body_top = float(current_regions.get("body_top", 0.0))
+    current_body_bottom = float(current_regions.get("body_bottom", 0.0))
+    alignment_x_overlap_ratio = 0.22
+    alignment_x_overlap_width = 8.0
+
+    shared_axes: list[float] = []
+    if previous_axes and current_axes:
+        shared_axes = [
+            axis
+            for axis in previous_axes
+            if any(abs(axis - current_axis) <= 1.0 for current_axis in current_axes)
+        ]
+    if shared_axes:
+        overlap_x0 = min(shared_axes) - 4.0
+        overlap_x1 = max(shared_axes) + 4.0
+    else:
+        overlap_x0 = max(previous_table_bbox[0], current_table_bbox[0])
+        overlap_x1 = min(previous_table_bbox[2], current_table_bbox[2])
+    overlap_bbox_for_previous = (
+        overlap_x0,
+        previous_table_bbox[1],
+        overlap_x1,
+        previous_table_bbox[3],
+    )
+    overlap_bbox_for_current = (
+        overlap_x0,
+        current_table_bbox[1],
+        overlap_x1,
+        current_table_bbox[3],
+    )
+    if _x_overlap_width(overlap_bbox_for_previous, previous_table_bbox) <= 0.0:
+        overlap_bbox_for_previous = previous_table_bbox
+        overlap_bbox_for_current = current_table_bbox
+
+    if previous_body_top and previous_body_bottom:
+        prev_gap = min(float(continuation_gap or 80.0), max(0.0, previous_body_bottom - previous_table_bbox[3]))
+    else:
+        prev_gap = continuation_gap
+    if current_body_top and current_body_bottom:
+        curr_gap = min(float(continuation_gap or 80.0), max(0.0, current_table_bbox[1] - current_body_top))
+    else:
+        curr_gap = continuation_gap
+
+    if _has_intervening_regions_after_table(
+        previous_regions,
+        previous_table_bbox,
+        max_vertical_gap=prev_gap,
+        overlap_bbox=overlap_bbox_for_previous,
+        min_x_overlap_ratio=alignment_x_overlap_ratio,
+        min_x_overlap=alignment_x_overlap_width,
+    ):
         return True
 
     if not current_regions:
         return True
-    if _has_intervening_regions_before_table(current_regions, current_table_bbox):
+    if _has_intervening_regions_before_table(
+        current_regions,
+        current_table_bbox,
+        max_vertical_gap=curr_gap,
+        overlap_bbox=overlap_bbox_for_current,
+        min_x_overlap_ratio=alignment_x_overlap_ratio,
+        min_x_overlap=alignment_x_overlap_width,
+    ):
         return True
 
     return False
@@ -476,13 +759,25 @@ def extract_pdf_to_outputs(
 
     def _collect_embedded_image_references(
         embedded_refs: Sequence[dict],
+        page_no: int,
         body_top: float,
         body_bottom: float,
     ) -> List[dict]:
         page_content_references: list[dict] = []
+        note_regions = note_regions_by_page.get(page_no, [])
         for entry in embedded_refs:
             bbox = _to_float_bbox(entry.get("bbox") if isinstance(entry, dict) else None)
             if bbox is None:
+                continue
+            if any(
+                not (
+                    float(bbox[2]) <= float(region[0])
+                    or float(region[2]) <= float(bbox[0])
+                    or float(bbox[3]) <= float(region[1])
+                    or float(region[3]) <= float(bbox[1])
+                )
+                for region in note_regions
+            ):
                 continue
 
             is_cont = False
@@ -510,7 +805,10 @@ def extract_pdf_to_outputs(
             )
             current_document_state.next_image_no += 1
 
-            if _is_edge_candidate_for_continuation(bbox=bbox, body_top=body_top, body_bottom=body_bottom):
+            if _is_cross_page_continuation_candidate(
+                bbox=bbox,
+                body_bottom=body_bottom,
+            ):
                 current_document_state.pending_image_ref_bbox = bbox
                 current_document_state.pending_image_body_bottom = body_bottom
             else:
@@ -626,6 +924,7 @@ def extract_pdf_to_outputs(
             tables: List[Tuple[TableRows, Tuple[float, float, float, float]]] = []
             note_references: List[dict] = []
             detected_table_payloads: List[dict] = []
+            detected_note_payloads: List[dict] = []
             table_exclusion_regions: list[Tuple[float, float, float, float]] = []
             for table_rows, bbox in detected_tables:
                 table_exclusion_regions.append(bbox)
@@ -641,6 +940,13 @@ def extract_pdf_to_outputs(
                     detected_table_payloads.append(
                         {
                             "kind": "note",
+                            "bbox": [round(float(value), 2) for value in bbox],
+                            "row_count": int(row_count),
+                            "col_count": int(col_count),
+                        }
+                    )
+                    detected_note_payloads.append(
+                        {
                             "bbox": [round(float(value), 2) for value in bbox],
                             "row_count": int(row_count),
                             "col_count": int(col_count),
@@ -724,6 +1030,7 @@ def extract_pdf_to_outputs(
 
                 region_map[page_idx] = {
                     "tables": unique_tables_regions,
+                    "notes": detected_note_payloads,
                     "text": [{"bbox": _rounded_bbox(bbox)} for bbox in body_text_regions],
                     "images": embedded_regions_payload
                     + [{"kind": "image", "source": "drawing", "bbox": _rounded_bbox(image_bbox)} for image_bbox in image_regions],
@@ -735,8 +1042,13 @@ def extract_pdf_to_outputs(
             else:
                 region_map[page_idx] = {
                     "tables": table_regions,
+                    "notes": [tuple(note["bbox"]) for note in detected_note_payloads],
                     "text": body_text_regions,
                     "images": [*embedded_image_regions, *image_regions],
+                    "body_top": float(body_top),
+                    "body_bottom": float(body_bottom),
+                    "header_margin": float(header_margin),
+                    "footer_margin": float(footer_margin),
                 }
                 obsolete_page_threshold = page_idx - 1
                 for obsolete_page in [p for p in region_map.keys() if p < obsolete_page_threshold]:
@@ -756,6 +1068,7 @@ def extract_pdf_to_outputs(
             if not tables:
                 page_content_references = _collect_embedded_image_references(
                     embedded_refs=embedded_image_refs,
+                    page_no=page_idx,
                     body_top=body_top,
                     body_bottom=body_bottom,
                 )
@@ -784,60 +1097,91 @@ def extract_pdf_to_outputs(
                 continue
 
             tables = sorted(tables, key=lambda item: item[1][1])
+            previous_cross_candidates = current_document_state.cross_page_candidates
+            current_document_state.cross_page_candidates = []
             for table_index, (table_rows, bbox) in enumerate(tables):
                 cross_page_continuation = _should_try_table_continuation_merge(
                     pending_page=current_document_state.pending_table_state.last_page,
                     current_page=page_idx,
                 )
+                continuation_gap = _continuation_gap_tolerance(body_top=body_top, body_bottom=body_bottom)
                 has_current_gap_text = _has_gap_text_before_bbox(
                     body_text_regions,
                     bbox,
+                    max_gap=continuation_gap,
+                    overlap_bbox=bbox,
+                    min_x_overlap_ratio=0.22,
+                    min_x_overlap_width=8.0,
                 )
                 current_axes = _vertical_axes_for_bbox(page, bbox)
-
-                can_merge_cross_page = (
-                    table_index == 0
-                    and cross_page_continuation
-                    and current_document_state.pending_table_state.is_active()
-                    and current_document_state.pending_table_state.last_page is not None
-                    and not _has_cross_page_gap_blocked(
-                        region_map=region_map,
-                        previous_page=current_document_state.pending_table_state.last_page,
-                        previous_table_bbox=current_document_state.pending_table_state.bbox if current_document_state.pending_table_state.bbox is not None else bbox,
-                        current_page=page_idx,
-                        current_table_bbox=bbox,
-                    )
-                )
-                if can_merge_cross_page:
-                    if _continuation_regions_should_merge(
-                        prev_bbox=current_document_state.pending_table_state.bbox if current_document_state.pending_table_state.bbox is not None else bbox,
-                        curr_bbox=bbox,
-                        prev_axes=current_document_state.pending_table_state.axes,
-                        curr_axes=current_axes,
+                cross_anchor = (
+                    _pick_cross_page_anchor(
+                        current_bbox=bbox,
+                        current_axes=current_axes,
+                        current_shape=_table_shape_signature(table_rows),
                         body_top=body_top,
                         body_bottom=body_bottom,
-                        has_gap_text=current_document_state.pending_table_state.has_gap_text or has_current_gap_text,
-                        prev_page_height=current_document_state.pending_table_state.page_height,
-                    ):
-                        if current_document_state.pending_table_state.start_page is not None and current_document_state.pending_table_state.table_no is not None:
-                            _append_table_reference(
-                                state=current_document_state,
-                                refs=page_table_references,
-                                table_no=current_document_state.pending_table_state.table_no,
-                                bbox=bbox,
-                            )
-                        current_document_state.pending_table_state.append_chunk(table_rows)
-                        current_document_state.pending_table_state.last_page = page_idx
-                        current_document_state.pending_table_state.bbox = (
-                            min(current_document_state.pending_table_state.bbox[0], bbox[0]),
-                            min(current_document_state.pending_table_state.bbox[1], bbox[1]),
-                            max(current_document_state.pending_table_state.bbox[2], bbox[2]),
-                            max(current_document_state.pending_table_state.bbox[3], bbox[3]),
+                        continuation_gap=continuation_gap,
+                        region_map=region_map,
+                        anchors=previous_cross_candidates,
+                        current_page=page_idx,
+                    )
+                    if table_index == 0 and cross_page_continuation
+                    else None
+                )
+                can_merge_cross_page = cross_anchor is not None and _continuation_regions_should_merge(
+                    prev_bbox=cross_anchor.bbox,
+                    curr_bbox=bbox,
+                    prev_axes=cross_anchor.axes,
+                    curr_axes=current_axes,
+                    body_top=body_top,
+                    body_bottom=body_bottom,
+                    has_gap_text=has_current_gap_text,
+                    edge_tolerance=continuation_gap,
+                    prev_page_height=cross_anchor.page_height,
+                )
+                if can_merge_cross_page:
+                    anchor_is_active = (
+                        current_document_state.pending_table_state.is_active()
+                        and current_document_state.pending_table_state.table_no == cross_anchor.table_no
+                    )
+                    if not anchor_is_active:
+                        _flush_pending_table(current_document_state)
+                        _load_cross_page_candidate(current_document_state, cross_anchor)
+
+                    if current_document_state.pending_table_state.start_page is not None and current_document_state.pending_table_state.table_no is not None:
+                        _append_table_reference(
+                            state=current_document_state,
+                            refs=page_table_references,
+                            table_no=current_document_state.pending_table_state.table_no,
+                            bbox=bbox,
                         )
-                        current_document_state.pending_table_state.page_height = float(page.height)
-                        current_document_state.pending_table_state.axes = _merge_numeric_positions([*current_document_state.pending_table_state.axes, *current_axes], tolerance=1.0)
-                        current_document_state.pending_table_state.has_gap_text = _has_gap_text_after_bbox(body_text_regions, bbox)
-                        continue
+                    current_document_state.pending_table_state.append_chunk(table_rows)
+                    current_document_state.pending_table_state.last_page = page_idx
+                    current_document_state.pending_table_state.bbox = (
+                        min(current_document_state.pending_table_state.bbox[0], bbox[0]),
+                        min(current_document_state.pending_table_state.bbox[1], bbox[1]),
+                        max(current_document_state.pending_table_state.bbox[2], bbox[2]),
+                        max(current_document_state.pending_table_state.bbox[3], bbox[3]),
+                    )
+                    current_document_state.pending_table_state.page_height = float(page.height)
+                    current_document_state.pending_table_state.axes = _merge_numeric_positions([*current_document_state.pending_table_state.axes, *current_axes], tolerance=1.0)
+                    current_document_state.pending_table_state.has_gap_text = _has_gap_text_after_bbox(
+                        body_text_regions,
+                        bbox,
+                        max_gap=continuation_gap,
+                        overlap_bbox=bbox,
+                        min_x_overlap_ratio=0.22,
+                        min_x_overlap_width=8.0,
+                    )
+                    if _is_cross_page_continuation_candidate(
+                        current_document_state.pending_table_state.bbox,
+                        body_bottom=body_bottom,
+                        continuation_gap=continuation_gap,
+                    ):
+                        current_document_state.cross_page_candidates.append(_to_cross_page_candidate(current_document_state.pending_table_state))
+                    continue
+
                 _flush_pending_table(current_document_state)
 
                 current_table_no = current_document_state.next_table_no
@@ -858,10 +1202,21 @@ def extract_pdf_to_outputs(
                 current_document_state.pending_table_state.has_gap_text = _has_gap_text_after_bbox(
                     body_text_regions,
                     bbox,
+                    max_gap=continuation_gap,
+                    overlap_bbox=bbox,
+                    min_x_overlap_ratio=0.22,
+                    min_x_overlap_width=8.0,
                 )
+                if _is_cross_page_continuation_candidate(
+                    bbox,
+                    body_bottom=body_bottom,
+                    continuation_gap=continuation_gap,
+                ):
+                    current_document_state.cross_page_candidates.append(_to_cross_page_candidate(current_document_state.pending_table_state))
 
             page_content_references = _collect_embedded_image_references(
                 embedded_refs=embedded_image_refs,
+                page_no=page_idx,
                 body_top=body_top,
                 body_bottom=body_bottom,
             )

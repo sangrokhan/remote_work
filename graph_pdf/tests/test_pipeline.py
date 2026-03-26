@@ -159,7 +159,7 @@ class PipelineExtractionTests(unittest.TestCase):
         pdf_path = self._build_pdf()
         call_index = 0
 
-        def fake_extract_tables(page: object, force_table: bool = False):
+        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None):
             nonlocal call_index
             call_index += 1
             if call_index == 1:
@@ -196,8 +196,66 @@ class PipelineExtractionTests(unittest.TestCase):
                     stem="note-routing",
                 )
 
-        self.assertIn("F1-U path is not present in the integrated CU-DU shape. Hence, the counters for F1-U are not provided in this shape.", "".join(ref_text for ref_text, _ in captured_refs["refs"]))
+        self.assertIn("Note: F1-U path is not present in the integrated CU-DU shape. Hence, the counters for F1-U are not provided in this shape.", "".join(ref_text for ref_text, _ in captured_refs["refs"]))
         self.assertIsNone(re.search(r"^### .* table \d+$", result["table_markdown"], flags=re.MULTILINE))
+
+    def test_note_like_single_column_tables_skip_overlapping_image_references(self) -> None:
+        pdf_path = self._build_pdf()
+        call_index = 0
+
+        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None):
+            nonlocal call_index
+            call_index += 1
+            if call_index == 1:
+                return [
+                    (
+                        [
+                            ["F1-U path is not present in the integrated CU-DU shape. Hence, the counters for"],
+                            ["F1-U are not provided in this shape."],
+                        ],
+                        (40.0, 121.0, 540.0, 160.0),
+                    )
+                ]
+            return []
+
+        captured_refs: dict[str, list[str]] = {"refs": []}
+
+        def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
+            captured_refs["refs"].extend(
+                str(entry.get("text") or "")
+                for entry in reference_lines
+                if isinstance(entry, dict) and entry.get("text")
+            )
+            return "BODY BLOCK"
+
+        with patch("extractor.pipeline._extract_tables", side_effect=fake_extract_tables), patch(
+            "extractor.pipeline._collect_embedded_image_refs",
+            return_value={
+                1: [
+                    {
+                        "bbox": (50.0, 130.0, 60.0, 140.0),
+                        "name": "note-icon.png",
+                        "name_stem": "note-icon",
+                        "suffix": ".png",
+                    }
+                ]
+            },
+        ), patch(
+            "extractor.pipeline._extract_body_text", side_effect=fake_extract_body_text
+        ), patch(
+            "extractor.pipeline._extract_embedded_images",
+            return_value=[],
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_root = Path(temp_dir)
+                extract_pdf_to_outputs(
+                    pdf_path=pdf_path,
+                    out_md_dir=temp_root / "md",
+                    out_image_dir=temp_root / "images",
+                    stem="note-routing-image-skip",
+                )
+
+        self.assertFalse(any(ref.startswith("[Image reference:") for ref in captured_refs["refs"]))
 
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -358,7 +416,7 @@ class PipelineExtractionTests(unittest.TestCase):
         fake_pdf_context.__enter__.return_value = fake_pdf
         fake_pdf_context.__exit__.return_value = False
 
-        def fake_extract_tables(page: object, force_table: bool = False):
+        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None):
             if page.page_index == 1:
                 return [
                     ([["Col1", "Col2"], ["A", "1"], ["B", "2"]], (40.0, 650.0, 540.0, 700.0)),
@@ -409,7 +467,7 @@ class PipelineExtractionTests(unittest.TestCase):
         fake_pdf_context.__enter__.return_value = fake_pdf
         fake_pdf_context.__exit__.return_value = False
 
-        def fake_extract_tables(page: object, force_table: bool = False):
+        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None):
             if page.page_index == 1:
                 return [
                     ([["Col1", "Col2"], ["A", "1"]], (40.0, 650.0, 540.0, 700.0)),

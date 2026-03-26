@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from extractor.shared import _merge_horizontal_band_segments, _merge_vertical_band_segments
 from extractor.tables import (
     _collapse_structural_triplet_columns,
+    _classify_single_column_region,
+    _collect_single_column_candidates_for_notes,
     _continuation_regions_should_merge,
     _extract_tables_from_crop,
     _extract_tables,
@@ -68,6 +70,110 @@ class TableModuleTests(unittest.TestCase):
             [["A", "B"], ["C", "D"], ["E", "F"]],
             _collapse_structural_triplet_columns(table),
         )
+
+    def test_geometry_aware_single_row_requires_note_signal(self) -> None:
+        from unittest.mock import patch
+
+        rows = [["The counter of F1-U DL Interface per QCI is provided only for NSA operation."]]
+        page = SimpleNamespace()
+        bbox = (127.22, 249.26, 524.85, 272.45)
+
+        with patch(
+            "extractor.tables._extract_region_words",
+            return_value=[
+                {"text": "The", "x0": 150.0, "x1": 172.0, "top": 252.0, "bottom": 263.0},
+                {"text": "counter", "x0": 176.0, "x1": 220.0, "top": 252.0, "bottom": 263.0},
+                {"text": "of", "x0": 224.0, "x1": 236.0, "top": 252.0, "bottom": 263.0},
+                {"text": "F1-U", "x0": 240.0, "x1": 268.0, "top": 252.0, "bottom": 263.0},
+                {"text": "DL", "x0": 272.0, "x1": 286.0, "top": 252.0, "bottom": 263.0},
+                {"text": "Interface", "x0": 290.0, "x1": 344.0, "top": 252.0, "bottom": 263.0},
+                {"text": "provided", "x0": 348.0, "x1": 398.0, "top": 252.0, "bottom": 263.0},
+                {"text": "only", "x0": 402.0, "x1": 426.0, "top": 252.0, "bottom": 263.0},
+                {"text": "for", "x0": 430.0, "x1": 446.0, "top": 252.0, "bottom": 263.0},
+                {"text": "NSA", "x0": 450.0, "x1": 474.0, "top": 252.0, "bottom": 263.0},
+            ],
+        ), patch(
+            "extractor.tables._extract_region_lines",
+            return_value=[
+                [
+                    {"text": "The", "x0": 150.0, "x1": 172.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "counter", "x0": 176.0, "x1": 220.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "of", "x0": 224.0, "x1": 236.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "F1-U", "x0": 240.0, "x1": 268.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "DL", "x0": 272.0, "x1": 286.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "Interface", "x0": 290.0, "x1": 344.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "provided", "x0": 348.0, "x1": 398.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "only", "x0": 402.0, "x1": 426.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "for", "x0": 430.0, "x1": 446.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "NSA", "x0": 450.0, "x1": 474.0, "top": 252.0, "bottom": 263.0},
+                ]
+            ],
+        ), patch(
+            "extractor.tables._internal_grid_counts",
+            return_value=(0, 0),
+        ), patch(
+            "extractor.tables._note_border_signature",
+            return_value=(False, {"reason": "no_border"}),
+        ), patch(
+            "extractor.tables._select_note_anchor_for_bbox",
+            return_value=None,
+        ):
+            kind, meta = _classify_single_column_region(rows, page=page, bbox=bbox)
+
+        self.assertEqual("table", kind)
+        self.assertEqual("single_row_without_note_geometry", meta["reason"])
+
+    def test_geometry_aware_single_row_uses_note_anchor_signal(self) -> None:
+        from unittest.mock import patch
+
+        rows = [["The counter of F1-U DL Interface per QCI is provided only for NSA operation."]]
+        page = SimpleNamespace()
+        bbox = (127.22, 249.26, 524.85, 272.45)
+
+        with patch(
+            "extractor.tables._extract_region_words",
+            return_value=[
+                {"text": "The", "x0": 150.0, "x1": 172.0, "top": 252.0, "bottom": 263.0},
+                {"text": "counter", "x0": 176.0, "x1": 220.0, "top": 252.0, "bottom": 263.0},
+                {"text": "of", "x0": 224.0, "x1": 236.0, "top": 252.0, "bottom": 263.0},
+                {"text": "F1-U", "x0": 240.0, "x1": 268.0, "top": 252.0, "bottom": 263.0},
+                {"text": "DL", "x0": 272.0, "x1": 286.0, "top": 252.0, "bottom": 263.0},
+                {"text": "Interface", "x0": 290.0, "x1": 344.0, "top": 252.0, "bottom": 263.0},
+                {"text": "provided", "x0": 348.0, "x1": 398.0, "top": 252.0, "bottom": 263.0},
+                {"text": "only", "x0": 402.0, "x1": 426.0, "top": 252.0, "bottom": 263.0},
+                {"text": "for", "x0": 430.0, "x1": 446.0, "top": 252.0, "bottom": 263.0},
+                {"text": "NSA", "x0": 450.0, "x1": 474.0, "top": 252.0, "bottom": 263.0},
+            ],
+        ), patch(
+            "extractor.tables._extract_region_lines",
+            return_value=[
+                [
+                    {"text": "The", "x0": 150.0, "x1": 172.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "counter", "x0": 176.0, "x1": 220.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "of", "x0": 224.0, "x1": 236.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "F1-U", "x0": 240.0, "x1": 268.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "DL", "x0": 272.0, "x1": 286.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "Interface", "x0": 290.0, "x1": 344.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "provided", "x0": 348.0, "x1": 398.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "only", "x0": 402.0, "x1": 426.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "for", "x0": 430.0, "x1": 446.0, "top": 252.0, "bottom": 263.0},
+                    {"text": "NSA", "x0": 450.0, "x1": 474.0, "top": 252.0, "bottom": 263.0},
+                ]
+            ],
+        ), patch(
+            "extractor.tables._internal_grid_counts",
+            return_value=(0, 0),
+        ), patch(
+            "extractor.tables._note_border_signature",
+            return_value=(False, {"reason": "no_border"}),
+        ), patch(
+            "extractor.tables._select_note_anchor_for_bbox",
+            return_value=(128.65, 252.0, 147.5, 269.75),
+        ):
+            kind, meta = _classify_single_column_region(rows, page=page, bbox=bbox)
+
+        self.assertEqual("note", kind)
+        self.assertEqual("single_row_note_anchor", meta["reason"])
 
     def test_continuation_regions_require_shared_axes_and_empty_gap(self) -> None:
         self.assertTrue(
@@ -522,6 +628,120 @@ class TableModuleTests(unittest.TestCase):
 
         self.assertEqual([expected_table], tables)
 
+    def test_extract_tables_excludes_full_note_bbox_when_splitting_table_region(self) -> None:
+        from unittest.mock import patch
+
+        page = SimpleNamespace(
+            width=600.0,
+            height=800.0,
+            horizontal_edges=[],
+            vertical_edges=[],
+            filter=lambda fn: page,
+        )
+        seen_split_bboxes: list[tuple[float, float, float, float]] = []
+
+        def fake_extract_tables_from_crop(page_obj, crop_bbox, fallback_to_text_rows=False, strategy_debug=None, strategy_source=None, strategy_source_name=None):
+            seen_split_bboxes.append(tuple(float(value) for value in crop_bbox))
+            return []
+
+        with patch(
+            "extractor.tables._table_regions",
+            return_value=[(40.0, 540.0, [{"top": 100.0}, {"top": 220.0}])],
+        ), patch(
+            "extractor.tables._collect_single_column_candidates_for_notes",
+            return_value=[
+                {
+                    "bbox": (40.0, 120.0, 540.0, 170.0),
+                    "raw_bbox": (40.0, 120.0, 540.0, 135.0),
+                    "rows": [["Merged note body"]],
+                    "is_white_content": False,
+                    "is_note_like": True,
+                    "note_anchor": (50.0, 122.0, 60.0, 132.0),
+                    "note_band": (120.0, 135.0),
+                }
+            ],
+        ), patch(
+            "extractor.tables._extract_tables_from_crop",
+            side_effect=fake_extract_tables_from_crop,
+        ):
+            _extract_tables(page)
+
+        self.assertEqual(
+            [
+                (40.0, 98.0, 540.0, 120.0),
+                (40.0, 170.0, 540.0, 222.0),
+            ],
+            seen_split_bboxes,
+        )
+
+    def test_extract_tables_uses_expanded_note_bbox_for_standalone_note(self) -> None:
+        from unittest.mock import patch
+
+        page = SimpleNamespace(
+            width=600.0,
+            height=800.0,
+            horizontal_edges=[],
+            vertical_edges=[],
+            filter=lambda fn: page,
+        )
+
+        with patch(
+            "extractor.tables._table_regions",
+            return_value=[],
+        ), patch(
+            "extractor.tables._collect_single_column_candidates_for_notes",
+            return_value=[
+                {
+                    "bbox": (40.0, 120.0, 540.0, 170.0),
+                    "raw_bbox": (40.0, 120.0, 540.0, 135.0),
+                    "rows": [["Merged note body"]],
+                    "is_white_content": False,
+                    "is_note_like": True,
+                    "note_anchor": (50.0, 122.0, 60.0, 132.0),
+                    "note_band": (120.0, 135.0),
+                }
+            ],
+        ), patch(
+            "extractor.tables._extract_tables_from_crop",
+            return_value=[],
+        ):
+            tables = _extract_tables(page)
+
+        self.assertEqual(
+            [([["Merged note body"]], (40.0, 120.0, 540.0, 170.0))],
+            tables,
+        )
+
+    def test_collect_single_column_candidates_refreshes_rows_for_expanded_note_bbox(self) -> None:
+        from unittest.mock import patch
+
+        page = SimpleNamespace(width=600.0, height=800.0)
+
+        with patch(
+            "extractor.tables._single_column_box_region_candidates",
+            return_value=[{"bbox": (40.0, 120.0, 540.0, 135.0), "is_white_content": False}],
+        ), patch(
+            "extractor.tables._extract_text_from_box_region",
+            return_value="tail only",
+        ), patch(
+            "extractor.tables._looks_like_single_column_note",
+            side_effect=[True, True],
+        ), patch(
+            "extractor.tables._select_note_anchor_for_bbox",
+            return_value=(50.0, 122.0, 60.0, 132.0),
+        ), patch(
+            "extractor.tables._candidate_note_band_for_bbox",
+            return_value=(120.0, 170.0),
+        ), patch(
+            "extractor.tables._extract_region_line_rows",
+            return_value=[["Line one"], ["Line two"]],
+        ):
+            candidates = _collect_single_column_candidates_for_notes(page)
+
+        self.assertEqual(1, len(candidates))
+        self.assertEqual((40.0, 120.0, 540.0, 170.0), candidates[0]["bbox"])
+        self.assertEqual([["Line one"], ["Line two"]], candidates[0]["rows"])
+
     def test_single_column_boxes_share_index_when_aligned(self) -> None:
         self.assertTrue(
             _single_column_boxes_share_index(
@@ -633,15 +853,14 @@ class TableModuleTests(unittest.TestCase):
         ]
         self.assertTrue(_looks_like_single_column_note(rows))
         self.assertEqual(
-            "For F1-U/Xn-U interface, GTP SN marking & Loss/OOS counting is always activated.",
+            "Note: For F1-U/Xn-U interface, GTP SN marking & Loss/OOS counting is always activated.",
             _single_column_note_body_text(rows),
         )
 
     def test_single_column_note_body_text_uses_first_non_empty_cell(self) -> None:
         rows = [["", "", "Escalation lane summary"], ["", "", "Owner confirmed"]]
-        self.assertTrue(_looks_like_single_column_note(rows))
         self.assertEqual(
-            "Escalation lane summary Owner confirmed",
+            "Note: Escalation lane summary Owner confirmed",
             _single_column_note_body_text(rows),
         )
 
@@ -652,9 +871,15 @@ class TableModuleTests(unittest.TestCase):
                 "Backup approver stays on the same visual box and must not become a second table row.",
             ],
         ]
-        self.assertTrue(_looks_like_single_column_note(rows))
         self.assertEqual(
-            "Escalation lane summary Owner confirmed for regional review and exception routing. Backup approver stays on the same visual box and must not become a second table row.",
+            "Note: Escalation lane summary Owner confirmed for regional review and exception routing. Backup approver stays on the same visual box and must not become a second table row.",
+            _single_column_note_body_text(rows),
+        )
+
+    def test_single_column_note_body_text_does_not_duplicate_existing_prefix(self) -> None:
+        rows = [["Note: Escalation lane summary"], ["Owner confirmed"]]
+        self.assertEqual(
+            "Note: Escalation lane summary Owner confirmed",
             _single_column_note_body_text(rows),
         )
 

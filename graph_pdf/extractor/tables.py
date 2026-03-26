@@ -584,13 +584,6 @@ def _estimate_region_kind(
     is_single_column_like = _is_single_column_like_rows(table_rows)
     row_count = len(table_rows)
     col_count = max((len(row) for row in table_rows), default=0)
-    if row_count <= 1:
-        fallback_kind, fallback_meta = _classify_single_column_rows_only(table_rows)
-        if fallback_kind == "note":
-            return fallback_kind, {
-                "reason": "single_row_fallback",
-                **fallback_meta,
-            }
     if col_count <= 0 or not region_words:
         return "table", {"reason": "empty_content"}
 
@@ -648,6 +641,46 @@ def _estimate_region_kind(
     else:
         is_note_border = False
         border_meta = {"reason": "no_geometry_context"}
+
+    if row_count <= 1:
+        note_anchor = (
+            _select_note_anchor_for_bbox(page, bbox)
+            if bbox is not None and page is not None
+            else None
+        )
+        if is_note_border:
+            return "note", {
+                "reason": "single_row_note_border",
+                "text_width_ratio": text_ratio,
+                "line_count": len(text_lines),
+                "max_words": max_words,
+                "max_chars": max_chars,
+                "total_chars": total_chars,
+                "internal_grid": internal_grid,
+                "border": border_meta,
+            }
+        if note_anchor is not None and max_words >= 6 and max_chars >= 40:
+            return "note", {
+                "reason": "single_row_note_anchor",
+                "text_width_ratio": text_ratio,
+                "line_count": len(text_lines),
+                "max_words": max_words,
+                "max_chars": max_chars,
+                "total_chars": total_chars,
+                "internal_grid": internal_grid,
+                "border": border_meta,
+                "note_anchor": [round(float(value), 2) for value in note_anchor],
+            }
+        return "table", {
+            "reason": "single_row_without_note_geometry",
+            "text_width_ratio": text_ratio,
+            "line_count": len(text_lines),
+            "max_words": max_words,
+            "max_chars": max_chars,
+            "total_chars": total_chars,
+            "internal_grid": internal_grid,
+            "border": border_meta,
+        }
 
     # 2) Visible note-like border makes the region a note.
     if is_note_border:
@@ -714,7 +747,7 @@ def _classify_single_column_region(
             "col_count": col_count,
             "effective_col_count": len(effective_cols),
         }
-    if not page or not bbox:
+    if page is None or bbox is None:
         return _classify_single_column_rows_only(table_rows)
 
     region_words = _extract_region_words(page=page, bbox=bbox)
@@ -835,7 +868,12 @@ def _single_column_note_body_text(rows: Sequence[Sequence[str]]) -> str:
             normalized = _normalize_text(line)
             if normalized:
                 parts.append(normalized)
-    return re.sub(r"\s+", " ", " ".join(parts)).strip()
+    text = re.sub(r"\s+", " ", " ".join(parts)).strip()
+    if not text:
+        return ""
+    if re.match(r"(?i)^note\s*:", text):
+        return re.sub(r"(?i)^note\s*:\s*", "Note: ", text, count=1)
+    return f"Note: {text}"
 
 
 def _rows_match(a: Sequence[str], b: Sequence[str]) -> bool:
@@ -967,43 +1005,167 @@ def _body_text_boxes(
     return text_boxes
 
 
+def _is_overlap_in_x(
+    subject: Tuple[float, float, float, float],
+    reference: Tuple[float, float, float, float],
+    *,
+    min_overlap_ratio: float = 0.0,
+    min_overlap_width: float = 0.0,
+) -> bool:
+    if min_overlap_ratio <= 0.0 and min_overlap_width <= 0.0:
+        return True
+
+    overlap = min(float(subject[2]), float(reference[2])) - max(float(subject[0]), float(reference[0]))
+    if overlap <= 0.0:
+        return False
+    if overlap >= min_overlap_width and min_overlap_width > 0.0:
+        return True
+    if min_overlap_ratio <= 0.0:
+        return overlap > 0.0
+
+    subject_width = max(1.0, float(subject[2]) - float(subject[0]))
+    reference_width = max(1.0, float(reference[2]) - float(reference[0]))
+    overlap_ratio = overlap / min(subject_width, reference_width)
+    return overlap_ratio >= min_overlap_ratio
+
+
 def _gap_text_boxes_after_bbox(
     body_text_boxes: Sequence[Tuple[float, float, float, float]],
     bbox: Tuple[float, float, float, float],
+    max_gap: float | None = None,
+    overlap_bbox: Tuple[float, float, float, float] | None = None,
+    min_x_overlap_ratio: float = 0.0,
+    min_x_overlap_width: float = 0.0,
 ) -> List[Tuple[float, float, float, float]]:
     # Text after a table candidate can block continuation into the next page.
-    return [text_bbox for text_bbox in body_text_boxes if float(text_bbox[1]) >= float(bbox[3])]
+    bottom = float(bbox[3])
+    if max_gap is None:
+        return [
+            text_bbox
+            for text_bbox in body_text_boxes
+            if float(text_bbox[1]) > bottom + 1.0
+            and _is_overlap_in_x(
+                subject=text_bbox,
+                reference=overlap_bbox if overlap_bbox is not None else bbox,
+                min_overlap_ratio=min_x_overlap_ratio,
+                min_overlap_width=min_x_overlap_width,
+            )
+        ]
+    max_top = bottom + max(0.0, float(max_gap))
+    return [
+        text_bbox
+        for text_bbox in body_text_boxes
+        if bottom + 1.0 < float(text_bbox[1]) <= max_top
+        and _is_overlap_in_x(
+            subject=text_bbox,
+            reference=overlap_bbox if overlap_bbox is not None else bbox,
+            min_overlap_ratio=min_x_overlap_ratio,
+            min_x_overlap_width=min_x_overlap_width,
+        )
+    ]
 
 
 def _gap_text_boxes_before_bbox(
     body_text_boxes: Sequence[Tuple[float, float, float, float]],
     bbox: Tuple[float, float, float, float],
+    max_gap: float | None = None,
+    overlap_bbox: Tuple[float, float, float, float] | None = None,
+    min_x_overlap_ratio: float = 0.0,
+    min_x_overlap_width: float = 0.0,
 ) -> List[Tuple[float, float, float, float]]:
     # Text before a table candidate can mean the new page starts with prose rather than a continuation table.
-    return [text_bbox for text_bbox in body_text_boxes if float(text_bbox[3]) <= float(bbox[1])]
+    top = float(bbox[1])
+    if max_gap is None:
+        return [
+            text_bbox
+            for text_bbox in body_text_boxes
+            if float(text_bbox[3]) < top - 1.0
+            and _is_overlap_in_x(
+                subject=text_bbox,
+                reference=overlap_bbox if overlap_bbox is not None else bbox,
+                min_overlap_ratio=min_x_overlap_ratio,
+                min_x_overlap_width=min_x_overlap_width,
+            )
+        ]
+    min_bottom = top - max(0.0, float(max_gap))
+    return [
+        text_bbox
+        for text_bbox in body_text_boxes
+        if min_bottom <= float(text_bbox[3]) < top - 1.0
+        and _is_overlap_in_x(
+            subject=text_bbox,
+            reference=overlap_bbox if overlap_bbox is not None else bbox,
+            min_overlap_ratio=min_x_overlap_ratio,
+            min_x_overlap_width=min_x_overlap_width,
+        )
+    ]
 
 
 def _has_gap_text_after_bbox(
     body_text_boxes: Sequence[Tuple[float, float, float, float]],
     bbox: Tuple[float, float, float, float],
+    max_gap: float | None = None,
+    overlap_bbox: Tuple[float, float, float, float] | None = None,
+    min_x_overlap_ratio: float = 0.0,
+    min_x_overlap_width: float = 0.0,
 ) -> bool:
     # Fast predicate version used by cross-page merge checks.
     threshold = float(bbox[3])
-    for text_bbox in body_text_boxes:
-        if float(text_bbox[1]) >= threshold:
-            return True
+    overlap_reference = overlap_bbox if overlap_bbox is not None else bbox
+    if max_gap is None:
+        for text_bbox in body_text_boxes:
+            if float(text_bbox[1]) > threshold + 1.0 and _is_overlap_in_x(
+                subject=text_bbox,
+                reference=overlap_reference,
+                min_overlap_ratio=min_x_overlap_ratio,
+                min_overlap_width=min_x_overlap_width,
+            ):
+                return True
+    else:
+        max_top = threshold + max(0.0, float(max_gap))
+        for text_bbox in body_text_boxes:
+            top = float(text_bbox[1])
+            if threshold + 1.0 < top <= max_top and _is_overlap_in_x(
+                subject=text_bbox,
+                reference=overlap_reference,
+                min_overlap_ratio=min_x_overlap_ratio,
+                min_overlap_width=min_x_overlap_width,
+            ):
+                return True
     return False
 
 
 def _has_gap_text_before_bbox(
     body_text_boxes: Sequence[Tuple[float, float, float, float]],
     bbox: Tuple[float, float, float, float],
+    max_gap: float | None = None,
+    overlap_bbox: Tuple[float, float, float, float] | None = None,
+    min_x_overlap_ratio: float = 0.0,
+    min_x_overlap_width: float = 0.0,
 ) -> bool:
     # Fast predicate version used by cross-page merge checks.
     threshold = float(bbox[1])
-    for text_bbox in body_text_boxes:
-        if float(text_bbox[3]) <= threshold:
-            return True
+    overlap_reference = overlap_bbox if overlap_bbox is not None else bbox
+    if max_gap is None:
+        for text_bbox in body_text_boxes:
+            if float(text_bbox[3]) < threshold - 1.0 and _is_overlap_in_x(
+                subject=text_bbox,
+                reference=overlap_reference,
+                min_overlap_ratio=min_x_overlap_ratio,
+                min_overlap_width=min_x_overlap_width,
+            ):
+                return True
+    else:
+        min_top = threshold - max(0.0, float(max_gap))
+        for text_bbox in body_text_boxes:
+            bottom = float(text_bbox[3])
+            if min_top <= bottom < threshold - 1.0 and _is_overlap_in_x(
+                subject=text_bbox,
+                reference=overlap_reference,
+                min_overlap_ratio=min_x_overlap_ratio,
+                min_overlap_width=min_x_overlap_width,
+            ):
+                return True
     return False
 
 
@@ -1041,16 +1203,18 @@ def _continuation_regions_should_merge(
     _curr_x0, curr_top, _curr_x1, _curr_bottom = curr_bbox
 
     shared_axes = [axis for axis in prev_axes if any(abs(axis - other) <= axis_tolerance for other in curr_axes)]
-    if not shared_axes or bool(has_gap_text):
-        return False
-
-    # Near-footer / near-header placement is the common continuation pattern, but shared axes already make this permissive.
     prev_near_footer = abs(body_bottom - prev_bottom) <= edge_tolerance
     curr_near_header = abs(curr_top - body_top) <= edge_tolerance
+    if bool(has_gap_text) and not (prev_near_footer or curr_near_header):
+        return False
+
+    # Near-footer / near-header placement is the common continuation pattern.
+    # Allow that path even when shared vertical axes are not fully stable.
     if prev_near_footer or curr_near_header:
-        # Keep current continuation behavior when the fragments are aligned near page edges.
-        # This covers the usual table-break pattern while still allowing occasional header/footers offsets.
         return True
+
+    if not shared_axes:
+        return False
 
     if prev_page_height is None:
         return True
@@ -1803,6 +1967,10 @@ def _collect_single_column_candidates_for_notes(
                 entry["bbox"][2],
                 max(entry["bbox"][3], note_band[1]),
             )
+            expanded_rows = _compact_fallback_rows(_extract_region_line_rows(page, raw_bbox))
+            if expanded_rows:
+                rows = expanded_rows
+            is_note_like = _looks_like_single_column_note(rows=rows, page=page, bbox=raw_bbox)
 
         candidate_rows.append(
             {
@@ -2085,17 +2253,12 @@ def _extract_tables(
     for candidate in candidate_rows:
         if candidate["is_white_content"] or not candidate.get("is_note_like", False):
             continue
-        band_top, band_bottom = (
-            candidate.get("note_band")
-            if candidate.get("note_band") is not None
-            else (candidate["bbox"][1], candidate["bbox"][3])
-        )
         note_exclusion_bands.append(
             (
                 candidate["bbox"][0],
                 candidate["bbox"][2],
-                band_top,
-                band_bottom,
+                candidate["bbox"][1],
+                candidate["bbox"][3],
             )
         )
 
@@ -2151,11 +2314,17 @@ def _extract_tables(
             if candidate["is_white_content"] or not candidate.get("is_note_like", False):
                 continue
 
-            candidate_bbox = (
-                candidate["raw_bbox"]
-                if candidate.get("note_band") is not None
-                else candidate["bbox"]
-            )
+            candidate_bbox = candidate["bbox"]
+            overlapping_indexes = [
+                index
+                for index, (_rows, existing_bbox) in enumerate(merged)
+                if _single_column_boxes_share_index(existing_bbox, candidate_bbox)
+                and _bbox_overlap_ratio(existing_bbox, candidate_bbox) > 0.0
+            ]
+            if overlapping_indexes and candidate.get("note_band") is None:
+                for index in reversed(overlapping_indexes):
+                    merged.pop(index)
+                continue
             # overlap 자체는 제거 사유로 사용하지 않는다. 서로 다른 타입이라도 병합 대상에 둘 다 남겨둔다.
             key = _table_key(candidate["rows"], candidate_bbox)
             if key in seen_keys:
