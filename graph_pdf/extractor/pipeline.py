@@ -18,11 +18,14 @@ from .tables import (
     _body_text_boxes,
     _continuation_regions_should_merge,
     _extract_tables,
+    _header_row_count,
     _has_gap_text_after_bbox,
     _has_gap_text_before_bbox,
+    _looks_like_header_row,
     _looks_like_single_column_note,
     _should_try_table_continuation_merge,
     _single_column_note_body_text,
+    _split_repeated_header,
     _vertical_axes_for_bbox,
 )
 from .text import _detect_body_bounds, _extract_body_text, _extract_drawing_image_bboxes
@@ -73,6 +76,96 @@ def _table_shape_signature(rows: Sequence[Sequence[str]]) -> tuple[int, int]:
     return (row_count, col_count)
 
 
+def _table_header_signature(rows: Sequence[Sequence[str]]) -> tuple[int, str]:
+    header_count = _header_row_count(rows)
+    if not header_count:
+        if not rows:
+            return (0, "")
+        values = [_normalize_text(cell) for cell in rows[0] if _normalize_text(cell)]
+        if not values:
+            return (0, "")
+        return (1, re.sub(r"\s+", "", " ".join(values)).strip())
+    values: list[str] = []
+    for row in rows[:header_count]:
+        values.extend(_normalize_text(cell) for cell in row if _normalize_text(cell))
+    return (header_count, re.sub(r"\s+", "", " ".join(values)).strip())
+
+
+def _looks_like_cross_page_continuation_rows(
+    previous_rows: Sequence[Sequence[str]],
+    current_rows: Sequence[Sequence[str]],
+) -> bool:
+    if not previous_rows or not current_rows:
+        return False
+
+    previous_header_count, previous_header_signature = _table_header_signature(previous_rows)
+    current_header_count, current_header_signature = _table_header_signature(current_rows)
+    repeated_header_trimmed = False
+    if (
+        previous_header_count
+        and previous_header_count == current_header_count
+        and previous_header_signature == current_header_signature
+    ):
+        trimmed_rows = [list(row) for row in current_rows[current_header_count:]]
+        repeated_header_trimmed = True
+    else:
+        trimmed_rows = _split_repeated_header(
+            [list(row) for row in previous_rows],
+            [list(row) for row in current_rows],
+        )
+        repeated_header_trimmed = len(trimmed_rows) < len(current_rows)
+    if not trimmed_rows:
+        return True
+    first_row = trimmed_rows[0]
+    non_empty = [_normalize_text(cell) for cell in first_row if _normalize_text(cell)]
+    if not non_empty:
+        return True
+    if len(non_empty) <= 2:
+        return True
+    if not repeated_header_trimmed:
+        return False
+
+    def _leading_data_cell(rows: Sequence[Sequence[str]], *, reverse: bool = False) -> str:
+        iterator = reversed(rows) if reverse else iter(rows)
+        for row in iterator:
+            normalized = [_normalize_text(cell) for cell in row if _normalize_text(cell)]
+            if not normalized or _looks_like_header_row(row):
+                continue
+            leading = normalized[0]
+            if "packet" in leading.lower():
+                continue
+            if len(normalized) > 1 and "collected in up per" in normalized[1].lower():
+                leading = f"{leading} {normalized[1]}".strip()
+            return leading
+        return ""
+
+    previous_family = _leading_data_cell(previous_rows, reverse=True)
+    current_family = _leading_data_cell(trimmed_rows)
+    if not previous_family or not current_family:
+        return False
+
+    previous_family_normalized = previous_family.lower()
+    current_family_normalized = current_family.lower()
+
+    previous_is_collected = "collected in up per" in previous_family_normalized
+    current_is_collected = "collected in up per" in current_family_normalized
+    if previous_is_collected != current_is_collected:
+        return False
+    if not previous_is_collected:
+        return False
+
+    stopwords = {"interface", "per", "collected", "in", "up", "ip"}
+
+    def _context_keywords(text: str) -> set[str]:
+        return {
+            token
+            for token in re.findall(r"[a-z0-9-]+", text.lower())
+            if token not in stopwords and len(token) > 1
+        }
+
+    return bool(_context_keywords(previous_family_normalized) & _context_keywords(current_family_normalized))
+
+
 def _table_shapes_compatible(
     previous_shape: tuple[int, int],
     current_shape: tuple[int, int],
@@ -85,6 +178,12 @@ def _table_shapes_compatible(
         return False
     if previous_col_count == 1 or current_col_count == 1:
         return previous_col_count == current_col_count
+    if (
+        min(previous_row_count, current_row_count) <= 3
+        and min(previous_col_count, current_col_count) >= 4
+        and max(previous_col_count, current_col_count) <= (min(previous_col_count, current_col_count) * 3)
+    ):
+        return True
     return abs(previous_col_count - current_col_count) <= 1
 
 
@@ -279,14 +378,28 @@ def _should_continue_content_region(
 def _is_cross_page_continuation_candidate(
     bbox: Tuple[float, float, float, float],
     body_bottom: float,
+    body_top: float | None = None,
     continuation_gap: float | None = None,
     edge_tolerance: float = 24.0,
 ) -> bool:
-    _x0, _top, _x1, bottom = bbox
+    _x0, top, _x1, bottom = bbox
+    gap = abs(bottom - body_bottom)
     tolerance = float(edge_tolerance)
-    if continuation_gap is not None and continuation_gap > 0:
-        tolerance = max(tolerance, float(continuation_gap))
-    return abs(bottom - body_bottom) <= tolerance
+    if gap <= tolerance:
+        return True
+    if continuation_gap is None or continuation_gap <= 0:
+        return False
+
+    tolerance = max(tolerance, min(80.0, float(continuation_gap) * 1.5))
+    if gap > tolerance:
+        return False
+    if body_top is None:
+        return True
+
+    span = max(0.0, float(body_bottom) - float(body_top))
+    if span <= 0.0:
+        return True
+    return float(top) >= float(body_top) + (span * 0.5)
 
 
 @dataclass
@@ -362,6 +475,9 @@ class _DocumentOutputState:
         self.pending_image_body_bottom = None
         self.cross_page_candidates = []
 
+    def has_output_content(self) -> bool:
+        return bool(self.output_text or self.output_tables or self.pending_table_state.is_active())
+
 
 def _to_cross_page_candidate(state: _PendingTableState) -> _CrossPageTableCandidate:
     return _CrossPageTableCandidate(
@@ -386,7 +502,7 @@ def _load_cross_page_candidate(
     state: _DocumentOutputState,
     candidate: _CrossPageTableCandidate,
 ) -> None:
-    state.pending_table_state.chunks = [list(row) for row in candidate.rows]
+    state.pending_table_state.chunks = [[list(row) for row in candidate.rows]]
     state.pending_table_state.table_no = candidate.table_no
     state.pending_table_state.start_page = candidate.start_page
     state.pending_table_state.last_page = candidate.last_page
@@ -399,6 +515,7 @@ def _load_cross_page_candidate(
 def _pick_cross_page_anchor(
     current_bbox: Tuple[float, float, float, float],
     current_axes: Sequence[float],
+    current_rows: Sequence[Sequence[str]],
     current_shape: tuple[int, int],
     body_top: float,
     body_bottom: float,
@@ -426,6 +543,9 @@ def _pick_cross_page_anchor(
             for current_axis in current_axes
         )
         if not has_x_overlap and not has_axis_overlap:
+            continue
+
+        if not _looks_like_cross_page_continuation_rows(anchor.rows, current_rows):
             continue
 
         if not _table_shapes_compatible(anchor.shape_signature, current_shape):
@@ -481,16 +601,35 @@ def _first_table_row_signature(table_rows: Sequence[Sequence[str]]) -> tuple[str
 
 def _strip_repeated_headers_by_chunk(chunks: Sequence[TableRows]) -> TableRows:
     normalized_rows: TableRows = []
-    previous_header_signature: tuple[str, ...] = ()
+    previous_header_signature = ""
+    previous_header_count = 0
+    previous_first_row_signature: tuple[str, ...] = ()
     for chunk in chunks:
         if not chunk:
             continue
-        current_signature = _first_table_row_signature(chunk)
-        if normalized_rows and current_signature and current_signature == previous_header_signature:
-            normalized_rows.extend(chunk[1:])
+        current_header_count, current_signature = _table_header_signature(chunk)
+        repeated_header_count = 0
+        if (
+            normalized_rows
+            and current_header_count
+            and current_signature
+            and current_header_count == previous_header_count
+            and current_signature == previous_header_signature
+        ):
+            repeated_header_count = current_header_count
         else:
-            normalized_rows.extend(chunk)
-        previous_header_signature = _first_table_row_signature(chunk)
+            current_first_row_signature = _first_table_row_signature(chunk)
+            if (
+                normalized_rows
+                and current_first_row_signature
+                and current_first_row_signature == previous_first_row_signature
+            ):
+                repeated_header_count = 1
+
+        normalized_rows.extend(chunk[repeated_header_count:])
+        previous_header_count = current_header_count
+        previous_header_signature = current_signature
+        previous_first_row_signature = _first_table_row_signature(chunk)
     return normalized_rows
 
 
@@ -718,7 +857,14 @@ def extract_pdf_to_outputs(
     note_regions_by_page: dict[int, list[Tuple[float, float, float, float]]] = {}
     region_map: dict[int, dict[str, Any]] = {}
     heading_levels = _load_heading_levels(add_heading)
-    initial_document_id = _safe_document_id(stem)
+    inferred_document_id = _infer_document_id_from_pdf(
+        pdf_path=pdf_path,
+        heading_levels=heading_levels,
+        header_margin=header_margin,
+        footer_margin=footer_margin,
+        selected_pages=selected_pages or None,
+    )
+    initial_document_id = _safe_document_id(inferred_document_id or "document")
     current_document_state = _DocumentOutputState(document_id=initial_document_id)
     document_artifacts: list[dict] = []
     image_files: list[Path] = []
@@ -816,8 +962,11 @@ def extract_pdf_to_outputs(
                 current_document_state.pending_image_body_bottom = None
         return page_content_references
 
-    def _flush_current_document(state: _DocumentOutputState) -> dict:
+    def _flush_current_document(state: _DocumentOutputState, *, force: bool = False) -> dict:
         nonlocal total_table_count
+        if not force and not state.has_output_content():
+            state.clear_transient_content_state()
+            return {}
         _flush_pending_table(state)
         state.clear_transient_content_state()
 
@@ -1118,6 +1267,7 @@ def extract_pdf_to_outputs(
                     _pick_cross_page_anchor(
                         current_bbox=bbox,
                         current_axes=current_axes,
+                        current_rows=table_rows,
                         current_shape=_table_shape_signature(table_rows),
                         body_top=body_top,
                         body_bottom=body_bottom,
@@ -1158,12 +1308,7 @@ def extract_pdf_to_outputs(
                         )
                     current_document_state.pending_table_state.append_chunk(table_rows)
                     current_document_state.pending_table_state.last_page = page_idx
-                    current_document_state.pending_table_state.bbox = (
-                        min(current_document_state.pending_table_state.bbox[0], bbox[0]),
-                        min(current_document_state.pending_table_state.bbox[1], bbox[1]),
-                        max(current_document_state.pending_table_state.bbox[2], bbox[2]),
-                        max(current_document_state.pending_table_state.bbox[3], bbox[3]),
-                    )
+                    current_document_state.pending_table_state.bbox = bbox
                     current_document_state.pending_table_state.page_height = float(page.height)
                     current_document_state.pending_table_state.axes = _merge_numeric_positions([*current_document_state.pending_table_state.axes, *current_axes], tolerance=1.0)
                     current_document_state.pending_table_state.has_gap_text = _has_gap_text_after_bbox(
@@ -1176,6 +1321,7 @@ def extract_pdf_to_outputs(
                     )
                     if _is_cross_page_continuation_candidate(
                         current_document_state.pending_table_state.bbox,
+                        body_top=body_top,
                         body_bottom=body_bottom,
                         continuation_gap=continuation_gap,
                     ):
@@ -1209,6 +1355,7 @@ def extract_pdf_to_outputs(
                 )
                 if _is_cross_page_continuation_candidate(
                     bbox,
+                    body_top=body_top,
                     body_bottom=body_bottom,
                     continuation_gap=continuation_gap,
                 ):
@@ -1252,7 +1399,7 @@ def extract_pdf_to_outputs(
 
     _flush_current_document(current_document_state)
     if not document_artifacts:
-        _flush_current_document(current_document_state)
+        _flush_current_document(current_document_state, force=True)
 
     markdown = "\n\n".join(artifact["markdown"] for artifact in document_artifacts if artifact["markdown"])
     table_markdown = "\n\n".join(artifact["table_markdown"] for artifact in document_artifacts if artifact["table_markdown"])

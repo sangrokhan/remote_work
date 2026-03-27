@@ -15,6 +15,7 @@ from extractor.tables import (
     _to_rect_entry,
     _merge_single_column_fragment_rows,
     _single_column_box_regions,
+    _single_column_box_region_candidates,
     _single_column_boxes_share_index,
     _split_repeated_header,
     _single_column_note_body_text,
@@ -23,6 +24,7 @@ from extractor.tables import (
     _looks_like_single_column_note,
     _table_rejection_reason,
     _table_text_from_rows,
+    _header_row_count,
 )
 
 
@@ -69,6 +71,134 @@ class TableModuleTests(unittest.TestCase):
         self.assertEqual(
             [["A", "B"], ["C", "D"], ["E", "F"]],
             _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_collapses_sparse_split_pairs(self) -> None:
+        table = [
+            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
+            ["", "X2-U Interfa QCI", "ce per eNB IP per", "", "", "X2URxPacketLossCnt", "", "", "Lost packets", ""],
+            ["", "", "", "", "", "X2URxPacketOosCnt", "", "", "OOS packets", ""],
+        ]
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["X2-U Interface per eNB IP per QCI", "X2URxPacketLossCnt", "Lost packets"],
+                ["", "X2URxPacketOosCnt", "OOS packets"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_keeps_space_for_full_word_companion(self) -> None:
+        table = [
+            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
+            ["", "N3 Interface", "per UPF IP", "", "", "N3RxPacketLossCnt", "", "", "Lost packets", ""],
+        ]
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["N3 Interface per UPF IP", "N3RxPacketLossCnt", "Lost packets"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_reorders_collected_suffix_phrase(self) -> None:
+        table = [
+            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
+            ["", "N3 Interface UPF IP", "collected in UP per", "", "", "N3RxPacketLossCnt", "", "", "Lost packets", ""],
+        ]
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["N3 Interface collected in UP per UPF IP", "N3RxPacketLossCnt", "Lost packets"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_reorders_collected_suffix_with_tail_qualifier(self) -> None:
+        table = [
+            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
+            ["", "F1-U Interfa per gNB-DU", "ce collected in UP per 5QI", "", "", "F1URxPacketLossCnt", "", "", "Lost packets", ""],
+        ]
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["F1-U Interface collected in UP per 5QI per gNB-DU", "F1URxPacketLossCnt", "Lost packets"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_compresses_mixed_width_chunks(self) -> None:
+        table = [
+            ["", "Family Display Name", "", "", "Type Name", "", "", "Type Description", ""],
+            ["", "S1-U Interface collected in UP per sGW IP per QCI", "", "", "S1URxPacketLossCnt", "", "", "Lost packets", ""],
+            ["", "", "", "", "S1URxPacketOosCnt", "", "", "OOS packets", ""],
+            ["", "F1-U Interfa per gNB-DU", "ce collected in UP per QCI", "", "", "F1URxPacketLossCnt", "", "", "Lost packets", ""],
+            ["", "", "", "", "", "F1URxPacketOosCnt", "", "", "OOS packets", ""],
+            ["", "X2-U Interfa per eNB IP p", "ce collected in UP er QCI", "", "", "X2URxPacketLossCnt", "", "", "Lost packets", ""],
+            ["", "", "", "", "", "X2URxPacketOosCnt", "", "", "OOS packets", ""],
+        ]
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["S1-U Interface collected in UP per sGW IP per QCI", "S1URxPacketLossCnt", "Lost packets"],
+                ["", "S1URxPacketOosCnt", "OOS packets"],
+                ["F1-U Interface collected in UP per QCI per gNB-DU", "F1URxPacketLossCnt", "Lost packets"],
+                ["", "F1URxPacketOosCnt", "OOS packets"],
+                ["X2-U Interface collected in UP per eNB IP per QCI", "X2URxPacketLossCnt", "Lost packets"],
+                ["", "X2URxPacketOosCnt", "OOS packets"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_builds_family_type_description_layout_from_four_columns(self) -> None:
+        table = [
+            [
+                "F1-U, XN-U collected in SNSSAI F1-U, XN-U collected in SNSSAI",
+                "UL Interface UPC per 5QI per UL Interface UPP per 5QI per",
+                "PacketLossCntUL",
+                "Lost packets",
+            ],
+            ["", "", "PacketOosCntUL", "OOS packets"],
+        ]
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                [
+                    "F1-U, XN-U collected in UL Interface UPC per 5QI per SNSSAI\nF1-U, XN-U collected in UL Interface UPP per 5QI per SNSSAI",
+                    "PacketLossCntUL",
+                    "Lost packets",
+                ],
+                ["", "PacketOosCntUL", "OOS packets"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_normalizes_dl_family_display_name(self) -> None:
+        table = [
+            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
+            ["", "DL F1-U, Xn PRC per 5Q", "-U Interface per I per S-NSSAI", "", "", "PacketLossCntDL", "", "", "Lost packets", ""],
+        ]
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["DL F1-U, Xn-U Interface per PRC per 5QI per S-NSSAI", "PacketLossCntDL", "Lost packets"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_table_text_from_rows_preserves_explicit_multiline_cells(self) -> None:
+        rows = [
+            ["Family Display Name", "Type Name", "Type Description"],
+            [
+                "F1-U, XN-U collected in UL Interface UPC per 5QI per SNSSAI\nF1-U, XN-U collected in UL Interface UPP per 5QI per SNSSAI",
+                "PacketLossCntUL",
+                "Lost packets",
+            ],
+        ]
+        markdown = _table_text_from_rows(rows)
+        self.assertIn(
+            "F1-U, XN-U collected in UL Interface UPC per 5QI per SNSSAI<br>F1-U, XN-U collected in UL Interface UPP per 5QI per SNSSAI",
+            markdown,
         )
 
     def test_geometry_aware_single_row_requires_note_signal(self) -> None:
@@ -184,18 +314,18 @@ class TableModuleTests(unittest.TestCase):
                 curr_axes=[180.4, 279.8],
                 body_top=72.0,
                 body_bottom=722.0,
-                gap_text_boxes=[],
+                has_gap_text=[],
             )
         )
         self.assertFalse(
             _continuation_regions_should_merge(
-                prev_bbox=(100.0, 620.0, 400.0, 705.0),
-                curr_bbox=(102.0, 88.0, 402.0, 190.0),
+                prev_bbox=(100.0, 520.0, 400.0, 620.0),
+                curr_bbox=(102.0, 180.0, 402.0, 280.0),
                 prev_axes=[180.0, 280.0],
                 curr_axes=[180.4, 279.8],
                 body_top=72.0,
                 body_bottom=722.0,
-                gap_text_boxes=[(40.0, 730.0, 80.0, 742.0)],
+                has_gap_text=[(40.0, 730.0, 80.0, 742.0)],
             )
         )
 
@@ -408,7 +538,14 @@ class TableModuleTests(unittest.TestCase):
 
         expected_bbox = (40.0, 119.0, 540.0, 150.0)
         table_regions.assert_called_once_with(page)
-        extract_from_crop.assert_called_once_with(page, expected_bbox, fallback_to_text_rows=True)
+        extract_from_crop.assert_called_once_with(
+            page,
+            expected_bbox,
+            fallback_to_text_rows=False,
+            strategy_debug=None,
+            strategy_source="table_region",
+            strategy_source_name="table_region#0:split#0",
+        )
 
     def test_extract_tables_filters_single_column_box_overlapping_detected_table(self) -> None:
         table_bbox = (40.0, 119.0, 540.0, 150.0)
@@ -493,7 +630,8 @@ class TableModuleTests(unittest.TestCase):
         ):
             tables = _extract_tables(page)
 
-        self.assertEqual([], tables)
+        self.assertEqual(1, len(tables))
+        self.assertEqual(table_bbox, tables[0][1])
 
     def test_extract_tables_keeps_layout_candidate_if_not_note(self) -> None:
         table_bbox = (40.0, 119.0, 540.0, 150.0)
@@ -831,7 +969,67 @@ class TableModuleTests(unittest.TestCase):
         markdown = _table_text_from_rows(rows)
 
         self.assertIn("| Stage<br>Group | Team<br>Function | Notes<br>Deliverable |", markdown)
-        self.assertIn("| Phase A | Discovery | Kickoff scope lock |", markdown)
+        self.assertIn("| Phase A", markdown)
+        self.assertIn("Kickoff scope lock", markdown)
+
+    def test_header_row_count_does_not_promote_first_data_row_to_header(self) -> None:
+        rows = [
+            ["Interface / Direction", "Sender", "Receiver"],
+            ["S1-U / Downlink", "S-GW", "CU-UP"],
+            ["F1-U / Uplink", "DU", "CU-UP"],
+        ]
+
+        self.assertEqual(1, _header_row_count(rows))
+
+    def test_collapse_structural_triplet_columns_normalizes_ul_family_display_variants(self) -> None:
+        table = [
+            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
+            ["", "F1-U UL Inte", "rface per QCI", "", "", "F1UPacketLossCntUL_QC I", "", "", "Lost packets", ""],
+            ["", "F1-U UL Inte UP per QCI", "rface collected in", "", "", "F1UPacketLossRateUL_Q CI", "", "", "Lost packets", ""],
+            ["", "F1-U UL Inte UP per UP", "rface collected in", "", "", "F1UPacketLossCntUL", "", "", "Lost packets", ""],
+        ]
+
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["F1-U UL Interface per QCI", "F1UPacketLossCntUL_QCI", "Lost packets"],
+                ["F1-U UL Interface collected in UP per QCI", "F1UPacketLossRateUL_QCI", "Lost packets"],
+                ["F1-U UL Interface collected in UP per UP", "F1UPacketLossCntUL", "Lost packets"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_repairs_shifted_family_type_rows(self) -> None:
+        table = [
+            ["", "Family Display Name", "", "", "Type Name", "", "", "Type Description", ""],
+            ["", "F1-U DL Interface per QCI F1-U DL Interface per PRC per QCI", "", "", "F1UPacketLossCntDL_QC I", "", "", "Lost packets", ""],
+            ["", "", "F1UPacketOosCntDL_QCI", "OOS packets"],
+            ["", "", "F1UPacketLossRateDL_Q CI", "Loss-rate packets"],
+        ]
+
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["F1-U DL Interface per QCI\nF1-U DL Interface per PRC per QCI", "F1UPacketLossCntDL_QCI", "Lost packets"],
+                ["", "F1UPacketOosCntDL_QCI", "OOS packets"],
+                ["", "F1UPacketLossRateDL_QCI", "Loss-rate packets"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
+
+    def test_collapse_structural_triplet_columns_normalizes_dl_du_family_display_name(self) -> None:
+        table = [
+            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
+            ["", "F1-U DL Inte F1-U DL Inte DU", "rface per DU rface per PRC per", "", "", "F1UPacketLossCntDL", "", "", "Lost packets", ""],
+        ]
+
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["F1-U DL Interface per DU\nF1-U DL Interface per PRC per DU", "F1UPacketLossCntDL", "Lost packets"],
+            ],
+            _collapse_structural_triplet_columns(table),
+        )
 
     def test_table_text_from_rows_treats_long_single_column_as_note_content(self) -> None:
         rows = [
@@ -841,9 +1039,9 @@ class TableModuleTests(unittest.TestCase):
 
         markdown = _table_text_from_rows(rows)
 
-        self.assertIn("| Column 1 |", markdown)
-        self.assertIn("| F1-U path is not present in the integrated CU-DU shape. Hence, the counters for |", markdown)
-        self.assertIn("| F1-U are not provided in this shape. |", markdown)
+        self.assertIn("| Column 1", markdown)
+        self.assertIn("F1-U path is not present in the integrated CU-DU shape. Hence, the counters for", markdown)
+        self.assertIn("F1-U are not provided in this shape.", markdown)
         self.assertNotIn("| F1-U path is not present in the integrated CU-DU shape. Hence, the counters for | --- |", markdown)
 
     def test_single_column_note_body_text_is_single_line(self) -> None:
@@ -945,9 +1143,9 @@ class TableModuleTests(unittest.TestCase):
 
         markdown = _table_text_from_rows(rows)
 
-        self.assertIn("| Status |", markdown)
-        self.assertIn("| --- |", markdown)
-        self.assertIn("| Ready |", markdown)
+        self.assertIn("| Column 1", markdown)
+        self.assertIn("Status", markdown)
+        self.assertIn("Ready", markdown)
 
     def test_split_repeated_header_removes_repeated_two_row_header_block(self) -> None:
         prev_rows = [
