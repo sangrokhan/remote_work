@@ -972,6 +972,25 @@ class TableModuleTests(unittest.TestCase):
         self.assertIn("| Phase A", markdown)
         self.assertIn("Kickoff scope lock", markdown)
 
+    def test_table_text_from_rows_does_not_pad_cells_to_column_width(self) -> None:
+        rows = [
+            ["Parameter", "Description"],
+            ["qci", "This parameter is the QoS Class Identifier(QCI)."],
+        ]
+
+        markdown = _table_text_from_rows(rows)
+
+        self.assertEqual(
+            "\n".join(
+                [
+                    "| Parameter | Description |",
+                    "| --- | --- |",
+                    "| qci | This parameter is the QoS Class Identifier(QCI). |",
+                ]
+            ),
+            markdown,
+        )
+
     def test_header_row_count_does_not_promote_first_data_row_to_header(self) -> None:
         rows = [
             ["Interface / Direction", "Sender", "Receiver"],

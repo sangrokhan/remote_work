@@ -2850,21 +2850,11 @@ def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
         padded_row = list(row) + [""] * max(0, len(header) - len(row))
         formatted_body.append([_format_markdown_cell(str(value or "")) for value in padded_row])
 
-    column_widths = [
-        max(
-            len(formatted_header[idx]),
-            *(len(row[idx]) for row in formatted_body),
-            3,
-        )
-        for idx in range(len(header))
-    ]
-    header_line = "| " + " | ".join(
-        formatted_header[idx].ljust(column_widths[idx]) for idx in range(len(header))
-    ) + " |"
-    divider_line = "| " + " | ".join("-" * column_widths[idx] for idx in range(len(header))) + " |"
+    header_line = "| " + " | ".join(formatted_header) + " |"
+    divider_line = "| " + " | ".join("---" for _ in header) + " |"
     body_lines = []
     for row in formatted_body:
-        body_lines.append("| " + " | ".join(row[idx].ljust(column_widths[idx]) for idx in range(len(header))) + " |")
+        body_lines.append("| " + " | ".join(row) + " |")
     return "\n".join([header_line, divider_line, *body_lines])
 
 
