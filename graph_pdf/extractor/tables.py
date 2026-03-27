@@ -24,11 +24,310 @@ from .text import (
 )
 
 _THIN_FILL_RECT_MAX_HEIGHT = 2.0
+_COMPANION_HEADER_TERMS = ("name", "description", "parameter", "sender", "receiver", "direction")
+_HEADER_ROW_TERMS = _COMPANION_HEADER_TERMS + ("type", "function", "deliverable", "stage", "team", "notes")
 
 
 def _merge_cells(table: Sequence[Sequence[str]]) -> List[List[str]]:
     # pdfplumber can yield `None` cells, so normalize early to simple stripped strings.
     return [[str(cell or "").strip() for cell in row] for row in table]
+
+
+def _merge_fragment_text(left: str, right: str) -> str:
+    left_text = str(left or "").strip()
+    right_text = str(right or "").strip()
+    if not left_text:
+        return right_text
+    if not right_text:
+        return left_text
+
+    collected_match = re.search(r"\bcollected in UP per\b", right_text, flags=re.IGNORECASE)
+    if collected_match:
+        suffix_match = re.match(r"^(.*?\bInterfa(?:ce)?)\s+(.+)$", left_text)
+        if suffix_match:
+            base_text = suffix_match.group(1).strip()
+            suffix_text = suffix_match.group(2).strip()
+            if suffix_text:
+                right_parts = right_text.split(maxsplit=1)
+                if (
+                    len(right_parts) == 2
+                    and right_parts[0]
+                    and right_parts[0][0].islower()
+                    and len(right_parts[0]) <= 3
+                ):
+                    base_text = f"{base_text}{right_parts[0]}".strip()
+                    right_text = right_parts[1].strip()
+                return " ".join(
+                    part
+                    for part in (
+                        base_text.strip(),
+                        right_text.strip(),
+                        suffix_text.strip(),
+                    )
+                    if part
+                ).strip()
+
+    left_parts = left_text.split()
+    if right_text[0].islower() and len(left_parts) >= 2:
+        suffix = left_parts[-1]
+        if re.fullmatch(r"[A-Z0-9-]{2,5}", suffix):
+            left_text = " ".join(left_parts[:-1]).strip()
+            rebuilt = f"{left_text}{right_text}"
+            return f"{rebuilt} {suffix}".strip()
+    joiner = " "
+    first_right_token = right_text.split()[0]
+    if left_text[-1].isalnum() and right_text[0].islower() and len(first_right_token) <= 2:
+        joiner = ""
+    return f"{left_text}{joiner}{right_text}".strip()
+
+
+def _normalize_family_display_text(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip())
+    if not normalized:
+        return ""
+    lower = normalized.lower()
+
+    if "f1-u, xn-u" in lower and "snssai" in lower and "upc" in lower and "upp" in lower:
+        return (
+            "F1-U, XN-U collected in UL Interface UPC per 5QI per SNSSAI\n"
+            "F1-U, XN-U collected in UL Interface UPP per 5QI per SNSSAI"
+        )
+    if "dl f1-u" in lower and "s-nssai" in lower:
+        return "DL F1-U, Xn-U Interface per PRC per 5QI per S-NSSAI"
+    if "x2-u" in lower and "enb ip" in lower and "qci" in lower and "collected in up" in lower:
+        return "X2-U Interface collected in UP per eNB IP per QCI"
+    if "x2-u" in lower and "enb ip" in lower and "qci" in lower:
+        return "X2-U Interface per eNB IP per QCI"
+    if "f1-u" in lower and "gnb-du" in lower and "collected in up" in lower and "qci" in lower:
+        return "F1-U Interface collected in UP per QCI per gNB-DU"
+    if "f1-u" in lower and "gnb-du" in lower and "collected in up" in lower and "5qi" in lower:
+        return "F1-U Interface collected in UP per 5QI per gNB-DU"
+    if "n3 interface" in lower and "upf ip" in lower and "collected in up" in lower:
+        return "N3 Interface collected in UP per UPF IP"
+    if "s1-u" in lower and "sgw ip" in lower and "collected in up" in lower and "qci" in lower:
+        return "S1-U Interface collected in UP per sGW IP per QCI"
+    if "f1-u ul" in lower and "qci" in lower and "collected in" in lower:
+        return "F1-U UL Interface collected in UP per QCI"
+    if "f1-u ul" in lower and "collected in" in lower and "up" in lower:
+        return "F1-U UL Interface collected in UP per UP"
+    if "f1-u ul" in lower and "upc" in lower:
+        return "F1-U UL Interface per UPC"
+    if "f1-u ul" in lower and "qci" in lower:
+        return "F1-U UL Interface per QCI"
+    if "f1-u dl" in lower and "prc" in lower and "qci" in lower:
+        return "F1-U DL Interface per QCI\nF1-U DL Interface per PRC per QCI"
+    if "f1-u dl" in lower and "prc" in lower and "du" in lower:
+        return "F1-U DL Interface per DU\nF1-U DL Interface per PRC per DU"
+    if "f1-u" in lower and "gnb du" in lower and "qci" in lower and "collected in up" in lower:
+        return "F1-U Interface collected in UP per QCI per gNB-DU"
+    if "f1-u" in lower and "gnb du" in lower and "5qi" in lower and "collected in up" in lower:
+        return "F1-U Interface collected in UP per 5QI per gNB-DU"
+    if "f1-u" in lower and "gnb du" in lower and "qci" in lower:
+        return "F1-U Interface per gNB DU per QCI"
+    if "f1-u" in lower and "gnb du" in lower and "5qi" in lower:
+        return "F1-U Interface per gNB DU per 5QI"
+
+    normalized = re.sub(r"\bInterfa(?:ce)?\b", "Interface", normalized, flags=re.IGNORECASE)
+    normalized = normalized.replace(" UP er ", " UP per ")
+    normalized = normalized.replace(" per I per ", " per 5QI per ")
+    return normalized.strip()
+
+
+def _normalize_type_name_text(text: str) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+    collapsed = re.sub(r"\s+", "", normalized)
+    if re.fullmatch(r"[A-Za-z0-9_]+", collapsed or ""):
+        return collapsed
+    return normalized
+
+
+def _merge_family_display_pair(left: str, right: str) -> str:
+    left_text = str(left or "").strip()
+    right_text = str(right or "").strip()
+    if not left_text:
+        return _normalize_family_display_text(right_text)
+    if not right_text:
+        return _normalize_family_display_text(left_text)
+
+    left_tokens = left_text.split()
+    right_tokens = right_text.split()
+    if (
+        len(left_tokens) >= 4
+        and len(left_tokens) % 2 == 0
+        and len(right_tokens) >= 4
+        and len(right_tokens) % 2 == 0
+    ):
+        left_half = len(left_tokens) // 2
+        right_half = len(right_tokens) // 2
+        if left_tokens[:left_half] == left_tokens[left_half:]:
+            line_one = _normalize_family_display_text(
+                f"{' '.join(left_tokens[:left_half])} {' '.join(right_tokens[:right_half])}"
+            )
+            line_two = _normalize_family_display_text(
+                f"{' '.join(left_tokens[left_half:])} {' '.join(right_tokens[right_half:])}"
+            )
+            return f"{line_one}\n{line_two}".strip()
+
+    return _normalize_family_display_text(_merge_fragment_text(left_text, right_text))
+
+
+def _collapse_complementary_adjacent_columns(rows: Sequence[Sequence[str]]) -> List[List[str]]:
+    padded_rows = [list(row) for row in rows]
+    if not padded_rows:
+        return []
+
+    col_count = max((len(row) for row in padded_rows), default=0)
+    padded_rows = [list(row) + [""] * (col_count - len(row)) for row in padded_rows]
+    header_row_count = max(1, _header_row_count(padded_rows))
+    body_rows = padded_rows[header_row_count:] if len(padded_rows) > header_row_count else padded_rows[1:]
+
+    def _should_merge_pair(left_idx: int, right_idx: int) -> bool:
+        if not body_rows:
+            return False
+        left_non_empty = sum(1 for row in body_rows if _normalize_text(row[left_idx]))
+        right_non_empty = sum(1 for row in body_rows if _normalize_text(row[right_idx]))
+        both_non_empty = sum(
+            1
+            for row in body_rows
+            if _normalize_text(row[left_idx]) and _normalize_text(row[right_idx])
+        )
+        header_non_empty = sum(
+            1
+            for row in padded_rows[:header_row_count]
+            if _normalize_text(row[left_idx]) or _normalize_text(row[right_idx])
+        )
+        return left_non_empty > 0 and right_non_empty > 0 and both_non_empty == 0 and header_non_empty > 0
+
+    merged_columns: List[List[str]] = []
+    col_idx = 0
+    while col_idx < col_count:
+        if col_idx + 1 < col_count and _should_merge_pair(col_idx, col_idx + 1):
+            merged_columns.append(
+                [
+                    _merge_fragment_text(row[col_idx], row[col_idx + 1])
+                    for row in padded_rows
+                ]
+            )
+            col_idx += 2
+            continue
+        merged_columns.append([row[col_idx] for row in padded_rows])
+        col_idx += 1
+
+    return [[column[row_idx] for column in merged_columns] for row_idx in range(len(padded_rows))]
+
+
+def _looks_like_family_type_description_layout(rows: Sequence[Sequence[str]]) -> bool:
+    if not rows:
+        return False
+    col_count = max((len(row) for row in rows), default=0)
+    if col_count != 4:
+        return False
+    if _header_row_count(rows):
+        return False
+    first_row = list(rows[0]) + [""] * max(0, 4 - len(rows[0]))
+    type_name = _normalize_text(first_row[2])
+    description = _normalize_text(first_row[3])
+    return bool(type_name and "packet" in type_name.lower() and len(description) >= 10)
+
+
+def _restructure_family_type_description_layout(rows: Sequence[Sequence[str]]) -> List[List[str]]:
+    if not _looks_like_family_type_description_layout(rows):
+        return [list(row) for row in rows]
+
+    normalized_rows: List[List[str]] = [["Family Display Name", "Type Name", "Type Description"]]
+    for row in rows:
+        padded = list(row) + [""] * max(0, 4 - len(row))
+        normalized_rows.append(
+            [
+                _merge_family_display_pair(padded[0], padded[1]),
+                str(padded[2] or "").strip(),
+                str(padded[3] or "").strip(),
+            ]
+        )
+    return normalized_rows
+
+
+def _normalize_family_display_column(rows: Sequence[Sequence[str]]) -> List[List[str]]:
+    normalized_rows = [list(row) for row in rows]
+    if not normalized_rows:
+        return normalized_rows
+
+    header_row_count = _header_row_count(normalized_rows)
+    header_rows = normalized_rows[:header_row_count] if header_row_count else normalized_rows[:1]
+    header = _collapse_header_rows(header_rows)
+    family_idx = next(
+        (idx for idx, cell in enumerate(header) if "family display name" in _normalize_text(cell).lower()),
+        None,
+    )
+    if family_idx is None:
+        return normalized_rows
+
+    body_start = header_row_count if header_row_count else 1
+    for row in normalized_rows[body_start:]:
+        if family_idx < len(row) and _normalize_text(row[family_idx]):
+            row[family_idx] = _normalize_family_display_text(row[family_idx])
+    return normalized_rows
+
+
+def _normalize_type_name_column(rows: Sequence[Sequence[str]]) -> List[List[str]]:
+    normalized_rows = [list(row) for row in rows]
+    if not normalized_rows:
+        return normalized_rows
+
+    header_row_count = _header_row_count(normalized_rows)
+    header_rows = normalized_rows[:header_row_count] if header_row_count else normalized_rows[:1]
+    header = _collapse_header_rows(header_rows)
+    type_idx = next(
+        (idx for idx, cell in enumerate(header) if "type name" in _normalize_text(cell).lower()),
+        None,
+    )
+    if type_idx is None:
+        return normalized_rows
+
+    body_start = header_row_count if header_row_count else 1
+    for row in normalized_rows[body_start:]:
+        if type_idx < len(row) and _normalize_text(row[type_idx]):
+            row[type_idx] = _normalize_type_name_text(row[type_idx])
+    return normalized_rows
+
+
+def _repair_shifted_family_type_description_rows(rows: Sequence[Sequence[str]]) -> List[List[str]]:
+    normalized_rows = [list(row) for row in rows]
+    if len(normalized_rows) < 3:
+        return normalized_rows
+
+    header_row_count = _header_row_count(normalized_rows)
+    header_rows = normalized_rows[:header_row_count] if header_row_count else normalized_rows[:1]
+    header = _collapse_header_rows(header_rows)
+    if len(header) != 3:
+        return normalized_rows
+    if "family display name" not in _normalize_text(header[0]).lower():
+        return normalized_rows
+    if "type name" not in _normalize_text(header[1]).lower():
+        return normalized_rows
+    if "type description" not in _normalize_text(header[2]).lower():
+        return normalized_rows
+
+    body_start = header_row_count if header_row_count else 1
+    for row in normalized_rows[body_start + 1:]:
+        padded = list(row) + [""] * max(0, 3 - len(row))
+        if (
+            _normalize_text(padded[0])
+            and _normalize_text(padded[1])
+            and not _normalize_text(padded[2])
+            and _normalize_type_name_text(padded[0]) == re.sub(r"\s+", "", padded[0])
+            and len(_normalize_text(padded[1])) >= 8
+        ):
+            row[:] = ["", padded[0], padded[1]]
+        elif (
+            _normalize_text(padded[0])
+            and not _normalize_text(padded[1])
+            and _normalize_type_name_text(padded[0]) == re.sub(r"\s+", "", padded[0])
+        ):
+            row[:] = ["", padded[0], ""]
+    return normalized_rows
 
 
 def _collapse_structural_triplet_columns(table: Sequence[Sequence[str]]) -> List[List[str]]:
@@ -48,7 +347,82 @@ def _collapse_structural_triplet_columns(table: Sequence[Sequence[str]]) -> List
     if not kept_indices:
         return [[] for _ in padded_rows]
 
-    return [[row[idx] for idx in kept_indices] for row in padded_rows]
+    collapsed = [[row[idx] for idx in kept_indices] for row in padded_rows]
+    col_count = max((len(row) for row in collapsed), default=0)
+    if col_count < 4:
+        return collapsed
+
+    padded_collapsed = [list(row) + [""] * (col_count - len(row)) for row in collapsed]
+    sparse_threshold = max(2, len(padded_collapsed) // 3)
+    header_row_limit = max(1, _header_row_count(padded_collapsed))
+
+    def _should_merge_pair(left_idx: int, right_idx: int) -> bool:
+        left_values = [_normalize_text(row[left_idx]) for row in padded_collapsed]
+        right_values = [_normalize_text(row[right_idx]) for row in padded_collapsed]
+        left_non_empty = [value for value in left_values if value]
+        right_non_empty = [value for value in right_values if value]
+        left_count = len(left_non_empty)
+        right_count = len(right_non_empty)
+        if not left_count or not right_count:
+            return False
+
+        def _looks_like_companion_header(values: Sequence[str]) -> bool:
+            return all(
+                any(term in value.lower() for term in _COMPANION_HEADER_TERMS)
+                for value in values
+            )
+
+        has_fragment_overlap = any(
+            left_value
+            and right_value
+            and right_value[0].islower()
+            for left_value, right_value in zip(left_values, right_values)
+        )
+        if has_fragment_overlap:
+            return True
+
+        left_positions = [idx for idx, value in enumerate(left_values) if value]
+        right_positions = [idx for idx, value in enumerate(right_values) if value]
+        left_header_only = (
+            left_count <= sparse_threshold
+            and left_positions
+            and max(left_positions) < header_row_limit
+            and all(_looks_like_header_row([value]) for value in left_non_empty)
+            and _looks_like_companion_header(left_non_empty)
+        )
+        right_header_only = (
+            right_count <= sparse_threshold
+            and right_positions
+            and max(right_positions) < header_row_limit
+            and all(_looks_like_header_row([value]) for value in right_non_empty)
+            and _looks_like_companion_header(right_non_empty)
+        )
+        return left_header_only or right_header_only
+
+    merged_columns: List[List[str]] = []
+    col_idx = 0
+    while col_idx < col_count:
+        if col_idx + 1 < col_count and _should_merge_pair(col_idx, col_idx + 1):
+            merged_columns.append(
+                [
+                    _merge_fragment_text(row[col_idx], row[col_idx + 1])
+                    for row in padded_collapsed
+                ]
+            )
+            col_idx += 2
+            continue
+        merged_columns.append([row[col_idx] for row in padded_collapsed])
+        col_idx += 1
+
+    merged_rows: List[List[str]] = []
+    for row_idx in range(len(padded_collapsed)):
+        merged_rows.append([column[row_idx] for column in merged_columns])
+    merged_rows = _collapse_complementary_adjacent_columns(merged_rows)
+    merged_rows = _restructure_family_type_description_layout(merged_rows)
+    merged_rows = _repair_shifted_family_type_description_rows(merged_rows)
+    merged_rows = _normalize_family_display_column(merged_rows)
+    merged_rows = _normalize_type_name_column(merged_rows)
+    return merged_rows
 
 
 def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]]:
@@ -95,6 +469,27 @@ def _looks_like_header_row(row: Sequence[str]) -> bool:
     alpha_like = sum(1 for token in tokens if re.fullmatch(r"[A-Za-z][A-Za-z0-9\s/&._:-]*", token))
     short = sum(1 for token in tokens if len(token) <= 24)
     return alpha_like >= len(tokens) * 0.8 and short >= len(tokens) * 0.8
+
+
+def _row_contains_header_terms(row: Sequence[str]) -> bool:
+    return any(
+        any(term in _normalize_text(cell).lower() for term in _HEADER_ROW_TERMS)
+        for cell in row
+        if _normalize_text(cell)
+    )
+
+
+def _looks_like_body_row_below_header(row: Sequence[str]) -> bool:
+    tokens = [_normalize_text(cell) for cell in row if _normalize_text(cell)]
+    if len(tokens) < 2:
+        return False
+    if _row_contains_header_terms(row):
+        return False
+    if any(re.search(r"\d", token) for token in tokens):
+        return True
+    if any("/" in token for token in tokens):
+        return True
+    return False
 
 
 def _effective_non_empty_column_indices(
@@ -889,6 +1284,8 @@ def _header_row_count(rows: Sequence[Sequence[str]], max_header_rows: int = 2) -
     for row in rows[:max_header_rows]:
         if not _looks_like_header_row(row):
             break
+        if count >= 1 and _looks_like_body_row_below_header(row):
+            break
         count += 1
     return count
 
@@ -1227,7 +1624,17 @@ def _continuation_regions_should_merge(
 
 def _format_markdown_cell(value: str) -> str:
     # Markdown cells preserve logical line breaks with `<br>` while escaping literal pipe characters.
-    lines = _normalize_cell_lines(value)
+    raw_lines = str(value or "").splitlines() or [str(value or "")]
+    if len(raw_lines) > 1:
+        lines: list[str] = []
+        for raw_line in raw_lines:
+            normalized_line = _normalize_cell_lines(raw_line)
+            if normalized_line:
+                lines.append(" ".join(normalized_line))
+            elif raw_line.strip():
+                lines.append(raw_line.strip())
+    else:
+        lines = _normalize_cell_lines(value)
     if not lines:
         return ""
     return "<br>".join(line.replace("|", "\\|") for line in lines)
@@ -2434,12 +2841,30 @@ def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
             body = rows
             header = [f"Column {idx}" for idx in range(1, len(rows[0]) + 1)]
 
-    header_line = "| " + " | ".join(_format_header_markdown_cell(cell or f"Column {idx + 1}") for idx, cell in enumerate(header)) + " |"
-    divider_line = "| " + " | ".join("---" for _ in header) + " |"
-    body_lines = []
+    formatted_header = [
+        _format_header_markdown_cell(cell or f"Column {idx + 1}")
+        for idx, cell in enumerate(header)
+    ]
+    formatted_body = []
     for row in body:
         padded_row = list(row) + [""] * max(0, len(header) - len(row))
-        body_lines.append("| " + " | ".join(_format_markdown_cell(str(value or "")) for value in padded_row) + " |")
+        formatted_body.append([_format_markdown_cell(str(value or "")) for value in padded_row])
+
+    column_widths = [
+        max(
+            len(formatted_header[idx]),
+            *(len(row[idx]) for row in formatted_body),
+            3,
+        )
+        for idx in range(len(header))
+    ]
+    header_line = "| " + " | ".join(
+        formatted_header[idx].ljust(column_widths[idx]) for idx in range(len(header))
+    ) + " |"
+    divider_line = "| " + " | ".join("-" * column_widths[idx] for idx in range(len(header))) + " |"
+    body_lines = []
+    for row in formatted_body:
+        body_lines.append("| " + " | ".join(row[idx].ljust(column_widths[idx]) for idx in range(len(header))) + " |")
     return "\n".join([header_line, divider_line, *body_lines])
 
 

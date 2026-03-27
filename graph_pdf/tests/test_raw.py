@@ -85,14 +85,12 @@ class RawDumpTests(unittest.TestCase):
             str(root / "md"),
             "--out-image-dir",
             str(root / "images"),
-            "--stem",
-            "sample",
         ]
         with patch.object(sys, "argv", import_argv):
             cli_main()
 
-        self.assertTrue((root / "md" / "sample.md").exists())
-        self.assertTrue((root / "md" / "sample_summary.json").exists())
+        self.assertTrue((root / "md" / "document.md").exists())
+        self.assertTrue((root / "md" / "output_summary.json").exists())
 
 
 if __name__ == "__main__":
