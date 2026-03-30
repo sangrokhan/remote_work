@@ -117,7 +117,7 @@ class PipelineExtractionTests(unittest.TestCase):
         blocks: list[str] = []
         current: list[str] = []
         for line in markdown.splitlines():
-            if line.startswith("### ") and " table " in line and line.split()[-1].isdigit():
+            if line.startswith("[//]: # (") and " - Table " in line and line.endswith(")"):
                 if current:
                     blocks.append("\n".join(current))
                 current = [line]
@@ -197,7 +197,10 @@ class PipelineExtractionTests(unittest.TestCase):
 
     def test_table_output_uses_markdown_tables(self) -> None:
         markdown = self._extract_table_markdown()
-        self.assertIsNotNone(re.search(r"^### .* table 1$", markdown, flags=re.MULTILINE), "table header is missing")
+        self.assertIsNotNone(
+            re.search(r"^\[//\]: # \(.+ - Table 1\)$", markdown, flags=re.MULTILINE),
+            "table header is missing",
+        )
         self.assertIn("| Item | Qty | Price |", markdown)
         self.assertIn("| --- | --- | --- |", markdown)
         self.assertNotIn("- Row 1", markdown)
@@ -220,121 +223,243 @@ class PipelineExtractionTests(unittest.TestCase):
             markdown,
         )
 
-    def test_single_column_box_like_region_is_routed_to_body_text(self) -> None:
-        result = self._extract_result()
-        table_markdown = result["table_markdown"]
-        markdown = result["markdown"]
-        self.assertNotIn("| Column 1 |", table_markdown)
-        self.assertIn(
-            "Escalation lane summary Owner confirmed for regional review and exception routing.",
-            markdown,
-        )
-        self.assertIn(
-            "Backup approver stays on the same visual box and must not become a second table row.",
-            markdown,
-        )
+    def test_orphan_table_header_line_is_owned_by_table_not_body_text(self) -> None:
+        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1)]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdf_context = MagicMock()
+        fake_pdf_context.__enter__.return_value = fake_pdf
+        fake_pdf_context.__exit__.return_value = False
 
-    def test_note_like_single_column_tables_are_routed_to_body_text(self) -> None:
-        pdf_path = self._build_pdf()
-        call_index = 0
-
-        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None):
-            nonlocal call_index
-            call_index += 1
-            if call_index == 1:
-                return [
-                    (
-                        [
-                            ["F1-U path is not present in the integrated CU-DU shape. Hence, the counters for"],
-                            ["F1-U are not provided in this shape."],
-                        ],
-                        (40.0, 121.0, 540.0, 160.0),
-                    )
-                ]
-            return []
-
-        captured_refs: dict[str, list[tuple[str, tuple]]] = {"refs": []}
+        orphan_header = "Family Display Name Type Name Type Description"
 
         def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
-            captured_refs["refs"].extend(
-                (str(entry.get("text") or ""), tuple(entry.get("bbox", ())) )
-                for entry in reference_lines
-                if isinstance(entry, dict) and entry.get("text")
-            )
-            return "BODY BLOCK"
+            return f"{orphan_header}\nVisible body line"
 
-        with patch("extractor.pipeline._extract_tables", side_effect=fake_extract_tables), patch(
-            "extractor.pipeline._extract_body_text", side_effect=fake_extract_body_text
-        ):
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp_root = Path(temp_dir)
-                result = extract_pdf_to_outputs(
-                    pdf_path=pdf_path,
-                    out_md_dir=temp_root / "md",
-                    out_image_dir=temp_root / "images",
-                    stem="note-routing",
-                )
-
-        self.assertIn("Note: F1-U path is not present in the integrated CU-DU shape. Hence, the counters for F1-U are not provided in this shape.", "".join(ref_text for ref_text, _ in captured_refs["refs"]))
-        self.assertIsNone(re.search(r"^### .* table \d+$", result["table_markdown"], flags=re.MULTILINE))
-
-    def test_note_like_single_column_tables_skip_overlapping_image_references(self) -> None:
-        pdf_path = self._build_pdf()
-        call_index = 0
-
-        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None):
-            nonlocal call_index
-            call_index += 1
-            if call_index == 1:
-                return [
-                    (
-                        [
-                            ["F1-U path is not present in the integrated CU-DU shape. Hence, the counters for"],
-                            ["F1-U are not provided in this shape."],
-                        ],
-                        (40.0, 121.0, 540.0, 160.0),
-                    )
-                ]
-            return []
-
-        captured_refs: dict[str, list[str]] = {"refs": []}
-
-        def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
-            captured_refs["refs"].extend(
-                str(entry.get("text") or "")
-                for entry in reference_lines
-                if isinstance(entry, dict) and entry.get("text")
-            )
-            return "BODY BLOCK"
-
-        with patch("extractor.pipeline._extract_tables", side_effect=fake_extract_tables), patch(
-            "extractor.pipeline._collect_embedded_image_refs",
-            return_value={
-                1: [
-                    {
-                        "bbox": (50.0, 130.0, 60.0, 140.0),
-                        "name": "note-icon.png",
-                        "name_stem": "note-icon",
-                        "suffix": ".png",
-                    }
-                ]
-            },
+        with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
+            "extractor.pipeline._extract_heading_preview_markdown",
+            return_value="",
         ), patch(
-            "extractor.pipeline._extract_body_text", side_effect=fake_extract_body_text
+            "extractor.pipeline._collect_note_candidates",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._extract_tables",
+            return_value=[
+                (
+                    [[orphan_header], ["Counter row"]],
+                    (40.0, 120.0, 540.0, 180.0),
+                )
+            ],
+        ), patch(
+            "extractor.pipeline._extract_body_text",
+            side_effect=fake_extract_body_text,
+        ), patch(
+            "extractor.pipeline._collect_embedded_image_refs",
+            return_value={},
         ), patch(
             "extractor.pipeline._extract_embedded_images",
             return_value=[],
+        ), patch(
+            "extractor.pipeline._extract_drawing_image_bboxes",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._detect_body_bounds",
+            return_value=(70.0, 700.0),
+        ), patch(
+            "extractor.pipeline._body_text_boxes",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._vertical_axes_for_bbox",
+            return_value=[40.0, 540.0],
+        ), patch(
+            "extractor.pipeline._has_gap_text_before_bbox",
+            return_value=False,
+        ), patch(
+            "extractor.pipeline._has_gap_text_after_bbox",
+            return_value=False,
+        ), patch(
+            "extractor.pipeline._continuation_regions_should_merge",
+            return_value=False,
         ):
             with tempfile.TemporaryDirectory() as temp_dir:
-                temp_root = Path(temp_dir)
-                extract_pdf_to_outputs(
-                    pdf_path=pdf_path,
-                    out_md_dir=temp_root / "md",
-                    out_image_dir=temp_root / "images",
-                    stem="note-routing-image-skip",
+                root = Path(temp_dir)
+                result = extract_pdf_to_outputs(
+                    pdf_path=Path("unused.pdf"),
+                    out_md_dir=root / "md",
+                    out_image_dir=root / "images",
+                    stem="orphan-header",
                 )
 
-        self.assertFalse(any(ref.startswith("[Image reference:") for ref in captured_refs["refs"]))
+        self.assertIn(orphan_header, result["table_markdown"])
+        self.assertNotIn(orphan_header, result["markdown"])
+
+    def test_pipeline_excludes_only_note_anchor_regions_from_image_export(self) -> None:
+        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1)]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdf_context = MagicMock()
+        fake_pdf_context.__enter__.return_value = fake_pdf
+        fake_pdf_context.__exit__.return_value = False
+        captured: dict[str, object] = {}
+
+        note_bbox = (120.0, 200.0, 520.0, 320.0)
+        note_anchor = (128.0, 212.0, 146.0, 230.0)
+
+        def fake_extract_embedded_images(**kwargs):
+            captured["excluded_regions_by_page"] = kwargs.get("excluded_regions_by_page")
+            return []
+
+        with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
+            "extractor.pipeline._extract_heading_preview_markdown", return_value=""
+        ), patch(
+            "extractor.pipeline._collect_note_candidates",
+            return_value=[
+                {
+                    "bbox": note_bbox,
+                    "rows": [["A note sentence"]],
+                    "is_white_content": False,
+                    "is_note_like": True,
+                    "note_anchor": note_anchor,
+                }
+            ],
+        ), patch(
+            "extractor.pipeline._extract_tables",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._extract_body_text",
+            return_value="",
+        ), patch(
+            "extractor.pipeline._collect_embedded_image_refs",
+            return_value={},
+        ), patch(
+            "extractor.pipeline._extract_embedded_images",
+            side_effect=fake_extract_embedded_images,
+        ), patch(
+            "extractor.pipeline._extract_drawing_image_bboxes",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._detect_body_bounds",
+            return_value=(70.0, 700.0),
+        ), patch(
+            "extractor.pipeline._body_text_boxes",
+            return_value=[],
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                extract_pdf_to_outputs(
+                    pdf_path=Path("unused.pdf"),
+                    out_md_dir=root / "md",
+                    out_image_dir=root / "images",
+                    stem="note-anchor-exclusion",
+                    page_write=True,
+                )
+
+        self.assertEqual({1: [note_anchor]}, captured["excluded_regions_by_page"])
+
+    def test_pipeline_inserts_drawing_image_reference_into_body_flow(self) -> None:
+        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1)]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdf_context = MagicMock()
+        fake_pdf_context.__enter__.return_value = fake_pdf
+        fake_pdf_context.__exit__.return_value = False
+        captured_refs: list[str] = []
+
+        def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
+            captured_refs.extend(str(entry.get("text") or "") for entry in reference_lines)
+            return ""
+
+        with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
+            "extractor.pipeline._extract_heading_preview_markdown", return_value=""
+        ), patch(
+            "extractor.pipeline._collect_note_candidates",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._extract_tables",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._extract_body_text",
+            side_effect=fake_extract_body_text,
+        ), patch(
+            "extractor.pipeline._collect_embedded_image_refs",
+            return_value={},
+        ), patch(
+            "extractor.pipeline._extract_embedded_images",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._extract_drawing_image_bboxes",
+            return_value=[(160.0, 220.0, 420.0, 380.0)],
+        ), patch(
+            "extractor.pipeline._detect_body_bounds",
+            return_value=(70.0, 700.0),
+        ), patch(
+            "extractor.pipeline._body_text_boxes",
+            return_value=[],
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                extract_pdf_to_outputs(
+                    pdf_path=Path("unused.pdf"),
+                    out_md_dir=root / "md",
+                    out_image_dir=root / "images",
+                    stem="drawing-image-ref",
+                    page_write=True,
+                )
+
+        self.assertIn("[output_image_1.png]", captured_refs)
+
+    def test_pipeline_collects_note_groups_before_extracting_tables(self) -> None:
+        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1)]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdf_context = MagicMock()
+        fake_pdf_context.__enter__.return_value = fake_pdf
+        fake_pdf_context.__exit__.return_value = False
+
+        call_order: list[str] = []
+
+        def fake_collect_note_candidates(page: object):
+            call_order.append("notes")
+            return []
+
+        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None, **kwargs):
+            call_order.append("tables")
+            return []
+
+        with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
+            "extractor.pipeline._extract_heading_preview_markdown",
+            return_value="",
+        ), patch(
+            "extractor.pipeline._collect_note_candidates",
+            side_effect=fake_collect_note_candidates,
+        ), patch(
+            "extractor.pipeline._extract_tables",
+            side_effect=fake_extract_tables,
+        ), patch(
+            "extractor.pipeline._extract_body_text",
+            return_value="",
+        ), patch(
+            "extractor.pipeline._collect_embedded_image_refs",
+            return_value={},
+        ), patch(
+            "extractor.pipeline._extract_embedded_images",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._extract_drawing_image_bboxes",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._detect_body_bounds",
+            return_value=(70.0, 700.0),
+        ), patch(
+            "extractor.pipeline._body_text_boxes",
+            return_value=[],
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                extract_pdf_to_outputs(
+                    pdf_path=Path("unused.pdf"),
+                    out_md_dir=root / "md",
+                    out_image_dir=root / "images",
+                    stem="note-first",
+                )
+
+        self.assertEqual(["notes", "tables"], call_order)
 
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -354,18 +479,17 @@ class PipelineExtractionTests(unittest.TestCase):
 
         self.assertIn("[//]: # (Page 1)", result["markdown"])
         self.assertNotIn("[//]: # (Page 3)", result["markdown"])
-        self.assertIsNotNone(re.search(r"^### .* table 1$", result["table_markdown"], flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 1\)$", result["table_markdown"], flags=re.MULTILINE))
         self.assertEqual(2, result["summary"]["table_count"])
         self.assertEqual(1, len(result["image_files"]))
 
     def test_markdown_includes_table_references_for_detected_tables(self) -> None:
         markdown = self._extract_result(page_write=True)["markdown"]
 
-        self.assertRegex(markdown, r"\[Table reference: .+ table 1\]")
-        self.assertEqual(1, len(re.findall(r"\[Table reference: .+ table 2\]", markdown)))
-        self.assertRegex(markdown, r"\[Table reference: .+ table 3\]")
-        self.assertEqual(0, len(re.findall(r"\[Table reference: .+ table 4\]", markdown)))
-        self.assertIn("[//]: # (Page 2)", markdown)
+        self.assertRegex(markdown, r"\[[A-Za-z0-9._-]+_tables\.md - Table 1\]")
+        self.assertEqual(1, len(re.findall(r"\[[A-Za-z0-9._-]+_tables\.md - Table 2\]", markdown)))
+        self.assertRegex(markdown, r"\[[A-Za-z0-9._-]+_tables\.md - Table 3\]")
+        self.assertIn("[//]: # (Page 1)", markdown)
         self.assertIn("[//]: # (Page 4)", markdown)
 
     def test_extract_embedded_images_respects_selected_pages(self) -> None:
@@ -401,7 +525,7 @@ class PipelineExtractionTests(unittest.TestCase):
             )
 
         self.assertEqual(1, len(image_files))
-        self.assertEqual("sample_image_01.png", image_files[0].name)
+        self.assertEqual("sample_image_1.png", image_files[0].name)
 
     def test_flow_diagram_text_is_filtered_and_rendered_as_drawing(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -458,6 +582,41 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertIn(paragraph, result["markdown"])
         self.assertNotIn(f"# {paragraph}", result["markdown"])
 
+    def test_default_heading_profile_applies_to_direct_pipeline_calls(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        pdf_path = root / "docid.pdf"
+        title, paragraph = _build_document_id_heading_pdf(pdf_path)
+        heading_json = root / "heading.json"
+        heading_json.write_text(
+            json.dumps(
+                {
+                    "heading_rules": [
+                        {
+                            "match": {"font_size": 20.0},
+                            "assign": {"tag": "h2"},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("extractor.pipeline.DEFAULT_ADD_HEADING", heading_json):
+            result = extract_pdf_to_outputs(
+                pdf_path=pdf_path,
+                out_md_dir=root / "md",
+                out_image_dir=root / "images",
+                stem="docid",
+            )
+
+        self.assertEqual("FGR-TEST01.md", Path(result["md_file"]).name)
+        self.assertEqual("FGR-TEST01_tables.md", Path(result["table_md_file"]).name)
+        self.assertFalse((root / "md" / "docid.md").exists())
+        self.assertIn(f"## {title}", result["markdown"])
+        self.assertIn(paragraph, result["markdown"])
+
     def test_h2_document_id_heading_drives_output_file_names_without_stem_fallback(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -488,10 +647,186 @@ class PipelineExtractionTests(unittest.TestCase):
         )
 
         self.assertEqual("FGR-TEST01.md", Path(result["md_file"]).name)
-        self.assertEqual("FGR-TEST01_table.md", Path(result["table_md_file"]).name)
+        self.assertEqual("FGR-TEST01_tables.md", Path(result["table_md_file"]).name)
         self.assertFalse((root / "md" / "docid.md").exists())
         self.assertIn(f"## {title}", result["markdown"])
         self.assertIn(paragraph, result["markdown"])
+
+    def test_missing_h2_uses_output_as_default_document_name(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        pdf_path = root / "no_h2.pdf"
+        _title, _paragraph = _build_heading_pdf(pdf_path)
+        heading_json = root / "heading.json"
+        heading_json.write_text(
+            json.dumps(
+                {
+                    "heading_rules": [
+                        {
+                            "match": {"font_size": 20.0},
+                            "assign": {"tag": "h1"},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = extract_pdf_to_outputs(
+            pdf_path=pdf_path,
+            out_md_dir=root / "md",
+            out_image_dir=root / "images",
+            stem="ignored-stem",
+            add_heading=heading_json,
+        )
+
+        self.assertEqual("output.md", Path(result["md_file"]).name)
+        self.assertEqual("output_tables.md", Path(result["table_md_file"]).name)
+
+    def test_pre_h2_content_stays_in_output_until_h2_is_actually_seen(self) -> None:
+        pages = [
+            SimpleNamespace(width=612.0, height=792.0, page_index=1),
+            SimpleNamespace(width=612.0, height=792.0, page_index=2),
+        ]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdf_context = MagicMock()
+        fake_pdf_context.__enter__.return_value = fake_pdf
+        fake_pdf_context.__exit__.return_value = False
+
+        def fake_extract_heading_preview_markdown(page, header_margin, footer_margin, heading_levels=None):
+            if page.page_index == 1:
+                return ""
+            return "## FGR-DOC002 Second document"
+
+        def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
+            if page.page_index == 1:
+                return "Prelude body before first h2"
+            return "## FGR-DOC002 Second document\nDoc 2 body"
+
+        with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
+            "extractor.pipeline._extract_heading_preview_markdown", side_effect=fake_extract_heading_preview_markdown
+        ), patch(
+            "extractor.pipeline._extract_body_text", side_effect=fake_extract_body_text
+        ), patch("extractor.pipeline._extract_tables", return_value=[]), patch(
+            "extractor.pipeline._collect_embedded_image_refs", return_value={}
+        ), patch(
+            "extractor.pipeline._extract_embedded_images", return_value=[]
+        ), patch(
+            "extractor.pipeline._extract_drawing_image_bboxes", return_value=[]
+        ), patch(
+            "extractor.pipeline._detect_body_bounds", return_value=(70.0, 700.0)
+        ), patch(
+            "extractor.pipeline._body_text_boxes", return_value=[]
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                result = extract_pdf_to_outputs(
+                    pdf_path=Path("unused.pdf"),
+                    out_md_dir=root / "md",
+                    out_image_dir=root / "images",
+                    stem="pre-h2",
+                )
+
+        documents = result["documents"]
+        self.assertEqual(["output", "FGR-DOC002"], [doc["document_id"] for doc in documents])
+        self.assertIn("Prelude body before first h2", documents[0]["markdown"])
+        self.assertNotIn("Prelude body before first h2", documents[1]["markdown"])
+        self.assertEqual("output.md", Path(documents[0]["md_file"]).name)
+        self.assertEqual("FGR-DOC002.md", Path(documents[1]["md_file"]).name)
+
+    def test_document_images_are_written_under_doc_id_images_directory(self) -> None:
+        result = self._extract_result()
+        image_paths = [Path(path) for path in result["image_files"]]
+
+        self.assertTrue(image_paths)
+        for image_path in image_paths:
+            self.assertEqual(f"{image_path.stem.split('_image_')[0]}_images", image_path.parent.name)
+
+    def test_chapter_page_is_moved_to_next_document_start(self) -> None:
+        pages = [
+            SimpleNamespace(width=612.0, height=792.0, page_index=1),
+            SimpleNamespace(width=612.0, height=792.0, page_index=2),
+            SimpleNamespace(width=612.0, height=792.0, page_index=3),
+        ]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdf_context = MagicMock()
+        fake_pdf_context.__enter__.return_value = fake_pdf
+        fake_pdf_context.__exit__.return_value = False
+
+        def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
+            if page.page_index == 1:
+                return "## FGR-DOC001 First document\nDoc 1 body"
+            if page.page_index == 2:
+                return "# Chapter 2\nChapter bridge text"
+            return "## FGR-DOC002 Second document\nDoc 2 body"
+
+        with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
+            "extractor.pipeline._extract_body_text", side_effect=fake_extract_body_text
+        ), patch("extractor.pipeline._extract_tables", return_value=[]), patch(
+            "extractor.pipeline._collect_embedded_image_refs", return_value={}
+        ), patch(
+            "extractor.pipeline._extract_embedded_images", return_value=[]
+        ), patch(
+            "extractor.pipeline._extract_drawing_image_bboxes", return_value=[]
+        ), patch(
+            "extractor.pipeline._detect_body_bounds", return_value=(70.0, 700.0)
+        ), patch(
+            "extractor.pipeline._body_text_boxes", return_value=[]
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                result = extract_pdf_to_outputs(
+                    pdf_path=Path("unused.pdf"),
+                    out_md_dir=root / "md",
+                    out_image_dir=root / "images",
+                    stem="chapter-shift",
+                )
+
+        documents = result["documents"]
+        self.assertEqual(2, len(documents))
+        self.assertNotIn("Chapter bridge text", documents[0]["markdown"])
+        self.assertIn("Chapter bridge text", documents[1]["markdown"])
+
+    def test_pipeline_does_not_use_body_text_preview_pass_for_document_switching(self) -> None:
+        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1)]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdf_context = MagicMock()
+        fake_pdf_context.__enter__.return_value = fake_pdf
+        fake_pdf_context.__exit__.return_value = False
+
+        extract_body_text_calls: list[int] = []
+
+        def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
+            extract_body_text_calls.append(page.page_index)
+            return "Plain body text"
+
+        with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
+            "extractor.pipeline._extract_body_text", side_effect=fake_extract_body_text
+        ), patch(
+            "extractor.pipeline._extract_body_text_lines",
+            return_value=(["FGR-DOC001 First document"], ["## FGR-DOC001 First document"]),
+        ), patch("extractor.pipeline._extract_tables", return_value=[]), patch(
+            "extractor.pipeline._collect_embedded_image_refs", return_value={}
+        ), patch(
+            "extractor.pipeline._extract_embedded_images", return_value=[]
+        ), patch(
+            "extractor.pipeline._extract_drawing_image_bboxes", return_value=[]
+        ), patch(
+            "extractor.pipeline._detect_body_bounds", return_value=(70.0, 700.0)
+        ), patch(
+            "extractor.pipeline._body_text_boxes", return_value=[]
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                extract_pdf_to_outputs(
+                    pdf_path=Path("unused.pdf"),
+                    out_md_dir=root / "md",
+                    out_image_dir=root / "images",
+                    stem="single-pass",
+                )
+
+        self.assertEqual([1], extract_body_text_calls)
 
     def test_spanning_stage_table_merges_into_one_block(self) -> None:
         markdown = self._extract_table_markdown()
@@ -501,7 +836,6 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertTrue(stage_block)
         self.assertIn("Release Notes", stage_block)
         self.assertIn("Phase C", stage_block)
-        self.assertIsNone(re.search(r"^### .* table 3$", markdown, flags=re.MULTILINE))
 
     def test_strip_repeated_headers_by_chunk(self) -> None:
         chunks = [
@@ -603,7 +937,7 @@ class PipelineExtractionTests(unittest.TestCase):
         fake_pdf_context.__enter__.return_value = fake_pdf
         fake_pdf_context.__exit__.return_value = False
 
-        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None):
+        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None, **kwargs):
             if page.page_index == 1:
                 return [
                     ([["Col1", "Col2"], ["A", "1"], ["B", "2"]], (40.0, 650.0, 540.0, 700.0)),
@@ -642,9 +976,9 @@ class PipelineExtractionTests(unittest.TestCase):
         table_markdown = result["table_markdown"]
         blocks = self._table_blocks(table_markdown)
         self.assertEqual(2, len(blocks), table_markdown)
-        self.assertIsNotNone(re.search(r"^### .* table 1$", table_markdown, flags=re.MULTILINE))
-        self.assertIsNotNone(re.search(r"^### .* table 2$", table_markdown, flags=re.MULTILINE))
-        self.assertIsNone(re.search(r"^### .* table 3$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 1\)$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 2\)$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNone(re.search(r"^\[//\]: # \(.+ - Table 3\)$", table_markdown, flags=re.MULTILINE))
         self.assertEqual(1, blocks[0].count("| Col1 | Col2 |"))
 
     def test_cross_page_merge_blocks_when_intervening_region_exists(self) -> None:
@@ -654,7 +988,7 @@ class PipelineExtractionTests(unittest.TestCase):
         fake_pdf_context.__enter__.return_value = fake_pdf
         fake_pdf_context.__exit__.return_value = False
 
-        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None):
+        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None, **kwargs):
             if page.page_index == 1:
                 return [
                     ([["Col1", "Col2"], ["A", "1"]], (40.0, 650.0, 540.0, 680.0)),
@@ -702,8 +1036,52 @@ class PipelineExtractionTests(unittest.TestCase):
         table_markdown = result["table_markdown"]
         blocks = self._table_blocks(table_markdown)
         self.assertEqual(2, len(blocks), table_markdown)
-        self.assertIsNotNone(re.search(r"^### .* table 1$", table_markdown, flags=re.MULTILINE))
-        self.assertIsNotNone(re.search(r"^### .* table 2$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 1\)$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 2\)$", table_markdown, flags=re.MULTILINE))
+
+    def test_pipeline_excludes_table_owned_orphan_header_lines_from_body_text(self) -> None:
+        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1)]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdf_context = MagicMock()
+        fake_pdf_context.__enter__.return_value = fake_pdf
+        fake_pdf_context.__exit__.return_value = False
+        orphan_bbox = (77.42, 652.9, 405.88, 661.9)
+
+        def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
+            self.assertIn(orphan_bbox, excluded_bboxes)
+            return ""
+
+        with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
+            "extractor.pipeline._extract_heading_preview_markdown", return_value=""
+        ), patch(
+            "extractor.pipeline._extract_tables",
+            return_value=[
+                ([["Family Display Name", "Type Name", "Type Description"], ["Docs", "READY", "Finalize"]], (72.0, 668.0, 525.0, 720.0)),
+            ],
+        ), patch("extractor.pipeline._detect_body_bounds", return_value=(70.0, 700.0)), patch(
+            "extractor.pipeline._extract_drawing_image_bboxes", return_value=[]
+        ), patch("extractor.pipeline._body_text_boxes", return_value=[]), patch(
+            "extractor.pipeline._table_owned_body_line_bboxes",
+            return_value=[orphan_bbox],
+        ), patch("extractor.pipeline._has_gap_text_before_bbox", return_value=False), patch(
+            "extractor.pipeline._has_gap_text_after_bbox", return_value=False
+        ), patch("extractor.pipeline._vertical_axes_for_bbox", return_value=[40.0, 540.0]), patch(
+            "extractor.pipeline._collect_embedded_image_refs", return_value={}
+        ), patch(
+            "extractor.pipeline._extract_body_text", side_effect=fake_extract_body_text
+        ), patch(
+            "extractor.pipeline._extract_embedded_images",
+            return_value=[],
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                extract_pdf_to_outputs(
+                    pdf_path=Path("unused.pdf"),
+                    out_md_dir=root / "md",
+                    out_image_dir=root / "images",
+                    stem="orphan-header-owned",
+                    page_write=True,
+                )
 
     def test_cross_page_merge_does_not_reuse_stale_mid_page_anchor(self) -> None:
         pages = [
@@ -716,7 +1094,7 @@ class PipelineExtractionTests(unittest.TestCase):
         fake_pdf_context.__enter__.return_value = fake_pdf
         fake_pdf_context.__exit__.return_value = False
 
-        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None):
+        def fake_extract_tables(page: object, force_table: bool = False, strategy_debug=None, **kwargs):
             if page.page_index == 1:
                 return [
                     ([["Col1", "Col2"], ["A1", "1"]], (40.0, 650.0, 540.0, 700.0)),
@@ -759,16 +1137,20 @@ class PipelineExtractionTests(unittest.TestCase):
         table_markdown = result["table_markdown"]
         blocks = self._table_blocks(table_markdown)
         self.assertEqual(2, len(blocks), table_markdown)
-        self.assertIsNotNone(re.search(r"^### .* table 1$", table_markdown, flags=re.MULTILINE))
-        self.assertIsNotNone(re.search(r"^### .* table 2$", table_markdown, flags=re.MULTILINE))
-        self.assertEqual(1, len(re.findall(r"^### .* table 1$", table_markdown, flags=re.MULTILINE)), table_markdown)
+        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 1\)$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 2\)$", table_markdown, flags=re.MULTILINE))
+        self.assertEqual(
+            1,
+            len(re.findall(r"^\[//\]: # \(.+ - Table 1\)$", table_markdown, flags=re.MULTILINE)),
+            table_markdown,
+        )
         self.assertNotIn("| B2 | 11 |", blocks[0], table_markdown)
         self.assertIn("| B2 | 11 |", blocks[1], table_markdown)
 
     def test_demo_table_markdown_is_written_to_separate_file(self) -> None:
         result = self._extract_result()
         self.assertEqual(result["table_markdown"], result["table_md_file"].read_text(encoding="utf-8"))
-        self.assertTrue(result["table_md_file"].name.endswith("_table.md"))
+        self.assertTrue(result["table_md_file"].name.endswith("_tables.md"))
         self.assertEqual(2, len(result["image_files"]))
 
     def test_header_images_are_not_exported_as_body_images(self) -> None:

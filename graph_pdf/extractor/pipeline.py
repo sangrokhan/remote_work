@@ -11,6 +11,7 @@ import pdfplumber
 
 from .debug import _collect_page_edge_debug, _collect_rotated_text_debug, _collect_table_drawing_debug
 from .images import _collect_embedded_image_refs, _extract_embedded_images
+from .notes import _collect_note_candidates, _note_body_text
 from .raw import materialize_raw_dump
 from .shared import TableRows, _merge_numeric_positions, _normalize_text
 from .tables import (
@@ -22,13 +23,15 @@ from .tables import (
     _has_gap_text_after_bbox,
     _has_gap_text_before_bbox,
     _looks_like_header_row,
-    _looks_like_single_column_note,
     _should_try_table_continuation_merge,
-    _single_column_note_body_text,
     _split_repeated_header,
+    _table_owned_body_lines,
+    _table_owned_body_line_bboxes,
     _vertical_axes_for_bbox,
 )
-from .text import _detect_body_bounds, _extract_body_text, _extract_drawing_image_bboxes
+from .text import _detect_body_bounds, _extract_body_text, _extract_body_text_lines, _extract_drawing_image_bboxes
+
+DEFAULT_ADD_HEADING = Path(__file__).resolve().parent.parent / "fixtures" / "font_heading_profile.sample.json"
 
 
 def _to_float_bbox(raw_bbox: object) -> tuple[float, float, float, float] | None:
@@ -220,6 +223,10 @@ def _heading_max_x0_from_rule(match: dict[str, Any]) -> float | None:
 
 def _load_heading_levels(add_heading: Path | None) -> dict[float, dict[str, float | int]] | None:
     if add_heading is None:
+        if not DEFAULT_ADD_HEADING.exists():
+            return None
+        add_heading = DEFAULT_ADD_HEADING
+    elif not Path(add_heading).exists():
         return None
 
     payload = json.loads(Path(add_heading).read_text(encoding="utf-8"))
@@ -263,7 +270,7 @@ def _extract_document_id_from_markdown_line(line: str) -> str | None:
 def _safe_document_id(document_id: str) -> str:
     document_id = document_id.strip()
     safe = _UNSAFE_DOC_ID_CHARS_RE.sub("_", document_id)
-    return safe or "document"
+    return safe or "output"
 
 
 def _extract_document_id(markdown: str) -> str | None:
@@ -274,31 +281,35 @@ def _extract_document_id(markdown: str) -> str | None:
     return None
 
 
-def _infer_document_id_from_pdf(
-    pdf_path: Path,
-    heading_levels: Optional[dict[float, dict[str, float | int] | int]],
+def _contains_markdown_heading(markdown: str, level: int) -> bool:
+    prefix = "#" * max(1, int(level))
+    return any(line.startswith(f"{prefix} ") for line in markdown.splitlines())
+
+
+def _extract_heading_preview_markdown(
+    page: "pdfplumber.page.Page",
+    *,
     header_margin: float,
     footer_margin: float,
-    selected_pages: Optional[set[int]] = None,
-) -> str | None:
+    heading_levels: Optional[dict[float, dict[str, float | int] | int]],
+) -> str:
     try:
-        with pdfplumber.open(str(pdf_path)) as pdf:
-            for page in pdf.pages:
-                page_no = int(getattr(page, "page_number", 0) or 0)
-                if selected_pages and page_no and page_no not in selected_pages:
-                    continue
-                page_markdown = _extract_body_text(
-                    page,
-                    header_margin=header_margin,
-                    footer_margin=footer_margin,
-                    heading_levels=heading_levels,
-                )
-                doc_id = _extract_document_id(page_markdown)
-                if doc_id:
-                    return doc_id
-    except Exception:
-        return None
-    return None
+        _raw_lines, normalized_lines = _extract_body_text_lines(
+            page,
+            header_margin=header_margin,
+            footer_margin=footer_margin,
+            heading_levels=heading_levels,
+        )
+    except AttributeError:
+        preview_markdown = _extract_body_text(
+            page,
+            header_margin=header_margin,
+            footer_margin=footer_margin,
+            heading_levels=heading_levels,
+        )
+        return "\n".join(line for line in preview_markdown.splitlines() if line.startswith("#"))
+    heading_lines = [line for line in normalized_lines if line.startswith("#")]
+    return "\n".join(heading_lines)
 
 
 def _document_text_profile(debug_pages: Sequence[dict]) -> dict:
@@ -342,11 +353,32 @@ def _body_excluded_bboxes(
     return excluded
 
 
-def _content_ref_text(content_type: str, document_id: str, index: int, continued: bool = False) -> str:
-    label = f"[{content_type} reference: {document_id} {content_type.lower()} {index}]"
-    if continued:
-        label += " (continued)"
-    return label
+def _table_owned_header_texts(
+    tables: Sequence[Tuple[TableRows, Tuple[float, float, float, float]]],
+) -> set[str]:
+    owned_texts: set[str] = set()
+    for rows, _bbox in tables:
+        if not rows:
+            continue
+        header_row_count = _header_row_count(rows)
+        header_rows = rows[:header_row_count] if header_row_count else rows[:1]
+        for row in header_rows:
+            joined = " ".join(
+                _normalize_text(str(cell or ""))
+                for cell in row
+                if _normalize_text(str(cell or ""))
+            ).strip()
+            normalized = _normalize_text(joined)
+            if normalized:
+                owned_texts.add(normalized)
+    return owned_texts
+
+
+def _image_reference_text(document_id: str, index: int, suffix: str) -> str:
+    normalized_suffix = str(suffix or "").strip() or ".png"
+    if not normalized_suffix.startswith("."):
+        normalized_suffix = f".{normalized_suffix}"
+    return f"[{document_id}_image_{index}{normalized_suffix}]"
 
 
 def _should_continue_content_region(
@@ -810,7 +842,7 @@ def _has_cross_page_gap_blocked(
 
 
 def _table_reference_text(document_id: str, table_no: int) -> str:
-    return f"[Table reference: {document_id} table {table_no}]"
+    return f"[{document_id}_tables.md - Table {table_no}]"
 
 
 def extract_pdf_to_outputs(
@@ -855,19 +887,13 @@ def extract_pdf_to_outputs(
     selected_pages = set(int(page_no) for page_no in (pages or []))
     drawing_regions_by_page: dict[int, list[Tuple[float, float, float, float]]] = {}
     note_regions_by_page: dict[int, list[Tuple[float, float, float, float]]] = {}
+    note_marker_regions_by_page: dict[int, list[Tuple[float, float, float, float]]] = {}
     region_map: dict[int, dict[str, Any]] = {}
     heading_levels = _load_heading_levels(add_heading)
-    inferred_document_id = _infer_document_id_from_pdf(
-        pdf_path=pdf_path,
-        heading_levels=heading_levels,
-        header_margin=header_margin,
-        footer_margin=footer_margin,
-        selected_pages=selected_pages or None,
-    )
-    initial_document_id = _safe_document_id(inferred_document_id or "document")
-    current_document_state = _DocumentOutputState(document_id=initial_document_id)
+    current_document_state = _DocumentOutputState(document_id="output")
     document_artifacts: list[dict] = []
     image_files: list[Path] = []
+    pending_document_prefix_blocks: list[str] = []
     table_debug_pages: List[dict] | None = [] if debug else None
     edge_debug_pages: List[dict] | None = [] if debug else None
     rotated_debug: List[dict] | None = [] if debug_watermark else None
@@ -903,14 +929,15 @@ def extract_pdf_to_outputs(
         state.emitted_table_references.add(key)
         refs.append({"text": _table_reference_text(state.document_id, table_no), "bbox": bbox})
 
-    def _collect_embedded_image_references(
+    def _collect_page_image_references(
         embedded_refs: Sequence[dict],
+        drawing_regions: Sequence[Tuple[float, float, float, float]],
         page_no: int,
         body_top: float,
         body_bottom: float,
     ) -> List[dict]:
         page_content_references: list[dict] = []
-        note_regions = note_regions_by_page.get(page_no, [])
+        note_regions = note_marker_regions_by_page.get(page_no, [])
         for entry in embedded_refs:
             bbox = _to_float_bbox(entry.get("bbox") if isinstance(entry, dict) else None)
             if bbox is None:
@@ -926,25 +953,46 @@ def extract_pdf_to_outputs(
             ):
                 continue
 
-            is_cont = False
-            if (
-                current_document_state.pending_image_ref_bbox is not None
-                and current_document_state.pending_image_body_bottom is not None
+            page_content_references.append(
+                {
+                    "text": _image_reference_text(
+                        current_document_state.document_id,
+                        current_document_state.next_image_no,
+                        str(entry.get("suffix") or ".png"),
+                    ),
+                    "bbox": bbox,
+                }
+            )
+            current_document_state.next_image_no += 1
+
+            if _is_cross_page_continuation_candidate(
+                bbox=bbox,
+                body_bottom=body_bottom,
             ):
-                is_cont = _should_continue_content_region(
-                    prev_bbox=current_document_state.pending_image_ref_bbox,
-                    curr_bbox=bbox,
-                    prev_body_bottom=current_document_state.pending_image_body_bottom,
-                    curr_body_top=body_top,
+                current_document_state.pending_image_ref_bbox = bbox
+                current_document_state.pending_image_body_bottom = body_bottom
+            else:
+                current_document_state.pending_image_ref_bbox = None
+                current_document_state.pending_image_body_bottom = None
+
+        for bbox in drawing_regions:
+            if any(
+                not (
+                    float(bbox[2]) <= float(region[0])
+                    or float(region[2]) <= float(bbox[0])
+                    or float(bbox[3]) <= float(region[1])
+                    or float(region[3]) <= float(bbox[1])
                 )
+                for region in note_regions
+            ):
+                continue
 
             page_content_references.append(
                 {
-                    "text": _content_ref_text(
-                        "Image",
+                    "text": _image_reference_text(
                         current_document_state.document_id,
                         current_document_state.next_image_no,
-                        continued=is_cont,
+                        ".png",
                     ),
                     "bbox": bbox,
                 }
@@ -976,20 +1024,21 @@ def extract_pdf_to_outputs(
         document_id = state.document_id
         text_file = out_md_dir / f"{document_id}.txt"
         md_file = out_md_dir / f"{document_id}.md"
-        table_md_file = out_md_dir / f"{document_id}_table.md"
+        table_md_file = out_md_dir / f"{document_id}_tables.md"
         text_file.write_text(markdown, encoding="utf-8")
         md_file.write_text(markdown, encoding="utf-8")
         table_md_file.write_text(table_markdown, encoding="utf-8")
 
         # Image extraction happens after text/table rendering so image export stays independent from markdown generation.
+        document_image_dir = out_image_dir / f"{document_id}_images"
         document_images = _extract_embedded_images(
             pdf_path=pdf_path,
-            out_image_dir=out_image_dir,
+            out_image_dir=document_image_dir,
             stem=document_id,
             pages=state.pages,
             drawing_regions_by_page=drawing_regions_by_page,
             image_refs_by_page=embedded_image_refs_by_page,
-            excluded_regions_by_page=note_regions_by_page,
+            excluded_regions_by_page=note_marker_regions_by_page,
         )
         image_files.extend(document_images)
 
@@ -1042,7 +1091,7 @@ def extract_pdf_to_outputs(
                 current_document_state.clear_transient_content_state()
                 continue
 
-            preview_markdown = _extract_body_text(
+            preview_markdown = _extract_heading_preview_markdown(
                 page,
                 header_margin=header_margin,
                 footer_margin=footer_margin,
@@ -1051,6 +1100,15 @@ def extract_pdf_to_outputs(
             detected_document_id = _extract_document_id(preview_markdown)
             if detected_document_id is not None:
                 _commit_document_switch(detected_document_id)
+                if pending_document_prefix_blocks:
+                    current_document_state.output_text.extend(pending_document_prefix_blocks)
+                    pending_document_prefix_blocks.clear()
+
+            chapter_bridge_page = (
+                detected_document_id is None
+                and _contains_markdown_heading(preview_markdown, 1)
+                and current_document_state.has_output_content()
+            )
 
             current_document_state.pages.append(page_idx)
 
@@ -1064,6 +1122,33 @@ def extract_pdf_to_outputs(
             if debug_watermark:
                 rotated_debug.extend(_collect_rotated_text_debug(page, page_no=page_idx))
 
+            note_candidate_rows = _collect_note_candidates(page)
+            note_references: List[dict] = []
+            detected_note_payloads: List[dict] = []
+            note_bboxes: list[Tuple[float, float, float, float]] = []
+            for candidate in note_candidate_rows:
+                if bool(candidate.get("is_white_content")) or not bool(candidate.get("is_note_like")):
+                    continue
+                candidate_bbox = tuple(float(value) for value in candidate["bbox"])
+                note_bboxes.append(candidate_bbox)
+                note_anchor = _to_float_bbox(candidate.get("note_anchor"))
+                if note_anchor is not None:
+                    note_marker_regions_by_page.setdefault(page_idx, []).append(note_anchor)
+                rows = candidate.get("rows") or []
+                row_count = len(rows)
+                col_count = max((len(row) for row in rows), default=0)
+                note_regions_by_page.setdefault(page_idx, []).append(candidate_bbox)
+                detected_note_payloads.append(
+                    {
+                        "bbox": _rounded_bbox(candidate_bbox),
+                        "row_count": int(row_count),
+                        "col_count": int(col_count),
+                    }
+                )
+                note_text = _note_body_text(rows)
+                if note_text:
+                    note_references.append({"text": note_text, "bbox": candidate_bbox})
+
             strategy_debug: list[dict] | None = [] if debug else None
             detected_tables = _extract_tables(
                 page,
@@ -1071,40 +1156,10 @@ def extract_pdf_to_outputs(
                 strategy_debug=strategy_debug,
             )
             tables: List[Tuple[TableRows, Tuple[float, float, float, float]]] = []
-            note_references: List[dict] = []
             detected_table_payloads: List[dict] = []
-            detected_note_payloads: List[dict] = []
             table_exclusion_regions: list[Tuple[float, float, float, float]] = []
             for table_rows, bbox in detected_tables:
                 table_exclusion_regions.append(bbox)
-                row_count = len(table_rows)
-                col_count = max((len(row) for row in table_rows), default=0)
-                is_note = _looks_like_single_column_note(
-                    rows=table_rows,
-                    page=page,
-                    bbox=bbox,
-                )
-                if is_note:
-                    note_regions_by_page.setdefault(page_idx, []).append(bbox)
-                    detected_table_payloads.append(
-                        {
-                            "kind": "note",
-                            "bbox": [round(float(value), 2) for value in bbox],
-                            "row_count": int(row_count),
-                            "col_count": int(col_count),
-                        }
-                    )
-                    detected_note_payloads.append(
-                        {
-                            "bbox": [round(float(value), 2) for value in bbox],
-                            "row_count": int(row_count),
-                            "col_count": int(col_count),
-                        }
-                    )
-                    note_text = _single_column_note_body_text(table_rows)
-                    if note_text:
-                        note_references.append({"text": note_text, "bbox": bbox})
-                    continue
                 tables.append((table_rows, bbox))
                 detected_table_payloads.append(
                     {
@@ -1210,13 +1265,23 @@ def extract_pdf_to_outputs(
                     *embedded_image_regions,
                 ],
             )
+            table_owned_body_line_bboxes = _table_owned_body_line_bboxes(
+                page,
+                tables=tables,
+                header_margin=header_margin,
+                footer_margin=footer_margin,
+            )
+            table_owned_texts = _table_owned_header_texts(tables)
+            page_excluded_bboxes.extend(table_owned_body_line_bboxes)
             page_excluded_bboxes.extend(table_exclusion_regions)
+            page_excluded_bboxes.extend(note_bboxes)
             page_table_references: List[dict] = []
             page_content_references: List[dict] = []
 
             if not tables:
-                page_content_references = _collect_embedded_image_references(
+                page_content_references = _collect_page_image_references(
                     embedded_refs=embedded_image_refs,
+                    drawing_regions=image_regions,
                     page_no=page_idx,
                     body_top=body_top,
                     body_bottom=body_bottom,
@@ -1238,11 +1303,18 @@ def extract_pdf_to_outputs(
                     ],
                     heading_levels=heading_levels,
                 )
+                if table_owned_texts:
+                    page_text = "\n".join(
+                        line
+                        for line in page_text.splitlines()
+                        if _normalize_text(line) not in table_owned_texts
+                    )
                 if page_text.strip():
-                    if page_write:
-                        current_document_state.output_text.append(f"{_format_page_comment(page_idx)}\n{page_text}")
+                    final_page_text = f"{_format_page_comment(page_idx)}\n{page_text}" if page_write else page_text
+                    if chapter_bridge_page:
+                        pending_document_prefix_blocks.append(final_page_text)
                     else:
-                        current_document_state.output_text.append(page_text)
+                        current_document_state.output_text.append(final_page_text)
                 continue
 
             tables = sorted(tables, key=lambda item: item[1][1])
@@ -1361,8 +1433,9 @@ def extract_pdf_to_outputs(
                 ):
                     current_document_state.cross_page_candidates.append(_to_cross_page_candidate(current_document_state.pending_table_state))
 
-            page_content_references = _collect_embedded_image_references(
+            page_content_references = _collect_page_image_references(
                 embedded_refs=embedded_image_refs,
+                drawing_regions=image_regions,
                 page_no=page_idx,
                 body_top=body_top,
                 body_bottom=body_bottom,
@@ -1391,12 +1464,21 @@ def extract_pdf_to_outputs(
                 + note_references,
                 heading_levels=heading_levels,
             )
+            if table_owned_texts:
+                page_text = "\n".join(
+                    line
+                    for line in page_text.splitlines()
+                    if _normalize_text(line) not in table_owned_texts
+                )
             if page_text.strip():
-                if page_write:
-                    current_document_state.output_text.append(f"{_format_page_comment(page_idx)}\n{page_text}")
+                final_page_text = f"{_format_page_comment(page_idx)}\n{page_text}" if page_write else page_text
+                if chapter_bridge_page:
+                    pending_document_prefix_blocks.append(final_page_text)
                 else:
-                    current_document_state.output_text.append(page_text)
+                    current_document_state.output_text.append(final_page_text)
 
+    if pending_document_prefix_blocks:
+        current_document_state.output_text.extend(pending_document_prefix_blocks)
     _flush_current_document(current_document_state)
     if not document_artifacts:
         _flush_current_document(current_document_state, force=True)

@@ -15,13 +15,12 @@ def main() -> None:
     parser.add_argument("pdf_path", nargs="?")
     parser.add_argument("--out-md-dir", default="graph_pdf/artifacts/md")
     parser.add_argument("--out-image-dir", default="graph_pdf/artifacts/images")
-    parser.add_argument("--stem", default="output")
     parser.add_argument("--pages", help="1-based pages like 1,3,5-8")
     parser.add_argument("--force-table", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--debug-watermark", action="store_true")
     parser.add_argument("--profile-fonts", action="store_true")
-    parser.add_argument("--add-heading")
+    parser.add_argument("--heading-profile")
     parser.add_argument("--page-write", action="store_true")
     parser.add_argument("--raw")
     parser.add_argument("--from-raw")
@@ -35,6 +34,8 @@ def main() -> None:
         parser.error("pdf_path is required when using --raw")
     if not args.pdf_path and not args.from_raw:
         parser.error("pdf_path is required unless --from-raw is provided")
+
+    stem = "output"
 
     if args.raw:
         dump_pdf_to_raw_file(
@@ -50,14 +51,14 @@ def main() -> None:
                 profile_pdf_fonts(
                     pdf_path=materialized_pdf_path,
                     out_dir=Path(args.out_md_dir),
-                    stem=args.stem,
+                    stem=stem,
                     pages=selected_pages,
                 )
         else:
             profile_pdf_fonts(
                 pdf_path=Path(args.pdf_path),
                 out_dir=Path(args.out_md_dir),
-                stem=args.stem,
+                stem=stem,
                 pages=selected_pages,
             )
         return
@@ -66,12 +67,12 @@ def main() -> None:
         pdf_path=Path(args.pdf_path) if args.pdf_path else None,
         out_md_dir=Path(args.out_md_dir),
         out_image_dir=Path(args.out_image_dir),
-        stem=args.stem,
+        stem=stem,
         pages=selected_pages,
         force_table=args.force_table,
         debug=args.debug,
         debug_watermark=args.debug_watermark,
-        add_heading=Path(args.add_heading) if args.add_heading else None,
+        add_heading=Path(args.heading_profile) if args.heading_profile else None,
         page_write=args.page_write,
         from_raw=Path(args.from_raw) if args.from_raw else None,
         region_log=Path(args.region_log) if args.region_log else None,

@@ -21,17 +21,18 @@ def _normalize(value: str) -> str:
 def _extract_markdown_tables(markdown_text: str) -> List[List[List[str]]]:
     lines = markdown_text.splitlines()
     tables: List[List[List[str]]] = []
+    table_title_re = re.compile(r"^\[//\]: # \(.+ - Table \d+\)$")
 
     i = 0
     while i < len(lines):
         line = lines[i]
-        if not re.match(r"^### .+ table \d+$", line):
+        if not table_title_re.match(line):
             i += 1
             continue
 
         i += 1
         table_lines: List[str] = []
-        while i < len(lines) and not re.match(r"^### .+ table \d+$", lines[i]):
+        while i < len(lines) and not table_title_re.match(lines[i]):
             table_lines.append(lines[i])
             i += 1
 
@@ -142,13 +143,14 @@ def run_checks() -> int:
         if _normalize(token) not in normalized_text:
             raise AssertionError(f"missing expected body text: {token}")
 
-    if re.search(r"^### .+ table \d+$", markdown_text, flags=re.MULTILINE):
+    if re.search(r"^\[//\]: # \(.+ - Table \d+\)$", markdown_text, flags=re.MULTILINE):
         raise AssertionError("body markdown still contains embedded table blocks")
 
     extracted_tables = _extract_markdown_tables(table_markdown)
     demo_tables = {
         table["id"]: (table["columns"], table["rows"])
         for table in fixture["tables"]
+        if table.get("id") != "callout"
     }
     flattened_rows: List[Sequence[str]] = [row for rows in extracted_tables for row in rows]
     expected_rows = [row for _, rows in demo_tables.values() for row in rows]

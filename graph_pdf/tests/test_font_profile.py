@@ -112,17 +112,15 @@ class FontProfileTests(unittest.TestCase):
             str(pdf_path),
             "--out-md-dir",
             str(root / "md"),
-            "--stem",
-            "sample",
             "--profile-fonts",
         ]
         with patch.object(sys, "argv", argv):
             cli_main()
 
-        self.assertTrue((root / "md" / "sample_font_profile.json").exists())
-        self.assertTrue((root / "md" / "sample_font_profile.csv").exists())
+        self.assertTrue((root / "md" / "output_font_profile.json").exists())
+        self.assertTrue((root / "md" / "output_font_profile.csv").exists())
 
-    def test_cli_add_heading_option_passes_heading_json_to_pipeline(self) -> None:
+    def test_cli_heading_profile_option_passes_heading_json_to_pipeline(self) -> None:
         root, pdf_path = self._build_pdf()
         heading_json = root / "heading.json"
         heading_json.write_text(
@@ -137,9 +135,7 @@ class FontProfileTests(unittest.TestCase):
             str(root / "md"),
             "--out-image-dir",
             str(root / "images"),
-            "--stem",
-            "sample",
-            "--add-heading",
+            "--heading-profile",
             str(heading_json),
         ]
         with patch.object(sys, "argv", argv), patch("extractor.__main__.extract_pdf_to_outputs") as mock_extract:
