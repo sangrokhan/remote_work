@@ -255,36 +255,11 @@ def _repair_watermark_bleed(text: str) -> str:
 
 
 def _is_layout_artifact(text: str) -> bool:
-    # The sample/demo PDFs contain known header/footer strings that should never enter body extraction.
+    # Keep only narrow non-body cleanup here. Header/footer removal should come from page geometry.
     normalized = _normalize_text(text).lower()
     if not normalized:
         return True
-    if "graph pdf demo header" in normalized:
-        return True
-    if "chapter 1: deep structure verification" in normalized:
-        return False
-    if re.search(r"^page \d+\s*/\s*\d+$", normalized):
-        return True
-
-    header_markers = (
-        "prepared for table + text extraction tests",
-        "header checks:",
-        "header line",
-        "header line 1",
-        "header line 2",
-        "header line 3",
-    )
-    footer_markers = (
-        "graph pdf demo footer / left",
-        "footer details: keep header/footer clean",
-        "footer note: ignore this for body extraction",
-        "footer line 1:",
-        "footer line 2:",
-        "footer line 3:",
-        "footer line marker:",
-        "footer page marker:",
-    )
-    return any(marker in normalized for marker in (*header_markers, *footer_markers))
+    return False
 
 
 def _is_gray_color(color: object) -> bool:

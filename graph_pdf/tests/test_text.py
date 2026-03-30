@@ -12,6 +12,7 @@ from extractor.text import (
     _extract_body_word_lines,
     _extract_drawing_image_bboxes,
     _is_gray_color,
+    _is_layout_artifact,
     _is_non_watermark_obj,
     _is_shape_text_line,
     _normalize_cell_lines,
@@ -189,6 +190,86 @@ class TextModuleTests(unittest.TestCase):
 
         self.assertEqual(1, len(lines))
         self.assertTrue(lines[0]["is_shape_text"])
+
+    def test_extract_body_word_lines_keeps_orphan_table_header_line_for_table_stage(self) -> None:
+        filtered_page = SimpleNamespace(
+            extract_words=lambda **kwargs: [
+                {"text": "Family", "x0": 77.42, "x1": 102.45, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Display", "x0": 105.02, "x1": 133.29, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Name", "x0": 135.86, "x1": 159.65, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Type", "x0": 219.17, "x1": 238.27, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Name", "x0": 240.77, "x1": 264.55, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Type", "x0": 339.67, "x1": 358.77, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Description", "x0": 361.27, "x1": 405.88, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+            ],
+            chars=[],
+        )
+        page = SimpleNamespace()
+
+        with patch("extractor.text._filter_page_for_extraction", return_value=filtered_page), patch(
+            "extractor.text._detect_body_bounds", return_value=(40.0, 700.0)
+        ):
+            lines = _extract_body_word_lines(page, header_margin=90.0, footer_margin=40.0)
+
+        self.assertEqual(1, len(lines))
+        self.assertEqual("Family Display Name Type Name Type Description", lines[0]["text"])
+
+    def test_layout_artifact_no_longer_uses_demo_header_footer_strings(self) -> None:
+        self.assertFalse(_is_layout_artifact("Graph PDF Demo Header"))
+        self.assertFalse(_is_layout_artifact("Graph PDF Demo Footer / Left"))
+        self.assertFalse(_is_layout_artifact("Page 1 / 3"))
+
+    def test_extract_body_word_lines_keeps_header_like_strings_when_inside_body_bounds(self) -> None:
+        filtered_page = SimpleNamespace(
+            extract_words=lambda **kwargs: [
+                {
+                    "text": "Graph",
+                    "x0": 64.0,
+                    "x1": 92.0,
+                    "top": 120.0,
+                    "bottom": 132.0,
+                    "size": 11.0,
+                    "fontname": "Helvetica",
+                },
+                {
+                    "text": "PDF",
+                    "x0": 96.0,
+                    "x1": 118.0,
+                    "top": 120.0,
+                    "bottom": 132.0,
+                    "size": 11.0,
+                    "fontname": "Helvetica",
+                },
+                {
+                    "text": "Demo",
+                    "x0": 122.0,
+                    "x1": 154.0,
+                    "top": 120.0,
+                    "bottom": 132.0,
+                    "size": 11.0,
+                    "fontname": "Helvetica",
+                },
+                {
+                    "text": "Header",
+                    "x0": 158.0,
+                    "x1": 204.0,
+                    "top": 120.0,
+                    "bottom": 132.0,
+                    "size": 11.0,
+                    "fontname": "Helvetica",
+                },
+            ],
+            chars=[],
+        )
+        page = SimpleNamespace()
+
+        with patch("extractor.text._filter_page_for_extraction", return_value=filtered_page), patch(
+            "extractor.text._detect_body_bounds", return_value=(40.0, 700.0)
+        ):
+            lines = _extract_body_word_lines(page, header_margin=90.0, footer_margin=40.0)
+
+        self.assertEqual(1, len(lines))
+        self.assertEqual("Graph PDF Demo Header", lines[0]["text"])
 
     def test_extract_drawing_image_bboxes_selects_largest_curve_as_region(self) -> None:
         page = SimpleNamespace(

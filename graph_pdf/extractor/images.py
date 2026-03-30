@@ -477,7 +477,7 @@ def _extract_embedded_images(
                     if image_stem not in allowed_names and image_name not in allowed_names:
                         continue
                     suffix = Path(image_name).suffix or ".bin"
-                    out_path = out_image_dir / f"{stem}_image_{image_no:02d}{suffix}"
+                    out_path = out_image_dir / f"{stem}_image_{image_no}{suffix}"
                     image_no += 1
                     out_path.write_bytes(image_file.data)
                     image_files.append(out_path)
@@ -495,7 +495,7 @@ def _extract_embedded_images(
                     ):
                         continue
                     suffix = str(image_ref.get("suffix") or Path(image_name).suffix or ".bin")
-                    out_path = out_image_dir / f"{stem}_image_{image_no:02d}{suffix}"
+                    out_path = out_image_dir / f"{stem}_image_{image_no}{suffix}"
                     image_no += 1
                     image_payload = _match_embedded_image_by_name(image_name, image_stem, page.images)
                     if image_payload is None:
@@ -536,7 +536,7 @@ def _extract_embedded_images(
                         bbox=(render_left, render_top, render_right, render_bottom),
                         resolution=180.0,
                     )
-                    out_path = out_image_dir / f"{stem}_image_{image_no:02d}.png"
+                    out_path = out_image_dir / f"{stem}_image_{image_no}.png"
                     image_no += 1
                     region_image.save(str(out_path), format="PNG")
                     image_files.append(out_path)

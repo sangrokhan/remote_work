@@ -9,19 +9,25 @@ from typing import Any
 
 from extractor.pipeline import extract_pdf_to_outputs
 from extractor.raw import materialize_raw_dump
+from scripts.replay_samples import (
+    _count_table_references,
+    _count_table_sections,
+    _extract_table_references,
+    _extract_table_sections,
+)
 
 
 class SampleRawDumpTests(unittest.TestCase):
-    _ARTIFACT_ROOT = Path(__file__).resolve().parents[1] / "artifacts" / "sample_visuals" / "parse"
+    _ARTIFACT_ROOT = Path(__file__).resolve().parents[1] / "artifacts" / "compare" / "gold-check-20260327-140302"
 
     def _sample_raw_paths(self) -> list[Path]:
         samples_dir = Path(__file__).resolve().parents[1] / "samples"
         return sorted(samples_dir.glob("*.dump"))
 
     def _load_artifact_summary(self, raw_path: Path, mode: str) -> dict[str, Any]:
+        del mode
         stem = raw_path.stem
-        expected_stem = f"{stem}_{mode}" if mode == "from_raw" else stem
-        summary_path = self._ARTIFACT_ROOT / stem / mode / "md" / f"{expected_stem}_summary.json"
+        summary_path = self._ARTIFACT_ROOT / stem / "md" / f"{stem}_summary.json"
         return json.loads(summary_path.read_text(encoding="utf-8"))
 
     def _assert_output_snapshot_matches(self, result: dict[str, Any], raw_path: Path, mode: str) -> None:
@@ -51,12 +57,14 @@ class SampleRawDumpTests(unittest.TestCase):
         self.assertMultiLineEqual(artifact_table, actual_table_md, raw_path.name)
         self.assertMultiLineEqual(artifact_txt, actual_txt, raw_path.name)
 
+        artifact_image_paths = {Path(path).name: Path(path) for path in artifact["images"]}
         for image_name in artifact_images:
-            artifact_image_path = self._ARTIFACT_ROOT / raw_path.stem / mode / "images" / image_name
+            artifact_image_path = artifact_image_paths.get(image_name)
             actual_image_path = next((Path(path) for path in result["summary"]["images"] if Path(path).name == image_name), None)
+            self.assertIsNotNone(artifact_image_path, f"missing artifact image: {image_name}")
             self.assertIsNotNone(actual_image_path, f"missing image in current output: {image_name}")
 
-            artifact_digest = hashlib.sha256(artifact_image_path.read_bytes()).hexdigest()
+            artifact_digest = hashlib.sha256(Path(artifact_image_path).read_bytes()).hexdigest()
             actual_digest = hashlib.sha256(actual_image_path.read_bytes()).hexdigest()
             self.assertEqual(artifact_digest, actual_digest, f"image changed: {image_name} ({raw_path.name}, {mode})")
 
@@ -113,6 +121,21 @@ class SampleRawDumpTests(unittest.TestCase):
                     self.assertTrue(Path(direct_result["text_file"]).exists())
                     self.assertTrue(Path(direct_result["md_file"]).exists())
                     self.assertTrue(Path(direct_result["table_md_file"]).exists())
+
+    def test_replay_samples_uses_current_table_reference_contract(self) -> None:
+        markdown = "Body text\n\n[FGR-BC0401_tables.md - Table 1]\n"
+        table_markdown = "[//]: # (FGR-BC0401 - Table 1)\n| Col |\n| --- |\n| Value |\n"
+
+        self.assertEqual(1, _count_table_references(markdown))
+        self.assertEqual(1, _count_table_sections(table_markdown))
+        self.assertEqual(
+            ["FGR-BC0401_tables.md - Table 1"],
+            _extract_table_references(markdown),
+        )
+        self.assertEqual(
+            ["FGR-BC0401_tables.md - Table 1"],
+            _extract_table_sections(table_markdown),
+        )
 
 
 if __name__ == "__main__":
