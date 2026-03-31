@@ -1,0 +1,17 @@
+{
+  "pdf": "samples/raw-32-37.dump",
+  "document_id": "FGR-BC0008",
+  "text_file": "samples/gold/raw-32-37/md/FGR-BC0008.txt",
+  "md_file": "samples/gold/raw-32-37/md/FGR-BC0008.md",
+  "table_md_file": "samples/gold/raw-32-37/md/FGR-BC0008_tables.md",
+  "images": [],
+  "table_count": 5,
+  "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ]
+}

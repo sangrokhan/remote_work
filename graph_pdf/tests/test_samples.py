@@ -18,7 +18,13 @@ from scripts.replay_samples import (
 
 
 class SampleRawDumpTests(unittest.TestCase):
-    _ARTIFACT_ROOT = Path(__file__).resolve().parents[1] / "artifacts" / "compare" / "gold-check-20260327-140302"
+    _ARTIFACT_ROOT = Path(__file__).resolve().parents[1] / "samples" / "gold"
+
+    def _assert_summary_table_counts_match(self, summary: dict[str, Any], summary_name: str) -> None:
+        table_md_file = Path(summary["table_md_file"])
+        table_markdown = table_md_file.read_text(encoding="utf-8")
+        actual_table_count = _count_table_sections(table_markdown)
+        self.assertEqual(actual_table_count, summary["table_count"], summary_name)
 
     def _sample_raw_paths(self) -> list[Path]:
         samples_dir = Path(__file__).resolve().parents[1] / "samples"
@@ -32,10 +38,10 @@ class SampleRawDumpTests(unittest.TestCase):
 
     def _assert_output_snapshot_matches(self, result: dict[str, Any], raw_path: Path, mode: str) -> None:
         artifact = self._load_artifact_summary(raw_path=raw_path, mode=mode)
-
         artifact_md = Path(artifact["md_file"]).read_text(encoding="utf-8")
+        artifact_table_markdown = Path(artifact["table_md_file"]).read_text(encoding="utf-8")
+        artifact_table_count = _count_table_sections(artifact_table_markdown)
         artifact_txt = Path(artifact["text_file"]).read_text(encoding="utf-8")
-        artifact_table = Path(artifact["table_md_file"]).read_text(encoding="utf-8")
         artifact_images = sorted(Path(p).name for p in artifact["images"])
 
         artifact_md_file = Path(artifact["md_file"])
@@ -50,11 +56,11 @@ class SampleRawDumpTests(unittest.TestCase):
         actual_table_md = result["table_markdown"]
         actual_txt = Path(result["text_file"]).read_text(encoding="utf-8")
         actual_images = sorted(Path(p).name for p in result["summary"]["images"])
-        self.assertEqual(artifact["table_count"], result["summary"]["table_count"], raw_path.name)
+        self.assertEqual(artifact_table_count, result["summary"]["table_count"], raw_path.name)
         self.assertEqual(len(artifact["images"]), len(actual_images), raw_path.name)
         self.assertEqual(artifact_images, actual_images, raw_path.name)
         self.assertMultiLineEqual(artifact_md, actual_md, raw_path.name)
-        self.assertMultiLineEqual(artifact_table, actual_table_md, raw_path.name)
+        self.assertMultiLineEqual(artifact_table_markdown, actual_table_md, raw_path.name)
         self.assertMultiLineEqual(artifact_txt, actual_txt, raw_path.name)
 
         artifact_image_paths = {Path(path).name: Path(path) for path in artifact["images"]}
@@ -82,7 +88,6 @@ class SampleRawDumpTests(unittest.TestCase):
                         out_md_dir=root / "from_raw" / "md",
                         out_image_dir=root / "from_raw" / "images",
                         stem=f"{raw_path.stem}_from_raw",
-                        page_write=True,
                         from_raw=raw_path,
                     )
 
@@ -92,7 +97,6 @@ class SampleRawDumpTests(unittest.TestCase):
                             out_md_dir=root / "direct" / "md",
                             out_image_dir=root / "direct" / "images",
                             stem=raw_path.stem,
-                            page_write=True,
                         )
 
                     self.assertEqual(
@@ -124,7 +128,7 @@ class SampleRawDumpTests(unittest.TestCase):
 
     def test_replay_samples_uses_current_table_reference_contract(self) -> None:
         markdown = "Body text\n\n[FGR-BC0401_tables.md - Table 1]\n"
-        table_markdown = "[//]: # (FGR-BC0401 - Table 1)\n| Col |\n| --- |\n| Value |\n"
+        table_markdown = "[FGR-BC0401_tables.md - Table 1]\n| Col |\n| --- |\n| Value |\n"
 
         self.assertEqual(1, _count_table_references(markdown))
         self.assertEqual(1, _count_table_sections(table_markdown))
@@ -136,6 +140,33 @@ class SampleRawDumpTests(unittest.TestCase):
             ["FGR-BC0401_tables.md - Table 1"],
             _extract_table_sections(table_markdown),
         )
+
+    def test_gold_summaries_match_table_markdown_counts(self) -> None:
+        for summary_path in sorted(self._ARTIFACT_ROOT.glob("raw-*/md/*_summary.json")):
+            with self.subTest(summary=summary_path.name):
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                self._assert_summary_table_counts_match(summary, summary_path.name)
+                for index, document in enumerate(summary.get("documents", []), start=1):
+                    self._assert_summary_table_counts_match(document, f"{summary_path.name} documents[{index}]")
+
+    def test_raw_93_114_table_count_matches_golden_table_file(self) -> None:
+        raw_path = Path(__file__).resolve().parents[1] / "samples" / "raw-93-114.dump"
+        artifact = self._load_artifact_summary(raw_path=raw_path, mode="from_raw")
+        expected_table_count = _count_table_sections(
+            Path(artifact["table_md_file"]).read_text(encoding="utf-8")
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            result = extract_pdf_to_outputs(
+                pdf_path=None,
+                out_md_dir=root / "from_raw" / "md",
+                out_image_dir=root / "from_raw" / "images",
+                stem="raw-93-114_from_raw",
+                from_raw=raw_path,
+            )
+
+        self.assertEqual(expected_table_count, result["summary"]["table_count"])
 
 
 if __name__ == "__main__":

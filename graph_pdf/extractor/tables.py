@@ -1482,9 +1482,44 @@ def _table_regions(
     page: pdfplumber.page.PageObject,
     y_tolerance: float = 65.0,
     min_lines: int = 3,
+    excluded_bboxes: Sequence[Tuple[float, float, float, float]] | None = None,
 ) -> List[tuple]:
     # Table discovery is driven by connected edge geometry rather than text layout alone.
     del y_tolerance
+    excluded_bboxes = list(excluded_bboxes or [])
+
+    def _horizontal_edge_owned_by_excluded_bbox(
+        edge: dict[str, Any],
+        bbox: Tuple[float, float, float, float],
+        *,
+        x_tolerance: float = 3.0,
+        y_tolerance: float = 6.0,
+    ) -> bool:
+        edge_x0 = float(edge["x0"])
+        edge_x1 = float(edge["x1"])
+        edge_center_y = (float(edge["top"]) + float(edge["bottom"])) / 2.0
+        return (
+            abs(edge_x0 - float(bbox[0])) <= x_tolerance
+            and abs(edge_x1 - float(bbox[2])) <= x_tolerance
+            and edge_center_y >= float(bbox[1]) - y_tolerance
+            and edge_center_y <= float(bbox[3]) + y_tolerance
+        )
+
+    def _vertical_edge_owned_by_excluded_bbox(
+        edge: dict[str, Any],
+        bbox: Tuple[float, float, float, float],
+        *,
+        x_tolerance: float = 3.0,
+        min_overlap: float = 8.0,
+    ) -> bool:
+        edge_center_x = (float(edge["x0"]) + float(edge["x1"])) / 2.0
+        if not (
+            abs(edge_center_x - float(bbox[0])) <= x_tolerance
+            or abs(edge_center_x - float(bbox[2])) <= x_tolerance
+        ):
+            return False
+        overlap = min(float(edge["bottom"]), float(bbox[3])) - max(float(edge["top"]), float(bbox[1]))
+        return overlap >= min_overlap
 
     body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
     horizontal_edges = [
@@ -1492,12 +1527,14 @@ def _table_regions(
         for edge in page.horizontal_edges
         if float(edge["bottom"]) > body_top
         and float(edge["top"]) < body_bottom
+        and not any(_horizontal_edge_owned_by_excluded_bbox(edge, bbox) for bbox in excluded_bboxes)
     ]
     vertical_edges = [
         edge
         for edge in page.vertical_edges
         if float(edge["bottom"]) > body_top
         and float(edge["top"]) < body_bottom
+        and not any(_vertical_edge_owned_by_excluded_bbox(edge, bbox) for bbox in excluded_bboxes)
     ]
 
     merged_h = []
@@ -2203,12 +2240,13 @@ def _extract_tables(
     page: pdfplumber.page.PageObject,
     force_table: bool = False,
     strategy_debug: list[dict] | None = None,
+    excluded_bboxes: Sequence[Tuple[float, float, float, float]] | None = None,
 ) -> List[TableChunk]:
     # Region-based extraction is preferred because full-page fallback tends to over-merge adjacent content.
     page = _filter_page_for_extraction(page)
     seen_keys = set()
     merged: List[TableChunk] = []
-    table_regions = _table_regions(page)
+    table_regions = _table_regions(page, excluded_bboxes=excluded_bboxes)
 
     def _table_key(
         rows: Sequence[Sequence[str]],
@@ -2409,7 +2447,7 @@ def _append_output_table(
     collapsed_rows = _collapse_structural_triplet_columns(merged_rows)
     table_text = _table_text_from_rows(collapsed_rows)
     if table_text:
-        block = f"[//]: # ({document_id} - Table {table_no})\n{table_text}"
+        block = f"[{document_id}_tables.md - Table {table_no}]\n{table_text}"
         if page_no is not None:
             output_tables.append(f"{_format_page_comment(page_no)}\n{block}")
         else:
