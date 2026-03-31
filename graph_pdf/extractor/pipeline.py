@@ -50,6 +50,53 @@ def _x_overlap_width(
     return max(0.0, min(float(bbox_a[2]), float(bbox_b[2])) - max(float(bbox_a[0]), float(bbox_b[0])))
 
 
+def _bbox_area(bbox: Tuple[float, float, float, float]) -> float:
+    return max(0.0, float(bbox[2]) - float(bbox[0])) * max(0.0, float(bbox[3]) - float(bbox[1]))
+
+
+def _bbox_intersection_area(
+    bbox_a: Tuple[float, float, float, float],
+    bbox_b: Tuple[float, float, float, float],
+) -> float:
+    overlap_width = max(0.0, min(float(bbox_a[2]), float(bbox_b[2])) - max(float(bbox_a[0]), float(bbox_b[0])))
+    overlap_height = max(0.0, min(float(bbox_a[3]), float(bbox_b[3])) - max(float(bbox_a[1]), float(bbox_b[1])))
+    return overlap_width * overlap_height
+
+
+def _bbox_overlap_ratio_against_smaller_region(
+    bbox_a: Tuple[float, float, float, float],
+    bbox_b: Tuple[float, float, float, float],
+) -> float:
+    smaller_area = min(_bbox_area(bbox_a), _bbox_area(bbox_b))
+    if smaller_area <= 0.0:
+        return 0.0
+    return _bbox_intersection_area(bbox_a, bbox_b) / smaller_area
+
+
+def _bbox_overlap_ratio_against_larger_region(
+    bbox_a: Tuple[float, float, float, float],
+    bbox_b: Tuple[float, float, float, float],
+) -> float:
+    larger_area = max(_bbox_area(bbox_a), _bbox_area(bbox_b))
+    if larger_area <= 0.0:
+        return 0.0
+    return _bbox_intersection_area(bbox_a, bbox_b) / larger_area
+
+
+def _table_bbox_conflicts_with_note_region(
+    table_bbox: Tuple[float, float, float, float],
+    note_bboxes: Sequence[Tuple[float, float, float, float]],
+    *,
+    min_overlap_ratio: float = 0.9,
+    min_large_overlap_ratio: float = 0.85,
+) -> bool:
+    return any(
+        _bbox_overlap_ratio_against_smaller_region(table_bbox, note_bbox) >= min_overlap_ratio
+        and _bbox_overlap_ratio_against_larger_region(table_bbox, note_bbox) >= min_large_overlap_ratio
+        for note_bbox in note_bboxes
+    )
+
+
 def _has_x_overlap(
     candidate: Tuple[float, float, float, float],
     reference: Tuple[float, float, float, float],
@@ -128,6 +175,8 @@ def _looks_like_cross_page_continuation_rows(
     if not repeated_header_trimmed:
         return False
 
+    family_layout_signature = "familydisplaynametypenametypedescription"
+
     def _leading_data_cell(rows: Sequence[Sequence[str]], *, reverse: bool = False) -> str:
         iterator = reversed(rows) if reverse else iter(rows)
         for row in iterator:
@@ -149,6 +198,12 @@ def _looks_like_cross_page_continuation_rows(
 
     previous_family_normalized = previous_family.lower()
     current_family_normalized = current_family.lower()
+
+    if (
+        family_layout_signature in previous_header_signature.lower()
+        and family_layout_signature in current_header_signature.lower()
+    ):
+        return True
 
     previous_is_collected = "collected in up per" in previous_family_normalized
     current_is_collected = "collected in up per" in current_family_normalized
@@ -430,6 +485,9 @@ def _is_cross_page_continuation_candidate(
 
     span = max(0.0, float(body_bottom) - float(body_top))
     if span <= 0.0:
+        return True
+    table_height = max(0.0, float(bottom) - float(top))
+    if table_height >= span * 0.45:
         return True
     return float(top) >= float(body_top) + (span * 0.5)
 
@@ -845,6 +903,12 @@ def _table_reference_text(document_id: str, table_no: int) -> str:
     return f"[{document_id}_tables.md - Table {table_no}]"
 
 
+def _with_trailing_newline(text: str) -> str:
+    if not text:
+        return ""
+    return text if text.endswith("\n") else f"{text}\n"
+
+
 def extract_pdf_to_outputs(
     pdf_path: Path | None,
     out_md_dir: Path,
@@ -1019,7 +1083,7 @@ def extract_pdf_to_outputs(
         state.clear_transient_content_state()
 
         markdown = "\n\n".join(state.output_text)
-        table_markdown = "\n\n".join(state.output_tables)
+        table_markdown = _with_trailing_newline("\n\n".join(state.output_tables))
 
         document_id = state.document_id
         text_file = out_md_dir / f"{document_id}.txt"
@@ -1126,11 +1190,19 @@ def extract_pdf_to_outputs(
             note_references: List[dict] = []
             detected_note_payloads: List[dict] = []
             note_bboxes: list[Tuple[float, float, float, float]] = []
+            note_region_bboxes: list[Tuple[float, float, float, float]] = []
+            seen_note_region_bboxes: set[Tuple[float, float, float, float]] = set()
             for candidate in note_candidate_rows:
                 if bool(candidate.get("is_white_content")) or not bool(candidate.get("is_note_like")):
                     continue
                 candidate_bbox = tuple(float(value) for value in candidate["bbox"])
                 note_bboxes.append(candidate_bbox)
+                raw_candidate_bbox = _to_float_bbox(candidate.get("raw_bbox"))
+                if raw_candidate_bbox is None:
+                    raw_candidate_bbox = candidate_bbox
+                if raw_candidate_bbox not in seen_note_region_bboxes:
+                    seen_note_region_bboxes.add(raw_candidate_bbox)
+                    note_region_bboxes.append(raw_candidate_bbox)
                 note_anchor = _to_float_bbox(candidate.get("note_anchor"))
                 if note_anchor is not None:
                     note_marker_regions_by_page.setdefault(page_idx, []).append(note_anchor)
@@ -1154,11 +1226,14 @@ def extract_pdf_to_outputs(
                 page,
                 force_table=force_table,
                 strategy_debug=strategy_debug,
+                excluded_bboxes=note_region_bboxes,
             )
             tables: List[Tuple[TableRows, Tuple[float, float, float, float]]] = []
             detected_table_payloads: List[dict] = []
             table_exclusion_regions: list[Tuple[float, float, float, float]] = []
             for table_rows, bbox in detected_tables:
+                if _table_bbox_conflicts_with_note_region(bbox, note_bboxes):
+                    continue
                 table_exclusion_regions.append(bbox)
                 tables.append((table_rows, bbox))
                 detected_table_payloads.append(
@@ -1484,7 +1559,9 @@ def extract_pdf_to_outputs(
         _flush_current_document(current_document_state, force=True)
 
     markdown = "\n\n".join(artifact["markdown"] for artifact in document_artifacts if artifact["markdown"])
-    table_markdown = "\n\n".join(artifact["table_markdown"] for artifact in document_artifacts if artifact["table_markdown"])
+    table_markdown = _with_trailing_newline(
+        "\n\n".join(artifact["table_markdown"] for artifact in document_artifacts if artifact["table_markdown"])
+    )
 
     primary_document = document_artifacts[0]
     summary = {
