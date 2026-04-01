@@ -105,7 +105,6 @@ The collected types of counters in each interface/direction are as follows:
  Packet count
  Packet loss rate
 Note: F1-U path is not present in the integrated CU-DU shape. Hence, the counters for F1-U are not provided in this shape.
-
 Stand Alone
 There are two external networks of SA virtualization systems. One of them is the back-haul network between Core and gNB-UP, and is connected by the N3 interface. The other is mid-haul network between gNB-UP and DU, and is connected by the F1 interface. To measure network quality, a gNB collects the statistics for the number of lost packets and the number of out-of-sequence packets for user packets in the GTP layer. For this purpose, the sending side adds a sequence number for each GTP packet for transmission. The receiving side checks the sequence number for a received packet. If a packet with the specific sequence number is not received, it is judged as a lost packet. If there is a packet whose order is changed based on the sequence number, the out-of-sequence packet count is increased. The following figure depicts what statistics items CU-UP and DU can collect. The following table outlines Interface, Direction, Sender, Receiver, and Collection Unit.
 The following figure depicts the SA architecture.
@@ -119,7 +118,6 @@ The collected types of counters in each interface/direction are as follows:
  Packet count
  Packet loss rate
 Note: F1-U path is not present in integrated CU-DU shape. Hence, the counters for F1-U are not provided in this shape.
-
 #### When to Use
 For basic call procedure, this feature requires to be operated by default.
 #### Feature Optimization
@@ -144,8 +142,8 @@ To deactivate this feature, do the following:
 Verify if GTP Packet contains GTP sequence number when sequence-number-flag is enabled.
 #### Key Parameters
 This section describes the key parameters for activation, deactivation and configuration of the feature.
-Activation/Deactivation
-Parameters To activate or deactivate the feature, run the associated commands and set the key parameters.
+Activation/Deactivation Parameters 
+To activate or deactivate the feature, run the associated commands and set the key parameters.
 Parameter Descriptions of gtp-gw-info-entry
 [FGR-BC0401_tables.md - Table 3]
 

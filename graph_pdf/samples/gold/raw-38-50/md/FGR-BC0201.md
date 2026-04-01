@@ -38,7 +38,8 @@ None
 The implementation of this feature has no impact on the network.
 ### FEATURE DESCRIPTION
 #### Overview
-RLC Sublayer The Radio Link Control (RLC) is a link layer protocol that is located between the PDCP layer and MAC layer and it is applied to the radio link section between UE and gNB. The RLC is working in Acknowledged Mode (AM), Unacknowledged Mode (UM), or Transparent Mode (TM) depending on the service property.
+RLC Sublayer
+The Radio Link Control (RLC) is a link layer protocol that is located between the PDCP layer and MAC layer and it is applied to the radio link section between UE and gNB. The RLC is working in Acknowledged Mode (AM), Unacknowledged Mode (UM), or Transparent Mode (TM) depending on the service property.
  The AM supports the ARQ function that checks the reception of a packet and the packet re-transmission function to guarantee reliability. It is used for a service where delay-robustness and data reliability are important, such as FTP or an Internet connection.
 
  The UM has no data re-transmission function, and it is used to quickly send delay-sensitive packets in real-time. The most common application for UM is voice service.

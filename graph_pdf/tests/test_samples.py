@@ -168,6 +168,26 @@ class SampleRawDumpTests(unittest.TestCase):
 
         self.assertEqual(expected_table_count, result["summary"]["table_count"])
 
+    def test_raw_93_114_table_19_matches_golden_when_header_starts_on_previous_page(self) -> None:
+        raw_path = Path(__file__).resolve().parents[1] / "samples" / "raw-93-114.dump"
+        artifact = self._load_artifact_summary(raw_path=raw_path, mode="from_raw")
+        expected_blocks = Path(artifact["table_md_file"]).read_text(encoding="utf-8").strip().split("\n\n")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            result = extract_pdf_to_outputs(
+                pdf_path=None,
+                out_md_dir=root / "from_raw" / "md",
+                out_image_dir=root / "from_raw" / "images",
+                stem="raw-93-114_from_raw",
+                from_raw=raw_path,
+            )
+
+        actual_blocks = result["table_markdown"].strip().split("\n\n")
+        self.assertGreaterEqual(len(actual_blocks), 19)
+        self.assertGreaterEqual(len(expected_blocks), 19)
+        self.assertEqual(expected_blocks[18], actual_blocks[18])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,7 @@ def _normalize(value: str) -> str:
 def _extract_markdown_tables(markdown_text: str) -> List[List[List[str]]]:
     lines = markdown_text.splitlines()
     tables: List[List[List[str]]] = []
-    table_title_re = re.compile(r"^\[//\]: # \(.+ - Table \d+\)$")
+    table_title_re = re.compile(r"^\[[A-Za-z0-9._-]+_tables\.md - Table \d+\]$")
 
     i = 0
     while i < len(lines):
