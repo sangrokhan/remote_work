@@ -18,10 +18,12 @@ from extractor.pipeline import (
     _CrossPageTableCandidate,
     _DocumentOutputState,
     _is_cross_page_continuation_candidate,
-    _looks_like_cross_page_continuation_rows,
     _load_cross_page_candidate,
+    _pick_cross_page_anchor,
+    _rows_for_continuation_matching,
     _strip_repeated_headers_by_chunk,
     _table_shapes_compatible,
+    _to_cross_page_candidate,
 )
 from extractor.debug import _collect_rotated_text_debug, _collect_table_drawing_debug
 from extractor.images import _extract_embedded_images
@@ -117,7 +119,7 @@ class PipelineExtractionTests(unittest.TestCase):
         blocks: list[str] = []
         current: list[str] = []
         for line in markdown.splitlines():
-            if line.startswith("[//]: # (") and " - Table " in line and line.endswith(")"):
+            if line.startswith("[") and line.endswith("]") and "_tables.md - Table " in line:
                 if current:
                     blocks.append("\n".join(current))
                 current = [line]
@@ -142,6 +144,20 @@ class PipelineExtractionTests(unittest.TestCase):
     def test_table_shapes_allow_header_only_continuation_chunk(self) -> None:
         self.assertTrue(_table_shapes_compatible((2, 9), (3, 4)))
 
+    def test_rows_for_continuation_matching_collapses_only_globally_empty_columns(self) -> None:
+        rows = [
+            ["Column A", "", "Column B", "", "Column C"],
+            ["Value A", "", "Value B", "", "Value C"],
+        ]
+
+        self.assertEqual(
+            [
+                ["Column A", "Column B", "Column C"],
+                ["Value A", "Value B", "Value C"],
+            ],
+            _rows_for_continuation_matching(rows),
+        )
+
     def test_cross_page_continuation_candidate_allows_moderate_bottom_gap(self) -> None:
         self.assertTrue(
             _is_cross_page_continuation_candidate(
@@ -152,8 +168,8 @@ class PipelineExtractionTests(unittest.TestCase):
             )
         )
 
-    def test_cross_page_continuation_candidate_rejects_high_on_page_table(self) -> None:
-        self.assertFalse(
+    def test_cross_page_continuation_candidate_ignores_table_top_position_when_bottom_gap_is_within_tolerance(self) -> None:
+        self.assertTrue(
             _is_cross_page_continuation_candidate(
                 bbox=(72.02, 153.90, 525.57, 674.82),
                 body_top=66.24,
@@ -162,43 +178,154 @@ class PipelineExtractionTests(unittest.TestCase):
             )
         )
 
-    def test_cross_page_continuation_rows_accept_type_description_only_chunk(self) -> None:
-        previous_rows = [
-            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
-            ["", "F1-U UL Inte UP per UP", "rface collected in", "", "", "F1UPacketLossCntUL", "", "", "desc", ""],
-        ]
-        current_rows = [
-            ["", "", "F1UPacketOosCntDL_QCI", "desc"],
-            ["", "", "F1UPacketCntDL_QCI", "desc"],
-        ]
-        self.assertTrue(_looks_like_cross_page_continuation_rows(previous_rows, current_rows))
+    def test_pick_cross_page_anchor_uses_vertical_axes_not_row_content(self) -> None:
+        anchor = _CrossPageTableCandidate(
+            table_no=21,
+            start_page=4,
+            last_page=4,
+            bbox=(40.0, 640.0, 540.0, 700.0),
+            rows=[
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["N3 Interface collected in UP per UPF IP", "N3RxPacketLossCnt", "desc"],
+                ["The above", "counters are provided only for", "SA for CNF CU"],
+            ],
+            shape_signature=(3, 3),
+            axes=[120.0, 320.0],
+            has_gap_text=False,
+            page_height=792.0,
+        )
 
-    def test_cross_page_continuation_rows_reject_new_family_section_chunk(self) -> None:
-        previous_rows = [
-            ["", "Family Display Name", "", "", "Type Name", "", "", "Type Description", ""],
-            ["", "S1-U Interface collected in UP per sGW IP per QCI", "", "", "S1URxPacketLossCnt", "", "", "desc", ""],
-        ]
-        current_rows = [
-            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
-            ["", "N3 Interface", "per UPF IP", "", "", "N3RxPacketLossCnt", "", "", "desc", ""],
-        ]
-        self.assertFalse(_looks_like_cross_page_continuation_rows(previous_rows, current_rows))
+        with patch("extractor.pipeline._has_cross_page_gap_blocked", return_value=False), patch(
+            "extractor.pipeline._continuation_regions_should_merge",
+            return_value=True,
+        ):
+            selected = _pick_cross_page_anchor(
+                current_bbox=(40.0, 72.0, 540.0, 128.0),
+                current_axes=[120.0, 320.0],
+                current_rows=[
+                    ["Family Display Name", "Type Name", "Type Description"],
+                    ["N3 Interface collected in UP per UPF IP", "N3RxPacketLossCnt", "desc"],
+                ],
+                current_shape=(2, 3),
+                body_top=70.0,
+                body_bottom=700.0,
+                continuation_gap=40.0,
+                region_map={
+                    4: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                    5: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                },
+                anchors=[anchor],
+                current_page=5,
+            )
 
-    def test_cross_page_continuation_rows_accept_repeated_header_collected_family_chunk(self) -> None:
-        previous_rows = [
-            ["", "Family Display Name", "", "", "Type Name", "", "", "Type Description", ""],
-            ["", "S1-U Interface collected in UP per sGW IP per QCI", "", "", "S1URxPacketLossCnt", "", "", "desc", ""],
-        ]
-        current_rows = [
-            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
-            ["", "F1-U Interfa per gNB-DU", "ce collected in UP per QCI", "", "", "F1URxPacketLossCnt", "", "", "desc", ""],
-        ]
-        self.assertTrue(_looks_like_cross_page_continuation_rows(previous_rows, current_rows))
+        self.assertIsNotNone(selected)
+        self.assertEqual(anchor.table_no, selected.table_no)
+
+    def test_pick_cross_page_anchor_rejects_when_vertical_axes_do_not_overlap(self) -> None:
+        anchor = _CrossPageTableCandidate(
+            table_no=8,
+            start_page=2,
+            last_page=2,
+            bbox=(40.0, 640.0, 540.0, 700.0),
+            rows=[["A", "B"], ["one", "two"]],
+            shape_signature=(2, 2),
+            axes=[120.0, 320.0],
+            has_gap_text=False,
+            page_height=792.0,
+        )
+
+        selected = _pick_cross_page_anchor(
+            current_bbox=(560.0, 72.0, 760.0, 128.0),
+            current_axes=[580.0, 720.0],
+            current_rows=[["X", "Y"], ["three", "four"]],
+            current_shape=(2, 2),
+            body_top=70.0,
+            body_bottom=700.0,
+            continuation_gap=40.0,
+            region_map={
+                2: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                3: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+            },
+            anchors=[anchor],
+            current_page=3,
+        )
+
+        self.assertIsNone(selected)
+
+    def test_pick_cross_page_anchor_rejects_x_overlap_without_vertical_axis_overlap(self) -> None:
+        anchor = _CrossPageTableCandidate(
+            table_no=12,
+            start_page=2,
+            last_page=2,
+            bbox=(40.0, 640.0, 540.0, 700.0),
+            rows=[["A", "B"], ["one", "two"]],
+            shape_signature=(2, 2),
+            axes=[120.0, 320.0],
+            has_gap_text=False,
+            page_height=792.0,
+        )
+
+        with patch("extractor.pipeline._has_cross_page_gap_blocked", return_value=False), patch(
+            "extractor.pipeline._continuation_regions_should_merge",
+            return_value=True,
+        ):
+            selected = _pick_cross_page_anchor(
+                current_bbox=(60.0, 72.0, 520.0, 128.0),
+                current_axes=[180.0, 420.0],
+                current_rows=[["X", "Y"], ["three", "four"]],
+                current_shape=(2, 2),
+                body_top=70.0,
+                body_bottom=700.0,
+                continuation_gap=40.0,
+                region_map={
+                    2: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                    3: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                },
+                anchors=[anchor],
+                current_page=3,
+            )
+
+        self.assertIsNone(selected)
+
+    def test_pick_cross_page_anchor_rejects_when_intervening_region_blocks_gap(self) -> None:
+        anchor = _CrossPageTableCandidate(
+            table_no=9,
+            start_page=3,
+            last_page=3,
+            bbox=(40.0, 640.0, 540.0, 700.0),
+            rows=[["A", "B"], ["old", "row"]],
+            shape_signature=(2, 2),
+            axes=[120.0, 320.0],
+            has_gap_text=False,
+            page_height=792.0,
+        )
+
+        with patch("extractor.pipeline._has_cross_page_gap_blocked", return_value=True), patch(
+            "extractor.pipeline._continuation_regions_should_merge",
+            return_value=True,
+        ):
+            selected = _pick_cross_page_anchor(
+                current_bbox=(40.0, 72.0, 540.0, 128.0),
+                current_axes=[120.0, 320.0],
+                current_rows=[["X", "Y"], ["new", "row"]],
+                current_shape=(2, 2),
+                body_top=70.0,
+                body_bottom=700.0,
+                continuation_gap=40.0,
+                region_map={
+                    3: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                    4: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                },
+                anchors=[anchor],
+                current_page=4,
+            )
+
+        self.assertIsNone(selected)
 
     def test_table_output_uses_markdown_tables(self) -> None:
         markdown = self._extract_table_markdown()
         self.assertIsNotNone(
-            re.search(r"^\[//\]: # \(.+ - Table 1\)$", markdown, flags=re.MULTILINE),
+            re.search(r"^\[[A-Za-z0-9._-]+_tables\.md - Table 1\]$", markdown, flags=re.MULTILINE),
             "table header is missing",
         )
         self.assertIn("| Item | Qty | Price |", markdown)
@@ -223,14 +350,14 @@ class PipelineExtractionTests(unittest.TestCase):
             markdown,
         )
 
-    def test_orphan_table_header_line_is_owned_by_table_not_body_text(self) -> None:
-        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1)]
+    def test_header_like_body_line_remains_in_body_markdown_without_keyword_ownership(self) -> None:
+        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1, vertical_edges=[], horizontal_edges=[])]
         fake_pdf = SimpleNamespace(pages=pages)
         fake_pdf_context = MagicMock()
         fake_pdf_context.__enter__.return_value = fake_pdf
         fake_pdf_context.__exit__.return_value = False
 
-        orphan_header = "Family Display Name Type Name Type Description"
+        orphan_header = "Alpha Header Beta Header Gamma Header"
 
         def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
             return f"{orphan_header}\nVisible body line"
@@ -290,10 +417,10 @@ class PipelineExtractionTests(unittest.TestCase):
                 )
 
         self.assertIn(orphan_header, result["table_markdown"])
-        self.assertNotIn(orphan_header, result["markdown"])
+        self.assertIn(orphan_header, result["markdown"])
 
     def test_pipeline_excludes_only_note_anchor_regions_from_image_export(self) -> None:
-        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1)]
+        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1, vertical_edges=[], horizontal_edges=[])]
         fake_pdf = SimpleNamespace(pages=pages)
         fake_pdf_context = MagicMock()
         fake_pdf_context.__enter__.return_value = fake_pdf
@@ -341,6 +468,18 @@ class PipelineExtractionTests(unittest.TestCase):
         ), patch(
             "extractor.pipeline._body_text_boxes",
             return_value=[],
+        ), patch(
+            "extractor.pipeline._vertical_axes_for_bbox",
+            return_value=[127.22, 524.85],
+        ), patch(
+            "extractor.pipeline._has_gap_text_before_bbox",
+            return_value=False,
+        ), patch(
+            "extractor.pipeline._has_gap_text_after_bbox",
+            return_value=False,
+        ), patch(
+            "extractor.pipeline._continuation_regions_should_merge",
+            return_value=False,
         ):
             with tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)
@@ -392,6 +531,18 @@ class PipelineExtractionTests(unittest.TestCase):
         ), patch(
             "extractor.pipeline._body_text_boxes",
             return_value=[],
+        ), patch(
+            "extractor.pipeline._vertical_axes_for_bbox",
+            return_value=[127.22, 524.85],
+        ), patch(
+            "extractor.pipeline._has_gap_text_before_bbox",
+            return_value=False,
+        ), patch(
+            "extractor.pipeline._has_gap_text_after_bbox",
+            return_value=False,
+        ), patch(
+            "extractor.pipeline._continuation_regions_should_merge",
+            return_value=False,
         ):
             with tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)
@@ -449,6 +600,18 @@ class PipelineExtractionTests(unittest.TestCase):
         ), patch(
             "extractor.pipeline._body_text_boxes",
             return_value=[],
+        ), patch(
+            "extractor.pipeline._vertical_axes_for_bbox",
+            return_value=[127.22, 524.85],
+        ), patch(
+            "extractor.pipeline._has_gap_text_before_bbox",
+            return_value=False,
+        ), patch(
+            "extractor.pipeline._has_gap_text_after_bbox",
+            return_value=False,
+        ), patch(
+            "extractor.pipeline._continuation_regions_should_merge",
+            return_value=False,
         ):
             with tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)
@@ -460,6 +623,140 @@ class PipelineExtractionTests(unittest.TestCase):
                 )
 
         self.assertEqual(["notes", "tables"], call_order)
+
+    def test_pipeline_does_not_emit_table_when_table_bbox_matches_note_bbox(self) -> None:
+        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1, vertical_edges=[], horizontal_edges=[])]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdf_context = MagicMock()
+        fake_pdf_context.__enter__.return_value = fake_pdf
+        fake_pdf_context.__exit__.return_value = False
+
+        shared_bbox = (127.22, 79.2, 524.85, 119.54)
+
+        def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
+            lines = [str(entry.get("text") or "") for entry in reference_lines]
+            return "\n".join(line for line in lines if line)
+
+        with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
+            "extractor.pipeline._extract_heading_preview_markdown",
+            return_value="",
+        ), patch(
+            "extractor.pipeline._collect_note_candidates",
+            return_value=[
+                {
+                    "bbox": shared_bbox,
+                    "rows": [["DRB RLC parameter can be configured for each B6G TDD/B6G FDD/B6G CA UE/A6G."]],
+                    "is_white_content": False,
+                    "is_note_like": True,
+                    "note_anchor": (130.0, 82.0, 146.0, 98.0),
+                }
+            ],
+        ), patch(
+            "extractor.pipeline._extract_tables",
+            return_value=[
+                (
+                    [["DRB RLC parameter can be configured for each B6G TDD/B6G FDD/B6G CA"], ["UE/A6G."]],
+                    shared_bbox,
+                )
+            ],
+        ), patch(
+            "extractor.pipeline._extract_body_text",
+            side_effect=fake_extract_body_text,
+        ), patch(
+            "extractor.pipeline._collect_embedded_image_refs",
+            return_value={},
+        ), patch(
+            "extractor.pipeline._extract_embedded_images",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._extract_drawing_image_bboxes",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._detect_body_bounds",
+            return_value=(70.0, 700.0),
+        ), patch(
+            "extractor.pipeline._body_text_boxes",
+            return_value=[],
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                result = extract_pdf_to_outputs(
+                    pdf_path=Path("unused.pdf"),
+                    out_md_dir=root / "md",
+                    out_image_dir=root / "images",
+                    stem="note-table-ownership",
+                )
+
+        self.assertIn("Note:", result["markdown"])
+        self.assertEqual("", result["table_markdown"])
+        self.assertEqual(0, result["summary"]["table_count"])
+
+    def test_pipeline_keeps_large_table_when_note_bbox_is_only_small_overlap(self) -> None:
+        pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1, vertical_edges=[], horizontal_edges=[])]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdf_context = MagicMock()
+        fake_pdf_context.__enter__.return_value = fake_pdf
+        fake_pdf_context.__exit__.return_value = False
+
+        note_bbox = (127.22, 634.42, 524.85, 662.02)
+        large_table_bbox = (72.02, 369.69, 525.57, 663.3)
+
+        def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
+            lines = [str(entry.get("text") or "") for entry in reference_lines]
+            return "\n".join(line for line in lines if line)
+
+        with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
+            "extractor.pipeline._extract_heading_preview_markdown",
+            return_value="",
+        ), patch(
+            "extractor.pipeline._collect_note_candidates",
+            return_value=[
+                {
+                    "bbox": note_bbox,
+                    "rows": [["A note lives inside the lower area."]],
+                    "is_white_content": False,
+                    "is_note_like": True,
+                    "note_anchor": (130.0, 636.0, 146.0, 652.0),
+                }
+            ],
+        ), patch(
+            "extractor.pipeline._extract_tables",
+            return_value=[
+                (
+                    [["Family Display Name", "Type Name"], ["N3 Interface", "N3RxPacketCnt"]],
+                    large_table_bbox,
+                )
+            ],
+        ), patch(
+            "extractor.pipeline._extract_body_text",
+            side_effect=fake_extract_body_text,
+        ), patch(
+            "extractor.pipeline._collect_embedded_image_refs",
+            return_value={},
+        ), patch(
+            "extractor.pipeline._extract_embedded_images",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._extract_drawing_image_bboxes",
+            return_value=[],
+        ), patch(
+            "extractor.pipeline._detect_body_bounds",
+            return_value=(70.0, 700.0),
+        ), patch(
+            "extractor.pipeline._body_text_boxes",
+            return_value=[],
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                result = extract_pdf_to_outputs(
+                    pdf_path=Path("unused.pdf"),
+                    out_md_dir=root / "md",
+                    out_image_dir=root / "images",
+                    stem="note-table-overlap",
+                )
+
+        self.assertIn("[output_tables.md - Table 1]", result["table_markdown"])
+        self.assertEqual(1, result["summary"]["table_count"])
 
     def test_extract_can_limit_to_selected_pages(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -479,7 +776,7 @@ class PipelineExtractionTests(unittest.TestCase):
 
         self.assertIn("[//]: # (Page 1)", result["markdown"])
         self.assertNotIn("[//]: # (Page 3)", result["markdown"])
-        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 1\)$", result["table_markdown"], flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[[A-Za-z0-9._-]+_tables\.md - Table 1\]$", result["table_markdown"], flags=re.MULTILINE))
         self.assertEqual(2, result["summary"]["table_count"])
         self.assertEqual(1, len(result["image_files"]))
 
@@ -877,6 +1174,145 @@ class PipelineExtractionTests(unittest.TestCase):
             _strip_repeated_headers_by_chunk(chunks),
         )
 
+    def test_strip_repeated_headers_by_chunk_removes_normalized_repeated_header(self) -> None:
+        chunks = [
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["S1-U Interface", "S1URxPacketLossCnt", "desc"],
+            ],
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["S1-U Interface", "S1URxPacketOosCnt", "desc"],
+            ],
+        ]
+
+        self.assertEqual(
+            [
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["S1-U Interface", "S1URxPacketLossCnt", "desc"],
+                ["S1-U Interface", "S1URxPacketOosCnt", "desc"],
+            ],
+            _strip_repeated_headers_by_chunk(chunks),
+        )
+
+    def test_strip_repeated_headers_by_chunk_merges_carried_second_header_row_into_previous_body_row(self) -> None:
+        chunks = [
+            [
+                ["Stage", "Team", "Notes"],
+                ["Group", "Function", "Deliverable"],
+                ["Phase C", "Documentation", "Publish handoff pack"],
+                ["", "Legal", "Terms and compliance checks"],
+            ],
+            [
+                ["Stage", "Team", "Notes"],
+                ["Group", "Function", "Deliverable\n- consent language review\n- archive plan"],
+                ["", "Accessibility", "Review deep pass"],
+            ],
+        ]
+
+        self.assertEqual(
+            [
+                ["Stage", "Team", "Notes"],
+                ["Group", "Function", "Deliverable"],
+                ["Phase C", "Documentation", "Publish handoff pack"],
+                ["", "Legal", "Terms and compliance checks\n- consent language review\n- archive plan"],
+                ["", "Accessibility", "Review deep pass"],
+            ],
+            _strip_repeated_headers_by_chunk(chunks),
+        )
+
+    def test_pick_cross_page_anchor_prefers_latest_lower_anchor_on_score_tie(self) -> None:
+        anchors = [
+            _CrossPageTableCandidate(
+                table_no=10,
+                start_page=2,
+                last_page=2,
+                bbox=(40.0, 610.0, 540.0, 660.0),
+                rows=[["Col1", "Col2"], ["A", "1"]],
+                shape_signature=(2, 2),
+                axes=[40.0, 540.0],
+                has_gap_text=False,
+                page_height=792.0,
+            ),
+            _CrossPageTableCandidate(
+                table_no=11,
+                start_page=2,
+                last_page=2,
+                bbox=(40.0, 640.0, 540.0, 690.0),
+                rows=[["Col1", "Col2"], ["B", "2"]],
+                shape_signature=(2, 2),
+                axes=[40.0, 540.0],
+                has_gap_text=False,
+                page_height=792.0,
+            ),
+        ]
+
+        with patch("extractor.pipeline._has_cross_page_gap_blocked", return_value=False), patch(
+            "extractor.pipeline._continuation_regions_should_merge",
+            return_value=True,
+        ):
+            selected = _pick_cross_page_anchor(
+                current_bbox=(40.0, 70.0, 540.0, 120.0),
+                current_axes=[40.0, 540.0],
+                current_rows=[["Col1", "Col2"], ["C", "3"]],
+                current_shape=(2, 2),
+                body_top=70.0,
+                body_bottom=700.0,
+                continuation_gap=40.0,
+                region_map={
+                    2: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                    3: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                },
+                anchors=anchors,
+                current_page=3,
+            )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(11, selected.table_no)
+
+    def test_pick_cross_page_anchor_accepts_shape_changes_that_normalize_after_row_merge(self) -> None:
+        anchor = _CrossPageTableCandidate(
+            table_no=21,
+            start_page=4,
+            last_page=4,
+            bbox=(40.0, 640.0, 540.0, 700.0),
+            rows=[
+                ["Family Display Name", "Type Name", "Type Description"],
+                ["S1-U Interface collected in UP per sGW IP per QCI", "S1URxPacketLossCnt", "desc"],
+            ],
+            shape_signature=(2, 3),
+            axes=[40.0, 220.0, 380.0, 540.0],
+            has_gap_text=False,
+            page_height=792.0,
+        )
+        current_rows = [
+            ["", "Family Displa", "y Name", "", "", "Type Name", "", "", "Type Description", ""],
+            ["", "S1-U Interface", "collected in UP per sGW IP per QCI", "", "", "S1URxPacketOosCnt", "", "", "desc", ""],
+        ]
+
+        with patch("extractor.pipeline._has_cross_page_gap_blocked", return_value=False), patch(
+            "extractor.pipeline._continuation_regions_should_merge",
+            return_value=True,
+        ):
+            selected = _pick_cross_page_anchor(
+                current_bbox=(40.0, 72.0, 540.0, 128.0),
+                current_axes=[40.0, 220.0, 380.0, 540.0],
+                current_rows=current_rows,
+                current_shape=(len(current_rows), max(len(row) for row in current_rows)),
+                body_top=70.0,
+                body_bottom=700.0,
+                continuation_gap=40.0,
+                region_map={
+                    4: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                    5: {"body_top": 70.0, "body_bottom": 700.0, "tables": [], "text": [], "images": [], "notes": []},
+                },
+                anchors=[anchor],
+                current_page=5,
+            )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(anchor.table_no, selected.table_no)
+
     def test_load_cross_page_candidate_preserves_chunk_nesting(self) -> None:
         state = _DocumentOutputState(document_id="demo")
         candidate = _CrossPageTableCandidate(
@@ -898,6 +1334,42 @@ class PipelineExtractionTests(unittest.TestCase):
 
         self.assertEqual([candidate.rows], state.pending_table_state.chunks)
         self.assertEqual(candidate.rows, state.pending_table_state.flattened_rows())
+
+    def test_to_cross_page_candidate_keeps_carried_header_fragments_in_candidate_rows(self) -> None:
+        state = _DocumentOutputState(document_id="demo")
+        state.pending_table_state.chunks = [
+            [
+                ["Stage", "Team", "Notes"],
+                ["Group", "Function", "Deliverable"],
+                ["Phase C", "Documentation", "Publish handoff pack"],
+                ["", "Legal", "Terms and compliance checks"],
+            ],
+            [
+                ["Stage", "Team", "Notes"],
+                ["Group", "Function", "Deliverable\n- consent language review\n- archive plan"],
+                ["", "Accessibility", "Review deep pass"],
+            ],
+        ]
+        state.pending_table_state.table_no = 7
+        state.pending_table_state.start_page = 2
+        state.pending_table_state.last_page = 3
+        state.pending_table_state.bbox = (40.0, 72.0, 540.0, 690.0)
+        state.pending_table_state.axes = [40.0, 220.0, 540.0]
+        state.pending_table_state.page_height = 792.0
+
+        candidate = _to_cross_page_candidate(state.pending_table_state)
+
+        self.assertEqual(
+            [
+                ["Stage", "Team", "Notes"],
+                ["Group", "Function", "Deliverable"],
+                ["Phase C", "Documentation", "Publish handoff pack"],
+                ["", "Legal", "Terms and compliance checks\n- consent language review\n- archive plan"],
+                ["", "Accessibility", "Review deep pass"],
+            ],
+            candidate.rows,
+        )
+        self.assertEqual((5, 3), candidate.shape_signature)
 
     def test_reloaded_cross_page_candidate_outputs_normal_table_rows(self) -> None:
         state = _DocumentOutputState(document_id="demo")
@@ -929,6 +1401,46 @@ class PipelineExtractionTests(unittest.TestCase):
         self.assertIn("| Family Display Name | Type Name | Type Description |", table_markdown)
         self.assertIn("| S1-U Interface | S1URxPacketLossCnt | Lost packets |", table_markdown)
         self.assertNotIn("| F | a | m |", table_markdown)
+
+    def test_reloaded_candidate_plus_new_chunk_keeps_carried_header_text_in_final_output(self) -> None:
+        state = _DocumentOutputState(document_id="demo")
+        candidate = _CrossPageTableCandidate(
+            table_no=14,
+            start_page=12,
+            last_page=13,
+            bbox=(72.0, 80.0, 525.0, 249.0),
+            rows=[
+                ["Stage", "Team", "Notes"],
+                ["Group", "Function", "Deliverable"],
+                ["Phase C", "Documentation", "Publish handoff pack"],
+                ["", "Legal", "Terms and compliance checks\n- consent language review\n- archive plan"],
+            ],
+            shape_signature=(4, 3),
+            axes=[72.0, 240.0, 525.0],
+            has_gap_text=False,
+            page_height=792.0,
+        )
+
+        _load_cross_page_candidate(state, candidate)
+        state.pending_table_state.append_chunk(
+            [
+                ["Stage", "Team", "Notes"],
+                ["", "Operations", "Post-launch tasks"],
+            ]
+        )
+
+        output_tables: list[str] = []
+        _append_output_table(
+            output_tables,
+            state.document_id,
+            int(state.pending_table_state.table_no or 0),
+            state.pending_table_state.flattened_rows(),
+        )
+
+        table_markdown = "\n".join(output_tables)
+        self.assertEqual(1, table_markdown.count("| Stage<br>Group | Team<br>Function | Notes<br>Deliverable |"))
+        self.assertIn("Terms and compliance checks<br>- consent language review<br>- archive plan", table_markdown)
+        self.assertIn("|  | Operations | Post-launch tasks |", table_markdown)
 
     def test_cross_page_merge_only_targets_first_table_on_next_page(self) -> None:
         pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1), SimpleNamespace(width=612.0, height=792.0, page_index=2)]
@@ -976,9 +1488,9 @@ class PipelineExtractionTests(unittest.TestCase):
         table_markdown = result["table_markdown"]
         blocks = self._table_blocks(table_markdown)
         self.assertEqual(2, len(blocks), table_markdown)
-        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 1\)$", table_markdown, flags=re.MULTILINE))
-        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 2\)$", table_markdown, flags=re.MULTILINE))
-        self.assertIsNone(re.search(r"^\[//\]: # \(.+ - Table 3\)$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[[A-Za-z0-9._-]+_tables\.md - Table 1\]$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[[A-Za-z0-9._-]+_tables\.md - Table 2\]$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNone(re.search(r"^\[[A-Za-z0-9._-]+_tables\.md - Table 3\]$", table_markdown, flags=re.MULTILINE))
         self.assertEqual(1, blocks[0].count("| Col1 | Col2 |"))
 
     def test_cross_page_merge_blocks_when_intervening_region_exists(self) -> None:
@@ -1036,20 +1548,21 @@ class PipelineExtractionTests(unittest.TestCase):
         table_markdown = result["table_markdown"]
         blocks = self._table_blocks(table_markdown)
         self.assertEqual(2, len(blocks), table_markdown)
-        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 1\)$", table_markdown, flags=re.MULTILINE))
-        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 2\)$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[[A-Za-z0-9._-]+_tables\.md - Table 1\]$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[[A-Za-z0-9._-]+_tables\.md - Table 2\]$", table_markdown, flags=re.MULTILINE))
 
-    def test_pipeline_excludes_table_owned_orphan_header_lines_from_body_text(self) -> None:
+    def test_pipeline_keeps_table_adjacent_body_text_outside_table_bbox(self) -> None:
         pages = [SimpleNamespace(width=612.0, height=792.0, page_index=1)]
         fake_pdf = SimpleNamespace(pages=pages)
         fake_pdf_context = MagicMock()
         fake_pdf_context.__enter__.return_value = fake_pdf
         fake_pdf_context.__exit__.return_value = False
         orphan_bbox = (77.42, 652.9, 405.88, 661.9)
+        orphan_text = "Family Display Name Type Name Type Description"
 
         def fake_extract_body_text(page, header_margin, footer_margin, excluded_bboxes=(), reference_lines=(), heading_levels=None):
-            self.assertIn(orphan_bbox, excluded_bboxes)
-            return ""
+            self.assertNotIn(orphan_bbox, excluded_bboxes)
+            return orphan_text
 
         with patch("extractor.pipeline.pdfplumber.open", return_value=fake_pdf_context), patch(
             "extractor.pipeline._extract_heading_preview_markdown", return_value=""
@@ -1061,9 +1574,8 @@ class PipelineExtractionTests(unittest.TestCase):
         ), patch("extractor.pipeline._detect_body_bounds", return_value=(70.0, 700.0)), patch(
             "extractor.pipeline._extract_drawing_image_bboxes", return_value=[]
         ), patch("extractor.pipeline._body_text_boxes", return_value=[]), patch(
-            "extractor.pipeline._table_owned_body_line_bboxes",
-            return_value=[orphan_bbox],
-        ), patch("extractor.pipeline._has_gap_text_before_bbox", return_value=False), patch(
+            "extractor.pipeline._has_gap_text_before_bbox", return_value=False
+        ), patch(
             "extractor.pipeline._has_gap_text_after_bbox", return_value=False
         ), patch("extractor.pipeline._vertical_axes_for_bbox", return_value=[40.0, 540.0]), patch(
             "extractor.pipeline._collect_embedded_image_refs", return_value={}
@@ -1075,13 +1587,15 @@ class PipelineExtractionTests(unittest.TestCase):
         ):
             with tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)
-                extract_pdf_to_outputs(
+                result = extract_pdf_to_outputs(
                     pdf_path=Path("unused.pdf"),
                     out_md_dir=root / "md",
                     out_image_dir=root / "images",
                     stem="orphan-header-owned",
                     page_write=True,
                 )
+
+        self.assertIn(orphan_text, result["markdown"])
 
     def test_cross_page_merge_does_not_reuse_stale_mid_page_anchor(self) -> None:
         pages = [
@@ -1137,11 +1651,11 @@ class PipelineExtractionTests(unittest.TestCase):
         table_markdown = result["table_markdown"]
         blocks = self._table_blocks(table_markdown)
         self.assertEqual(2, len(blocks), table_markdown)
-        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 1\)$", table_markdown, flags=re.MULTILINE))
-        self.assertIsNotNone(re.search(r"^\[//\]: # \(.+ - Table 2\)$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[[A-Za-z0-9._-]+_tables\.md - Table 1\]$", table_markdown, flags=re.MULTILINE))
+        self.assertIsNotNone(re.search(r"^\[[A-Za-z0-9._-]+_tables\.md - Table 2\]$", table_markdown, flags=re.MULTILINE))
         self.assertEqual(
             1,
-            len(re.findall(r"^\[//\]: # \(.+ - Table 1\)$", table_markdown, flags=re.MULTILINE)),
+            len(re.findall(r"^\[[A-Za-z0-9._-]+_tables\.md - Table 1\]$", table_markdown, flags=re.MULTILINE)),
             table_markdown,
         )
         self.assertNotIn("| B2 | 11 |", blocks[0], table_markdown)
@@ -1150,6 +1664,7 @@ class PipelineExtractionTests(unittest.TestCase):
     def test_demo_table_markdown_is_written_to_separate_file(self) -> None:
         result = self._extract_result()
         self.assertEqual(result["table_markdown"], result["table_md_file"].read_text(encoding="utf-8"))
+        self.assertTrue(result["table_markdown"].endswith("\n"))
         self.assertTrue(result["table_md_file"].name.endswith("_tables.md"))
         self.assertEqual(2, len(result["image_files"]))
 

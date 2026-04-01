@@ -7,6 +7,7 @@ from unittest.mock import patch
 from extractor.shared import _parse_pages_spec
 from extractor.text import (
     _build_body_blocks,
+    _clean_cell_line,
     _detect_body_bounds,
     _extract_body_text_lines,
     _extract_body_word_lines,
@@ -22,6 +23,9 @@ from extractor.text import (
 
 
 class TextModuleTests(unittest.TestCase):
+    def test_clean_cell_line_preserves_trailing_i_token(self) -> None:
+        self.assertEqual("F1UPacketLossCntUL_QC I", _clean_cell_line("F1UPacketLossCntUL_QC I"))
+
     def test_parse_pages_spec_supports_ranges_and_lists(self) -> None:
         self.assertEqual([1, 3, 4, 5, 8], _parse_pages_spec("1,3-5,8"))
 
@@ -58,6 +62,16 @@ class TextModuleTests(unittest.TestCase):
         large_gap_paragraph_break = {"top": 114.0, "bottom": 126.0, "size": 20.0}
         self.assertTrue(_should_merge_paragraph_lines(previous, large_gap_wrapped_heading, same_kind="paragraph"))
         self.assertFalse(_should_merge_paragraph_lines(previous, large_gap_paragraph_break, same_kind="paragraph"))
+
+    def test_should_merge_paragraph_lines_rejects_color_change(self) -> None:
+        previous = {"top": 90.0, "bottom": 102.0, "size": 11.04, "color": (0.047, 0.302, 0.635)}
+        next_line = {"top": 106.0, "bottom": 118.0, "size": 11.04, "color": (0.0,)}
+        self.assertFalse(_should_merge_paragraph_lines(previous, next_line, same_kind="paragraph"))
+
+    def test_should_merge_paragraph_lines_keeps_same_color_merge_behavior(self) -> None:
+        previous = {"top": 90.0, "bottom": 102.0, "size": 11.04, "color": (0.0,)}
+        next_line = {"top": 106.0, "bottom": 118.0, "size": 11.04, "color": (0.0,)}
+        self.assertTrue(_should_merge_paragraph_lines(previous, next_line, same_kind="paragraph"))
 
     def test_should_merge_heading_lines_requires_same_heading_level(self) -> None:
         previous = {"top": 135.35, "bottom": 157.31, "size": 21.96}
@@ -194,13 +208,12 @@ class TextModuleTests(unittest.TestCase):
     def test_extract_body_word_lines_keeps_orphan_table_header_line_for_table_stage(self) -> None:
         filtered_page = SimpleNamespace(
             extract_words=lambda **kwargs: [
-                {"text": "Family", "x0": 77.42, "x1": 102.45, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
-                {"text": "Display", "x0": 105.02, "x1": 133.29, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
-                {"text": "Name", "x0": 135.86, "x1": 159.65, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
-                {"text": "Type", "x0": 219.17, "x1": 238.27, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
-                {"text": "Name", "x0": 240.77, "x1": 264.55, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
-                {"text": "Type", "x0": 339.67, "x1": 358.77, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
-                {"text": "Description", "x0": 361.27, "x1": 405.88, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Alpha", "x0": 77.42, "x1": 102.45, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Header", "x0": 105.02, "x1": 133.29, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Beta", "x0": 219.17, "x1": 238.27, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Header", "x0": 240.77, "x1": 264.55, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Gamma", "x0": 339.67, "x1": 358.77, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
+                {"text": "Header", "x0": 361.27, "x1": 405.88, "top": 652.9, "bottom": 661.9, "size": 9.0, "fontname": "Helvetica"},
             ],
             chars=[],
         )
@@ -212,7 +225,7 @@ class TextModuleTests(unittest.TestCase):
             lines = _extract_body_word_lines(page, header_margin=90.0, footer_margin=40.0)
 
         self.assertEqual(1, len(lines))
-        self.assertEqual("Family Display Name Type Name Type Description", lines[0]["text"])
+        self.assertEqual("Alpha Header Beta Header Gamma Header", lines[0]["text"])
 
     def test_layout_artifact_no_longer_uses_demo_header_footer_strings(self) -> None:
         self.assertFalse(_is_layout_artifact("Graph PDF Demo Header"))

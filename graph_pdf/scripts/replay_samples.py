@@ -13,8 +13,8 @@ from extractor.pipeline import extract_pdf_to_outputs
 from extractor.raw import load_raw_payload
 
 TABLE_REF_PATTERN = re.compile(r"\[[A-Za-z0-9._-]+_tables\.md - Table \d+\]")
-TABLE_HEADER_PATTERN = re.compile(r"^\[//\]: # \(.+ - Table \d+\)$", re.MULTILINE)
-TABLE_HEADER_CAPTURE_RE = re.compile(r"^\[//\]: # \((?P<document_id>.+?) - Table (?P<table_no>\d+)\)$")
+TABLE_HEADER_PATTERN = re.compile(r"^\[[A-Za-z0-9._-]+_tables\.md - Table \d+\]$", re.MULTILINE)
+TABLE_HEADER_CAPTURE_RE = re.compile(r"^\[(?P<document_id>[A-Za-z0-9._-]+)_tables\.md - Table (?P<table_no>\d+)\]$")
 DEFAULT_ADD_HEADING = Path(__file__).resolve().parent.parent / "fixtures" / "font_heading_profile.sample.json"
 
 

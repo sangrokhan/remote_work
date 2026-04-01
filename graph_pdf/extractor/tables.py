@@ -16,414 +16,22 @@ from .shared import (
     _normalize_text,
 )
 from .text import (
+    _clean_cell_line,
     _detect_body_bounds,
-    _extract_body_word_lines,
     _filter_page_for_extraction,
+    _extract_body_word_lines,
     _is_layout_artifact,
     _normalize_cell_lines,
     _repair_watermark_bleed,
 )
 
 _THIN_FILL_RECT_MAX_HEIGHT = 2.0
-_COMPANION_HEADER_TERMS = ("name", "description", "parameter", "sender", "receiver", "direction")
-_HEADER_ROW_TERMS = _COMPANION_HEADER_TERMS + ("type", "function", "deliverable", "stage", "team", "notes")
+_SEPARATOR_RECT_MAX_THICKNESS = 0.5
 
 
 def _merge_cells(table: Sequence[Sequence[str]]) -> List[List[str]]:
     # pdfplumber can yield `None` cells, so normalize early to simple stripped strings.
     return [[str(cell or "").strip() for cell in row] for row in table]
-
-
-def _merge_fragment_text(left: str, right: str) -> str:
-    left_text = str(left or "").strip()
-    right_text = str(right or "").strip()
-    if not left_text:
-        return right_text
-    if not right_text:
-        return left_text
-
-    collected_match = re.search(r"\bcollected in UP per\b", right_text, flags=re.IGNORECASE)
-    if collected_match:
-        suffix_match = re.match(r"^(.*?\bInterfa(?:ce)?)\s+(.+)$", left_text)
-        if suffix_match:
-            base_text = suffix_match.group(1).strip()
-            suffix_text = suffix_match.group(2).strip()
-            if suffix_text:
-                right_parts = right_text.split(maxsplit=1)
-                if (
-                    len(right_parts) == 2
-                    and right_parts[0]
-                    and right_parts[0][0].islower()
-                    and len(right_parts[0]) <= 3
-                ):
-                    base_text = f"{base_text}{right_parts[0]}".strip()
-                    right_text = right_parts[1].strip()
-                return " ".join(
-                    part
-                    for part in (
-                        base_text.strip(),
-                        right_text.strip(),
-                        suffix_text.strip(),
-                    )
-                    if part
-                ).strip()
-
-    left_parts = left_text.split()
-    if right_text[0].islower() and len(left_parts) >= 2:
-        suffix = left_parts[-1]
-        if re.fullmatch(r"[A-Z0-9-]{2,5}", suffix):
-            left_text = " ".join(left_parts[:-1]).strip()
-            rebuilt = f"{left_text}{right_text}"
-            return f"{rebuilt} {suffix}".strip()
-    joiner = " "
-    first_right_token = right_text.split()[0]
-    if left_text[-1].isalnum() and right_text[0].islower() and len(first_right_token) <= 2:
-        joiner = ""
-    return f"{left_text}{joiner}{right_text}".strip()
-
-
-def _normalize_family_display_text(text: str) -> str:
-    normalized = re.sub(r"\s+", " ", str(text or "").strip())
-    if not normalized:
-        return ""
-    lower = normalized.lower()
-
-    if "f1-u, xn-u" in lower and "snssai" in lower and "upc" in lower and "upp" in lower:
-        return (
-            "F1-U, XN-U collected in UL Interface UPC per 5QI per SNSSAI\n"
-            "F1-U, XN-U collected in UL Interface UPP per 5QI per SNSSAI"
-        )
-    if "dl f1-u" in lower and "s-nssai" in lower:
-        return "DL F1-U, Xn-U Interface per PRC per 5QI per S-NSSAI"
-    if "x2-u" in lower and "enb ip" in lower and "qci" in lower and "collected in up" in lower:
-        return "X2-U Interface collected in UP per eNB IP per QCI"
-    if "x2-u" in lower and "enb ip" in lower and "qci" in lower:
-        return "X2-U Interface per eNB IP per QCI"
-    if "f1-u" in lower and "gnb-du" in lower and "collected in up" in lower and "qci" in lower:
-        return "F1-U Interface collected in UP per QCI per gNB-DU"
-    if "f1-u" in lower and "gnb-du" in lower and "collected in up" in lower and "5qi" in lower:
-        return "F1-U Interface collected in UP per 5QI per gNB-DU"
-    if "n3 interface" in lower and "upf ip" in lower and "collected in up" in lower:
-        return "N3 Interface collected in UP per UPF IP"
-    if "s1-u" in lower and "sgw ip" in lower and "collected in up" in lower and "qci" in lower:
-        return "S1-U Interface collected in UP per sGW IP per QCI"
-    if "f1-u ul" in lower and "qci" in lower and "collected in" in lower:
-        return "F1-U UL Interface collected in UP per QCI"
-    if "f1-u ul" in lower and "collected in" in lower and "up" in lower:
-        return "F1-U UL Interface collected in UP per UP"
-    if "f1-u ul" in lower and "upc" in lower:
-        return "F1-U UL Interface per UPC"
-    if "f1-u ul" in lower and "qci" in lower:
-        return "F1-U UL Interface per QCI"
-    if "f1-u dl" in lower and "prc" in lower and "qci" in lower:
-        return "F1-U DL Interface per QCI\nF1-U DL Interface per PRC per QCI"
-    if "f1-u dl" in lower and "prc" in lower and "du" in lower:
-        return "F1-U DL Interface per DU\nF1-U DL Interface per PRC per DU"
-    if "f1-u" in lower and "gnb du" in lower and "qci" in lower and "collected in up" in lower:
-        return "F1-U Interface collected in UP per QCI per gNB-DU"
-    if "f1-u" in lower and "gnb du" in lower and "5qi" in lower and "collected in up" in lower:
-        return "F1-U Interface collected in UP per 5QI per gNB-DU"
-    if "f1-u" in lower and "gnb du" in lower and "qci" in lower:
-        return "F1-U Interface per gNB DU per QCI"
-    if "f1-u" in lower and "gnb du" in lower and "5qi" in lower:
-        return "F1-U Interface per gNB DU per 5QI"
-
-    normalized = re.sub(r"\bInterfa(?:ce)?\b", "Interface", normalized, flags=re.IGNORECASE)
-    normalized = normalized.replace(" UP er ", " UP per ")
-    normalized = normalized.replace(" per I per ", " per 5QI per ")
-    return normalized.strip()
-
-
-def _normalize_type_name_text(text: str) -> str:
-    normalized = str(text or "").strip()
-    if not normalized:
-        return ""
-    collapsed = re.sub(r"\s+", "", normalized)
-    if re.fullmatch(r"[A-Za-z0-9_]+", collapsed or ""):
-        return collapsed
-    return normalized
-
-
-def _merge_family_display_pair(left: str, right: str) -> str:
-    left_text = str(left or "").strip()
-    right_text = str(right or "").strip()
-    if not left_text:
-        return _normalize_family_display_text(right_text)
-    if not right_text:
-        return _normalize_family_display_text(left_text)
-
-    left_tokens = left_text.split()
-    right_tokens = right_text.split()
-    if (
-        len(left_tokens) >= 4
-        and len(left_tokens) % 2 == 0
-        and len(right_tokens) >= 4
-        and len(right_tokens) % 2 == 0
-    ):
-        left_half = len(left_tokens) // 2
-        right_half = len(right_tokens) // 2
-        if left_tokens[:left_half] == left_tokens[left_half:]:
-            line_one = _normalize_family_display_text(
-                f"{' '.join(left_tokens[:left_half])} {' '.join(right_tokens[:right_half])}"
-            )
-            line_two = _normalize_family_display_text(
-                f"{' '.join(left_tokens[left_half:])} {' '.join(right_tokens[right_half:])}"
-            )
-            return f"{line_one}\n{line_two}".strip()
-
-    return _normalize_family_display_text(_merge_fragment_text(left_text, right_text))
-
-
-def _collapse_complementary_adjacent_columns(rows: Sequence[Sequence[str]]) -> List[List[str]]:
-    padded_rows = [list(row) for row in rows]
-    if not padded_rows:
-        return []
-
-    col_count = max((len(row) for row in padded_rows), default=0)
-    padded_rows = [list(row) + [""] * (col_count - len(row)) for row in padded_rows]
-    header_row_count = max(1, _header_row_count(padded_rows))
-    body_rows = padded_rows[header_row_count:] if len(padded_rows) > header_row_count else padded_rows[1:]
-
-    def _should_merge_pair(left_idx: int, right_idx: int) -> bool:
-        if not body_rows:
-            return False
-        left_non_empty = sum(1 for row in body_rows if _normalize_text(row[left_idx]))
-        right_non_empty = sum(1 for row in body_rows if _normalize_text(row[right_idx]))
-        both_non_empty = sum(
-            1
-            for row in body_rows
-            if _normalize_text(row[left_idx]) and _normalize_text(row[right_idx])
-        )
-        header_non_empty = sum(
-            1
-            for row in padded_rows[:header_row_count]
-            if _normalize_text(row[left_idx]) or _normalize_text(row[right_idx])
-        )
-        return left_non_empty > 0 and right_non_empty > 0 and both_non_empty == 0 and header_non_empty > 0
-
-    merged_columns: List[List[str]] = []
-    col_idx = 0
-    while col_idx < col_count:
-        if col_idx + 1 < col_count and _should_merge_pair(col_idx, col_idx + 1):
-            merged_columns.append(
-                [
-                    _merge_fragment_text(row[col_idx], row[col_idx + 1])
-                    for row in padded_rows
-                ]
-            )
-            col_idx += 2
-            continue
-        merged_columns.append([row[col_idx] for row in padded_rows])
-        col_idx += 1
-
-    return [[column[row_idx] for column in merged_columns] for row_idx in range(len(padded_rows))]
-
-
-def _looks_like_family_type_description_layout(rows: Sequence[Sequence[str]]) -> bool:
-    if not rows:
-        return False
-    col_count = max((len(row) for row in rows), default=0)
-    if col_count != 4:
-        return False
-    if _header_row_count(rows):
-        return False
-    first_row = list(rows[0]) + [""] * max(0, 4 - len(rows[0]))
-    type_name = _normalize_text(first_row[2])
-    description = _normalize_text(first_row[3])
-    return bool(type_name and "packet" in type_name.lower() and len(description) >= 10)
-
-
-def _restructure_family_type_description_layout(rows: Sequence[Sequence[str]]) -> List[List[str]]:
-    if not _looks_like_family_type_description_layout(rows):
-        return [list(row) for row in rows]
-
-    normalized_rows: List[List[str]] = [["Family Display Name", "Type Name", "Type Description"]]
-    for row in rows:
-        padded = list(row) + [""] * max(0, 4 - len(row))
-        normalized_rows.append(
-            [
-                _merge_family_display_pair(padded[0], padded[1]),
-                str(padded[2] or "").strip(),
-                str(padded[3] or "").strip(),
-            ]
-        )
-    return normalized_rows
-
-
-def _normalize_family_display_column(rows: Sequence[Sequence[str]]) -> List[List[str]]:
-    normalized_rows = [list(row) for row in rows]
-    if not normalized_rows:
-        return normalized_rows
-
-    header_row_count = _header_row_count(normalized_rows)
-    header_rows = normalized_rows[:header_row_count] if header_row_count else normalized_rows[:1]
-    header = _collapse_header_rows(header_rows)
-    family_idx = next(
-        (idx for idx, cell in enumerate(header) if "family display name" in _normalize_text(cell).lower()),
-        None,
-    )
-    if family_idx is None:
-        return normalized_rows
-
-    body_start = header_row_count if header_row_count else 1
-    for row in normalized_rows[body_start:]:
-        if family_idx < len(row) and _normalize_text(row[family_idx]):
-            row[family_idx] = _normalize_family_display_text(row[family_idx])
-    return normalized_rows
-
-
-def _normalize_type_name_column(rows: Sequence[Sequence[str]]) -> List[List[str]]:
-    normalized_rows = [list(row) for row in rows]
-    if not normalized_rows:
-        return normalized_rows
-
-    header_row_count = _header_row_count(normalized_rows)
-    header_rows = normalized_rows[:header_row_count] if header_row_count else normalized_rows[:1]
-    header = _collapse_header_rows(header_rows)
-    type_idx = next(
-        (idx for idx, cell in enumerate(header) if "type name" in _normalize_text(cell).lower()),
-        None,
-    )
-    if type_idx is None:
-        return normalized_rows
-
-    body_start = header_row_count if header_row_count else 1
-    for row in normalized_rows[body_start:]:
-        if type_idx < len(row) and _normalize_text(row[type_idx]):
-            row[type_idx] = _normalize_type_name_text(row[type_idx])
-    return normalized_rows
-
-
-def _repair_shifted_family_type_description_rows(rows: Sequence[Sequence[str]]) -> List[List[str]]:
-    normalized_rows = [list(row) for row in rows]
-    if len(normalized_rows) < 3:
-        return normalized_rows
-
-    header_row_count = _header_row_count(normalized_rows)
-    header_rows = normalized_rows[:header_row_count] if header_row_count else normalized_rows[:1]
-    header = _collapse_header_rows(header_rows)
-    if len(header) != 3:
-        return normalized_rows
-    if "family display name" not in _normalize_text(header[0]).lower():
-        return normalized_rows
-    if "type name" not in _normalize_text(header[1]).lower():
-        return normalized_rows
-    if "type description" not in _normalize_text(header[2]).lower():
-        return normalized_rows
-
-    body_start = header_row_count if header_row_count else 1
-    for row in normalized_rows[body_start + 1:]:
-        padded = list(row) + [""] * max(0, 3 - len(row))
-        if (
-            _normalize_text(padded[0])
-            and _normalize_text(padded[1])
-            and not _normalize_text(padded[2])
-            and _normalize_type_name_text(padded[0]) == re.sub(r"\s+", "", padded[0])
-            and len(_normalize_text(padded[1])) >= 8
-        ):
-            row[:] = ["", padded[0], padded[1]]
-        elif (
-            _normalize_text(padded[0])
-            and not _normalize_text(padded[1])
-            and _normalize_type_name_text(padded[0]) == re.sub(r"\s+", "", padded[0])
-        ):
-            row[:] = ["", padded[0], ""]
-    return normalized_rows
-
-
-def _collapse_structural_triplet_columns(table: Sequence[Sequence[str]]) -> List[List[str]]:
-    # Remove vertically empty columns that are likely structural artifacts from extraction.
-    rows = [list(row) for row in table]
-    if not rows:
-        return []
-
-    col_count = max((len(row) for row in rows), default=0)
-    padded_rows = [list(row) + [""] * (col_count - len(row)) for row in rows]
-    kept_indices = [
-        idx
-        for idx in range(col_count)
-        if any(_normalize_text(str(padded_rows[row_idx][idx]).strip()) for row_idx in range(len(padded_rows)))
-    ]
-
-    if not kept_indices:
-        return [[] for _ in padded_rows]
-
-    collapsed = [[row[idx] for idx in kept_indices] for row in padded_rows]
-    col_count = max((len(row) for row in collapsed), default=0)
-    if col_count < 4:
-        return collapsed
-
-    padded_collapsed = [list(row) + [""] * (col_count - len(row)) for row in collapsed]
-    sparse_threshold = max(2, len(padded_collapsed) // 3)
-    header_row_limit = max(1, _header_row_count(padded_collapsed))
-
-    def _should_merge_pair(left_idx: int, right_idx: int) -> bool:
-        left_values = [_normalize_text(row[left_idx]) for row in padded_collapsed]
-        right_values = [_normalize_text(row[right_idx]) for row in padded_collapsed]
-        left_non_empty = [value for value in left_values if value]
-        right_non_empty = [value for value in right_values if value]
-        left_count = len(left_non_empty)
-        right_count = len(right_non_empty)
-        if not left_count or not right_count:
-            return False
-
-        def _looks_like_companion_header(values: Sequence[str]) -> bool:
-            return all(
-                any(term in value.lower() for term in _COMPANION_HEADER_TERMS)
-                for value in values
-            )
-
-        has_fragment_overlap = any(
-            left_value
-            and right_value
-            and right_value[0].islower()
-            for left_value, right_value in zip(left_values, right_values)
-        )
-        if has_fragment_overlap:
-            return True
-
-        left_positions = [idx for idx, value in enumerate(left_values) if value]
-        right_positions = [idx for idx, value in enumerate(right_values) if value]
-        left_header_only = (
-            left_count <= sparse_threshold
-            and left_positions
-            and max(left_positions) < header_row_limit
-            and all(_looks_like_header_row([value]) for value in left_non_empty)
-            and _looks_like_companion_header(left_non_empty)
-        )
-        right_header_only = (
-            right_count <= sparse_threshold
-            and right_positions
-            and max(right_positions) < header_row_limit
-            and all(_looks_like_header_row([value]) for value in right_non_empty)
-            and _looks_like_companion_header(right_non_empty)
-        )
-        return left_header_only or right_header_only
-
-    merged_columns: List[List[str]] = []
-    col_idx = 0
-    while col_idx < col_count:
-        if col_idx + 1 < col_count and _should_merge_pair(col_idx, col_idx + 1):
-            merged_columns.append(
-                [
-                    _merge_fragment_text(row[col_idx], row[col_idx + 1])
-                    for row in padded_collapsed
-                ]
-            )
-            col_idx += 2
-            continue
-        merged_columns.append([row[col_idx] for row in padded_collapsed])
-        col_idx += 1
-
-    merged_rows: List[List[str]] = []
-    for row_idx in range(len(padded_collapsed)):
-        merged_rows.append([column[row_idx] for column in merged_columns])
-    merged_rows = _collapse_complementary_adjacent_columns(merged_rows)
-    merged_rows = _restructure_family_type_description_layout(merged_rows)
-    merged_rows = _repair_shifted_family_type_description_rows(merged_rows)
-    merged_rows = _normalize_family_display_column(merged_rows)
-    merged_rows = _normalize_type_name_column(merged_rows)
-    return merged_rows
 
 
 def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]]:
@@ -432,7 +40,13 @@ def _normalize_extracted_table(table: Sequence[Sequence[str]]) -> List[List[str]
     for row in table:
         normalized_row = []
         for cell in row:
-            normalized_row.append("\n".join(_normalize_cell_lines(str(cell or ""))))
+            cell_text = str(cell or "")
+            explicit_lines = [_clean_cell_line(part) for part in cell_text.splitlines()]
+            explicit_lines = [line for line in explicit_lines if line]
+            if len(explicit_lines) > 1:
+                normalized_row.append("\n".join(explicit_lines))
+            else:
+                normalized_row.append("\n".join(_normalize_cell_lines(cell_text)))
         normalized.append(normalized_row)
     return normalized
 
@@ -460,135 +74,18 @@ def _log_rejected_table(
 
 
 def _looks_like_header_row(row: Sequence[str]) -> bool:
-    # Header detection is heuristic and only used for cross-page continuation handling.
+    # Header detection stays structure-based: multiple compact cells, no semantic keyword checks.
     if not row:
         return False
-    normalized = [_normalize_text(c) for c in row]
-    tokens = [cell for cell in normalized if cell]
-    if not tokens:
-        return False
-    alpha_like = sum(1 for token in tokens if re.fullmatch(r"[A-Za-z][A-Za-z0-9\s/&._:-]*", token))
-    short = sum(1 for token in tokens if len(token) <= 24)
-    return alpha_like >= len(tokens) * 0.8 and short >= len(tokens) * 0.8
-
-
-def _row_contains_header_terms(row: Sequence[str]) -> bool:
-    return any(
-        any(term in _normalize_text(cell).lower() for term in _HEADER_ROW_TERMS)
-        for cell in row
-        if _normalize_text(cell)
-    )
-
-
-def _looks_like_body_row_below_header(row: Sequence[str]) -> bool:
-    tokens = [_normalize_text(cell) for cell in row if _normalize_text(cell)]
+    tokens = [_normalize_text(c) for c in row if _normalize_text(c)]
     if len(tokens) < 2:
         return False
-    if _row_contains_header_terms(row):
+    if any("\n" in token for token in tokens):
         return False
-    if any(re.search(r"\d", token) for token in tokens):
-        return True
-    if any("/" in token for token in tokens):
-        return True
-    return False
-
-
-def _looks_like_orphan_table_header_line(line_text: str) -> bool:
-    normalized = _normalize_text(str(line_text or ""))
-    if not normalized:
-        return False
-    lower = normalized.lower()
-    matched_terms = [term for term in _HEADER_ROW_TERMS if term in lower]
-    if len(set(matched_terms)) < 2:
-        return False
-    if re.search(r"\d", normalized):
-        return False
-    if any(char in normalized for char in ".:;!?"):
-        return False
-    words = normalized.split()
-    if len(words) > 12:
-        return False
-    return True
-
-
-def _table_owned_body_line_bboxes(
-    page: pdfplumber.page.PageObject,
-    *,
-    tables: Sequence[Tuple[TableRows, Tuple[float, float, float, float]]],
-    header_margin: float,
-    footer_margin: float,
-    vertical_tolerance: float = 36.0,
-    min_x_overlap_ratio: float = 0.35,
-    min_x_overlap_width: float = 48.0,
-) -> List[Tuple[float, float, float, float]]:
-    return [
-        tuple(entry["bbox"])
-        for entry in _table_owned_body_lines(
-            page,
-            tables=tables,
-            header_margin=header_margin,
-            footer_margin=footer_margin,
-            vertical_tolerance=vertical_tolerance,
-            min_x_overlap_ratio=min_x_overlap_ratio,
-            min_x_overlap_width=min_x_overlap_width,
-        )
-    ]
-
-
-def _table_owned_body_lines(
-    page: pdfplumber.page.PageObject,
-    *,
-    tables: Sequence[Tuple[TableRows, Tuple[float, float, float, float]]],
-    header_margin: float,
-    footer_margin: float,
-    vertical_tolerance: float = 36.0,
-    min_x_overlap_ratio: float = 0.35,
-    min_x_overlap_width: float = 48.0,
-) -> List[dict[str, Any]]:
-    if not tables:
-        return []
-
-    try:
-        line_payloads = _extract_body_word_lines(
-            page,
-            header_margin=header_margin,
-            footer_margin=footer_margin,
-            excluded_bboxes=[bbox for _rows, bbox in tables],
-        )
-    except AttributeError:
-        return []
-    owned_lines: List[dict[str, Any]] = []
-    for line in line_payloads:
-        line_text = str(line.get("text") or "")
-        if not _looks_like_orphan_table_header_line(line_text):
-            continue
-
-        line_bbox = (
-            float(line.get("x0", 0.0)),
-            float(line.get("top", 0.0)),
-            float(line.get("x1", 0.0)),
-            float(line.get("bottom", 0.0)),
-        )
-        for _rows, table_bbox in tables:
-            near_table_top = 0.0 <= float(table_bbox[1]) - line_bbox[3] <= vertical_tolerance
-            near_table_bottom = 0.0 <= line_bbox[1] - float(table_bbox[3]) <= vertical_tolerance
-            if not (near_table_top or near_table_bottom):
-                continue
-            if not _is_overlap_in_x(
-                subject=line_bbox,
-                reference=table_bbox,
-                min_overlap_ratio=min_x_overlap_ratio,
-                min_overlap_width=min_x_overlap_width,
-            ):
-                continue
-            owned_lines.append(
-                {
-                    "text": line_text,
-                    "bbox": line_bbox,
-                }
-            )
-            break
-    return owned_lines
+    total_length = sum(len(token) for token in tokens)
+    max_length = max(len(token) for token in tokens)
+    average_length = total_length / len(tokens)
+    return max_length <= 32 and average_length <= 18 and total_length <= max(64, len(tokens) * 18)
 
 
 def _effective_non_empty_column_indices(
@@ -605,95 +102,14 @@ def _effective_non_empty_column_indices(
     return sorted(column_indexes)
 
 
-def _is_parameter_description_layout(rows: Sequence[Sequence[str]]) -> bool:
-    if not rows:
-        return False
-
-    header = [
-        _normalize_text(cell)
-        for cell in rows[0]
-        if _normalize_text(cell)
+def _collapse_empty_columns(rows: Sequence[Sequence[str]]) -> List[List[str]]:
+    kept_indices = _effective_non_empty_column_indices(rows)
+    if not kept_indices:
+        return [[] for _ in rows]
+    return [
+        [row[idx] if idx < len(row) else "" for idx in kept_indices]
+        for row in rows
     ]
-    if len(header) < 2:
-        return False
-    header_text = " ".join(header).lower()
-    if "parameter" not in header_text or "description" not in header_text:
-        return False
-
-    col_indexes = _effective_non_empty_column_indices(rows)
-    if len(col_indexes) < 2 or len(col_indexes) > 3:
-        return False
-
-    for row in rows[1:]:
-        active = [
-            (idx, _normalize_text(cell))
-            for idx, cell in enumerate(row)
-            if _normalize_text(cell)
-        ]
-        if not active:
-            continue
-        if len(active) != 2:
-            return False
-
-        key_text = active[0][1]
-        value_text = active[1][1]
-        if not key_text or len(key_text) > 28:
-            return False
-        if len(value_text) < 20:
-            return False
-
-    return True
-
-
-def _is_key_value_layout(rows: Sequence[Sequence[str]]) -> bool:
-    if len(rows) < 2:
-        return False
-
-    col_indexes = _effective_non_empty_column_indices(rows)
-    if len(col_indexes) < 2 or len(col_indexes) > 3:
-        return False
-
-    qualified_rows = 0
-    two_or_three_cell_rows = 0
-    short_key_rows = 0
-
-    for row in rows:
-        active = [
-            (idx, _normalize_text(cell))
-            for idx, cell in enumerate(row)
-            if _normalize_text(cell)
-        ]
-        if not active:
-            continue
-
-        qualified_rows += 1
-        if len(active) > 3:
-            return False
-
-        if len(active) in (2, 3):
-            two_or_three_cell_rows += 1
-            key_text = active[0][1]
-            value_cells = [item[1] for item in active[1:]]
-            if not key_text or len(key_text) > 40:
-                return False
-            if all(len(value_text) < 2 for value_text in value_cells):
-                return False
-            if len(key_text) <= 30:
-                short_key_rows += 1
-
-        if len(active) == 1:
-            value_text = active[0][1]
-            if len(value_text) > 3:
-                return False
-
-    if qualified_rows == 0 or two_or_three_cell_rows == 0:
-        return False
-    if two_or_three_cell_rows / qualified_rows < 0.7:
-        return False
-    if short_key_rows == 0:
-        return False
-
-    return True
 
 
 def _extract_region_words(
@@ -706,7 +122,12 @@ def _extract_region_words(
     words = (
         filtered_page
         .crop((x0, top, x1, bottom))
-        .extract_words(x_tolerance=1.5, y_tolerance=2.0, keep_blank_chars=False)
+        .extract_words(
+            x_tolerance=1.5,
+            y_tolerance=2.0,
+            keep_blank_chars=False,
+            extra_attrs=["size"],
+        )
         or []
     )
 
@@ -733,6 +154,575 @@ def _extract_region_lines(words: Sequence[dict[str, Any]], y_tolerance: float = 
             continue
         lines[-1].append(word)
     return lines
+
+
+def _is_black_color(value: object, threshold: float = 0.18) -> bool:
+    if value is None:
+        return False
+
+    if isinstance(value, (int, float)):
+        return float(value) <= threshold
+
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        return all(float(component) <= threshold for component in value[:3])
+
+    return False
+
+
+def _is_black_line_segment(segment: dict[str, Any], color_threshold: float = 0.18) -> bool:
+    color = segment.get("stroking_color")
+    if color is None:
+        color = segment.get("non_stroking_color")
+    return _is_black_color(color, threshold=color_threshold)
+
+
+def _is_black_fill_rect(rect: dict[str, Any], color_threshold: float = 0.18) -> bool:
+    if not bool(rect.get("fill", False)):
+        return False
+    color = rect.get("non_stroking_color")
+    if color is None:
+        color = rect.get("stroking_color")
+    return _is_black_color(color, threshold=color_threshold)
+
+
+def _is_vertical_separator_rect(rect: dict[str, Any], thickness: float = _SEPARATOR_RECT_MAX_THICKNESS) -> bool:
+    if not _is_black_fill_rect(rect):
+        return False
+    width = abs(float(rect.get("width", float(rect.get("x1", 0.0)) - float(rect.get("x0", 0.0))) or 0.0))
+    height = abs(float(rect.get("height", float(rect.get("bottom", 0.0)) - float(rect.get("top", 0.0))) or 0.0))
+    return width <= thickness and height > width
+
+
+def _is_horizontal_separator_rect(rect: dict[str, Any], thickness: float = _SEPARATOR_RECT_MAX_THICKNESS) -> bool:
+    if not _is_black_fill_rect(rect):
+        return False
+    width = abs(float(rect.get("width", float(rect.get("x1", 0.0)) - float(rect.get("x0", 0.0))) or 0.0))
+    height = abs(float(rect.get("height", float(rect.get("bottom", 0.0)) - float(rect.get("top", 0.0))) or 0.0))
+    return height <= thickness and width > height
+
+
+def _extract_region_word_payloads(
+    page: pdfplumber.page.PageObject,
+    bbox: Tuple[float, float, float, float],
+) -> list[dict[str, float | str]]:
+    filtered_page = _filter_page_for_extraction(page)
+    x0, top, x1, bottom = bbox
+    words = (
+        filtered_page
+        .crop((x0, top, x1, bottom))
+        .extract_words(
+            x_tolerance=1.5,
+            y_tolerance=2.0,
+            keep_blank_chars=False,
+            extra_attrs=["size"],
+        )
+        or []
+    )
+
+    payloads: list[dict[str, float | str]] = []
+    for line_index, line_words in enumerate(_extract_region_lines(words)):
+        ordered_words = sorted(line_words, key=lambda item: float(item.get("x0", 0.0)))
+        for word in ordered_words:
+            text = _normalize_text(str(word.get("text") or ""))
+            if not text or _is_layout_artifact(text):
+                continue
+            payloads.append(
+                {
+                    "text": text,
+                    "x0": float(word.get("x0", 0.0)),
+                    "x1": float(word.get("x1", 0.0)),
+                    "top": float(word.get("top", 0.0)),
+                    "bottom": float(word.get("bottom", 0.0)),
+                    "size": float(word.get("size", 0.0) or 0.0),
+                    "line_index": line_index,
+                }
+            )
+    return payloads
+
+
+def _extract_black_lines_for_table(
+    page: pdfplumber.page.PageObject,
+    crop_bbox: Tuple[float, float, float, float],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    x0, y0, x1, y1 = crop_bbox
+    horizontal_edges: list[dict[str, Any]] = []
+    vertical_edges: list[dict[str, Any]] = []
+
+    for line in getattr(page, "lines", []):
+        if not _is_black_line_segment(line):
+            continue
+        line_x0 = float(line.get("x0", 0.0))
+        line_x1 = float(line.get("x1", line_x0))
+        line_top = float(line.get("top", 0.0))
+        line_bottom = float(line.get("bottom", line_top))
+        if line_bottom < y0 - 1.0 or line_top > y1 + 1.0:
+            continue
+        overlap = min(max(line_x0, line_x1), x1) - max(min(line_x0, line_x1), x0)
+        if overlap < -1.0:
+            continue
+        orientation = line.get("orientation")
+        if orientation == "h" or abs(line_bottom - line_top) <= abs(line_x1 - line_x0):
+            horizontal_edges.append(dict(line))
+        if orientation == "v" or abs(line_x1 - line_x0) < abs(line_bottom - line_top):
+            vertical_edges.append(dict(line))
+
+    for rect in getattr(page, "rects", []) or []:
+        rect_x0 = float(rect.get("x0", 0.0))
+        rect_x1 = float(rect.get("x1", rect_x0))
+        rect_top = float(rect.get("top", 0.0))
+        rect_bottom = float(rect.get("bottom", rect_top))
+        if rect_bottom < y0 - 1.0 or rect_top > y1 + 1.0:
+            continue
+        overlap = min(max(rect_x0, rect_x1), x1) - max(min(rect_x0, rect_x1), x0)
+        if overlap < -1.0:
+            continue
+        if _is_horizontal_separator_rect(rect):
+            horizontal_edges.append(dict(rect))
+        if _is_vertical_separator_rect(rect):
+            vertical_edges.append(dict(rect))
+
+    if not horizontal_edges:
+        for edge in getattr(page, "horizontal_edges", []):
+            if not _is_black_line_segment(edge):
+                continue
+            edge_top = float(edge.get("top", 0.0))
+            edge_bottom = float(edge.get("bottom", edge_top))
+            if edge_bottom < y0 - 1.0 or edge_top > y1 + 1.0:
+                continue
+            edge_x0 = float(edge.get("x0", 0.0))
+            edge_x1 = float(edge.get("x1", edge_x0))
+            overlap = min(max(edge_x0, edge_x1), x1) - max(min(edge_x0, edge_x1), x0)
+            if overlap < -1.0:
+                continue
+            horizontal_edges.append(edge)
+
+    if not vertical_edges:
+        for edge in getattr(page, "vertical_edges", []):
+            if not _is_black_line_segment(edge):
+                continue
+            edge_x0 = float(edge.get("x0", 0.0))
+            edge_x1 = float(edge.get("x1", edge_x0))
+            overlap = min(max(edge_x0, edge_x1), x1) - max(min(edge_x0, edge_x1), x0)
+            if overlap < -1.0:
+                continue
+            edge_top = float(edge.get("top", 0.0))
+            edge_bottom = float(edge.get("bottom", edge_top))
+            if edge_bottom < y0 - 1.0 or edge_top > y1 + 1.0:
+                continue
+            vertical_edges.append(edge)
+
+    merged_horizontal = []
+    for group in _build_segment_groups(
+        horizontal_edges,
+        axis_key="top",
+        merge_fn=_merge_horizontal_band_segments,
+        tolerance=1.0,
+    ):
+        merged_horizontal.extend(group["merged_segments"])
+
+    merged_vertical = []
+    for group in _build_segment_groups(
+        vertical_edges,
+        axis_key="x0",
+        merge_fn=_merge_vertical_band_segments,
+        tolerance=1.0,
+    ):
+        merged_vertical.extend(group["merged_segments"])
+
+    return merged_horizontal, merged_vertical
+
+
+def _build_row_bands(
+    crop_bbox: Tuple[float, float, float, float],
+    horizontal_segments: list[dict[str, Any]],
+) -> tuple[list[float], list[Tuple[float, float, float, float]], str | None]:
+    x0, _y0, x1, _y1 = crop_bbox
+    crop_width = max(0.0, x1 - x0)
+    min_line_span = max(8.0, crop_width * 0.12)
+    line_positions = sorted(
+        (float(segment["top"]) + float(segment["bottom"])) / 2.0
+        for segment in horizontal_segments
+        if (float(segment["x1"]) - float(segment["x0"])) >= min_line_span
+    )
+    line_positions = _merge_numeric_positions(line_positions, tolerance=1.0)
+    if len(line_positions) < 2:
+        return [], [], "insufficient_row_lines"
+
+    row_bands: list[tuple[float, float, float, float]] = []
+    min_band_height = 2.0
+    for top, bottom in zip(line_positions, line_positions[1:]):
+        band_top = float(top)
+        band_bottom = float(bottom)
+        if band_bottom - band_top >= min_band_height:
+            row_bands.append((x0, band_top, x1, band_bottom))
+
+    if not row_bands:
+        return line_positions, [], "invalid_row_bands"
+    return line_positions, row_bands, None
+
+
+def _build_column_bands(
+    crop_bbox: Tuple[float, float, float, float],
+    row_bands: list[Tuple[float, float, float, float]],
+    vertical_segments: list[dict[str, Any]],
+) -> tuple[list[float], list[Tuple[float, float, float, float]], str | None]:
+    x0, y0, x1, y1 = crop_bbox
+    if not row_bands:
+        return [], [(x0, y0, x1, y1)], "no_internal_columns"
+
+    edge_tolerance = 8.0
+    candidate_segments: list[tuple[float, float, float]] = []
+    for segment in vertical_segments:
+        segment_x = float(segment["x0"]) if float(segment["x0"]) == float(segment["x1"]) else (float(segment["x0"]) + float(segment["x1"])) / 2.0
+        if segment_x <= x0 + edge_tolerance or segment_x >= x1 - edge_tolerance:
+            continue
+        segment_top = float(segment["top"])
+        segment_bottom = float(segment["bottom"])
+        candidate_segments.append((segment_x, segment_top, segment_bottom))
+
+    x_positions = [segment_x for segment_x, _segment_top, _segment_bottom in candidate_segments]
+    x_positions = _merge_numeric_positions(sorted(x_positions), tolerance=8.0)
+    if not x_positions:
+        return [], [(x0, y0, x1, y1)], "no_internal_vertical_lines"
+
+    if any(x0 < pos < x1 for pos in x_positions):
+        x_boundaries = [x0, *x_positions, x1]
+    else:
+        x_boundaries = [x0, x1]
+
+    x_boundaries = sorted(dict.fromkeys([float(v) for v in x_boundaries]))
+    column_bands: list[tuple[float, float, float, float]] = []
+    for left, right in zip(x_boundaries, x_boundaries[1:]):
+        if right - left > 1.0:
+            column_bands.append((left, y0, right, y1))
+
+    if not column_bands:
+        return x_positions, [(x0, y0, x1, y1)], "invalid_column_bands"
+
+    return x_positions, column_bands, None
+
+
+def _build_payload_grid(
+    page: pdfplumber.page.PageObject,
+    crop_bbox: Tuple[float, float, float, float],
+    row_bands: list[tuple[float, float, float, float]],
+    column_bands: list[tuple[float, float, float, float]],
+) -> tuple[
+    list[list[list[dict[str, Any]]]],
+    int,
+    int,
+    int,
+    int,
+]:
+    payloads = _extract_region_word_payloads(page, crop_bbox)
+    if not payloads:
+        return (
+            [[[] for _ in column_bands] for _ in row_bands],
+            0,
+            0,
+            0,
+            0,
+        )
+
+    if not row_bands or not column_bands:
+        return (
+            [[[] for _ in column_bands] for _ in row_bands],
+            0,
+            0,
+            0,
+            len(payloads),
+        )
+
+    cell_payloads: list[list[list[dict[str, Any]]]] = [
+        [[] for _ in column_bands] for _ in row_bands
+    ]
+    assigned = 0
+    ambiguous = 0
+    unassigned = 0
+
+    for payload in payloads:
+        payload_text = str(payload.get("text") or "")
+        if not payload_text:
+            continue
+
+        payload_x0 = float(payload["x0"])
+        payload_x1 = float(payload["x1"])
+        payload_top = float(payload["top"])
+        payload_bottom = float(payload["bottom"])
+
+        row_index, row_score, row_ambiguous_count = _pick_band_for_payload(
+            payload_top,
+            payload_bottom,
+            row_bands,
+            axis="y",
+        )
+        column_index, col_score, col_ambiguous_count = _pick_band_for_payload(
+            payload_x0,
+            payload_x1,
+            column_bands,
+            axis="x",
+        )
+
+        if (
+            row_index is None
+            or column_index is None
+            or row_score <= 0.0
+            or col_score <= 0.0
+        ):
+            unassigned += 1
+            continue
+
+        if row_ambiguous_count > 1 or col_ambiguous_count > 1:
+            ambiguous += 1
+
+        cell_payloads[row_index][column_index].append(
+            {
+                **payload,
+                "line_index": payload.get("line_index"),
+                "normalized_x0": payload_x0,
+            }
+        )
+        assigned += 1
+
+    return cell_payloads, assigned, ambiguous, unassigned, len(payloads)
+
+
+def _rows_from_payload_grid(
+    cell_payloads: list[list[list[dict[str, Any]]]],
+) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for row in cell_payloads:
+        row_values: list[str] = []
+        for cell_payloads in row:
+            if not cell_payloads:
+                row_values.append("")
+                continue
+
+            sorted_cell_payloads = sorted(
+                cell_payloads,
+                key=lambda payload: (
+                    int(payload.get("line_index", -1)) if payload.get("line_index") is not None else -1,
+                    float(payload.get("top", 0.0)),
+                    float(payload.get("x0", 0.0)),
+                )
+            )
+
+            grouped_lines: list[dict[str, Any]] = []
+            previous_payload: dict[str, Any] | None = None
+            for payload in sorted_cell_payloads:
+                payload_text = str(payload.get("text", "")).strip()
+                if not payload_text:
+                    continue
+
+                current_line_index = payload.get("line_index")
+                previous_line_index = previous_payload.get("line_index") if previous_payload else None
+
+                same_line = False
+                if previous_payload is not None:
+                    if current_line_index is not None and previous_line_index is not None:
+                        same_line = current_line_index == previous_line_index
+                    else:
+                        same_line = abs(float(payload.get("top", 0.0)) - float(previous_payload.get("top", 0.0))) <= 2.5
+
+                if not same_line or not grouped_lines:
+                    grouped_lines.append(
+                        {
+                            "words": [payload_text],
+                            "top": float(payload.get("top", 0.0)),
+                            "bottom": float(payload.get("bottom", payload.get("top", 0.0))),
+                            "font_size": float(payload.get("size", 0.0) or 0.0),
+                        }
+                    )
+                else:
+                    grouped_lines[-1]["words"].append(payload_text)
+                    grouped_lines[-1]["bottom"] = max(
+                        float(grouped_lines[-1]["bottom"]),
+                        float(payload.get("bottom", payload.get("top", 0.0))),
+                    )
+                    grouped_lines[-1]["font_size"] = max(
+                        float(grouped_lines[-1]["font_size"]),
+                        float(payload.get("size", 0.0) or 0.0),
+                    )
+
+                previous_payload = payload
+
+            logical_lines: list[str] = []
+            current_line: str | None = None
+            current_bottom = 0.0
+            current_font_size = 0.0
+            for grouped_line in grouped_lines:
+                line_text = " ".join(grouped_line["words"]).strip()
+                if not line_text:
+                    continue
+                line_top = float(grouped_line["top"])
+                line_bottom = float(grouped_line["bottom"])
+                line_font_size = float(grouped_line["font_size"] or 0.0)
+                if current_line is None:
+                    current_line = line_text
+                    current_bottom = line_bottom
+                    current_font_size = line_font_size
+                    continue
+
+                gap = max(0.0, line_top - current_bottom)
+                reference_font_size = line_font_size or current_font_size
+                gap_ratio = (gap / reference_font_size) if reference_font_size > 0.0 else float("inf")
+                if current_line.endswith("-"):
+                    current_line = f"{current_line}{line_text}".strip()
+                elif gap_ratio < 0.2:
+                    current_line = f"{current_line} {line_text}".strip()
+                else:
+                    logical_lines.append(current_line)
+                    current_line = line_text
+                current_bottom = line_bottom
+                current_font_size = line_font_size or current_font_size
+
+            if current_line:
+                logical_lines.append(current_line)
+
+            row_values.append("\n".join(logical_lines))
+
+        rows.append(row_values)
+
+    return rows
+
+
+def _interval_overlap(start: float, end: float, lower: float, upper: float) -> float:
+    return max(0.0, min(end, upper) - max(start, lower))
+
+
+def _pick_band_for_payload(
+    start: float,
+    end: float,
+    bands: list[Tuple[float, float, float, float]],
+    *,
+    axis: str,
+) -> tuple[int | None, float, int]:
+    center = (start + end) / 2.0
+    best_score = -1.0
+    best_index: int | None = None
+    for index, band in enumerate(bands):
+        if axis == "y":
+            band_start, band_end = band[1], band[3]
+        else:
+            band_start, band_end = band[0], band[2]
+        score = _interval_overlap(start, end, band_start, band_end)
+        if score > best_score + 1e-9:
+            best_score = score
+            best_index = index
+            continue
+        if abs(score - best_score) <= 1e-9:
+            continue
+
+    if best_index is None:
+        best_distance = float("inf")
+        for index, band in enumerate(bands):
+            if axis == "y":
+                band_start = band[1]
+                band_end = band[3]
+            else:
+                band_start = band[0]
+                band_end = band[2]
+            band_center = (band_start + band_end) / 2.0
+            distance = abs(center - band_center)
+            if distance < best_distance:
+                best_distance = distance
+                best_index = index
+
+    if axis == "y":
+        ambiguity_count = 0
+        for index, band in enumerate(bands):
+            band_start, band_end = band[1], band[3]
+            if _interval_overlap(start, end, band_start, band_end) == best_score and best_score > 0.0:
+                ambiguity_count += 1
+        return best_index, best_score, max(1, ambiguity_count)
+
+    ambiguity_count = 0
+    for index, band in enumerate(bands):
+        band_start, band_end = band[0], band[2]
+        if _interval_overlap(start, end, band_start, band_end) == best_score and best_score > 0.0:
+            ambiguity_count += 1
+    return best_index, best_score, max(1, ambiguity_count)
+
+
+def _build_grid_rows_from_black_lines(
+    page: pdfplumber.page.PageObject,
+    crop_bbox: Tuple[float, float, float, float],
+) -> tuple[
+    list[list[str]],
+    list[float],
+    list[float],
+    list[tuple[float, float, float, float]],
+    list[tuple[float, float, float, float]],
+    dict[str, Any],
+]:
+    horizontal_segments, vertical_segments = _extract_black_lines_for_table(page, crop_bbox)
+    row_line_positions, row_bands, row_error = _build_row_bands(crop_bbox, horizontal_segments)
+    if row_error is not None:
+        return [], row_line_positions, [], [], [], {
+            "reason": row_error,
+            "stage": "row_bands",
+            "raw_row_lines": len(horizontal_segments),
+        }
+
+    column_line_positions, column_bands, column_error = _build_column_bands(crop_bbox, row_bands, vertical_segments)
+    if column_error is not None and column_error != "no_internal_vertical_lines":
+        return [], row_line_positions, column_line_positions, row_bands, column_bands, {
+            "reason": column_error,
+            "stage": "column_bands",
+            "raw_vertical_lines": len(vertical_segments),
+        }
+
+    cell_payloads, assigned_payload_count, ambiguous_payload_count, unassigned_payload_count, raw_payload_count = _build_payload_grid(
+        page,
+        crop_bbox,
+        row_bands,
+        column_bands,
+    )
+    if not raw_payload_count:
+        return [], row_line_positions, column_line_positions, row_bands, column_bands, {
+            "reason": "no_text_units",
+            "stage": "line_assignment",
+            "raw_row_lines": len(horizontal_segments),
+            "raw_vertical_lines": len(vertical_segments),
+            "raw_payload_count": 0,
+        }
+
+    if not any(any(cell) for cell in cell_payloads):
+        return [], row_line_positions, column_line_positions, row_bands, column_bands, {
+            "reason": "no_text_assigned_to_cells",
+            "stage": "line_assignment",
+            "raw_row_lines": len(horizontal_segments),
+            "raw_vertical_lines": len(vertical_segments),
+            "raw_payload_count": raw_payload_count,
+            "assigned_payload_count": assigned_payload_count,
+            "ambiguous_payload_count": ambiguous_payload_count,
+            "unassigned_payload_count": unassigned_payload_count,
+        }
+
+    rows: list[list[str]] = _rows_from_payload_grid(cell_payloads)
+
+    return (
+        rows,
+        row_line_positions,
+        column_line_positions,
+        row_bands,
+        column_bands,
+        {
+            "stage": "line_assignment",
+            "raw_row_lines": len(horizontal_segments),
+            "raw_vertical_lines": len(vertical_segments),
+            "raw_payload_count": raw_payload_count,
+            "assigned_payload_count": assigned_payload_count,
+            "ambiguous_payload_count": ambiguous_payload_count,
+            "unassigned_payload_count": unassigned_payload_count,
+            "row_count": len(rows),
+            "column_count": len(column_bands),
+            "column_error": column_error,
+            "candidate_rows": 0,
+            "merged_rows": 0,
+            "ignored_rows": 0,
+        },
+    )
 
 
 def _extract_region_line_rows(
@@ -1083,13 +1073,18 @@ def _rows_match(a: Sequence[str], b: Sequence[str]) -> bool:
 
 
 def _header_row_count(rows: Sequence[Sequence[str]], max_header_rows: int = 2) -> int:
-    # Treat consecutive short alpha-like top rows as a multi-row header block.
+    # Treat consecutive compact top rows as a multi-row header block without semantic keyword checks.
     count = 0
     for row in rows[:max_header_rows]:
         if not _looks_like_header_row(row):
             break
-        if count >= 1 and _looks_like_body_row_below_header(row):
-            break
+        if count >= 1 and len(rows) > count + 1:
+            normalized_cells = [_normalize_text(cell) for cell in row if _normalize_text(cell)]
+            next_cells = [_normalize_text(cell) for cell in rows[count + 1] if _normalize_text(cell)]
+            current_total = sum(len(cell) for cell in normalized_cells)
+            next_total = sum(len(cell) for cell in next_cells)
+            if next_total > 0 and current_total >= next_total * 0.9:
+                break
         count += 1
     return count
 
@@ -1149,7 +1144,54 @@ def _split_repeated_header(prev_rows: TableRows, curr_rows: TableRows) -> TableR
     prev_header_count = _header_row_count(prev_rows)
     curr_header_count = _header_row_count(curr_rows)
     if not prev_header_count or prev_header_count != curr_header_count:
-        return curr_rows
+        comparable_count = min(prev_header_count, len(curr_rows))
+        if comparable_count <= 0:
+            return curr_rows
+
+        trimmed_prefix: TableRows = []
+        matched_rows = 0
+        for idx in range(comparable_count):
+            previous_row = list(prev_rows[idx])
+            current_row = list(curr_rows[idx])
+            width = max(len(previous_row), len(current_row))
+            trimmed_row = [""] * width
+            row_has_tail = False
+            row_matches = True
+
+            for col_idx in range(width):
+                previous_cell = str(previous_row[col_idx]).strip() if col_idx < len(previous_row) else ""
+                current_cell = str(current_row[col_idx]).strip() if col_idx < len(current_row) else ""
+                previous_text = _normalize_text(previous_cell)
+                current_text = _normalize_text(current_cell)
+
+                if not previous_text and not current_text:
+                    continue
+                if previous_text and current_text == previous_text:
+                    continue
+                if previous_cell and current_cell.startswith(f"{previous_cell}\n"):
+                    tail = "\n".join(
+                        part.strip()
+                        for part in current_cell.split("\n")[1:]
+                        if part.strip()
+                    )
+                    if tail:
+                        trimmed_row[col_idx] = tail
+                        row_has_tail = True
+                        continue
+                row_matches = False
+                break
+
+            if not row_matches:
+                break
+
+            matched_rows += 1
+            if row_has_tail:
+                trimmed_prefix.append(trimmed_row)
+
+        if not matched_rows:
+            return curr_rows
+
+        return trimmed_prefix + [list(row) for row in curr_rows[matched_rows:]]
     if all(
         _rows_match(prev_rows[idx], curr_rows[idx])
         for idx in range(curr_header_count)
@@ -1522,20 +1564,54 @@ def _table_regions(
         return overlap >= min_overlap
 
     body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
-    horizontal_edges = [
-        edge
-        for edge in page.horizontal_edges
-        if float(edge["bottom"]) > body_top
-        and float(edge["top"]) < body_bottom
-        and not any(_horizontal_edge_owned_by_excluded_bbox(edge, bbox) for bbox in excluded_bboxes)
-    ]
-    vertical_edges = [
-        edge
-        for edge in page.vertical_edges
-        if float(edge["bottom"]) > body_top
-        and float(edge["top"]) < body_bottom
-        and not any(_vertical_edge_owned_by_excluded_bbox(edge, bbox) for bbox in excluded_bboxes)
-    ]
+    horizontal_edges: list[dict[str, Any]] = []
+    vertical_edges: list[dict[str, Any]] = []
+
+    for line in getattr(page, "lines", []):
+        if not _is_black_line_segment(line):
+            continue
+        if float(line["bottom"]) <= body_top or float(line["top"]) >= body_bottom:
+            continue
+        orientation = line.get("orientation")
+        if (orientation == "h" or abs(float(line["bottom"]) - float(line["top"])) <= abs(float(line["x1"]) - float(line["x0"]))) and not any(
+            _horizontal_edge_owned_by_excluded_bbox(line, bbox) for bbox in excluded_bboxes
+        ):
+            horizontal_edges.append(dict(line))
+        if (orientation == "v" or abs(float(line["x1"]) - float(line["x0"])) < abs(float(line["bottom"]) - float(line["top"]))) and not any(
+            _vertical_edge_owned_by_excluded_bbox(line, bbox) for bbox in excluded_bboxes
+        ):
+            vertical_edges.append(dict(line))
+
+    for rect in getattr(page, "rects", []) or []:
+        rect_top = float(rect.get("top", 0.0))
+        rect_bottom = float(rect.get("bottom", rect_top))
+        if rect_bottom <= body_top or rect_top >= body_bottom:
+            continue
+        if _is_horizontal_separator_rect(rect) and not any(
+            _horizontal_edge_owned_by_excluded_bbox(rect, bbox) for bbox in excluded_bboxes
+        ):
+            horizontal_edges.append(dict(rect))
+        if _is_vertical_separator_rect(rect) and not any(
+            _vertical_edge_owned_by_excluded_bbox(rect, bbox) for bbox in excluded_bboxes
+        ):
+            vertical_edges.append(dict(rect))
+
+    if not horizontal_edges:
+        horizontal_edges = [
+            edge
+            for edge in page.horizontal_edges
+            if float(edge["bottom"]) > body_top
+            and float(edge["top"]) < body_bottom
+            and not any(_horizontal_edge_owned_by_excluded_bbox(edge, bbox) for bbox in excluded_bboxes)
+        ]
+    if not vertical_edges:
+        vertical_edges = [
+            edge
+            for edge in page.vertical_edges
+            if float(edge["bottom"]) > body_top
+            and float(edge["top"]) < body_bottom
+            and not any(_vertical_edge_owned_by_excluded_bbox(edge, bbox) for bbox in excluded_bboxes)
+        ]
 
     merged_h = []
     for group in _build_segment_groups(horizontal_edges, axis_key="top", merge_fn=_merge_horizontal_band_segments, tolerance=1.0):
@@ -1590,21 +1666,11 @@ def _table_regions(
             stack.extend(graph[idx] - visited)
 
         component_lines = [merged_h[idx] for idx in component]
-        # 기본 규칙: 수평선 3개 + 수직 연결. 색이 있는 선분이 있으면
-        # 수평선 2개 + 수직 1개 조합도 테이블 후보로 허용.
+        # Table regions are admitted by visible grid geometry only:
+        # at least two horizontal rules with at least one shared vertical connector.
         if not shared_verticals:
             continue
-
-        has_color_line = any(_is_colored_line(edge) for edge in component_lines)
-        has_color_line = has_color_line or any(
-            _is_colored_line(merged_v[idx])
-            for idx in shared_verticals
-        )
-        if len(component_lines) < min_lines and not (
-            len(component_lines) >= 2
-            and len(shared_verticals) >= 1
-            and has_color_line
-        ):
+        if len(component_lines) < 2:
             continue
 
         x0 = min(float(edge["x0"]) for edge in component_lines)
@@ -2134,82 +2200,60 @@ def _extract_tables_from_crop(
     strategy_source: str = "crop",
     strategy_source_name: str | None = None,
 ) -> List[TableChunk]:
-    # Crop-level extraction gives table_settings a tighter region and improves recovery of border-light tables.
-    x0, y0, x1, y1 = crop_bbox
-    crop = page.crop(crop_bbox)
+    # Stage 1: rebuild rows/columns from black line geometry and line-payload text assignment.
+    line_rows, row_line_positions, column_line_positions, row_bands, column_bands, line_payload_debug = (
+        _build_grid_rows_from_black_lines(page, crop_bbox)
+    )
 
-    v_lines = []
-    for edge in page.vertical_edges:
-        if edge["x0"] < x0 or edge["x0"] > x1:
-            continue
-        if edge["top"] > y1 or edge["bottom"] < y0:
-            continue
-        v_lines.append(edge["x0"])
-
-    explicit_v = sorted({x0, x1, *v_lines})
-    candidates = [
-        {
-            "vertical_strategy": "lines",
-            "horizontal_strategy": "lines",
-            "explicit_vertical_lines": explicit_v,
-            "snap_tolerance": 3,
-            "join_tolerance": 3,
-            "intersection_tolerance": 2,
-            "min_words_vertical": 1,
-            "min_words_horizontal": 1,
-        },
-        {
-            "vertical_strategy": "text",
-            "horizontal_strategy": "lines",
-            "explicit_vertical_lines": explicit_v,
-            "snap_tolerance": 4,
-            "join_tolerance": 4,
-            "intersection_tolerance": 2,
-            "min_words_vertical": 1,
-            "min_words_horizontal": 1,
-        },
-    ]
-
-    source_name = strategy_source_name
-    for settings_index, settings in enumerate(candidates):
-        # Try line-driven extraction first, then a text-assisted fallback inside the same crop.
-        tables = crop.extract_tables(table_settings=settings) or []
-        cleaned = []
-        rejected = []
-        for table in tables:
-            reason = _table_rejection_reason(table)
-            if reason is not None:
-                rejected.append(
-                    {
-                        "rows": len(table),
-                        "cols": max((len(row) for row in table), default=0),
-                        "reason": reason,
-                    }
-                )
-                _log_rejected_table(table, crop_bbox, reason)
-                continue
-            cleaned.append(_merge_cells(table))
+    if line_rows:
         if strategy_debug is not None:
             strategy_debug.append(
                 {
                     "source": strategy_source,
-                    "source_name": source_name,
+                    "source_name": strategy_source_name,
                     "crop_bbox": [round(float(value), 2) for value in crop_bbox],
-                    "strategy_index": settings_index,
-                    "mode": "crop_candidate",
-                    "vertical_strategy": settings.get("vertical_strategy"),
-                    "horizontal_strategy": settings.get("horizontal_strategy"),
-                    "raw_table_count": len(tables),
-                    "raw_row_count": sum(len(table) for table in tables),
-                    "kept_table_count": len(cleaned),
-                    "kept_row_count": sum(len(row) for row in cleaned),
-                    "rejected_count": len(rejected),
-                    "rejections": rejected,
+                    "mode": "line_grid",
+                    "strategy_index": 0,
+                    "status": "success",
+                    "row_line_count": len(row_line_positions),
+                    "column_line_count": len(column_line_positions),
+                    "row_band_count": len(row_bands),
+                    "column_band_count": len(column_bands),
+                    "raw_row_lines": int(line_payload_debug.get("raw_row_lines", 0)),
+                    "raw_vertical_lines": int(line_payload_debug.get("raw_vertical_lines", 0)),
+                    "raw_payload_count": int(line_payload_debug.get("raw_payload_count", 0)),
+                    "assigned_payload_count": int(line_payload_debug.get("assigned_payload_count", 0)),
+                    "ambiguous_payload_count": int(line_payload_debug.get("ambiguous_payload_count", 0)),
+                    "unassigned_payload_count": int(line_payload_debug.get("unassigned_payload_count", 0)),
                     "used_fallback_to_text_rows": False,
                 }
             )
-        if cleaned:
-            return [(table, crop_bbox) for table in cleaned]
+        return [(line_rows, crop_bbox)]
+
+    if strategy_debug is not None:
+        strategy_debug.append(
+            {
+                "source": strategy_source,
+                "source_name": strategy_source_name,
+                "crop_bbox": [round(float(value), 2) for value in crop_bbox],
+                "mode": "line_grid",
+                "strategy_index": 0,
+                "status": "failed",
+                "failure_reason": line_payload_debug.get("reason", "line_grid_failed"),
+                "failure_stage": line_payload_debug.get("stage"),
+                "row_line_count": len(row_line_positions),
+                "column_line_count": len(column_line_positions),
+                "row_band_count": len(row_bands),
+                "column_band_count": len(column_bands),
+                "raw_row_lines": int(line_payload_debug.get("raw_row_lines", 0)),
+                "raw_vertical_lines": int(line_payload_debug.get("raw_vertical_lines", 0)),
+                "raw_payload_count": int(line_payload_debug.get("raw_payload_count", 0)),
+                "assigned_payload_count": int(line_payload_debug.get("assigned_payload_count", 0)),
+                "ambiguous_payload_count": int(line_payload_debug.get("ambiguous_payload_count", 0)),
+                "unassigned_payload_count": int(line_payload_debug.get("unassigned_payload_count", 0)),
+                "used_fallback_to_text_rows": fallback_to_text_rows,
+            }
+        )
 
     if fallback_to_text_rows:
         line_rows = _compact_fallback_rows(_extract_region_line_rows(page, crop_bbox))
@@ -2217,9 +2261,9 @@ def _extract_tables_from_crop(
             strategy_debug.append(
                 {
                     "source": strategy_source,
-                    "source_name": source_name,
+                    "source_name": strategy_source_name,
                     "crop_bbox": [round(float(value), 2) for value in crop_bbox],
-                    "strategy_index": len(candidates),
+                    "strategy_index": 1,
                     "mode": "line_fallback",
                     "raw_table_count": 1 if line_rows else 0,
                     "raw_row_count": len(line_rows),
@@ -2233,6 +2277,21 @@ def _extract_tables_from_crop(
         if line_rows:
             return [(line_rows, crop_bbox)]
 
+    # legacy_path = page.extract_tables(
+    #     table_settings={
+    #         "vertical_strategy": "lines",
+    #         "horizontal_strategy": "lines",
+    #         "min_words_vertical": 2,
+    #         "min_words_horizontal": 2,
+    #         "snap_tolerance": 2,
+    #         "join_tolerance": 1,
+    #     }
+    # )
+    # if legacy_path:
+    #     legacy_rows = _compact_fallback_rows(legacy_path[0]) if legacy_path else []
+    #     if legacy_rows:
+    #         return [(legacy_rows, crop_bbox)]
+
     return []
 
 
@@ -2242,7 +2301,6 @@ def _extract_tables(
     strategy_debug: list[dict] | None = None,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] | None = None,
 ) -> List[TableChunk]:
-    # Region-based extraction is preferred because full-page fallback tends to over-merge adjacent content.
     page = _filter_page_for_extraction(page)
     seen_keys = set()
     merged: List[TableChunk] = []
@@ -2278,85 +2336,6 @@ def _extract_tables(
 
     if merged or not force_table:
         return merged
-
-    # The caller can opt into a more aggressive page-wide fallback when geometric table regions are absent.
-    full_bbox = (0.0, 0.0, float(page.width), float(page.height))
-    fallback_settings = [
-        {
-            "vertical_strategy": "lines",
-            "horizontal_strategy": "lines",
-            "snap_tolerance": 3,
-            "join_tolerance": 3,
-            "intersection_tolerance": 2,
-            "min_words_vertical": 1,
-            "min_words_horizontal": 1,
-        },
-        {
-            "vertical_strategy": "text",
-            "horizontal_strategy": "lines",
-            "snap_tolerance": 4,
-            "join_tolerance": 4,
-            "intersection_tolerance": 2,
-            "min_words_vertical": 1,
-            "min_words_horizontal": 1,
-        },
-        {
-            "vertical_strategy": "text",
-            "horizontal_strategy": "text",
-            "snap_tolerance": 4,
-            "join_tolerance": 4,
-            "intersection_tolerance": 2,
-            "min_words_vertical": 1,
-            "min_words_horizontal": 1,
-        },
-    ]
-
-    for settings_index, settings in enumerate(fallback_settings):
-        tables = page.extract_tables(table_settings=settings) or []
-        cleaned = []
-        rejected = []
-        for table in tables:
-            reason = _table_rejection_reason(table)
-            if reason is not None:
-                rejected.append(
-                    {
-                        "rows": len(table),
-                        "cols": max((len(row) for row in table), default=0),
-                        "reason": reason,
-                    }
-                )
-                _log_rejected_table(table, full_bbox, reason)
-                continue
-            cleaned.append(_merge_cells(table))
-        if strategy_debug is not None:
-            strategy_debug.append(
-                {
-                    "source": "full_page_fallback",
-                    "source_name": None,
-                    "crop_bbox": [round(float(value), 2) for value in full_bbox],
-                    "strategy_index": settings_index,
-                    "mode": "full_page_candidate",
-                    "vertical_strategy": settings.get("vertical_strategy"),
-                    "horizontal_strategy": settings.get("horizontal_strategy"),
-                    "raw_table_count": len(tables),
-                    "raw_row_count": sum(len(table) for table in tables),
-                    "kept_table_count": len(cleaned),
-                    "kept_row_count": sum(len(row) for row in cleaned),
-                    "rejected_count": len(rejected),
-                    "rejections": rejected,
-                    "used_fallback_to_text_rows": False,
-                }
-            )
-        if cleaned:
-            for table in cleaned:
-                table = _normalize_extracted_table(table)
-                rows_key = tuple(tuple(row) for row in table)
-                bbox_key = tuple(round(v, 2) for v in full_bbox)
-                key = (rows_key, bbox_key)
-                if key not in seen_keys:
-                    seen_keys.add(key)
-                    merged.append((table, full_bbox))
-            break
     return merged
 
 
@@ -2407,6 +2386,8 @@ def _merge_split_rows(rows: TableRows) -> TableRows:
 
     merged: TableRows = [list(rows[0])]
     for row in rows[1:]:
+        if not any(_normalize_text(cell) for cell in row):
+            continue
         can_merge_header, header_idx, joiner = _can_merge_header_split_rows(
             merged[-1],
             row,
@@ -2443,9 +2424,8 @@ def _append_output_table(
     page_no: int | None = None,
 ) -> None:
     # Table numbering is derived at append time so merged cross-page tables keep one output block.
-    merged_rows = _merge_split_rows(table_rows)
-    collapsed_rows = _collapse_structural_triplet_columns(merged_rows)
-    table_text = _table_text_from_rows(collapsed_rows)
+    merged_rows = _collapse_empty_columns(_merge_split_rows(table_rows))
+    table_text = _table_text_from_rows(merged_rows)
     if table_text:
         block = f"[{document_id}_tables.md - Table {table_no}]\n{table_text}"
         if page_no is not None:

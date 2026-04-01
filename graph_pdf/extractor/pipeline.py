@@ -13,20 +13,20 @@ from .debug import _collect_page_edge_debug, _collect_rotated_text_debug, _colle
 from .images import _collect_embedded_image_refs, _extract_embedded_images
 from .notes import _collect_note_candidates, _note_body_text
 from .raw import materialize_raw_dump
-from .shared import TableRows, _merge_numeric_positions, _normalize_text
+from .shared import TableRows, _bboxes_intersect, _merge_numeric_positions, _normalize_text
 from .tables import (
     _append_output_table,
     _body_text_boxes,
+    _collapse_empty_columns,
     _continuation_regions_should_merge,
     _extract_tables,
     _header_row_count,
     _has_gap_text_after_bbox,
     _has_gap_text_before_bbox,
     _looks_like_header_row,
+    _merge_split_rows,
     _should_try_table_continuation_merge,
     _split_repeated_header,
-    _table_owned_body_lines,
-    _table_owned_body_line_bboxes,
     _vertical_axes_for_bbox,
 )
 from .text import _detect_body_bounds, _extract_body_text, _extract_body_text_lines, _extract_drawing_image_bboxes
@@ -119,109 +119,34 @@ def _rounded_bbox(raw_bbox: Sequence[float] | tuple[float, float, float, float])
 
 
 def _table_shape_signature(rows: Sequence[Sequence[str]]) -> tuple[int, int]:
-    row_count = len(rows)
-    if not rows:
+    normalized_rows = _rows_for_continuation_matching(rows)
+    row_count = len(normalized_rows)
+    if not normalized_rows:
         return (0, 0)
-    col_count = max(len(row) for row in rows)
+    col_count = max(len(row) for row in normalized_rows)
     return (row_count, col_count)
 
 
 def _table_header_signature(rows: Sequence[Sequence[str]]) -> tuple[int, str]:
-    header_count = _header_row_count(rows)
+    normalized_rows = _rows_for_continuation_matching(rows)
+    header_count = _header_row_count(normalized_rows)
     if not header_count:
-        if not rows:
+        if not normalized_rows:
             return (0, "")
-        values = [_normalize_text(cell) for cell in rows[0] if _normalize_text(cell)]
+        values = [_normalize_text(cell) for cell in normalized_rows[0] if _normalize_text(cell)]
         if not values:
             return (0, "")
         return (1, re.sub(r"\s+", "", " ".join(values)).strip())
     values: list[str] = []
-    for row in rows[:header_count]:
+    for row in normalized_rows[:header_count]:
         values.extend(_normalize_text(cell) for cell in row if _normalize_text(cell))
     return (header_count, re.sub(r"\s+", "", " ".join(values)).strip())
 
 
-def _looks_like_cross_page_continuation_rows(
-    previous_rows: Sequence[Sequence[str]],
-    current_rows: Sequence[Sequence[str]],
-) -> bool:
-    if not previous_rows or not current_rows:
-        return False
-
-    previous_header_count, previous_header_signature = _table_header_signature(previous_rows)
-    current_header_count, current_header_signature = _table_header_signature(current_rows)
-    repeated_header_trimmed = False
-    if (
-        previous_header_count
-        and previous_header_count == current_header_count
-        and previous_header_signature == current_header_signature
-    ):
-        trimmed_rows = [list(row) for row in current_rows[current_header_count:]]
-        repeated_header_trimmed = True
-    else:
-        trimmed_rows = _split_repeated_header(
-            [list(row) for row in previous_rows],
-            [list(row) for row in current_rows],
-        )
-        repeated_header_trimmed = len(trimmed_rows) < len(current_rows)
-    if not trimmed_rows:
-        return True
-    first_row = trimmed_rows[0]
-    non_empty = [_normalize_text(cell) for cell in first_row if _normalize_text(cell)]
-    if not non_empty:
-        return True
-    if len(non_empty) <= 2:
-        return True
-    if not repeated_header_trimmed:
-        return False
-
-    family_layout_signature = "familydisplaynametypenametypedescription"
-
-    def _leading_data_cell(rows: Sequence[Sequence[str]], *, reverse: bool = False) -> str:
-        iterator = reversed(rows) if reverse else iter(rows)
-        for row in iterator:
-            normalized = [_normalize_text(cell) for cell in row if _normalize_text(cell)]
-            if not normalized or _looks_like_header_row(row):
-                continue
-            leading = normalized[0]
-            if "packet" in leading.lower():
-                continue
-            if len(normalized) > 1 and "collected in up per" in normalized[1].lower():
-                leading = f"{leading} {normalized[1]}".strip()
-            return leading
-        return ""
-
-    previous_family = _leading_data_cell(previous_rows, reverse=True)
-    current_family = _leading_data_cell(trimmed_rows)
-    if not previous_family or not current_family:
-        return False
-
-    previous_family_normalized = previous_family.lower()
-    current_family_normalized = current_family.lower()
-
-    if (
-        family_layout_signature in previous_header_signature.lower()
-        and family_layout_signature in current_header_signature.lower()
-    ):
-        return True
-
-    previous_is_collected = "collected in up per" in previous_family_normalized
-    current_is_collected = "collected in up per" in current_family_normalized
-    if previous_is_collected != current_is_collected:
-        return False
-    if not previous_is_collected:
-        return False
-
-    stopwords = {"interface", "per", "collected", "in", "up", "ip"}
-
-    def _context_keywords(text: str) -> set[str]:
-        return {
-            token
-            for token in re.findall(r"[a-z0-9-]+", text.lower())
-            if token not in stopwords and len(token) > 1
-        }
-
-    return bool(_context_keywords(previous_family_normalized) & _context_keywords(current_family_normalized))
+def _rows_for_continuation_matching(rows: Sequence[Sequence[str]]) -> TableRows:
+    if not rows:
+        return []
+    return _collapse_empty_columns(_merge_split_rows([list(row) for row in rows]))
 
 
 def _table_shapes_compatible(
@@ -408,27 +333,6 @@ def _body_excluded_bboxes(
     return excluded
 
 
-def _table_owned_header_texts(
-    tables: Sequence[Tuple[TableRows, Tuple[float, float, float, float]]],
-) -> set[str]:
-    owned_texts: set[str] = set()
-    for rows, _bbox in tables:
-        if not rows:
-            continue
-        header_row_count = _header_row_count(rows)
-        header_rows = rows[:header_row_count] if header_row_count else rows[:1]
-        for row in header_rows:
-            joined = " ".join(
-                _normalize_text(str(cell or ""))
-                for cell in row
-                if _normalize_text(str(cell or ""))
-            ).strip()
-            normalized = _normalize_text(joined)
-            if normalized:
-                owned_texts.add(normalized)
-    return owned_texts
-
-
 def _image_reference_text(document_id: str, index: int, suffix: str) -> str:
     normalized_suffix = str(suffix or "").strip() or ".png"
     if not normalized_suffix.startswith("."):
@@ -469,7 +373,7 @@ def _is_cross_page_continuation_candidate(
     continuation_gap: float | None = None,
     edge_tolerance: float = 24.0,
 ) -> bool:
-    _x0, top, _x1, bottom = bbox
+    _x0, _top, _x1, bottom = bbox
     gap = abs(bottom - body_bottom)
     tolerance = float(edge_tolerance)
     if gap <= tolerance:
@@ -478,18 +382,7 @@ def _is_cross_page_continuation_candidate(
         return False
 
     tolerance = max(tolerance, min(80.0, float(continuation_gap) * 1.5))
-    if gap > tolerance:
-        return False
-    if body_top is None:
-        return True
-
-    span = max(0.0, float(body_bottom) - float(body_top))
-    if span <= 0.0:
-        return True
-    table_height = max(0.0, float(bottom) - float(top))
-    if table_height >= span * 0.45:
-        return True
-    return float(top) >= float(body_top) + (span * 0.5)
+    return gap <= tolerance
 
 
 @dataclass
@@ -570,6 +463,7 @@ class _DocumentOutputState:
 
 
 def _to_cross_page_candidate(state: _PendingTableState) -> _CrossPageTableCandidate:
+    flattened_rows = state.flattened_rows()
     return _CrossPageTableCandidate(
         table_no=int(state.table_no or 0),
         start_page=int(state.start_page or 0),
@@ -580,8 +474,8 @@ def _to_cross_page_candidate(state: _PendingTableState) -> _CrossPageTableCandid
             float(state.bbox[2]),
             float(state.bbox[3]),
         ),
-        rows=[list(row) for row in state.flattened_rows()],
-        shape_signature=_table_shape_signature(state.flattened_rows()),
+        rows=[list(row) for row in flattened_rows],
+        shape_signature=_table_shape_signature(flattened_rows),
         axes=list(state.axes),
         has_gap_text=bool(state.has_gap_text),
         page_height=state.page_height,
@@ -616,26 +510,20 @@ def _pick_cross_page_anchor(
 ) -> _CrossPageTableCandidate | None:
     if not anchors or not current_bbox:
         return None
+    normalized_current_shape = _table_shape_signature(current_rows)
+    if normalized_current_shape != (0, 0):
+        current_shape = normalized_current_shape
 
     best_anchor: _CrossPageTableCandidate | None = None
     best_score = -1.0
 
     for anchor in anchors:
-        has_x_overlap = _has_x_overlap(
-            candidate=anchor.bbox,
-            reference=current_bbox,
-            min_ratio=0.22,
-            min_width=8.0,
-        )
         has_axis_overlap = any(
             abs(axis - current_axis) <= 1.0
             for axis in anchor.axes
             for current_axis in current_axes
         )
-        if not has_x_overlap and not has_axis_overlap:
-            continue
-
-        if not _looks_like_cross_page_continuation_rows(anchor.rows, current_rows):
+        if not has_axis_overlap:
             continue
 
         if not _table_shapes_compatible(anchor.shape_signature, current_shape):
@@ -666,7 +554,7 @@ def _pick_cross_page_anchor(
             continue
 
         overlap_width = _x_overlap_width(anchor.bbox, current_bbox)
-        if overlap_width <= 0.0 and has_axis_overlap:
+        if overlap_width <= 0.0:
             overlap_width = 5.0
         current_width = max(1.0, float(current_bbox[2]) - float(current_bbox[0]))
         anchor_width = max(1.0, float(anchor.bbox[2]) - float(anchor.bbox[0]))
@@ -675,7 +563,12 @@ def _pick_cross_page_anchor(
         if abs(anchor.shape_signature[1] - current_shape[1]) <= 1:
             shape_bonus = 0.5
         score = overlap_ratio + (overlap_width / 1000.0) + shape_bonus
-        if score <= best_score:
+        if best_anchor is not None and score == best_score:
+            if anchor.last_page < best_anchor.last_page:
+                continue
+            if anchor.last_page == best_anchor.last_page and float(anchor.bbox[3]) <= float(best_anchor.bbox[3]):
+                continue
+        elif score < best_score:
             continue
         best_score = score
         best_anchor = anchor
@@ -689,15 +582,102 @@ def _first_table_row_signature(table_rows: Sequence[Sequence[str]]) -> tuple[str
     return tuple(_normalize_text(cell) for cell in table_rows[0])
 
 
+def _normalize_header_row_signature(row: Sequence[str]) -> tuple[str, ...]:
+    return tuple(
+        _normalize_text((str(cell).split("\n", 1)[0]).strip()) if str(cell).strip() else ""
+        for cell in row
+    )
+
+
+def _merge_header_fragment_into_previous_row(
+    previous_rows: TableRows,
+    chunk: TableRows,
+    repeated_header_count: int,
+) -> tuple[TableRows, int]:
+    if not previous_rows or not chunk or repeated_header_count <= 0:
+        return chunk, 0
+
+    previous_last_row = previous_rows[-1]
+    header_rows_for_merge = min(max(1, repeated_header_count), len(chunk))
+    candidate_row_indices = list(range(header_rows_for_merge - 1, -1, -1))
+
+    # Prefer the deepest header row in the repeated header block when deciding where continuation text belongs.
+    fragment_row_index = None
+    for row_index in candidate_row_indices:
+        candidate_row = chunk[row_index]
+        if len(candidate_row) < 2:
+            continue
+        candidate_signature = _normalize_header_row_signature(candidate_row)
+        if not any(candidate_signature):
+            continue
+        if not _looks_like_header_row(candidate_signature):
+            continue
+        if not any("\n" in str(cell) for cell in candidate_row):
+            continue
+        if _looks_like_header_row([_normalize_text(cell) for cell in previous_last_row]):
+            continue
+        fragment_row_index = row_index
+        break
+
+    if fragment_row_index is None:
+        return chunk, 0
+
+    first_row = chunk[fragment_row_index]
+    if len(first_row) < 2:
+        return chunk, 0
+
+    first_row_signature = _normalize_header_row_signature(first_row)
+    if not first_row_signature:
+        return chunk, 0
+
+    continuation: list[tuple[int, str]] = []
+    for idx, cell in enumerate(first_row):
+        text = str(cell)
+        if "\n" not in text:
+            continue
+        header_text, tail = text.split("\n", 1)
+        header_signature = _normalize_text(header_text)
+        if not header_signature:
+            continue
+        tail = "\n".join(part.strip() for part in tail.splitlines() if part.strip())
+        if not tail:
+            continue
+        if first_row_signature[idx] != header_signature:
+            continue
+        continuation.append((idx, tail))
+
+    if not continuation:
+        return chunk, 0
+
+    if len(previous_last_row) < len(first_row):
+        previous_last_row.extend([""] * (len(first_row) - len(previous_last_row)))
+
+    for idx, text in continuation:
+        previous_value = _normalize_text(previous_last_row[idx])
+        if previous_value:
+            separator = "\n" if "\n" in previous_value else "\n"
+            previous_last_row[idx] = f"{previous_last_row[idx]}{separator}{text}"
+        else:
+            previous_last_row[idx] = text
+
+    return (
+        [row for index, row in enumerate(chunk) if index != fragment_row_index],
+        1,
+    )
+
+
 def _strip_repeated_headers_by_chunk(chunks: Sequence[TableRows]) -> TableRows:
     normalized_rows: TableRows = []
     previous_header_signature = ""
     previous_header_count = 0
     previous_first_row_signature: tuple[str, ...] = ()
+    previous_chunk: TableRows = []
     for chunk in chunks:
         if not chunk:
             continue
+
         current_header_count, current_signature = _table_header_signature(chunk)
+        current_first_row_signature = _first_table_row_signature(chunk)
         repeated_header_count = 0
         if (
             normalized_rows
@@ -708,7 +688,6 @@ def _strip_repeated_headers_by_chunk(chunks: Sequence[TableRows]) -> TableRows:
         ):
             repeated_header_count = current_header_count
         else:
-            current_first_row_signature = _first_table_row_signature(chunk)
             if (
                 normalized_rows
                 and current_first_row_signature
@@ -716,10 +695,67 @@ def _strip_repeated_headers_by_chunk(chunks: Sequence[TableRows]) -> TableRows:
             ):
                 repeated_header_count = 1
 
-        normalized_rows.extend(chunk[repeated_header_count:])
+        if (
+            repeated_header_count < previous_header_count
+            and normalized_rows
+            and previous_chunk
+            and previous_header_count > 0
+        ):
+            max_candidate_index = min(previous_header_count, len(chunk), len(previous_chunk))
+            for row_index in range(repeated_header_count, max_candidate_index):
+                candidate_signature = _normalize_header_row_signature(chunk[row_index])
+                previous_signature = _normalize_header_row_signature(previous_chunk[row_index])
+                if (
+                    not candidate_signature
+                    or not previous_signature
+                    or candidate_signature != previous_signature
+                ):
+                    continue
+                if not any(_looks_like_header_row([cell]) for cell in candidate_signature if cell):
+                    continue
+                if not any("\n" in str(cell) for cell in chunk[row_index]):
+                    continue
+                repeated_header_count = row_index + 1
+                break
+
+        chunk = [list(row) for row in chunk]
+        header_trimmed = False
+        if normalized_rows:
+            trimmed_chunk = _split_repeated_header(
+                [list(row) for row in normalized_rows],
+                [list(row) for row in chunk],
+            )
+            if len(trimmed_chunk) < len(chunk):
+                chunk = [list(row) for row in trimmed_chunk]
+                repeated_header_count = 0
+                header_trimmed = True
+
+        if header_trimmed and normalized_rows and chunk:
+            first_row = list(chunk[0])
+            non_empty = [idx for idx, cell in enumerate(first_row) if _normalize_text(cell)]
+            previous = normalized_rows[-1]
+            if len(previous) < len(first_row):
+                previous.extend([""] * (len(first_row) - len(previous)))
+            if first_row and not _normalize_text(first_row[0]) and len(non_empty) == 1 and non_empty[0] > 0:
+                idx = non_empty[0]
+                joiner = "\n" if previous[idx].strip() else ""
+                previous[idx] = f"{previous[idx]}{joiner}{first_row[idx]}".strip()
+                normalized_rows[-1] = previous
+                chunk = [list(row) for row in chunk[1:]]
+        chunk, merged_fragment_count = _merge_header_fragment_into_previous_row(
+            normalized_rows,
+            chunk,
+            repeated_header_count,
+        )
+
+        repeated_header_count = max(0, repeated_header_count - min(merged_fragment_count, repeated_header_count))
+
+        rows_to_extend = [list(row) for row in chunk[repeated_header_count:]]
+        normalized_rows.extend(rows_to_extend)
         previous_header_count = current_header_count
         previous_header_signature = current_signature
-        previous_first_row_signature = _first_table_row_signature(chunk)
+        previous_first_row_signature = current_first_row_signature
+        previous_chunk = [list(row) for row in chunk]
     return normalized_rows
 
 
@@ -1222,6 +1258,7 @@ def extract_pdf_to_outputs(
                     note_references.append({"text": note_text, "bbox": candidate_bbox})
 
             strategy_debug: list[dict] | None = [] if debug else None
+            # legacy_extraction = page.extract_tables()  # 기존 pdfplumber 테이블 추출 경로 (요청에 따라 비활성화)
             detected_tables = _extract_tables(
                 page,
                 force_table=force_table,
@@ -1340,14 +1377,6 @@ def extract_pdf_to_outputs(
                     *embedded_image_regions,
                 ],
             )
-            table_owned_body_line_bboxes = _table_owned_body_line_bboxes(
-                page,
-                tables=tables,
-                header_margin=header_margin,
-                footer_margin=footer_margin,
-            )
-            table_owned_texts = _table_owned_header_texts(tables)
-            page_excluded_bboxes.extend(table_owned_body_line_bboxes)
             page_excluded_bboxes.extend(table_exclusion_regions)
             page_excluded_bboxes.extend(note_bboxes)
             page_table_references: List[dict] = []
@@ -1378,12 +1407,6 @@ def extract_pdf_to_outputs(
                     ],
                     heading_levels=heading_levels,
                 )
-                if table_owned_texts:
-                    page_text = "\n".join(
-                        line
-                        for line in page_text.splitlines()
-                        if _normalize_text(line) not in table_owned_texts
-                    )
                 if page_text.strip():
                     final_page_text = f"{_format_page_comment(page_idx)}\n{page_text}" if page_write else page_text
                     if chapter_bridge_page:
@@ -1466,13 +1489,9 @@ def extract_pdf_to_outputs(
                         min_x_overlap_ratio=0.22,
                         min_x_overlap_width=8.0,
                     )
-                    if _is_cross_page_continuation_candidate(
-                        current_document_state.pending_table_state.bbox,
-                        body_top=body_top,
-                        body_bottom=body_bottom,
-                        continuation_gap=continuation_gap,
-                    ):
-                        current_document_state.cross_page_candidates.append(_to_cross_page_candidate(current_document_state.pending_table_state))
+                    current_document_state.cross_page_candidates.append(
+                        _to_cross_page_candidate(current_document_state.pending_table_state)
+                    )
                     continue
 
                 _flush_pending_table(current_document_state)
@@ -1500,13 +1519,9 @@ def extract_pdf_to_outputs(
                     min_x_overlap_ratio=0.22,
                     min_x_overlap_width=8.0,
                 )
-                if _is_cross_page_continuation_candidate(
-                    bbox,
-                    body_top=body_top,
-                    body_bottom=body_bottom,
-                    continuation_gap=continuation_gap,
-                ):
-                    current_document_state.cross_page_candidates.append(_to_cross_page_candidate(current_document_state.pending_table_state))
+                current_document_state.cross_page_candidates.append(
+                    _to_cross_page_candidate(current_document_state.pending_table_state)
+                )
 
             page_content_references = _collect_page_image_references(
                 embedded_refs=embedded_image_refs,
@@ -1539,12 +1554,6 @@ def extract_pdf_to_outputs(
                 + note_references,
                 heading_levels=heading_levels,
             )
-            if table_owned_texts:
-                page_text = "\n".join(
-                    line
-                    for line in page_text.splitlines()
-                    if _normalize_text(line) not in table_owned_texts
-                )
             if page_text.strip():
                 final_page_text = f"{_format_page_comment(page_idx)}\n{page_text}" if page_write else page_text
                 if chapter_bridge_page:

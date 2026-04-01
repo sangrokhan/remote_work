@@ -430,9 +430,6 @@ def _clean_cell_line(line: str) -> str:
     # Table cell cleanup is conservative: collapse whitespace and drop a common trailing watermark fragment.
     cleaned = str(line or "").strip()
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    tokens = cleaned.split()
-    if len(tokens) >= 2 and tokens[-1].upper() == "I":
-        cleaned = " ".join(tokens[:-1]).strip()
     return cleaned
 
 
@@ -520,6 +517,15 @@ def _paragraph_line_size_hint(line: dict) -> float:
     return height
 
 
+def _line_color_key(line: dict) -> tuple[float, ...] | None:
+    color = line.get("color")
+    if isinstance(color, tuple):
+        return tuple(round(float(value), 3) for value in color)
+    if isinstance(color, list):
+        return tuple(round(float(value), 3) for value in color)
+    return None
+
+
 def _should_merge_paragraph_lines(
     previous: dict,
     line: dict,
@@ -536,6 +542,11 @@ def _should_merge_paragraph_lines(
         cur_level = _line_heading_level(line, heading_levels)
         if prev_level is None or cur_level is None or prev_level != cur_level:
             return False
+
+    previous_color = _line_color_key(previous)
+    current_color = _line_color_key(line)
+    if previous_color is not None and current_color is not None and previous_color != current_color:
+        return False
 
     # Decide with the target (current) line as the reference for wrap behavior.
     line_size_hint = _paragraph_line_size_hint(line)

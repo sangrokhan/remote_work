@@ -1,7 +1,7 @@
 [FGR-BC0201_tables.md - Table 1]
 | Parameter | Description |
 | --- | --- |
-| srb-id | The ID of SRB to retrieve. 1: Information on SRB1. 2: Information on SRB2.<br>3: Information on SRB3 for NSA. |
+| srb-id | The ID of SRB to retrieve. 1: Information on SRB1. 2: Information on SRB2. 3: Information on SRB3 for NSA. |
 | gnb-timer-poll-retransmit | This parameter is the gNB timer to retransmit the poll in a transmitting AM RLC entity. |
 | ue-timer-poll-retransmit | This parameter is the UE timer to retransmit the poll in a transmitting AM RLC entity. |
 | gnb-poll-pdu | This parameter is the threshold to trigger the poll for pollPDU in an AM RLC entity at gNB side. |

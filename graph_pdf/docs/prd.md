@@ -1,5 +1,7 @@
 # PDF Roundtrip Extraction PRD
 
+> **제약:** 본 PRD 범위에서 휴리스틱한 접근은 사용할 수 없으며, 재현 가능한 규칙 기반/기하 기반 로직만 적용한다.
+
 ## Purpose
 
 This document is a working guide for agents building a PDF parser for PDFs generated from Word documents.

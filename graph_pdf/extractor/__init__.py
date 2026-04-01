@@ -17,7 +17,6 @@ from .shared import (
 )
 from .tables import (
     _append_output_table,
-    _collapse_structural_triplet_columns,
     _continuation_regions_should_merge,
     _extract_tables,
     _merge_split_rows,
@@ -46,7 +45,6 @@ __all__ = [
     "_append_output_table",
     "_build_body_blocks",
     "_char_rotation_degrees",
-    "_collapse_structural_triplet_columns",
     "_collect_page_edge_debug",
     "_collect_rotated_text_debug",
     "_collect_table_drawing_debug",

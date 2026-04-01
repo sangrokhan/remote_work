@@ -35,12 +35,16 @@ o FGR-RS7001 UL pre-scheduling
  The scheduling adjustment in the eNB cell for each DSCP value is supported by LTE-SW4213 and LTE-ME3319.
 ### SYSTEM IMPACT
 This section describes how this feature impacts the network functions and capabilities.
-Interdependencies between Features This feature affects periodic UL grant activation (FGR-RS7001 UL pre-scheduling) and DL proportional fair scheduling metric for non-GBR bearers. (FGR-RS0703 QoS Scheduling).
+Interdependencies between Features
+This feature affects periodic UL grant activation (FGR-RS7001 UL pre-scheduling) and DL proportional fair scheduling metric for non-GBR bearers. (FGR-RS0703 QoS Scheduling).
 If this feature is on in the gNB-CU, the gNB-CU does not mark the DSCP field of DL packets based on the 'FGR-CC4203 QoS Profile-based DSCP Mapping' feature. The gNB-CU keeps the DSCP value transmitted from the core network when sending DL packets to gNB-DU. The gNB-DU applies UL pre-scheduling and adjusts DL scheduling priority based on the DSCP of DL packets.
-Performance and Capacity None
-Coverage None
+Performance and Capacity
+None
+Coverage
+None
 
-Interfaces F1-U DL packet’s outer IP DSCP becomes the value when gNB is received from the core network.
+Interfaces
+F1-U DL packet’s outer IP DSCP becomes the value when gNB is received from the core network.
 ### FEATURE DESCRIPTION
 This feature provides DL scheduling weight value for DL scheduling prioritization over non-GBR bearers and provides periodic UL grant depending on the service.
 To identify the service at gNB, the packet inspection should be performed at the core network according to operator’s network configuration. The core network marks specific DSCP value in outer IP header for the service configured by operator.
@@ -64,13 +68,16 @@ None
 This section describes how to configure the feature in Samsung system and provides associated key parameters, counters, and KPIs.
 #### How to Activate
 This section provides the information that you need to configure the feature.
-Preconditions There are no specific preconditions to activate this feature.
-Activation Procedure To activate this feature, do the following:
+Preconditions
+There are no specific preconditions to activate this feature.
+Activation Procedure
+To activate this feature, do the following:
  Run dscp-bypass-function and set dscp-bypass-enable to on, then run dscp-bypass-function/nr-dscp-bypass-entries and/or dscp-bypass-function/dscp-bypass-entries and set dscp-bypass-mcg and/or dscp-bypass-scg to a value other than 0.
  Run dl-scheduling-dscp and set non-gbr-pf-weight-dscp-dl to a value other than 0.
  Run ul-scheduling-dscp and set ul-preschedule-group to a value other than 255.
 
-Deactivation Procedure To deactivate this feature, do the following:
+Deactivation Procedure
+To deactivate this feature, do the following:
  Run dscp-bypass-function and set dscp-bypass-enable to off.
  Run dl-scheduling-dscp and set non-gbr-pf-weight-dscp-dl to 0.
  Run ul-scheduling-dscp and set ul-preschedule-group to 255.
