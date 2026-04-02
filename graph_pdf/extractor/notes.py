@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import re
-from typing import List, Sequence
+from typing import Any, List, Sequence
 
 import pdfplumber
 
 from .tables import (
-    _candidate_image_regions_for_notes,
+    _THIN_FILL_RECT_MAX_HEIGHT,
+    _bbox_x_overlap_ratio,
     _compact_fallback_rows,
     _extract_region_line_payloads,
     _extract_region_line_rows,
-    _note_anchors_for_bbox,
-    _note_group_region_candidates,
-    _select_note_anchor_for_bbox,
+    _line_color_key,
+    _normalize_color_match,
 )
 from .shared import _normalize_text
-from .text import _normalize_cell_lines
+from .text import _detect_body_bounds, _normalize_cell_lines
 
 
 def _note_body_text(rows: Sequence[Sequence[str]]) -> str:
@@ -43,6 +43,238 @@ def _note_body_text(rows: Sequence[Sequence[str]]) -> str:
     if re.match(r"(?i)^note\s*:", text):
         return re.sub(r"(?i)^note\s*:\s*", "Note: ", text, count=1)
     return f"Note: {text}"
+
+
+def _candidate_image_regions_for_notes(
+    page: pdfplumber.page.PageObject,
+    min_width: float = 12.0,
+    min_height: float = 10.0,
+) -> List[tuple[float, float, float, float]]:
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
+    regions: List[tuple[float, float, float, float]] = []
+    for image in getattr(page, "images", []) or []:
+        x0 = float(image.get("x0", 0.0))
+        top = float(image.get("top", 0.0))
+        x1 = float(image.get("x1", x0))
+        bottom = float(image.get("bottom", top))
+        if x1 <= x0 or bottom <= top:
+            continue
+        if (x1 - x0) < min_width or (bottom - top) < min_height:
+            continue
+        if bottom <= body_top or top >= body_bottom:
+            continue
+        regions.append((x0, top, x1, bottom))
+    regions.sort(key=lambda bbox: (bbox[1], bbox[0]))
+    return regions
+
+
+def _blue_note_horizontal_segments(
+    page: pdfplumber.page.PageObject,
+    min_length: float = 90.0,
+) -> List[dict[str, Any]]:
+    body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
+
+    def is_blue_color(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return False
+        if isinstance(value, (list, tuple)) and len(value) >= 3:
+            r = float(value[0])
+            g = float(value[1])
+            b = float(value[2])
+            return b > 0.45 and r < 0.35 and g < 0.35
+        return False
+
+    segments: list[dict[str, Any]] = []
+    for edge in getattr(page, "horizontal_edges", []):
+        x0 = float(edge.get("x0", 0.0))
+        x1 = float(edge.get("x1", x0))
+        top = float(edge.get("top", edge.get("y0", 0.0)))
+        bottom = float(edge.get("bottom", top))
+        if top <= body_top or bottom >= body_bottom:
+            continue
+        if x1 - x0 < min_length:
+            continue
+        color = _line_color_key(edge)
+        if not is_blue_color(color):
+            continue
+        segments.append({"x0": x0, "x1": x1, "top": top, "bottom": bottom, "color": color})
+
+    for rect in getattr(page, "rects", []) or []:
+        if not bool(rect.get("fill")) or bool(rect.get("stroke")):
+            continue
+        rect_top = float(rect.get("top", 0.0))
+        rect_bottom = float(rect.get("bottom", rect_top))
+        if rect_top <= body_top or rect_bottom >= body_bottom:
+            continue
+        if abs(rect_bottom - rect_top) > _THIN_FILL_RECT_MAX_HEIGHT:
+            continue
+        x0 = float(rect.get("x0", 0.0))
+        x1 = float(rect.get("x1", x0))
+        if x1 - x0 < min_length:
+            continue
+        color = rect.get("non_stroking_color")
+        if color is None:
+            color = rect.get("stroking_color")
+        if not is_blue_color(color):
+            continue
+        segments.append(
+            {
+                "x0": x0,
+                "x1": x1,
+                "top": rect_top,
+                "bottom": rect_bottom,
+                "color": _line_color_key({"stroking_color": color}),
+            }
+        )
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[float, float, float, float, tuple[Any, ...] | int | float | None]] = set()
+    for segment in sorted(segments, key=lambda item: (float(item["top"]), float(item["x0"]))):
+        key = (
+            round(float(segment["x0"]), 2),
+            round(float(segment["top"]), 2),
+            round(float(segment["x1"]), 2),
+            round(float(segment["bottom"]), 2),
+            segment["color"],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(segment)
+    return deduped
+
+
+def _note_group_region_candidates(
+    page: pdfplumber.page.PageObject,
+    image_regions: Sequence[tuple[float, float, float, float]] | None = None,
+) -> List[tuple[float, float, float, float]]:
+    image_regions = list(image_regions or _candidate_image_regions_for_notes(page))
+    if not image_regions:
+        return []
+
+    segments = _blue_note_horizontal_segments(page)
+    if not segments:
+        return []
+
+    candidates: list[tuple[float, float, float, float]] = []
+    start_tolerance = 12.0
+    end_tolerance = 12.0
+
+    for anchor in image_regions:
+        anchor_area = (float(anchor[0]), float(anchor[1]), float(anchor[2]), float(anchor[3]))
+        top_segment: dict[str, Any] | None = None
+        bottom_segment: dict[str, Any] | None = None
+
+        for segment in segments:
+            segment_area = (
+                float(segment["x0"]),
+                float(segment["top"]),
+                float(segment["x1"]),
+                float(segment["bottom"]),
+            )
+            if _bbox_x_overlap_ratio(anchor_area, segment_area) < 0.10:
+                continue
+            if float(segment["bottom"]) <= float(anchor[1]):
+                top_segment = segment
+            elif float(segment["top"]) >= float(anchor[3]):
+                if bottom_segment is None:
+                    bottom_segment = segment
+                break
+
+        if top_segment is None or bottom_segment is None:
+            continue
+        if not _normalize_color_match(top_segment["color"], bottom_segment["color"]):
+            continue
+        if abs(float(top_segment["x0"]) - float(bottom_segment["x0"])) > start_tolerance:
+            continue
+        if abs(float(top_segment["x1"]) - float(bottom_segment["x1"])) > end_tolerance:
+            continue
+
+        candidates.append(
+            (
+                min(float(top_segment["x0"]), float(bottom_segment["x0"])),
+                min(float(top_segment["top"]), float(top_segment["bottom"])),
+                max(float(top_segment["x1"]), float(bottom_segment["x1"])),
+                max(float(bottom_segment["top"]), float(bottom_segment["bottom"])),
+            )
+        )
+
+    if not candidates:
+        return []
+
+    deduped: list[tuple[float, float, float, float]] = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for bbox in sorted(candidates, key=lambda item: (item[1], item[0])):
+        key = tuple(round(float(value), 2) for value in bbox)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(bbox)
+    return deduped
+
+
+def _select_note_anchor_for_bbox(
+    page: pdfplumber.page.PageObject,
+    bbox: tuple[float, float, float, float],
+    image_regions: Sequence[tuple[float, float, float, float]] | None = None,
+) -> tuple[float, float, float, float] | None:
+    image_regions = list(image_regions or _candidate_image_regions_for_notes(page))
+    if not image_regions:
+        return None
+
+    note_y0, note_y1 = bbox[1], bbox[3]
+    note_center_y = (note_y0 + note_y1) / 2.0
+    best_anchor: tuple[float, float, float, float] | None = None
+    best_score = -1.0
+
+    for region in image_regions:
+        _image_x0, image_top, _image_x1, image_bottom = region
+        x_overlap = _bbox_x_overlap_ratio(region, bbox)
+        if x_overlap < 0.10:
+            continue
+        if image_bottom < note_y0 or image_top > note_y1:
+            continue
+
+        image_center_y = (image_top + image_bottom) / 2.0
+        score = x_overlap * 100.0 - abs(note_center_y - image_center_y)
+        if score > best_score:
+            best_score = score
+            best_anchor = region
+
+    return best_anchor
+
+
+def _note_anchors_for_bbox(
+    page: pdfplumber.page.PageObject,
+    bbox: tuple[float, float, float, float],
+    image_regions: Sequence[tuple[float, float, float, float]] | None = None,
+) -> List[tuple[float, float, float, float]]:
+    image_regions = list(image_regions or _candidate_image_regions_for_notes(page))
+    if not image_regions:
+        return []
+
+    note_y0, note_y1 = bbox[1], bbox[3]
+    matches: list[tuple[float, float, float, float]] = []
+    for region in image_regions:
+        _image_x0, image_top, _image_x1, image_bottom = region
+        x_overlap = _bbox_x_overlap_ratio(region, bbox)
+        if x_overlap < 0.10:
+            continue
+        if image_bottom < note_y0 or image_top > note_y1:
+            continue
+        matches.append(region)
+
+    deduped: list[tuple[float, float, float, float]] = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for region in sorted(matches, key=lambda item: (item[1], item[0])):
+        key = tuple(round(float(value), 2) for value in region)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(region)
+    return deduped
 
 
 def _split_note_rows_by_anchors(

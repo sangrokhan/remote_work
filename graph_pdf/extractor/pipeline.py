@@ -10,7 +10,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 import pdfplumber
 
 from .debug import _collect_page_edge_debug, _collect_rotated_text_debug, _collect_table_drawing_debug
-from .images import _collect_embedded_image_refs, _extract_embedded_images
+from .images import _collect_embedded_image_refs, _extract_drawing_image_bboxes, _extract_embedded_images
 from .notes import _collect_note_candidates, _note_body_text
 from .raw import materialize_raw_dump
 from .shared import TableRows, _bboxes_intersect, _merge_numeric_positions, _normalize_text
@@ -29,7 +29,7 @@ from .tables import (
     _split_repeated_header,
     _vertical_axes_for_bbox,
 )
-from .text import _detect_body_bounds, _extract_body_text, _extract_body_text_lines, _extract_drawing_image_bboxes
+from .text import _detect_body_bounds, _extract_body_text, _extract_body_text_lines
 
 DEFAULT_ADD_HEADING = Path(__file__).resolve().parent.parent / "fixtures" / "font_heading_profile.json"
 

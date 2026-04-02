@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from extractor.images import _extract_drawing_image_bboxes
 from extractor.shared import _parse_pages_spec
 from extractor.text import (
     _build_body_blocks,
@@ -11,7 +12,6 @@ from extractor.text import (
     _detect_body_bounds,
     _extract_body_text_lines,
     _extract_body_word_lines,
-    _extract_drawing_image_bboxes,
     _is_gray_color,
     _is_layout_artifact,
     _is_non_watermark_obj,
@@ -138,6 +138,8 @@ class TextModuleTests(unittest.TestCase):
 
         with patch("extractor.text._filter_page_for_extraction", return_value=filtered_page), patch(
             "extractor.text._detect_body_bounds", return_value=(40.0, 700.0)
+        ), patch(
+            "extractor.images._extract_drawing_image_bboxes", return_value=[]
         ):
             lines = _extract_body_word_lines(page, header_margin=90.0, footer_margin=40.0)
 
@@ -175,6 +177,8 @@ class TextModuleTests(unittest.TestCase):
             "extractor.text._detect_body_bounds", return_value=(40.0, 700.0)
         ), patch(
             "extractor.text._shape_text_regions", return_value=[(40.0, 110.0, 540.0, 150.0)]
+        ), patch(
+            "extractor.images._extract_drawing_image_bboxes", return_value=[]
         ):
             lines = _extract_body_word_lines(page, header_margin=90.0, footer_margin=40.0)
 
@@ -197,6 +201,8 @@ class TextModuleTests(unittest.TestCase):
 
         with patch("extractor.text._filter_page_for_extraction", return_value=filtered_page), patch(
             "extractor.text._detect_body_bounds", return_value=(40.0, 700.0)
+        ), patch(
+            "extractor.images._extract_drawing_image_bboxes", return_value=[]
         ):
             lines = _extract_body_word_lines(page, header_margin=90.0, footer_margin=40.0)
 
@@ -254,6 +260,8 @@ class TextModuleTests(unittest.TestCase):
 
         with patch("extractor.text._filter_page_for_extraction", return_value=filtered_page), patch(
             "extractor.text._detect_body_bounds", return_value=(40.0, 700.0)
+        ), patch(
+            "extractor.images._extract_drawing_image_bboxes", return_value=[]
         ):
             lines = _extract_body_word_lines(page, header_margin=90.0, footer_margin=40.0)
 
@@ -275,7 +283,7 @@ class TextModuleTests(unittest.TestCase):
             ],
         )
 
-        with patch("extractor.text._detect_body_bounds", return_value=(40.0, 700.0)):
+        with patch("extractor.images._detect_body_bounds", return_value=(40.0, 700.0)):
             regions = _extract_drawing_image_bboxes(page=page, header_margin=90.0, footer_margin=40.0)
 
         self.assertEqual(1, len(regions))
@@ -291,7 +299,7 @@ class TextModuleTests(unittest.TestCase):
             ],
             rects=[],
         )
-        with patch("extractor.text._detect_body_bounds", return_value=(40.0, 700.0)):
+        with patch("extractor.images._detect_body_bounds", return_value=(40.0, 700.0)):
             regions = _extract_drawing_image_bboxes(
                 page=page,
                 header_margin=90.0,
@@ -311,7 +319,7 @@ class TextModuleTests(unittest.TestCase):
                 {"object_type": "rect", "x0": 20.0, "top": 60.0, "x1": 220.0, "bottom": 190.0},
             ],
         )
-        with patch("extractor.text._detect_body_bounds", return_value=(40.0, 700.0)):
+        with patch("extractor.images._detect_body_bounds", return_value=(40.0, 700.0)):
             regions = _extract_drawing_image_bboxes(page=page, header_margin=90.0, footer_margin=40.0)
 
         self.assertEqual([], regions)
