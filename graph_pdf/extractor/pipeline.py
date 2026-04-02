@@ -508,6 +508,8 @@ def _pick_cross_page_anchor(
     anchors: Sequence[_CrossPageTableCandidate],
     current_page: int,
 ) -> _CrossPageTableCandidate | None:
+    # 다음 페이지 첫 표가 직전 표의 연속인지 판정할 때,
+    # 텍스트 유사도보다 축 정렬/형태/페이지 경계 주변 방해 요소를 더 강하게 본다.
     if not anchors or not current_bbox:
         return None
     normalized_current_shape = _table_shape_signature(current_rows)
@@ -518,6 +520,7 @@ def _pick_cross_page_anchor(
     best_score = -1.0
 
     for anchor in anchors:
+        # 표 셀 내용은 OCR/word split 영향이 크므로, 우선 열 축이 실제로 맞는지 먼저 걸러낸다.
         has_axis_overlap = any(
             abs(axis - current_axis) <= 1.0
             for axis in anchor.axes
@@ -562,6 +565,7 @@ def _pick_cross_page_anchor(
         shape_bonus = 0.0
         if abs(anchor.shape_signature[1] - current_shape[1]) <= 1:
             shape_bonus = 0.5
+        # 점수가 같으면 더 최근 페이지에 있고, 더 아래쪽까지 내려온 anchor를 우선한다.
         score = overlap_ratio + (overlap_width / 1000.0) + shape_bonus
         if best_anchor is not None and score == best_score:
             if anchor.last_page < best_anchor.last_page:
@@ -667,6 +671,8 @@ def _merge_header_fragment_into_previous_row(
 
 
 def _strip_repeated_headers_by_chunk(chunks: Sequence[TableRows]) -> TableRows:
+    # 여러 chunk로 이어진 표를 합칠 때 반복 header를 제거하되,
+    # 두 번째 header row에 섞여 들어온 continuation text는 마지막 body row로 되돌린다.
     normalized_rows: TableRows = []
     previous_header_signature = ""
     previous_header_count = 0
@@ -861,6 +867,8 @@ def _has_cross_page_gap_blocked(
     previous_axes: Sequence[float] | None = None,
     current_axes: Sequence[float] | None = None,
 ) -> bool:
+    # 페이지 경계 바로 위/아래에 표와 같은 축을 차지하는 text, image, note, 다른 table이 끼면
+    # 연속 표로 붙이지 않는다. 단순 페이지 인접만으로는 merge하지 않기 위한 안전장치다.
     previous_regions = region_map.get(previous_page, {})
     current_regions = region_map.get(current_page, {})
     if not previous_regions:
@@ -880,6 +888,7 @@ def _has_cross_page_gap_blocked(
             if any(abs(axis - current_axis) <= 1.0 for current_axis in current_axes)
         ]
     if shared_axes:
+        # 공통 축이 있으면 그 축 주변만 검사해서, unrelated side content 때문에 merge가 막히지 않게 한다.
         overlap_x0 = min(shared_axes) - 4.0
         overlap_x1 = max(shared_axes) + 4.0
     else:
@@ -961,6 +970,9 @@ def extract_pdf_to_outputs(
     from_raw: Path | None = None,
     region_log: Path | None = None,
 ) -> dict:
+    # 이 함수가 실제 파이프라인의 중심이다.
+    # 페이지별로 note/table/image/body text를 수집하고, 문서 분리와 cross-page table 상태를 관리한 뒤
+    # 최종 markdown / tables / images / summary 파일을 쓴다.
     if from_raw is not None:
         with materialize_raw_dump(from_raw) as (materialized_pdf_path, _raw_payload):
             return extract_pdf_to_outputs(
@@ -1129,7 +1141,8 @@ def extract_pdf_to_outputs(
         md_file.write_text(markdown, encoding="utf-8")
         table_md_file.write_text(table_markdown, encoding="utf-8")
 
-        # Image extraction happens after text/table rendering so image export stays independent from markdown generation.
+        # 이미지 추출은 텍스트/표 렌더링이 끝난 뒤에 수행한다.
+        # 이렇게 해야 markdown 생성 로직과 이미지 저장 로직을 느슨하게 유지할 수 있다.
         document_image_dir = out_image_dir / f"{document_id}_images"
         document_images = _extract_embedded_images(
             pdf_path=pdf_path,
@@ -1180,6 +1193,7 @@ def extract_pdf_to_outputs(
             current_document_state = _DocumentOutputState(document_id=_safe_document_id(new_document_id))
             return
 
+        # 실제 문서 ID가 바뀌는 순간에만 flush해서, 같은 문서 안의 페이지는 하나로 유지한다.
         if _safe_document_id(current.document_id) != _safe_document_id(new_document_id):
             _flush_current_document(current)
             current_document_state = _DocumentOutputState(document_id=_safe_document_id(new_document_id))
@@ -1209,6 +1223,8 @@ def extract_pdf_to_outputs(
                 and _contains_markdown_heading(preview_markdown, 1)
                 and current_document_state.has_output_content()
             )
+            # 문서 ID 없는 h1 챕터 페이지는 직전 문서 끝이 아니라
+            # 다음 문서의 머리말처럼 붙이기 위해 잠시 보류한다.
 
             current_document_state.pages.append(page_idx)
 
@@ -1461,6 +1477,8 @@ def extract_pdf_to_outputs(
                     prev_page_height=cross_anchor.page_height,
                 )
                 if can_merge_cross_page:
+                    # 이미 열린 pending table이 다른 anchor를 가리키면 먼저 flush하고,
+                    # 선택된 anchor 상태를 다시 로드한 뒤 새 chunk를 이어 붙인다.
                     anchor_is_active = (
                         current_document_state.pending_table_state.is_active()
                         and current_document_state.pending_table_state.table_no == cross_anchor.table_no

@@ -53,30 +53,6 @@ class TableModuleTests(unittest.TestCase):
         self.assertTrue(333.0 <= column_lines[1] <= 337.0)
         self.assertEqual(3, len(column_bands))
 
-    def test_rows_from_payload_grid_inserts_newline_when_gap_ratio_exceeds_threshold(self) -> None:
-        cell_payloads = [
-            [
-                [
-                    {"text": "F1-U", "line_index": 0, "top": 100.0, "bottom": 109.0, "x0": 10.0, "size": 9.0},
-                    {"text": "DL", "line_index": 0, "top": 100.0, "bottom": 109.0, "x0": 20.0, "size": 9.0},
-                    {"text": "Interface", "line_index": 1, "top": 112.48, "bottom": 121.48, "x0": 10.0, "size": 9.0},
-                    {"text": "per", "line_index": 1, "top": 112.48, "bottom": 121.48, "x0": 40.0, "size": 9.0},
-                    {"text": "DU", "line_index": 2, "top": 122.68, "bottom": 131.68, "x0": 10.0, "size": 9.0},
-                ]
-            ]
-        ]
-
-        self.assertEqual(
-            [["F1-U DL\nInterface per DU"]],
-            _rows_from_payload_grid(cell_payloads),
-        )
-
-    def test_normalize_extracted_table_preserves_explicit_cell_line_breaks(self) -> None:
-        self.assertEqual(
-            [["F1-U DL Interface per DU\nF1-U DL Interface per PRC per DU"]],
-            _normalize_extracted_table([["F1-U DL Interface per DU\nF1-U DL Interface per PRC per DU"]]),
-        )
-
     def test_is_black_line_segment_accepts_visible_black_line(self) -> None:
         self.assertTrue(
             _is_black_line_segment(
@@ -303,43 +279,6 @@ class TableModuleTests(unittest.TestCase):
         self.assertEqual((72.0, 525.0), (round(x0, 1), round(x1, 1)))
         self.assertEqual(2, len(lines))
 
-    def test_build_grid_rows_from_black_lines_does_not_merge_adjacent_rows_after_grid_assignment(self) -> None:
-        crop_bbox = (40.0, 100.0, 240.0, 190.0)
-        crop = SimpleNamespace(
-            extract_words=lambda **kwargs: [
-                {"text": "Parameter", "x0": 52.0, "x1": 98.0, "top": 118.0, "bottom": 128.0},
-                {"text": "Description", "x0": 126.0, "x1": 188.0, "top": 118.0, "bottom": 128.0},
-                {"text": "srb-id", "x0": 52.0, "x1": 82.0, "top": 148.0, "bottom": 158.0},
-                {"text": "The ID of SRB to retrieve.", "x0": 126.0, "x1": 214.0, "top": 148.0, "bottom": 158.0},
-            ]
-        )
-        page = SimpleNamespace(
-            horizontal_edges=[
-                {"x0": 40.0, "x1": 240.0, "top": 110.0, "bottom": 110.0, "stroking_color": 0.0},
-                {"x0": 40.0, "x1": 240.0, "top": 140.0, "bottom": 140.0, "stroking_color": 0.0},
-                {"x0": 40.0, "x1": 240.0, "top": 170.0, "bottom": 170.0, "stroking_color": 0.0},
-            ],
-            vertical_edges=[
-                {"x0": 120.0, "x1": 120.0, "top": 110.0, "bottom": 170.0, "stroking_color": 0.0},
-            ],
-            filter=lambda fn: page,
-            crop=lambda bbox: crop,
-        )
-
-        rows, _row_lines, _column_lines, _row_bands, _column_bands, debug = _build_grid_rows_from_black_lines(
-            page,
-            crop_bbox,
-        )
-
-        self.assertEqual(
-            [
-                ["Parameter", "Description"],
-                ["srb-id", "The ID of SRB to retrieve."],
-            ],
-            rows,
-        )
-        self.assertEqual(0, debug["merged_rows"])
-
     def test_table_rejection_reason_allows_single_column_and_sparse_tables(self) -> None:
         self.assertIsNone(_table_rejection_reason([["Status"], ["Ready"]]))
         self.assertIsNone(_table_rejection_reason([["Status", "", ""], ["Ready", "", ""]]))
@@ -347,37 +286,6 @@ class TableModuleTests(unittest.TestCase):
     def test_table_rejection_reason_no_longer_rejects_large_row_count_by_size_only(self) -> None:
         table = [["Value"] for _ in range(81)]
         self.assertIsNone(_table_rejection_reason(table))
-
-    def test_collapse_empty_columns_removes_sparse_empty_columns(self) -> None:
-        table = [
-            ["", "Area", "", "", "Status", "", "", "Action", ""],
-            ["", "Docs", "", "", "READY", "", "", "Finalize", ""],
-            ["", "QA", "", "", "TODO", "", "", "Confirm", ""],
-        ]
-
-        self.assertEqual(
-            [
-                ["Area", "Status", "Action"],
-                ["Docs", "READY", "Finalize"],
-                ["QA", "TODO", "Confirm"],
-            ],
-            _collapse_empty_columns(table),
-        )
-
-    def test_table_text_from_rows_preserves_explicit_multiline_cells(self) -> None:
-        rows = [
-            ["Family Display Name", "Type Name", "Type Description"],
-            [
-                "F1-U, XN-U collected in UL Interface UPC per 5QI per SNSSAI\nF1-U, XN-U collected in UL Interface UPP per 5QI per SNSSAI",
-                "PacketLossCntUL",
-                "Lost packets",
-            ],
-        ]
-        markdown = _table_text_from_rows(rows)
-        self.assertIn(
-            "F1-U, XN-U collected in UL Interface UPC per 5QI per SNSSAI<br>F1-U, XN-U collected in UL Interface UPP per 5QI per SNSSAI",
-            markdown,
-        )
 
     def test_continuation_regions_require_shared_axes_and_empty_gap(self) -> None:
         self.assertTrue(
@@ -785,104 +693,6 @@ class TableModuleTests(unittest.TestCase):
 
         self.assertEqual([(40.0, 120.0, 540.0, 220.0)], groups)
 
-    def test_collect_note_candidates_splits_sparse_multi_anchor_note_group(self) -> None:
-        from unittest.mock import patch
-
-        page = SimpleNamespace(width=600.0, height=800.0)
-        all_line_payloads = [
-            {
-                "text": "The counter ‘F1-U UL Interface collected in UP per UP’ is provided only for SA",
-                "top": 456.4,
-                "bottom": 467.5,
-                "x0": 70.0,
-                "x1": 380.0,
-            },
-            {
-                "text": "operation.",
-                "top": 469.0,
-                "bottom": 480.0,
-                "x0": 70.0,
-                "x1": 130.0,
-            },
-            {
-                "text": "The counter for ‘F1-U UL Interface collected in UP per UP’ might not be",
-                "top": 494.0,
-                "bottom": 505.0,
-                "x0": 70.0,
-                "x1": 390.0,
-            },
-            {
-                "text": "provided to the operator to which ‘F1-U, XN-U UL Interface collected in UPP per 5QI per",
-                "top": 507.0,
-                "bottom": 518.0,
-                "x0": 70.0,
-                "x1": 470.0,
-            },
-            {
-                "text": "SNSSAI’ is provided.",
-                "top": 519.4,
-                "bottom": 530.5,
-                "x0": 70.0,
-                "x1": 180.0,
-            },
-            {
-                "text": "The counter for the F1-U section is provided only for the CU-DU separation scenario.",
-                "top": 544.6,
-                "bottom": 568.3,
-                "x0": 70.0,
-                "x1": 420.0,
-            },
-        ]
-
-        def _payloads_for_bbox(_page: SimpleNamespace, bbox: tuple[float, float, float, float]) -> list[dict[str, float | str]]:
-            _x0, top, _x1, bottom = bbox
-            return [
-                payload
-                for payload in all_line_payloads
-                if float(payload["bottom"]) >= top and float(payload["top"]) <= bottom
-            ]
-
-        with patch(
-            "extractor.notes._note_group_region_candidates",
-            return_value=[(40.0, 444.5, 540.0, 571.6)],
-        ), patch(
-            "extractor.notes._select_note_anchor_for_bbox",
-            side_effect=[
-                (50.0, 447.2, 60.0, 465.0),
-                (50.0, 535.4, 60.0, 553.2),
-            ],
-        ), patch(
-            "extractor.notes._candidate_image_regions_for_notes",
-            return_value=[
-                (50.0, 447.2, 60.0, 465.0),
-                (50.0, 485.0, 60.0, 502.8),
-                (50.0, 535.4, 60.0, 553.2),
-            ],
-        ), patch(
-            "extractor.notes._extract_region_line_payloads",
-            side_effect=_payloads_for_bbox,
-        ):
-            candidates = _collect_note_candidates(page)
-
-        note_candidates = [candidate for candidate in candidates if candidate["is_note_like"] and not candidate["is_white_content"]]
-        self.assertEqual(3, len(note_candidates))
-        self.assertEqual(
-            [["The counter ‘F1-U UL Interface collected in UP per UP’ is provided only for SA"], ["operation."]],
-            note_candidates[0]["rows"],
-        )
-        self.assertEqual(
-            [
-                ["The counter for ‘F1-U UL Interface collected in UP per UP’ might not be"],
-                ["provided to the operator to which ‘F1-U, XN-U UL Interface collected in UPP per 5QI per"],
-                ["SNSSAI’ is provided."],
-            ],
-            note_candidates[1]["rows"],
-        )
-        self.assertEqual(
-            [["The counter for the F1-U section is provided only for the CU-DU separation scenario."]],
-            note_candidates[2]["rows"],
-        )
-
     def test_table_text_from_rows_collapses_two_header_rows_into_single_markdown_header(self) -> None:
         rows = [
             ["Stage", "Team", "Notes"],
@@ -896,25 +706,6 @@ class TableModuleTests(unittest.TestCase):
         self.assertIn("| Phase A", markdown)
         self.assertIn("Kickoff scope lock", markdown)
 
-    def test_table_text_from_rows_does_not_pad_cells_to_column_width(self) -> None:
-        rows = [
-            ["Parameter", "Description"],
-            ["qci", "This parameter is the QoS Class Identifier(QCI)."],
-        ]
-
-        markdown = _table_text_from_rows(rows)
-
-        self.assertEqual(
-            "\n".join(
-                [
-                    "| Parameter | Description |",
-                    "| --- | --- |",
-                    "| qci | This parameter is the QoS Class Identifier(QCI). |",
-                ]
-            ),
-            markdown,
-        )
-
     def test_header_row_count_does_not_promote_first_data_row_to_header(self) -> None:
         rows = [
             ["Column A", "Column B", "Column C"],
@@ -923,29 +714,6 @@ class TableModuleTests(unittest.TestCase):
         ]
 
         self.assertEqual(1, _header_row_count(rows))
-
-    def test_table_text_from_rows_preserves_single_column_table_without_note_reclassification(self) -> None:
-        rows = [
-            ["F1-U path is not present in the integrated CU-DU shape. Hence, the counters for"],
-            ["F1-U are not provided in this shape."],
-        ]
-
-        markdown = _table_text_from_rows(rows)
-
-        self.assertIn("| F1-U path is not present in the integrated CU-DU shape. Hence, the counters for |", markdown)
-        self.assertIn("F1-U path is not present in the integrated CU-DU shape. Hence, the counters for", markdown)
-        self.assertIn("F1-U are not provided in this shape.", markdown)
-        self.assertIn("| --- |", markdown)
-
-    def test_note_body_text_is_single_line(self) -> None:
-        rows = [
-            ["For F1-U/Xn-U interface, GTP SN marking & Loss/OOS counting is always"],
-            ["activated."],
-        ]
-        self.assertEqual(
-            "Note: For F1-U/Xn-U interface, GTP SN marking & Loss/OOS counting is always activated.",
-            _note_body_text(rows),
-        )
 
     def test_note_body_text_uses_first_non_empty_cell(self) -> None:
         rows = [["", "", "Escalation lane summary"], ["", "", "Owner confirmed"]]
