@@ -101,13 +101,15 @@ def _split_note_rows_by_anchors(
 def _collect_note_candidates(
     page: pdfplumber.page.PageObject,
 ) -> List[dict]:
-    # Collect note candidates strictly from note-group geometry and note anchors.
+    # note는 표와 같은 bbox라도 취급이 다르므로,
+    # note-group geometry와 anchor를 기준으로 먼저 분리된 후보 집합을 만든다.
     candidate_rows: List[dict] = []
     image_regions = _candidate_image_regions_for_notes(page)
     note_group_candidates = _note_group_region_candidates(page, image_regions=image_regions)
     for bbox in note_group_candidates:
         split_candidates = _split_note_rows_by_anchors(page, bbox, image_regions=image_regions)
         if split_candidates:
+            # 한 note group 안에 anchor가 여러 개면 실제로는 독립된 note 블록일 가능성이 높다.
             for split_candidate in split_candidates:
                 candidate_rows.append(
                     {

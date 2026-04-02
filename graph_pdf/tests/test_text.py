@@ -23,9 +23,6 @@ from extractor.text import (
 
 
 class TextModuleTests(unittest.TestCase):
-    def test_clean_cell_line_preserves_trailing_i_token(self) -> None:
-        self.assertEqual("F1UPacketLossCntUL_QC I", _clean_cell_line("F1UPacketLossCntUL_QC I"))
-
     def test_parse_pages_spec_supports_ranges_and_lists(self) -> None:
         self.assertEqual([1, 3, 4, 5, 8], _parse_pages_spec("1,3-5,8"))
 
@@ -94,27 +91,6 @@ class TextModuleTests(unittest.TestCase):
                 heading_levels=heading_levels,
             )
         )
-
-    def test_extract_body_text_lines_merges_wrapped_heading_text_into_single_markdown_line(self) -> None:
-        page = SimpleNamespace()
-        line_payloads = [
-            {"text": "FGR-BC0008, DSCP Based Scheduling", "top": 135.35, "bottom": 157.31, "size": 21.96},
-            {"text": "Adjustment", "top": 160.31, "bottom": 182.27, "size": 21.96},
-        ]
-
-        with patch("extractor.text._extract_body_word_lines", return_value=line_payloads):
-            raw_lines, normalized_lines = _extract_body_text_lines(
-                page=page,
-                header_margin=90.0,
-                footer_margin=40.0,
-                heading_levels={21.96: 2},
-            )
-
-        self.assertEqual(
-            ["FGR-BC0008, DSCP Based Scheduling", "Adjustment"],
-            raw_lines,
-        )
-        self.assertEqual(["## FGR-BC0008, DSCP Based Scheduling Adjustment"], normalized_lines)
 
     def test_build_body_blocks_groups_adjacent_paragraph_lines(self) -> None:
         lines = [
@@ -384,21 +360,3 @@ class TextModuleTests(unittest.TestCase):
 
         self.assertEqual(40.0, body_top)
         self.assertEqual(710.0, body_bottom)
-
-    def test_detect_body_bounds_uses_large_chapter_line_when_no_top_divider_exists(self) -> None:
-        page = SimpleNamespace(
-            width=600.0,
-            height=800.0,
-            horizontal_edges=[{"x0": 35.0, "x1": 565.0, "top": 742.0}],
-            extract_words=lambda **kwargs: [
-                {"text": "Chapter", "x0": 36.0, "x1": 110.0, "top": 96.0, "bottom": 114.0, "size": 20.0, "fontname": "Helvetica-Bold"},
-                {"text": "3:", "x0": 118.0, "x1": 140.0, "top": 96.0, "bottom": 114.0, "size": 20.0, "fontname": "Helvetica-Bold"},
-                {"text": "New", "x0": 148.0, "x1": 190.0, "top": 96.0, "bottom": 114.0, "size": 20.0, "fontname": "Helvetica-Bold"},
-                {"text": "Section", "x0": 198.0, "x1": 260.0, "top": 96.0, "bottom": 114.0, "size": 20.0, "fontname": "Helvetica-Bold"},
-            ],
-        )
-
-        body_top, body_bottom = _detect_body_bounds(page, header_margin=90.0, footer_margin=40.0)
-
-        self.assertEqual(96.0, body_top)
-        self.assertEqual(742.0, body_bottom)

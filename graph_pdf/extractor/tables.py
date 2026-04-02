@@ -490,6 +490,8 @@ def _build_payload_grid(
 def _rows_from_payload_grid(
     cell_payloads: list[list[list[dict[str, Any]]]],
 ) -> list[list[str]]:
+    # cell payload를 다시 논리적 cell text로 되돌릴 때,
+    # 같은 visual line은 공백으로 붙이고 line gap이 커지면 줄바꿈으로 유지한다.
     rows: list[list[str]] = []
     for row in cell_payloads:
         row_values: list[str] = []
@@ -571,6 +573,7 @@ def _rows_from_payload_grid(
                 elif gap_ratio < 0.2:
                     current_line = f"{current_line} {line_text}".strip()
                 else:
+                    # gap이 충분히 크면 같은 셀 안에서도 실제 multi-line 값으로 보존한다.
                     logical_lines.append(current_line)
                     current_line = line_text
                 current_bottom = line_bottom
@@ -655,6 +658,8 @@ def _build_grid_rows_from_black_lines(
     list[tuple[float, float, float, float]],
     dict[str, Any],
 ]:
+    # 검은 선으로 row/column band를 만들고, 텍스트 payload를 각 cell에 배정해 표 row를 복원한다.
+    # 실패 이유를 debug payload로 남겨 후속 fallback 판단에 재사용한다.
     horizontal_segments, vertical_segments = _extract_black_lines_for_table(page, crop_bbox)
     row_line_positions, row_bands, row_error = _build_row_bands(crop_bbox, horizontal_segments)
     if row_error is not None:
@@ -2347,7 +2352,8 @@ def _extract_tables(
 
 
 def _table_text_from_rows(rows: Sequence[Sequence[str]]) -> str:
-    # Convert normalized row data into markdown table text used by the final artifacts.
+    # 최종 산출물은 markdown table이므로,
+    # 여러 header row는 하나의 markdown header로 collapse하고 body row만 아래에 렌더링한다.
     if not rows:
         return ""
 

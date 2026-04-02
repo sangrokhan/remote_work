@@ -436,7 +436,8 @@ def _extract_embedded_images(
     image_refs_by_page: Optional[dict[int, Sequence[dict]]] = None,
     excluded_regions_by_page: Optional[dict[int, Sequence[Tuple[float, float, float, float]]]] = None,
 ) -> List[Path]:
-    # Image extraction is intentionally independent from table/text extraction so it can be reused or debugged separately.
+    # 이미지 저장은 본문/표 생성과 분리해 둔다.
+    # 같은 PDF에서도 body markdown 생성 규칙과 이미지 export 규칙을 독립적으로 디버깅할 수 있어야 하기 때문이다.
     out_image_dir.mkdir(parents=True, exist_ok=True)
 
     image_files: List[Path] = []
@@ -471,7 +472,8 @@ def _extract_embedded_images(
 
             if image_refs_by_page is None:
                 for image_file in page.images:
-                    # pypdf and pdfplumber expose image identifiers slightly differently, so compare both forms.
+                    # pypdf와 pdfplumber의 image 이름 표현이 조금 달라서
+                    # stem과 원본 이름 둘 다 비교해 매칭한다.
                     image_name = _normalize_pdf_image_name(image_file.name or "")
                     image_stem = _normalize_pdf_image_stem(image_name)
                     if image_stem not in allowed_names and image_name not in allowed_names:
@@ -531,6 +533,7 @@ def _extract_embedded_images(
                 if render_right <= render_left or render_bottom <= render_top:
                     continue
                 try:
+                    # drawing 이미지는 PDF object를 직접 다시 그려서 raster 이미지로 만든다.
                     region_image = _render_drawing_region_image(
                         page=plumber_page,
                         bbox=(render_left, render_top, render_right, render_bottom),

@@ -331,7 +331,8 @@ def _detect_body_bounds(
     header_margin: float,
     footer_margin: float,
 ) -> Tuple[float, float]:
-    # Prefer explicit horizontal divider lines, then fall back to a chapter heading or the configured margins.
+    # 본문 영역은 "상단/하단 긴 divider -> chapter류 큰 heading -> 기본 margin" 순서로 잡는다.
+    # 고정 margin만 쓰면 문서마다 body 시작점이 크게 흔들리기 때문이다.
     default_top = float(footer_margin)
     default_bottom = float(page.height - header_margin)
     min_width = float(page.width) * 0.7
@@ -390,7 +391,8 @@ def _extract_body_text_lines(
     reference_lines: Sequence[dict] = (),
     heading_levels: dict[float, int] | None = None,
 ) -> Tuple[List[str], List[str]]:
-    # Return both the raw visual lines and the normalized logical lines for debug and downstream reuse.
+    # raw visual line과 normalized logical line을 둘 다 반환한다.
+    # preview/document split/debug는 raw 성격이 필요하고, 최종 markdown은 normalized line이 필요하다.
     line_payloads = _extract_body_word_lines(
         page=page,
         header_margin=header_margin,
@@ -405,6 +407,7 @@ def _extract_body_text_lines(
     for block in blocks:
         block_lines = [str(line["text"]) for line in block["lines"]]
         if block["kind"] == "reference":
+            # 표/이미지/note reference line은 이미 완성된 텍스트이므로 추가 정규화를 하지 않는다.
             normalized_lines.extend(line for line in block_lines if line.strip())
             continue
         if block["kind"] == "heading":
@@ -415,6 +418,7 @@ def _extract_body_text_lines(
             if level is None:
                 normalized_lines.extend(block_lines)
                 continue
+            # 줄바꿈된 heading은 하나의 markdown heading으로 합친다.
             heading_text = _join_non_heading_block_lines(block_lines)
             if heading_text:
                 normalized_lines.append(f"{'#' * level} {heading_text}")
@@ -558,7 +562,8 @@ def _should_merge_paragraph_lines(
 
 
 def _build_body_blocks(lines: Sequence[dict], heading_levels: dict[float, dict[str, float | int] | int] | None = None) -> List[dict]:
-    # Collapse adjacent body lines into coarse logical blocks before converting them to page text.
+    # 페이지 line을 바로 문자열로 만들지 않고, 먼저 heading/paragraph/reference block으로 묶는다.
+    # 이후 단계는 이 block 경계를 기준으로 heading merge와 paragraph join을 수행한다.
     if not lines:
         return []
 
@@ -650,7 +655,7 @@ def _extract_body_word_lines(
     footer_margin: float,
     excluded_bboxes: Sequence[Tuple[float, float, float, float]] = (),
 ) -> List[dict]:
-    # Convert word-level extraction into line payloads enriched with the signals later heuristics need.
+    # word 단위를 그대로 쓰지 않고, 이후 규칙이 필요로 하는 스타일/색/shape 교차 여부까지 붙인 line payload로 올린다.
     filtered_page = _filter_page_for_extraction(page)
     body_top, body_bottom = _detect_body_bounds(page, header_margin=header_margin, footer_margin=footer_margin)
     shape_regions = _shape_text_regions(page)
@@ -678,7 +683,7 @@ def _extract_body_word_lines(
     filtered_chars = list(getattr(filtered_page, "chars", []) or [])
     for word in words:
         bbox = _word_bbox(word)
-        # Excluded bboxes are used to suppress table text when generating the final body output.
+        # excluded_bboxes는 최종 body markdown에서 table/image 영역 텍스트가 다시 섞이지 않도록 막는다.
         if bbox[3] <= body_top or bbox[1] >= body_bottom:
             continue
         if any(_bboxes_intersect(bbox, excluded_bbox) for excluded_bbox in excluded_bboxes):
