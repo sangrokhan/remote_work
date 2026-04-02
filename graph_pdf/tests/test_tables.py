@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from extractor.notes import _collect_note_candidates, _note_body_text
+from extractor.notes import _collect_note_candidates, _note_body_text, _note_group_region_candidates
 from extractor.shared import _merge_horizontal_band_segments, _merge_vertical_band_segments
 from extractor.tables import (
     _is_black_fill_rect,
@@ -18,7 +18,6 @@ from extractor.tables import (
     _is_horizontal_separator_rect,
     _normalize_extracted_table,
     _to_rect_entry,
-    _note_group_region_candidates,
     _rows_from_payload_grid,
     _is_vertical_separator_rect,
     _split_repeated_header,
@@ -680,7 +679,7 @@ class TableModuleTests(unittest.TestCase):
         )
 
         with patch(
-            "extractor.tables._detect_body_bounds",
+            "extractor.notes._detect_body_bounds",
             return_value=(80.0, 760.0),
         ):
             groups = _note_group_region_candidates(

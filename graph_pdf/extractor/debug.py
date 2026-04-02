@@ -13,12 +13,12 @@ from .shared import (
     _round_graphic_object,
     _round_segment,
 )
+from .images import _selected_drawing_image_groups
 from .tables import _table_regions
 from .text import (
     _detect_body_bounds,
     _extract_body_text_lines,
     _extract_body_word_lines,
-    _selected_drawing_image_groups,
 )
 
 
