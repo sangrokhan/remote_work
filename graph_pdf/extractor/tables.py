@@ -1065,11 +1065,15 @@ def _content_width_ratio(
     return text_width / region_width
 
 
+def _normalized_row_text(row: Sequence[str]) -> str:
+    return "".join(_normalize_text(cell) for cell in row if _normalize_text(cell))
+
+
 def _rows_match(a: Sequence[str], b: Sequence[str]) -> bool:
     # Header rows are compared after whitespace normalization to avoid duplicate header output.
-    if len(a) != len(b):
-        return False
-    return all(_normalize_text(x) == _normalize_text(y) for x, y in zip(a, b))
+    if len(a) == len(b) and all(_normalize_text(x) == _normalize_text(y) for x, y in zip(a, b)):
+        return True
+    return bool(_normalized_row_text(a)) and _normalized_row_text(a) == _normalized_row_text(b)
 
 
 def _header_row_count(rows: Sequence[Sequence[str]], max_header_rows: int = 2) -> int:
@@ -1153,6 +1157,9 @@ def _split_repeated_header(prev_rows: TableRows, curr_rows: TableRows) -> TableR
         for idx in range(comparable_count):
             previous_row = list(prev_rows[idx])
             current_row = list(curr_rows[idx])
+            if _rows_match(previous_row, current_row):
+                matched_rows += 1
+                continue
             width = max(len(previous_row), len(current_row))
             trimmed_row = [""] * width
             row_has_tail = False

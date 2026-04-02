@@ -31,7 +31,7 @@ from .tables import (
 )
 from .text import _detect_body_bounds, _extract_body_text, _extract_body_text_lines, _extract_drawing_image_bboxes
 
-DEFAULT_ADD_HEADING = Path(__file__).resolve().parent.parent / "fixtures" / "font_heading_profile.sample.json"
+DEFAULT_ADD_HEADING = Path(__file__).resolve().parent.parent / "fixtures" / "font_heading_profile.json"
 
 
 def _to_float_bbox(raw_bbox: object) -> tuple[float, float, float, float] | None:

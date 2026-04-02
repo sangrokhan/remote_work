@@ -132,11 +132,25 @@ When debug page markers are enabled, the parser may insert page comments such as
 
 These page comments are debug metadata and are not part of the primary extraction contract.
 
+### Raw Replay Support
+
+The parser may support a raw replay mode for reproducible extraction runs.
+
+In raw replay mode, the input may be provided as a minimal payload containing the source PDF bytes rather than as a direct PDF file path.
+
+The raw payload must be sufficient to reconstruct the same parser input document without OCR or external enrichment.
+
+If raw replay mode is used, the parser must execute the same extraction pipeline and output contract used for direct PDF input.
+
 ### Heading Rules
 
 Headers must be rendered in Markdown using heading markers.
 
 A separate JSON file will provide the font sizes used to classify headings.
+
+If an explicit heading-profile JSON path is not provided, the parser may load a bundled default heading-profile JSON.
+
+If no explicit or bundled heading-profile JSON is available, text must still be extracted, and unmatched text must remain normal body text.
 
 The font size defined for chapter must be mapped to `h1`.
 
@@ -222,11 +236,21 @@ The table content itself must be written using standard Markdown table syntax.
 
 A table that continues across page boundaries must be merged and written as a single final table.
 
+Only the previous page's last table and the current page's first table may be considered as cross-page continuation candidates.
+
+Cross-page continuation must be decided by reproducible structural signals rather than row-content semantics.
+
+The continuation decision must use page-boundary-local geometry and intervening-region checks.
+
+Shared vertical-axis alignment between the two candidate table fragments is a primary continuation signal.
+
 If a repeated table header appears during page continuation, the duplicated header row must be removed.
 
 Merged cells must be represented without text repetition, leaving the continued cell positions empty where needed.
 
 If body content or note content appears between two table fragments before table merging, those fragments must not be treated as one table.
+
+The same non-merge rule also applies when image regions or other table regions exist between the two fragments.
 
 That rule applies even when the table layout looks similar across the page boundary.
 
@@ -237,6 +261,12 @@ Body text should be reconstructed only after note regions, table regions, image 
 For normal body text, lines that belong to the same sentence should be merged into a single line in the Markdown output.
 
 The fixed left indent of the body area should be treated as the baseline text start position for normal paragraph reconstruction.
+
+The current body-text reconstruction scope is heading-plus-paragraph recovery, not full list-structure reconstruction.
+
+List-depth inference, bullet-style normalization, and style-based paragraph splitting are out of scope unless they are promoted into an explicit parsing target later.
+
+Paragraph reconstruction should prefer repeatable geometry-based line grouping over font-style or width heuristics.
 
 Headers and body text should be reconstructed according to the heading rules defined by the external font-size JSON.
 
