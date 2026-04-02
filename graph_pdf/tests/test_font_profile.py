@@ -9,9 +9,28 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from reportlab.lib.colors import HexColor
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+
 from extractor import profile_pdf_fonts
 from extractor.__main__ import main as cli_main
-from sample_generator import create_demo_pdf
+
+
+def _build_profile_pdf(pdf_path: Path) -> None:
+    c = canvas.Canvas(str(pdf_path), pagesize=letter)
+    c.setFont("Helvetica-Bold", 20)
+    c.setFillColor(HexColor("#000000"))
+    c.drawString(72, 720, "Font Profile Title")
+    c.setFont("Helvetica", 11)
+    c.setFillColor(HexColor("#004CB2"))
+    c.drawString(72, 692, "Blue accent line for font profile review.")
+    c.setFillColor(HexColor("#000000"))
+    c.drawString(72, 676, "Body line stays in the default black bucket.")
+    c.showPage()
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 720, "Second page keeps page_count above one.")
+    c.save()
 
 
 class FontProfileTests(unittest.TestCase):
@@ -19,22 +38,22 @@ class FontProfileTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        pdf_path = root / "sample.pdf"
-        create_demo_pdf(pdf_path)
+        pdf_path = root / "font_profile.pdf"
+        _build_profile_pdf(pdf_path)
         return root, pdf_path
 
-    def test_profile_pdf_fonts_writes_sample_style_summary(self) -> None:
+    def test_profile_pdf_fonts_writes_style_summary(self) -> None:
         root, pdf_path = self._build_pdf()
 
         result = profile_pdf_fonts(
             pdf_path=pdf_path,
             out_dir=root / "md",
-            stem="sample",
+            stem="font_profile",
         )
 
         payload = json.loads(result["json_file"].read_text(encoding="utf-8"))
         self.assertEqual(str(pdf_path), payload["pdf"])
-        self.assertEqual(4, payload["page_count"])
+        self.assertEqual(2, payload["page_count"])
         self.assertTrue(payload["styles"])
 
         styles = {
@@ -42,18 +61,14 @@ class FontProfileTests(unittest.TestCase):
             for entry in payload["styles"]
         }
         self.assertIn((20.0, "0.000,0.000,0.000"), styles)
-        self.assertIn((11.0, "0.000,0.300,0.700"), styles)
+        self.assertIn((11.0, "0.000,0.298,0.698"), styles)
+        self.assertIn("Font Profile Title", styles[(20.0, "0.000,0.000,0.000")]["sample_texts"])
         self.assertIn(
-            "Chapter 1: Deep Structure Verification",
-            styles[(20.0, "0.000,0.000,0.000")]["sample_texts"],
+            "Blue accent line for font profile review.",
+            styles[(11.0, "0.000,0.298,0.698")]["sample_texts"],
         )
-        self.assertIn(
-            "Blue accent line marks a separate style bucket for font profile review.",
-            styles[(11.0, "0.000,0.300,0.700")]["sample_texts"],
-        )
-        self.assertEqual(1, styles[(11.0, "0.000,0.300,0.700")]["sample_page"])
-        self.assertGreaterEqual(styles[(11.0, "0.000,0.300,0.700")]["page_count"], 1)
-        self.assertNotIn("Laptop 12 $120", styles[(11.0, "0.000,0.000,0.000")]["sample_texts"])
+        self.assertEqual(1, styles[(11.0, "0.000,0.298,0.698")]["sample_page"])
+        self.assertGreaterEqual(styles[(11.0, "0.000,0.000,0.000")]["page_count"], 1)
 
         with result["csv_file"].open(encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle))
@@ -67,7 +82,7 @@ class FontProfileTests(unittest.TestCase):
     def test_profile_pdf_fonts_skips_lines_marked_as_shape_text(self) -> None:
         root = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
-        pdf_path = root / "sample.pdf"
+        pdf_path = root / "font_profile.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n")
 
         fake_pdf = SimpleNamespace(pages=[SimpleNamespace()])
@@ -97,7 +112,7 @@ class FontProfileTests(unittest.TestCase):
             result = profile_pdf_fonts(
                 pdf_path=pdf_path,
                 out_dir=root / "md",
-                stem="sample",
+                stem="font_profile",
             )
 
         payload = json.loads(result["json_file"].read_text(encoding="utf-8"))
