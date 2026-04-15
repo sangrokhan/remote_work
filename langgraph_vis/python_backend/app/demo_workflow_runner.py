@@ -22,7 +22,6 @@ class DemoWorkflowRunner:
         *,
         orchestrator: RunOrchestrator,
         schema_registry: WorkflowSchemaRegistry | None = None,
-        *,
         random_fn: RandomFn | None = None,
         delay_fn: SleepFn | None = None,
         loop_probability: float = 0.35,
