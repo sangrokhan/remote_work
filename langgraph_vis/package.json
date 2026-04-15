@@ -1,0 +1,11 @@
+{
+  "name": "langgraph-vis-week02",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:backend": "PYTHONPATH=. .venv/bin/pytest -q python_backend/tests",
+    "test:frontend": "node --test tests/week-04/*.test.js",
+    "test": "npm run test:backend && npm run test:frontend"
+  }
+}

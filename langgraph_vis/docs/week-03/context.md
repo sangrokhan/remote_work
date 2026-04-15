@@ -23,6 +23,7 @@
 - 저장기: canonical event append + 정렬/중복제거.
 - 조회기: filter/pagination + node별 timeline 집계.
 - 검증기: stream-history parity 테스트 및 checksum 비교.
+- week02에서 확인된 미해결 이슈는 [docs/week-02/hand-off-todo.md](/home/han/.openclaw/workspace/remote_work/langgraph_vis/docs/week-02/hand-off-todo.md)에서 추적.
 
 ## 주차 출력물 연결
 - week03 종료 시 `docs/week-04`가 소비할 입력:
