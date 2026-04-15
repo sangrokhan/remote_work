@@ -26,6 +26,69 @@ def _create_sample_store():
     return store
 
 
+def test_create_run_api_generates_run():
+    store = RunStateStore()
+    with _create_client_with_store(store) as client:
+        response = client.post(
+            "/api/runs",
+            json={
+                "runId": "run_new",
+                "threadId": "thread_new",
+                "workflowId": "support_ticket_classifier_v1",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runId"] == "run_new"
+    assert body["threadId"] == "thread_new"
+    assert body["state"]["runId"] == "run_new"
+    assert body["state"]["threadId"] == "thread_new"
+    assert body["state"]["state"] == "running"
+
+
+def test_create_run_api_returns_bad_request_for_invalid_payload():
+    store = RunStateStore()
+    with _create_client_with_store(store) as client:
+        response = client.post("/api/runs", data="not-json", headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == RUN_ERROR_CODES["INVALID_RUN_PAYLOAD"]
+
+
+def test_append_event_api_accepts_event():
+    store = _create_sample_store()
+    with _create_client_with_store(store) as client:
+        response = client.post(
+            "/api/runs/run_api/events",
+            json={"eventType": "node_token", "payload": {"nodeId": "intent_parser", "token": "test"}},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["event"]["eventType"] == "node_token"
+    assert body["state"]["state"] == "running"
+
+
+def test_append_event_api_rejects_missing_event_type():
+    store = _create_sample_store()
+    with _create_client_with_store(store) as client:
+        response = client.post("/api/runs/run_api/events", json={"payload": {}})
+
+    assert response.status_code == 400
+    assert response.json()["code"] == RUN_ERROR_CODES["INVALID_RUN_PAYLOAD"]
+
+
+def test_append_event_api_returns_405_for_non_post():
+    store = _create_sample_store()
+    with _create_client_with_store(store) as client:
+        response = client.put("/api/runs/run_api/events", json={"eventType": "node_started"})
+
+    assert response.status_code == 405
+    assert response.json()["code"] == RUN_ERROR_CODES["INVALID_RUN_PAYLOAD"]
+
+
 def test_get_state_returns_cursor_and_state():
     store = _create_sample_store()
     with _create_client_with_store(store) as client:

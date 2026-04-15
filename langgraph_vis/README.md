@@ -16,12 +16,21 @@ python -m pip install -r python_backend/requirements.txt
 ### 2) 백엔드 실행
 
 ```bash
-PYTHONPATH=. .venv/bin/python python_backend/run_server.py
+# Linux/macOS
+cd /path/to/remote_work/langgraph_vis
+PYTHONPATH=$(pwd) .venv/bin/python -m uvicorn python_backend.app.main:app --host 0.0.0.0 --port 8000
 ```
 
 - API 서버: `http://127.0.0.1:8000`
 - API 문서: `http://127.0.0.1:8000/docs`
 - 테스트 페이지: `http://127.0.0.1:8000/ui/`
+
+참고:
+- 서버 루트(`/`)는 `http://127.0.0.1:8000/ui/`로 이동합니다.
+- run/event를 즉시 넣고 확인하려면:
+  - `POST /api/runs`
+  - `POST /api/runs/{runId}/events`
+- UI에도 `Create run`/`Emit event` 버튼이 추가되어 실시간으로 데이터 입력 후 SSE를 확인할 수 있습니다.
 
 ### 3) 테스트 실행
 
