@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LangGraph Vis Week 04</title>
+    <style>
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #0b1020;
+        color: #e5e7eb;
+      }
+      .panel {
+        margin-bottom: 16px;
+      }
+      label {
+        margin-right: 8px;
+      }
+      input,
+      button {
+        margin-right: 8px;
+      }
+      textarea,
+      pre {
+        width: 100%;
+        box-sizing: border-box;
+      }
+      textarea,
+      pre {
+        background: #111827;
+        color: #f9fafb;
+        border: 1px solid #374151;
+        border-radius: 8px;
+      }
+      textarea {
+        min-height: 140px;
+        resize: vertical;
+      }
+      .row {
+        margin-top: 8px;
+      }
+      .error {
+        color: #f87171;
+      }
+      button {
+        padding: 6px 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>LangGraph Vis Week 04</h1>
+    <p>백엔드 API + SSE 스트림 데모 페이지</p>
+
+    <div class="panel">
+      <label for="base-url">Backend URL</label>
+      <input id="base-url" value="http://127.0.0.1:8000" size="36" />
+      <label for="run-id">runId</label>
+      <input id="run-id" value="run_api" />
+      <label for="thread-id">threadId</label>
+      <input id="thread-id" value="thread-1" />
+    </div>
+
+    <div class="panel">
+      <label for="from-seq">fromSeq</label>
+      <input id="from-seq" value="1" size="8" />
+      <label for="last-event-id">last-event-id</label>
+      <input id="last-event-id" placeholder="선택" size="20" />
+    </div>
+
+    <div class="panel row">
+      <button id="btn-state">Load state</button>
+      <button id="btn-events">Load events</button>
+      <button id="btn-stream">Open stream</button>
+      <button id="btn-stop">Close stream</button>
+    </div>
+
+    <pre id="status" class="error"></pre>
+    <h3>State</h3>
+    <pre id="state-output">-</pre>
+    <h3>Events</h3>
+    <pre id="events-output">-</pre>
+
+    <script>
+      const baseUrlInput = document.getElementById("base-url");
+      const runIdInput = document.getElementById("run-id");
+      const threadIdInput = document.getElementById("thread-id");
+      const fromSeqInput = document.getElementById("from-seq");
+      const lastEventIdInput = document.getElementById("last-event-id");
+      const statusOutput = document.getElementById("status");
+      const stateOutput = document.getElementById("state-output");
+      const eventsOutput = document.getElementById("events-output");
+
+      let streamHandle = null;
+
+      function runApiUrl(path, query) {
+        const base = new URL(baseUrlInput.value.replace(/\\/$/, ""));
+        const url = new URL(path, `${base.href}/`);
+        Object.entries(query || {}).forEach(([key, value]) => {
+          if (value !== undefined && value !== null && `${value}` !== "") {
+            url.searchParams.set(key, value);
+          }
+        });
+        return url.toString();
+      }
+
+      function getRunId() {
+        const runId = runIdInput.value.trim();
+        if (!runId) {
+          throw new Error("runId is required");
+        }
+        return runId;
+      }
+
+      function normalizeThreadId() {
+        return threadIdInput.value.trim();
+      }
+
+      async function doGet(path, query) {
+        const runId = getRunId();
+        const threadId = normalizeThreadId();
+        const url = runApiUrl(path.replace("{runId}", runId).replace("{threadId}", threadId), query);
+        const response = await fetch(url, { headers: { "Accept": "application/json" } });
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`${response.status}: ${errorText || response.statusText}`);
+        }
+        return response.json();
+      }
+
+      async function loadState() {
+        statusOutput.textContent = "";
+        try {
+          const payload = await doGet("/api/runs/{runId}/state");
+          stateOutput.textContent = JSON.stringify(payload, null, 2);
+        } catch (error) {
+          statusOutput.textContent = String(error);
+        }
+      }
+
+      async function loadEvents() {
+        statusOutput.textContent = "";
+        try {
+          const payload = await doGet("/api/runs/{runId}/events", { lastEventId: lastEventIdInput.value.trim() });
+          eventsOutput.textContent = JSON.stringify(payload, null, 2);
+        } catch (error) {
+          statusOutput.textContent = String(error);
+        }
+      }
+
+      function openStream() {
+        statusOutput.textContent = "";
+        const runId = getRunId();
+        const threadId = normalizeThreadId();
+        if (!threadId) {
+          statusOutput.textContent = "threadId를 입력하세요.";
+          return;
+        }
+
+        if (streamHandle) {
+          streamHandle.close();
+        }
+
+        const url = runApiUrl(`/api/runs/${encodeURIComponent(runId)}/events/stream`, {
+          fromSeq: fromSeqInput.value.trim(),
+          lastEventId: lastEventIdInput.value.trim(),
+        });
+
+        const source = new EventSource(url);
+        streamHandle = source;
+
+        const output = [];
+        eventsOutput.textContent = "";
+        source.addEventListener("run-event", (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            output.push(data);
+            eventsOutput.textContent = JSON.stringify(output, null, 2);
+          } catch (err) {
+            statusOutput.textContent = `SSE parse error: ${err.message}`;
+          }
+        });
+        source.addEventListener("error", () => {
+          statusOutput.textContent = "SSE 연결이 종료되었거나 오류가 발생했습니다.";
+          source.close();
+          streamHandle = null;
+        });
+      }
+
+      function closeStream() {
+        if (streamHandle) {
+          streamHandle.close();
+          streamHandle = null;
+        }
+      }
+
+      document.getElementById("btn-state").addEventListener("click", loadState);
+      document.getElementById("btn-events").addEventListener("click", loadEvents);
+      document.getElementById("btn-stream").addEventListener("click", openStream);
+      document.getElementById("btn-stop").addEventListener("click", closeStream);
+    </script>
+  </body>
+</html>
