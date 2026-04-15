@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start:backend": "PYTHONPATH=. .venv/bin/python python_backend/run_server.py",
+    "start": "npm run start:backend",
     "test:backend": "PYTHONPATH=. .venv/bin/pytest -q python_backend/tests",
     "test:frontend": "node --test tests/week-04/*.test.js",
     "test": "npm run test:backend && npm run test:frontend"
