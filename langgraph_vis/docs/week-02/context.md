@@ -28,7 +28,11 @@
 ## week02 완료 기준(다음 주차 입력값)
 - `run-state-machine`, `sse-envelope` 필드는 plan의 동의어 집합과 동일해야 하며 `docs/week-03`의 canonical event 변환기 입력으로 사용한다.
 - `threadId`, `eventSeq`, `checkpoint` 누락 없이 run state cursor를 반환한다.
+- API 계약 정합성은 `docs/week-02/run-api-contract.yaml`에서 `code/message/requestId` 포함 형태로 고정.
 
 ## 구현 가능성 및 리스크
 - 리스크: 이벤트 순번 누락, 중복 수신, stream disconnect.
 - 대응: `eventSeq` 단조성 검사 + `resync window` + 상태 snapshot API 병행.
+
+## week03 handoff
+- week03 진입은 `docs/week-02/context-to-week03.md`를 기준으로 하며, carry-over 리스크는 `docs/week-02/changelog.md`로 추적한다.
