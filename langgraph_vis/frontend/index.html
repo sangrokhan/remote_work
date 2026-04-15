@@ -80,6 +80,49 @@
       .hidden {
         display: none;
       }
+      .node-panel {
+        margin-top: 16px;
+        padding: 12px;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        background: #0f172a;
+      }
+      .node-list {
+        list-style: none;
+        padding: 0;
+        margin: 4px 0 0;
+      }
+      .node-item {
+        margin-bottom: 6px;
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid #334155;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .node-item.active {
+        border-color: #22d3ee;
+        box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.2);
+        background: #082f49;
+      }
+      .node-item .node-name {
+        color: #e2e8f0;
+        font-weight: 600;
+      }
+      .node-item .node-meta {
+        color: #94a3b8;
+        font-size: 13px;
+      }
+      .active-chip {
+        margin: 0 0 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid #0f766e;
+        background: #042f2e;
+        width: fit-content;
+        color: #5eead4;
+      }
     </style>
   </head>
   <body>
@@ -158,6 +201,13 @@
     <h3>Events</h3>
     <pre id="events-output">-</pre>
 
+    <div class="node-panel">
+      <h3>Active Node</h3>
+      <div id="active-node" class="active-chip">활성 노드 없음</div>
+      <h3>Node Activity</h3>
+      <ul id="node-list" class="node-list"></ul>
+    </div>
+
     <script>
       const baseUrlInput = document.getElementById("base-url");
       const runIdInput = document.getElementById("run-id");
@@ -170,8 +220,11 @@
       const helpOutput = document.getElementById("help");
       const stateOutput = document.getElementById("state-output");
       const eventsOutput = document.getElementById("events-output");
+      const activeNodeOutput = document.getElementById("active-node");
+      const nodeListOutput = document.getElementById("node-list");
 
       const runIdPattern = /^[a-z][a-z0-9_-]{1,63}$/;
+      let eventHistory = [];
 
       document.getElementById("root-link").addEventListener("click", (event) => {
         event.preventDefault();
@@ -223,6 +276,99 @@
         }
       }
 
+      function normalizeEvents(rawEvents) {
+        if (!Array.isArray(rawEvents)) {
+          return [];
+        }
+        return rawEvents
+          .filter((event) => event && typeof event === "object")
+          .map((event) => ({
+            ...event,
+            eventSeq: Number(event.eventSeq || 0),
+            nodeId: event.nodeId,
+            eventType: String(event.eventType || ""),
+          }));
+      }
+
+      function updateNodeHighlights(rawEvents) {
+        const events = normalizeEvents(rawEvents);
+        const nodeStats = new Map();
+        let activeNode = "";
+        let activeSeq = -1;
+
+        for (const event of events) {
+          if (!event.nodeId) {
+            continue;
+          }
+          const nodeId = String(event.nodeId);
+          const existing = nodeStats.get(nodeId) || {
+            eventCount: 0,
+            lastSeq: -1,
+            lastEventType: "",
+            isRunning: false,
+          };
+          existing.eventCount += 1;
+          if (Number.isFinite(event.eventSeq)) {
+            existing.lastSeq = event.eventSeq;
+          }
+          existing.lastEventType = event.eventType;
+
+          if (event.eventType === "node_started" || event.eventType === "node_token") {
+            existing.isRunning = true;
+          } else if (event.eventType === "node_completed") {
+            existing.isRunning = false;
+          }
+
+          if (existing.isRunning && existing.lastSeq >= activeSeq) {
+            activeNode = nodeId;
+            activeSeq = existing.lastSeq;
+          }
+          nodeStats.set(nodeId, existing);
+        }
+
+        activeNodeOutput.textContent = activeNode || "활성 노드 없음";
+        nodeListOutput.textContent = "";
+
+        if (nodeStats.size === 0) {
+          const empty = document.createElement("li");
+          empty.className = "node-item";
+          empty.textContent = "아직 node 이벤트가 없습니다";
+          nodeListOutput.appendChild(empty);
+          return;
+        }
+
+        for (const [nodeId, stats] of Array.from(nodeStats.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+          const item = document.createElement("li");
+          item.className = "node-item";
+          if (nodeId === activeNode) {
+            item.classList.add("active");
+          }
+
+          const left = document.createElement("span");
+          left.className = "node-name";
+          left.textContent = nodeId;
+
+          const right = document.createElement("span");
+          right.className = "node-meta";
+          right.textContent = `events: ${stats.eventCount}, last: ${stats.lastEventType || "unknown"} (seq ${stats.lastSeq})`;
+
+          item.appendChild(left);
+          item.appendChild(right);
+          nodeListOutput.appendChild(item);
+        }
+      }
+
+      function setEventHistory(events, append = false) {
+        const normalized = normalizeEvents(events);
+        if (append) {
+          eventHistory = eventHistory.concat(normalized);
+        } else {
+          eventHistory = normalized;
+        }
+        eventsOutput.textContent = JSON.stringify(eventHistory, null, 2);
+        updateNodeHighlights(eventHistory);
+      }
+
       function setStatus(message, isError = false) {
         statusOutput.textContent = message || "";
         statusOutput.classList.toggle("error", isError);
@@ -257,7 +403,7 @@
         setStatus("요청 중...");
         try {
           const payload = await doGet("/api/runs/{runId}/events", { lastEventId: lastEventIdInput.value.trim() });
-          eventsOutput.textContent = JSON.stringify(payload, null, 2);
+          setEventHistory(Array.isArray(payload.events) ? payload.events : []);
           setStatus("events 조회 완료");
         } catch (error) {
           setStatus(String(error), true);
@@ -285,17 +431,15 @@
 
           const source = new EventSource(url);
           streamHandle = source;
+          setEventHistory([]);
           source.addEventListener("open", () => {
             setStatus("SSE 연결됨");
           });
 
-          const output = [];
-          eventsOutput.textContent = "";
           source.addEventListener("run-event", (event) => {
             try {
               const data = JSON.parse(event.data);
-              output.push(data);
-              eventsOutput.textContent = JSON.stringify(output, null, 2);
+              setEventHistory([data], true);
             } catch (err) {
               setStatus(`SSE parse error: ${err.message}`, true);
             }
@@ -345,6 +489,7 @@
           runIdInput.value = payload.runId;
           threadIdInput.value = payload.threadId;
           stateOutput.textContent = JSON.stringify(payload.state, null, 2);
+          setEventHistory([]);
           setStatus("run 생성 완료");
         } catch (error) {
           setStatus(String(error), true);
@@ -375,10 +520,9 @@
             stateOutput.textContent = JSON.stringify(result.state, null, 2);
           }
           if (result.event) {
-            eventsOutput.textContent = JSON.stringify(result.event, null, 2);
+            setEventHistory([result.event], true);
           } else {
-            const existing = eventsOutput.textContent === "-" ? [] : [eventsOutput.textContent];
-            eventsOutput.textContent = JSON.stringify(existing, null, 2);
+            setEventHistory(eventHistory, false);
           }
           setStatus("이벤트 emit 완료");
         } catch (error) {
