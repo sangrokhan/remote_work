@@ -27,10 +27,10 @@ PYTHONPATH=$(pwd) .venv/bin/python -m uvicorn python_backend.app.main:app --host
 
 참고:
 - 서버 루트(`/`)는 `http://127.0.0.1:8000/ui/`로 이동합니다.
-- run/event를 즉시 넣고 확인하려면:
-  - `POST /api/runs`
-  - `POST /api/runs/{runId}/events`
-- UI에도 `Create run`/`Emit event` 버튼이 추가되어 실시간으로 데이터 입력 후 SSE를 확인할 수 있습니다.
+- PoC 데모에서는 `POST /api/runs`로 내부 런을 생성한 뒤
+  `POST /api/runs/{runId}/demo/run`으로 더미 워크플로우를 실행합니다.
+- 기본 워크플로우는 `langgraph_demo_workflow_v1`이며 3개 노드가 **백엔드에서 3~5초 랜덤 지연**으로 동작합니다.
+  - 3번째 노드에서 일정 확률로 1번 노드로 되돌아가는 루프를 재현합니다.
 
 ### 3) 테스트 실행
 
@@ -41,11 +41,8 @@ npm test
 
 ## 페이지 사용
 
-- `http://127.0.0.1:8000/ui/` 에서 실행 상태/이벤트 조회를 할 수 있습니다.
-- `runId` 와 `threadId` 를 입력하고:
-  - `Load state`: `GET /api/runs/{runId}/state` 조회
-  - `Load events`: `GET /api/runs/{runId}/events` 조회
-  - `Open stream`: `GET /api/runs/{runId}/events/stream` SSE 구독
+- `http://127.0.0.1:8000/ui/`에서 바로 데모를 실행할 수 있습니다.
+- `Run` 버튼 하나만 클릭하면 스키마 조회, 실행 요청, 실시간 노드 하이라이트가 모두 동작합니다.
 
 ## 참고
 
