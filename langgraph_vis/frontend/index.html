@@ -6,7 +6,7 @@
     <title>LangGraph Vis Week 04</title>
     <style>
       body {
-        font-family: Inter, system-ui, sans-serif;
+        font-family: "Noto Sans KR", Arial, sans-serif;
         margin: 0;
         padding: 24px;
         background: #0b1020;
@@ -47,11 +47,75 @@
       button {
         padding: 6px 12px;
       }
+      .guide {
+        margin: 0 0 16px;
+        padding: 12px;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        background: #0f172a;
+      }
+      .guide h2,
+      .guide h3 {
+        margin-top: 0;
+      }
+      .guide ul {
+        margin: 4px 0 0 20px;
+      }
+      .inline-code {
+        background: #111827;
+        color: #93c5fd;
+        padding: 1px 6px;
+        border-radius: 4px;
+      }
+      .status-box {
+        margin-bottom: 8px;
+      }
+      .muted {
+        color: #cbd5e1;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .hidden {
+        display: none;
+      }
     </style>
   </head>
   <body>
     <h1>LangGraph Vis Week 04</h1>
-    <p>백엔드 API + SSE 스트림 데모 페이지</p>
+    <p class="muted">백엔드 API + SSE 스트림 데모 페이지</p>
+
+    <section class="guide">
+      <h2>사용 방법</h2>
+      <ol>
+        <li>아래 <span class="inline-code">Backend URL</span>에 현재 실행 중인 서버 주소를 넣습니다.</li>
+        <li><span class="inline-code">runId</span>와 <span class="inline-code">threadId</span>를 넣습니다.</li>
+        <li>
+          <span class="inline-code">Load state</span> → <code>/api/runs/{runId}/state</code> 조회
+        </li>
+        <li>
+          <span class="inline-code">Load events</span> → <code>/api/runs/{runId}/events</code> 조회
+        </li>
+        <li>
+          <span class="inline-code">Open stream</span> → SSE
+          <code>/api/runs/{runId}/events/stream</code> 구독
+        </li>
+      </ol>
+      <h3>주의</h3>
+      <ul>
+        <li>조회 전용만 쓰던 흐름에서 <span class="inline-code">Create run</span>과
+          <span class="inline-code">Emit event</span>를 통해 실시간 입력 데모로 확장했습니다.</li>
+        <li>입력한 <span class="inline-code">runId</span>가 존재하지 않으면
+          <span class="inline-code">404</span>가 나옵니다.
+        </li>
+        <li><span class="inline-code">runId</span>는 영문 소문자 시작, 소문자/숫자/_,- 조합이어야 합니다.</li>
+      </ul>
+      <p>
+        API 문서: <a href="/docs" target="_blank" rel="noreferrer">/docs</a> ,
+        루트 접속: <a href="/" id="root-link">/ → /ui/</a>
+      </p>
+    </section>
 
     <div class="panel">
       <label for="base-url">Backend URL</label>
@@ -60,6 +124,15 @@
       <input id="run-id" value="run_api" />
       <label for="thread-id">threadId</label>
       <input id="thread-id" value="thread-1" />
+    </div>
+
+    <div class="panel">
+      <button id="btn-create-run">Create run</button>
+      <label for="event-type">eventType</label>
+      <input id="event-type" value="node_started" size="16" />
+      <label for="event-payload">event payload</label>
+      <input id="event-payload" size="46" value='{"nodeId":"intent_parser"}' />
+      <button id="btn-emit">Emit event</button>
     </div>
 
     <div class="panel">
@@ -76,7 +149,10 @@
       <button id="btn-stop">Close stream</button>
     </div>
 
-    <pre id="status" class="error"></pre>
+    <div class="status-box">
+      <pre id="status" class="error"></pre>
+      <pre id="help" class="muted">버튼을 누르면 선택한 API의 응답 JSON이 아래에 표시됩니다.</pre>
+    </div>
     <h3>State</h3>
     <pre id="state-output">-</pre>
     <h3>Events</h3>
@@ -88,14 +164,24 @@
       const threadIdInput = document.getElementById("thread-id");
       const fromSeqInput = document.getElementById("from-seq");
       const lastEventIdInput = document.getElementById("last-event-id");
+      const eventTypeInput = document.getElementById("event-type");
+      const eventPayloadInput = document.getElementById("event-payload");
       const statusOutput = document.getElementById("status");
+      const helpOutput = document.getElementById("help");
       const stateOutput = document.getElementById("state-output");
       const eventsOutput = document.getElementById("events-output");
+
+      const runIdPattern = /^[a-z][a-z0-9_-]{1,63}$/;
+
+      document.getElementById("root-link").addEventListener("click", (event) => {
+        event.preventDefault();
+        window.location.replace(`${window.location.origin}/ui/`);
+      });
 
       let streamHandle = null;
 
       function runApiUrl(path, query) {
-        const base = new URL(baseUrlInput.value.replace(/\\/$/, ""));
+        const base = new URL(baseUrlInput.value.replace(/\/$/, ""));
         const url = new URL(path, `${base.href}/`);
         Object.entries(query || {}).forEach(([key, value]) => {
           if (value !== undefined && value !== null && `${value}` !== "") {
@@ -110,11 +196,36 @@
         if (!runId) {
           throw new Error("runId is required");
         }
+        if (!runIdPattern.test(runId)) {
+          throw new Error(
+            "runId 형식이 올바르지 않습니다. 영문 소문자로 시작하고 영문 소문자/숫자/_- 만 허용합니다."
+          );
+        }
         return runId;
       }
 
       function normalizeThreadId() {
         return threadIdInput.value.trim();
+      }
+
+      function parsePayload(raw) {
+        if (!raw || `${raw}`.trim() === "") {
+          return {};
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+            throw new Error("payload must be an object");
+          }
+          return parsed;
+        } catch (error) {
+          throw new Error(`payload parse error: ${error.message}`);
+        }
+      }
+
+      function setStatus(message, isError = false) {
+        statusOutput.textContent = message || "";
+        statusOutput.classList.toggle("error", isError);
       }
 
       async function doGet(path, query) {
@@ -130,68 +241,148 @@
       }
 
       async function loadState() {
-        statusOutput.textContent = "";
+        helpOutput.classList.add("hidden");
+        setStatus("요청 중...");
         try {
           const payload = await doGet("/api/runs/{runId}/state");
           stateOutput.textContent = JSON.stringify(payload, null, 2);
+          setStatus("state 조회 완료");
         } catch (error) {
-          statusOutput.textContent = String(error);
+          setStatus(String(error), true);
         }
       }
 
       async function loadEvents() {
-        statusOutput.textContent = "";
+        helpOutput.classList.add("hidden");
+        setStatus("요청 중...");
         try {
           const payload = await doGet("/api/runs/{runId}/events", { lastEventId: lastEventIdInput.value.trim() });
           eventsOutput.textContent = JSON.stringify(payload, null, 2);
+          setStatus("events 조회 완료");
         } catch (error) {
-          statusOutput.textContent = String(error);
+          setStatus(String(error), true);
         }
       }
 
       function openStream() {
-        statusOutput.textContent = "";
-        const runId = getRunId();
-        const threadId = normalizeThreadId();
-        if (!threadId) {
-          statusOutput.textContent = "threadId를 입력하세요.";
-          return;
-        }
-
-        if (streamHandle) {
-          streamHandle.close();
-        }
-
-        const url = runApiUrl(`/api/runs/${encodeURIComponent(runId)}/events/stream`, {
-          fromSeq: fromSeqInput.value.trim(),
-          lastEventId: lastEventIdInput.value.trim(),
-        });
-
-        const source = new EventSource(url);
-        streamHandle = source;
-
-        const output = [];
-        eventsOutput.textContent = "";
-        source.addEventListener("run-event", (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            output.push(data);
-            eventsOutput.textContent = JSON.stringify(output, null, 2);
-          } catch (err) {
-            statusOutput.textContent = `SSE parse error: ${err.message}`;
+        helpOutput.classList.add("hidden");
+        try {
+          setStatus("SSE 연결 시도 중...");
+          const runId = getRunId();
+          const threadId = normalizeThreadId();
+          if (!threadId) {
+            setStatus("threadId를 입력하세요.", true);
+            return;
           }
-        });
-        source.addEventListener("error", () => {
-          statusOutput.textContent = "SSE 연결이 종료되었거나 오류가 발생했습니다.";
-          source.close();
-          streamHandle = null;
-        });
+          if (streamHandle) {
+            streamHandle.close();
+          }
+
+          const url = runApiUrl(`/api/runs/${encodeURIComponent(runId)}/events/stream`, {
+            fromSeq: fromSeqInput.value.trim(),
+            lastEventId: lastEventIdInput.value.trim(),
+          });
+
+          const source = new EventSource(url);
+          streamHandle = source;
+          source.addEventListener("open", () => {
+            setStatus("SSE 연결됨");
+          });
+
+          const output = [];
+          eventsOutput.textContent = "";
+          source.addEventListener("run-event", (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              output.push(data);
+              eventsOutput.textContent = JSON.stringify(output, null, 2);
+            } catch (err) {
+              setStatus(`SSE parse error: ${err.message}`, true);
+            }
+          });
+          source.addEventListener("error", () => {
+            setStatus("SSE 연결이 종료되었거나 오류가 발생했습니다.", true);
+            source.close();
+            streamHandle = null;
+          });
+        } catch (error) {
+          setStatus(String(error), true);
+        }
       }
 
       function closeStream() {
         if (streamHandle) {
           streamHandle.close();
           streamHandle = null;
+          setStatus("SSE 연결 종료");
+        }
+      }
+
+      async function createRun() {
+        helpOutput.classList.add("hidden");
+        setStatus("run 생성 중...");
+        try {
+          const body = {};
+          const runId = runIdInput.value.trim();
+          const threadId = threadIdInput.value.trim();
+          if (runId) {
+            body.runId = runId;
+          }
+          if (threadId) {
+            body.threadId = threadId;
+          }
+
+          const response = await fetch(runApiUrl("/api/runs"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`${response.status}: ${errorText || response.statusText}`);
+          }
+          const payload = await response.json();
+          runIdInput.value = payload.runId;
+          threadIdInput.value = payload.threadId;
+          stateOutput.textContent = JSON.stringify(payload.state, null, 2);
+          setStatus("run 생성 완료");
+        } catch (error) {
+          setStatus(String(error), true);
+        }
+      }
+
+      async function emitEvent() {
+        helpOutput.classList.add("hidden");
+        setStatus("이벤트 emit 중...");
+        try {
+          const runId = getRunId();
+          const eventType = eventTypeInput.value.trim();
+          if (!eventType) {
+            throw new Error("eventType is required");
+          }
+          const payload = parsePayload(eventPayloadInput.value);
+          const response = await fetch(runApiUrl(`/api/runs/${encodeURIComponent(runId)}/events`), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ eventType, payload }),
+          });
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`${response.status}: ${errorText || response.statusText}`);
+          }
+          const result = await response.json();
+          if (result.state) {
+            stateOutput.textContent = JSON.stringify(result.state, null, 2);
+          }
+          if (result.event) {
+            eventsOutput.textContent = JSON.stringify(result.event, null, 2);
+          } else {
+            const existing = eventsOutput.textContent === "-" ? [] : [eventsOutput.textContent];
+            eventsOutput.textContent = JSON.stringify(existing, null, 2);
+          }
+          setStatus("이벤트 emit 완료");
+        } catch (error) {
+          setStatus(String(error), true);
         }
       }
 
@@ -199,6 +390,8 @@
       document.getElementById("btn-events").addEventListener("click", loadEvents);
       document.getElementById("btn-stream").addEventListener("click", openStream);
       document.getElementById("btn-stop").addEventListener("click", closeStream);
+      document.getElementById("btn-create-run").addEventListener("click", createRun);
+      document.getElementById("btn-emit").addEventListener("click", emitEvent);
     </script>
   </body>
 </html>

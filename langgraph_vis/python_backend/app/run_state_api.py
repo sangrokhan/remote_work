@@ -19,6 +19,7 @@ from .run_error_contract import (
     normalize_run_error,
 )
 from .resync_controller import resolve_replay_from
+from .run_orchestrator import RunOrchestrator
 from .run_state_machine import is_terminal_state
 
 HEARTBEAT_MS = 20_000
@@ -100,6 +101,17 @@ def _heartbeat(now: datetime | None = None) -> str:
 
 def create_run_state_router(*, store):
     router = APIRouter()
+    orchestrator = RunOrchestrator(store=store)
+
+    def _validation_error(request_id: str, message: str):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "code": RUN_ERROR_CODES["INVALID_RUN_PAYLOAD"],
+                "message": message,
+                "requestId": request_id,
+            },
+        )
 
     def _method_not_allowed_payload():
         return {
@@ -257,6 +269,86 @@ def create_run_state_router(*, store):
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @router.post("/api/runs")
+    async def create_run(request: Request):
+        request_id = str(uuid.uuid4())
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                return _validation_error(request_id, RUN_ERROR_MESSAGES[RUN_ERROR_CODES["INVALID_RUN_PAYLOAD"]])
+
+            created = orchestrator.create_run(
+                run_id=payload.get("runId"),
+                thread_id=payload.get("threadId"),
+                workflow_id=payload.get("workflowId"),
+                workflow_version=payload.get("workflowVersion"),
+            )
+            state = store.get_run_state(created["runId"])
+            return {
+                "runId": created["runId"],
+                "threadId": created["threadId"],
+                "event": created["event"],
+                "state": state,
+            }
+        except ValueError as error:
+            return _validation_error(request_id, str(error))
+        except Exception as error:
+            return await _on_error(error, request_id)
+
+    @router.api_route("/api/runs", methods=["GET", "PUT", "PATCH", "DELETE"])
+    async def create_run_not_allowed():
+        request_id = str(uuid.uuid4())
+        payload = {**_method_not_allowed_payload(), "requestId": request_id}
+        return JSONResponse(status_code=405, content=payload, headers={"Allow": "POST"})
+
+    @router.post("/api/runs/{run_id}/events")
+    async def append_event(run_id: str, request: Request):
+        request_id = str(uuid.uuid4())
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                return _validation_error(request_id, RUN_ERROR_MESSAGES[RUN_ERROR_CODES["INVALID_RUN_PAYLOAD"]])
+
+            event_type = payload.get("eventType")
+            if not isinstance(event_type, str) or not event_type.strip():
+                return _validation_error(request_id, "eventType is required")
+
+            event_payload = payload.get("payload")
+            if event_payload is None:
+                event_payload = {}
+            if not isinstance(event_payload, dict):
+                return _validation_error(request_id, "payload must be an object")
+
+            options = {}
+            if "eventId" in payload and payload.get("eventId") is not None:
+                options["eventId"] = payload["eventId"]
+            if "checkpoint" in payload and payload.get("checkpoint") is not None:
+                options["checkpoint"] = payload["checkpoint"]
+
+            event = orchestrator.emit(
+                run_id=run_id,
+                event_type=event_type,
+                payload=event_payload,
+                options=options,
+            )
+
+            state = store.get_run_state(run_id)
+            return {
+                "runId": run_id,
+                "event": event,
+                "state": state,
+            }
+        except ValueError as error:
+            return _validation_error(request_id, str(error))
+        except Exception as error:
+            return await _on_error(error, request_id)
+
+    @router.api_route("/api/runs/{run_id}/events", methods=["PUT", "PATCH", "DELETE"])
+    async def append_event_not_allowed(run_id: str):
+        request_id = str(uuid.uuid4())
+        payload = {**_method_not_allowed_payload(), "requestId": request_id}
+        return JSONResponse(status_code=405, content=payload, headers={"Allow": "POST"})
 
     @router.get("/api/runs/{run_id}/events/stream")
     async def event_stream(

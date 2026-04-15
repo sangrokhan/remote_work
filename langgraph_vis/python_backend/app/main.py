@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -28,6 +29,10 @@ def create_app(*, run_store: RunStateStore | None = None):
     app.include_router(create_workflow_schema_router())
     app.include_router(create_run_state_router(store=store))
     app.include_router(create_run_history_router(store=store))
+
+    @app.get("/")
+    def redirect_root_to_ui() -> RedirectResponse:
+        return RedirectResponse(url="/ui/")
 
     frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
     if frontend_dir.exists():
