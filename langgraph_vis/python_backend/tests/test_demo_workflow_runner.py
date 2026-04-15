@@ -50,7 +50,7 @@ def test_runner_completes_after_expected_three_node_path():
     assert len(node_completions) == 3
     assert len(run_completed) == 1
 
-    node_order = [event["nodeId"] for event in node_starts]
+    node_order = [event["payload"]["nodeId"] for event in node_starts]
     assert node_order == ["dummy_node_1", "dummy_node_2", "dummy_node_3"]
 
     final_state = store.get_run_state("run_demo")
@@ -83,6 +83,6 @@ def test_runner_supports_loop_back_to_first_node():
 
     assert len(node_starts) == 6
     assert len(node_completions) == 6
-    assert node_starts[0]["nodeId"] == "dummy_node_1"
-    assert node_starts[-1]["nodeId"] == "dummy_node_3"
+    assert node_starts[0]["payload"]["nodeId"] == "dummy_node_1"
+    assert node_starts[-1]["payload"]["nodeId"] == "dummy_node_3"
     assert store.get_run_state("run_loop_demo")["state"] == "completed"

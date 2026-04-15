@@ -194,7 +194,7 @@ def create_run_state_router(*, store, workflow_registry: WorkflowSchemaRegistry 
         except Exception as error:
             return await _on_error(error, request_id)
 
-    @router.api_route("/api/runs/{run_id}/events", methods=["POST", "PUT", "PATCH", "DELETE"])
+    @router.api_route("/api/runs/{run_id}/events", methods=["GET", "PUT", "PATCH", "DELETE"])
     async def get_events_not_allowed(run_id: str):
         request_id = str(uuid.uuid4())
         payload = {**_method_not_allowed_payload(), "requestId": request_id}

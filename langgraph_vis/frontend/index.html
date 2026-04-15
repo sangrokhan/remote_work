@@ -220,18 +220,19 @@
       }
 
       function applyEvent(event) {
-        if (event.eventType === "node_started" && event.nodeId) {
+        const eventNodeId = event?.payload?.nodeId || event?.nodeId;
+        if (event.eventType === "node_started" && eventNodeId) {
           for (const nodeId of orderedNodeIds) {
             if (nodeCardById.get(nodeId).classList.contains("running")) {
               setNodeState(nodeId, "done");
             }
           }
-          setNodeState(String(event.nodeId), "running");
+          setNodeState(String(eventNodeId), "running");
           return;
         }
 
-        if (event.eventType === "node_completed" && event.nodeId) {
-          setNodeState(String(event.nodeId), "done");
+        if (event.eventType === "node_completed" && eventNodeId) {
+          setNodeState(String(eventNodeId), "done");
           return;
         }
 
