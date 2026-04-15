@@ -1,541 +1,330 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LangGraph Vis Week 04</title>
+    <title>LangGraph Demo</title>
     <style>
-      body {
-        font-family: "Noto Sans KR", Arial, sans-serif;
-        margin: 0;
-        padding: 24px;
-        background: #0b1020;
-        color: #e5e7eb;
+      :root {
+        --bg: #050d1e;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --idle: #1f2937;
+        --ready: #0f766e;
+        --running: #0ea5e9;
+        --done: #16a34a;
       }
-      .panel {
-        margin-bottom: 16px;
-      }
-      label {
-        margin-right: 8px;
-      }
-      input,
-      button {
-        margin-right: 8px;
-      }
-      textarea,
-      pre {
-        width: 100%;
+
+      * {
         box-sizing: border-box;
       }
-      textarea,
-      pre {
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Pretendard", "Noto Sans KR", Arial, sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 20% 0%, #1f4f6e2b, transparent 35%),
+          radial-gradient(circle at 80% 20%, #0f766e2b, transparent 35%),
+          var(--bg);
+      }
+
+      .wrap {
+        max-width: 680px;
+        margin: 0 auto;
+        padding: 28px 20px;
+      }
+
+      h1 {
+        margin: 0 0 14px;
+        font-size: 22px;
+      }
+
+      .lead {
+        color: var(--muted);
+        margin: 0 0 20px;
+      }
+
+      .workflow {
+        display: grid;
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .node-card {
         background: #111827;
-        color: #f9fafb;
-        border: 1px solid #374151;
-        border-radius: 8px;
-      }
-      textarea {
-        min-height: 140px;
-        resize: vertical;
-      }
-      .row {
-        margin-top: 8px;
-      }
-      .error {
-        color: #f87171;
-      }
-      button {
-        padding: 6px 12px;
-      }
-      .guide {
-        margin: 0 0 16px;
+        border: 1px solid var(--idle);
+        border-radius: 10px;
         padding: 12px;
-        border: 1px solid #334155;
-        border-radius: 8px;
-        background: #0f172a;
       }
-      .guide h2,
-      .guide h3 {
-        margin-top: 0;
+
+      .node-card.ready {
+        border-color: color-mix(in oklab, var(--ready), #ffffff 20%);
+        box-shadow: 0 0 0 2px #14b8a633;
+        background: #072a2b;
       }
-      .guide ul {
-        margin: 4px 0 0 20px;
+
+      .node-card.running {
+        border-color: var(--running);
+        background: #0c2e46;
+        box-shadow: 0 0 0 2px #38bdf822;
       }
-      .inline-code {
-        background: #111827;
-        color: #93c5fd;
-        padding: 1px 6px;
-        border-radius: 4px;
+
+      .node-card.done {
+        border-color: var(--done);
+        background: #092a18;
       }
-      .status-box {
-        margin-bottom: 8px;
+
+      .node-label {
+        margin: 0;
+        font-weight: 700;
       }
-      .muted {
-        color: #cbd5e1;
+
+      .node-meta {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 12px;
       }
-      pre {
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-      .hidden {
-        display: none;
-      }
-      .node-panel {
-        margin-top: 16px;
-        padding: 12px;
-        border: 1px solid #334155;
-        border-radius: 8px;
-        background: #0f172a;
-      }
-      .node-list {
-        list-style: none;
-        padding: 0;
-        margin: 4px 0 0;
-      }
-      .node-item {
-        margin-bottom: 6px;
-        padding: 8px 10px;
-        border-radius: 6px;
-        border: 1px solid #334155;
+
+      .controls {
         display: flex;
-        justify-content: space-between;
-        gap: 12px;
+        justify-content: flex-start;
       }
-      .node-item.active {
-        border-color: #22d3ee;
-        box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.2);
-        background: #082f49;
+
+      button {
+        appearance: none;
+        border: 0;
+        padding: 10px 24px;
+        border-radius: 10px;
+        background: #0f766e;
+        color: #e2f8f7;
+        font-weight: 700;
+        cursor: pointer;
       }
-      .node-item .node-name {
-        color: #e2e8f0;
-        font-weight: 600;
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
       }
-      .node-item .node-meta {
-        color: #94a3b8;
-        font-size: 13px;
+
+      .empty {
+        color: var(--muted);
       }
-      .active-chip {
-        margin: 0 0 6px;
-        padding: 6px 10px;
-        border-radius: 999px;
-        border: 1px solid #0f766e;
-        background: #042f2e;
-        width: fit-content;
-        color: #5eead4;
+
+      .arrow {
+        text-align: center;
+        color: #718096;
       }
     </style>
   </head>
   <body>
-    <h1>LangGraph Vis Week 04</h1>
-    <p class="muted">백엔드 API + SSE 스트림 데모 페이지</p>
-
-    <section class="guide">
-      <h2>사용 방법</h2>
-      <ol>
-        <li>아래 <span class="inline-code">Backend URL</span>에 현재 실행 중인 서버 주소를 넣습니다.</li>
-        <li><span class="inline-code">runId</span>와 <span class="inline-code">threadId</span>를 넣습니다.</li>
-        <li>
-          <span class="inline-code">Load state</span> → <code>/api/runs/{runId}/state</code> 조회
-        </li>
-        <li>
-          <span class="inline-code">Load events</span> → <code>/api/runs/{runId}/events</code> 조회
-        </li>
-        <li>
-          <span class="inline-code">Open stream</span> → SSE
-          <code>/api/runs/{runId}/events/stream</code> 구독
-        </li>
-      </ol>
-      <h3>주의</h3>
-      <ul>
-        <li>조회 전용만 쓰던 흐름에서 <span class="inline-code">Create run</span>과
-          <span class="inline-code">Emit event</span>를 통해 실시간 입력 데모로 확장했습니다.</li>
-        <li>입력한 <span class="inline-code">runId</span>가 존재하지 않으면
-          <span class="inline-code">404</span>가 나옵니다.
-        </li>
-        <li><span class="inline-code">runId</span>는 영문 소문자 시작, 소문자/숫자/_,- 조합이어야 합니다.</li>
-      </ul>
-      <p>
-        API 문서: <a href="/docs" target="_blank" rel="noreferrer">/docs</a> ,
-        루트 접속: <a href="/" id="root-link">/ → /ui/</a>
+    <main class="wrap">
+      <h1>LangGraph Demo</h1>
+      <p class="lead">
+        3개 더미 노드의 워크플로우를 실행하고 실시간으로 진행 노드를 확인합니다.
       </p>
-    </section>
-
-    <div class="panel">
-      <label for="base-url">Backend URL</label>
-      <input id="base-url" value="http://127.0.0.1:8000" size="36" />
-      <label for="run-id">runId</label>
-      <input id="run-id" value="run_api" />
-      <label for="thread-id">threadId</label>
-      <input id="thread-id" value="thread-1" />
-    </div>
-
-    <div class="panel">
-      <button id="btn-create-run">Create run</button>
-      <label for="event-type">eventType</label>
-      <input id="event-type" value="node_started" size="16" />
-      <label for="event-payload">event payload</label>
-      <input id="event-payload" size="46" value='{"nodeId":"intent_parser"}' />
-      <button id="btn-emit">Emit event</button>
-    </div>
-
-    <div class="panel">
-      <label for="from-seq">fromSeq</label>
-      <input id="from-seq" value="1" size="8" />
-      <label for="last-event-id">last-event-id</label>
-      <input id="last-event-id" placeholder="선택" size="20" />
-    </div>
-
-    <div class="panel row">
-      <button id="btn-state">Load state</button>
-      <button id="btn-events">Load events</button>
-      <button id="btn-stream">Open stream</button>
-      <button id="btn-stop">Close stream</button>
-    </div>
-
-    <div class="status-box">
-      <pre id="status" class="error"></pre>
-      <pre id="help" class="muted">버튼을 누르면 선택한 API의 응답 JSON이 아래에 표시됩니다.</pre>
-    </div>
-    <h3>State</h3>
-    <pre id="state-output">-</pre>
-    <h3>Events</h3>
-    <pre id="events-output">-</pre>
-
-    <div class="node-panel">
-      <h3>Active Node</h3>
-      <div id="active-node" class="active-chip">활성 노드 없음</div>
-      <h3>Node Activity</h3>
-      <ul id="node-list" class="node-list"></ul>
-    </div>
+      <section id="workflow" class="workflow">
+        <div class="empty">workflow를 불러오는 중…</div>
+      </section>
+      <div class="controls">
+        <button id="run-btn" type="button">Run</button>
+      </div>
+    </main>
 
     <script>
-      const baseUrlInput = document.getElementById("base-url");
-      const runIdInput = document.getElementById("run-id");
-      const threadIdInput = document.getElementById("thread-id");
-      const fromSeqInput = document.getElementById("from-seq");
-      const lastEventIdInput = document.getElementById("last-event-id");
-      const eventTypeInput = document.getElementById("event-type");
-      const eventPayloadInput = document.getElementById("event-payload");
-      const statusOutput = document.getElementById("status");
-      const helpOutput = document.getElementById("help");
-      const stateOutput = document.getElementById("state-output");
-      const eventsOutput = document.getElementById("events-output");
-      const activeNodeOutput = document.getElementById("active-node");
-      const nodeListOutput = document.getElementById("node-list");
+      const API_ORIGIN = window.location.origin;
+      const WORKFLOW_ID = "langgraph_demo_workflow_v1";
 
-      const runIdPattern = /^[a-z][a-z0-9_-]{1,63}$/;
-      let eventHistory = [];
+      const runButton = document.getElementById("run-btn");
+      const workflowContainer = document.getElementById("workflow");
+      const nodeCardById = new Map();
+      const orderedNodeIds = [];
+      let eventSource = null;
+      let isRunning = false;
 
-      document.getElementById("root-link").addEventListener("click", (event) => {
-        event.preventDefault();
-        window.location.replace(`${window.location.origin}/ui/`);
-      });
-
-      let streamHandle = null;
-
-      function runApiUrl(path, query) {
-        const base = new URL(baseUrlInput.value.replace(/\/$/, ""));
-        const url = new URL(path, `${base.href}/`);
-        Object.entries(query || {}).forEach(([key, value]) => {
-          if (value !== undefined && value !== null && `${value}` !== "") {
-            url.searchParams.set(key, value);
-          }
-        });
-        return url.toString();
-      }
-
-      function getRunId() {
-        const runId = runIdInput.value.trim();
-        if (!runId) {
-          throw new Error("runId is required");
-        }
-        if (!runIdPattern.test(runId)) {
-          throw new Error(
-            "runId 형식이 올바르지 않습니다. 영문 소문자로 시작하고 영문 소문자/숫자/_- 만 허용합니다."
-          );
-        }
-        return runId;
-      }
-
-      function normalizeThreadId() {
-        return threadIdInput.value.trim();
-      }
-
-      function parsePayload(raw) {
-        if (!raw || `${raw}`.trim() === "") {
-          return {};
-        }
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
-            throw new Error("payload must be an object");
-          }
-          return parsed;
-        } catch (error) {
-          throw new Error(`payload parse error: ${error.message}`);
-        }
-      }
-
-      function normalizeEvents(rawEvents) {
-        if (!Array.isArray(rawEvents)) {
-          return [];
-        }
-        return rawEvents
-          .filter((event) => event && typeof event === "object")
-          .map((event) => ({
-            ...event,
-            eventSeq: Number(event.eventSeq || 0),
-            nodeId: event.nodeId,
-            eventType: String(event.eventType || ""),
-          }));
-      }
-
-      function updateNodeHighlights(rawEvents) {
-        const events = normalizeEvents(rawEvents);
-        const nodeStats = new Map();
-        let activeNode = "";
-        let activeSeq = -1;
-
-        for (const event of events) {
-          if (!event.nodeId) {
-            continue;
-          }
-          const nodeId = String(event.nodeId);
-          const existing = nodeStats.get(nodeId) || {
-            eventCount: 0,
-            lastSeq: -1,
-            lastEventType: "",
-            isRunning: false,
-          };
-          existing.eventCount += 1;
-          if (Number.isFinite(event.eventSeq)) {
-            existing.lastSeq = event.eventSeq;
-          }
-          existing.lastEventType = event.eventType;
-
-          if (event.eventType === "node_started" || event.eventType === "node_token") {
-            existing.isRunning = true;
-          } else if (event.eventType === "node_completed") {
-            existing.isRunning = false;
-          }
-
-          if (existing.isRunning && existing.lastSeq >= activeSeq) {
-            activeNode = nodeId;
-            activeSeq = existing.lastSeq;
-          }
-          nodeStats.set(nodeId, existing);
-        }
-
-        activeNodeOutput.textContent = activeNode || "활성 노드 없음";
-        nodeListOutput.textContent = "";
-
-        if (nodeStats.size === 0) {
-          const empty = document.createElement("li");
-          empty.className = "node-item";
-          empty.textContent = "아직 node 이벤트가 없습니다";
-          nodeListOutput.appendChild(empty);
+      function setNodeState(nodeId, nextState) {
+        const card = nodeCardById.get(nodeId);
+        if (!card) {
           return;
         }
 
-        for (const [nodeId, stats] of Array.from(nodeStats.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
-          const item = document.createElement("li");
-          item.className = "node-item";
-          if (nodeId === activeNode) {
-            item.classList.add("active");
+        card.classList.remove("ready", "running", "done");
+        if (nextState) {
+          card.classList.add(nextState);
+        }
+      }
+
+      function resetNodeStates() {
+        for (const nodeId of orderedNodeIds) {
+          setNodeState(nodeId);
+        }
+        const startNodeId = orderedNodeIds[0];
+        if (startNodeId) {
+          setNodeState(startNodeId, "ready");
+        }
+      }
+
+      function renderWorkflow(schema) {
+        workflowContainer.innerHTML = "";
+        nodeCardById.clear();
+        orderedNodeIds.length = 0;
+
+        const nodes = Array.isArray(schema.nodes)
+          ? [...schema.nodes].sort((a, b) => Number(a.order || 0) - Number(b.order || 0))
+          : [];
+
+        if (nodes.length === 0) {
+          workflowContainer.innerHTML = "<div class=\"empty\">노드를 찾을 수 없습니다.</div>";
+          return;
+        }
+
+        nodes.forEach((node, index) => {
+          const nodeId = String(node.id);
+          orderedNodeIds.push(nodeId);
+
+          const card = document.createElement("article");
+          card.className = "node-card";
+          card.dataset.nodeId = nodeId;
+
+          const label = document.createElement("h2");
+          label.className = "node-label";
+          label.textContent = `${index + 1}. ${node.label}`;
+
+          const meta = document.createElement("p");
+          meta.className = "node-meta";
+          meta.textContent = node.description || "";
+
+          card.appendChild(label);
+          card.appendChild(meta);
+          workflowContainer.appendChild(card);
+
+          if (index + 1 < nodes.length) {
+            const arrow = document.createElement("div");
+            arrow.className = "arrow";
+            arrow.textContent = "↓";
+            workflowContainer.appendChild(arrow);
           }
 
-          const left = document.createElement("span");
-          left.className = "node-name";
-          left.textContent = nodeId;
+          nodeCardById.set(nodeId, card);
+        });
 
-          const right = document.createElement("span");
-          right.className = "node-meta";
-          right.textContent = `events: ${stats.eventCount}, last: ${stats.lastEventType || "unknown"} (seq ${stats.lastSeq})`;
+        resetNodeStates();
+      }
 
-          item.appendChild(left);
-          item.appendChild(right);
-          nodeListOutput.appendChild(item);
+      function stopStream() {
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
         }
       }
 
-      function setEventHistory(events, append = false) {
-        const normalized = normalizeEvents(events);
-        if (append) {
-          eventHistory = eventHistory.concat(normalized);
-        } else {
-          eventHistory = normalized;
-        }
-        eventsOutput.textContent = JSON.stringify(eventHistory, null, 2);
-        updateNodeHighlights(eventHistory);
-      }
-
-      function setStatus(message, isError = false) {
-        statusOutput.textContent = message || "";
-        statusOutput.classList.toggle("error", isError);
-      }
-
-      async function doGet(path, query) {
-        const runId = getRunId();
-        const threadId = normalizeThreadId();
-        const url = runApiUrl(path.replace("{runId}", runId).replace("{threadId}", threadId), query);
-        const response = await fetch(url, { headers: { "Accept": "application/json" } });
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`${response.status}: ${errorText || response.statusText}`);
-        }
-        return response.json();
-      }
-
-      async function loadState() {
-        helpOutput.classList.add("hidden");
-        setStatus("요청 중...");
-        try {
-          const payload = await doGet("/api/runs/{runId}/state");
-          stateOutput.textContent = JSON.stringify(payload, null, 2);
-          setStatus("state 조회 완료");
-        } catch (error) {
-          setStatus(String(error), true);
-        }
-      }
-
-      async function loadEvents() {
-        helpOutput.classList.add("hidden");
-        setStatus("요청 중...");
-        try {
-          const payload = await doGet("/api/runs/{runId}/events", { lastEventId: lastEventIdInput.value.trim() });
-          setEventHistory(Array.isArray(payload.events) ? payload.events : []);
-          setStatus("events 조회 완료");
-        } catch (error) {
-          setStatus(String(error), true);
-        }
-      }
-
-      function openStream() {
-        helpOutput.classList.add("hidden");
-        try {
-          setStatus("SSE 연결 시도 중...");
-          const runId = getRunId();
-          const threadId = normalizeThreadId();
-          if (!threadId) {
-            setStatus("threadId를 입력하세요.", true);
-            return;
-          }
-          if (streamHandle) {
-            streamHandle.close();
-          }
-
-          const url = runApiUrl(`/api/runs/${encodeURIComponent(runId)}/events/stream`, {
-            fromSeq: fromSeqInput.value.trim(),
-            lastEventId: lastEventIdInput.value.trim(),
-          });
-
-          const source = new EventSource(url);
-          streamHandle = source;
-          setEventHistory([]);
-          source.addEventListener("open", () => {
-            setStatus("SSE 연결됨");
-          });
-
-          source.addEventListener("run-event", (event) => {
-            try {
-              const data = JSON.parse(event.data);
-              setEventHistory([data], true);
-            } catch (err) {
-              setStatus(`SSE parse error: ${err.message}`, true);
+      function applyEvent(event) {
+        if (event.eventType === "node_started" && event.nodeId) {
+          for (const nodeId of orderedNodeIds) {
+            if (nodeCardById.get(nodeId).classList.contains("running")) {
+              setNodeState(nodeId, "done");
             }
-          });
-          source.addEventListener("error", () => {
-            setStatus("SSE 연결이 종료되었거나 오류가 발생했습니다.", true);
-            source.close();
-            streamHandle = null;
-          });
-        } catch (error) {
-          setStatus(String(error), true);
+          }
+          setNodeState(String(event.nodeId), "running");
+          return;
+        }
+
+        if (event.eventType === "node_completed" && event.nodeId) {
+          setNodeState(String(event.nodeId), "done");
+          return;
+        }
+
+        if (event.eventType === "run_completed") {
+          isRunning = false;
+          runButton.disabled = false;
+          runButton.textContent = "Run";
+          stopStream();
         }
       }
 
-      function closeStream() {
-        if (streamHandle) {
-          streamHandle.close();
-          streamHandle = null;
-          setStatus("SSE 연결 종료");
-        }
+      function subscribeEvents(runId) {
+        stopStream();
+        eventSource = new EventSource(`${API_ORIGIN}/api/runs/${encodeURIComponent(runId)}/events/stream`);
+        eventSource.addEventListener("run-event", (event) => {
+          applyEvent(JSON.parse(event.data));
+        });
+        eventSource.addEventListener("error", () => {
+          if (isRunning) {
+            stopStream();
+          }
+        });
       }
 
-      async function createRun() {
-        helpOutput.classList.add("hidden");
-        setStatus("run 생성 중...");
+      async function startRun() {
+        if (isRunning) {
+          return;
+        }
+
+        if (runButton.disabled) {
+          return;
+        }
+
         try {
-          const body = {};
-          const runId = runIdInput.value.trim();
-          const threadId = threadIdInput.value.trim();
-          if (runId) {
-            body.runId = runId;
-          }
-          if (threadId) {
-            body.threadId = threadId;
+          isRunning = true;
+          runButton.disabled = true;
+          runButton.textContent = "실행 중…";
+          resetNodeStates();
+
+          const runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+          const threadId = `thread_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+          const createResponse = await fetch(`${API_ORIGIN}/api/runs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              runId,
+              threadId,
+              workflowId: WORKFLOW_ID,
+            }),
+          });
+          if (!createResponse.ok) {
+            const message = await createResponse.text();
+            throw new Error(`run 생성 실패: ${createResponse.status} ${message}`);
           }
 
-          const response = await fetch(runApiUrl("/api/runs"), {
+          subscribeEvents(runId);
+
+          const runResponse = await fetch(`${API_ORIGIN}/api/runs/${encodeURIComponent(runId)}/demo/run`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify(body),
           });
-          if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`${response.status}: ${errorText || response.statusText}`);
+          if (!runResponse.ok) {
+            const message = await runResponse.text();
+            throw new Error(`demo 실행 실패: ${runResponse.status} ${message}`);
           }
-          const payload = await response.json();
-          runIdInput.value = payload.runId;
-          threadIdInput.value = payload.threadId;
-          stateOutput.textContent = JSON.stringify(payload.state, null, 2);
-          setEventHistory([]);
-          setStatus("run 생성 완료");
         } catch (error) {
-          setStatus(String(error), true);
+          isRunning = false;
+          runButton.disabled = false;
+          runButton.textContent = "Run";
+          stopStream();
+          console.error(error);
+          alert(error.message || "실행 중 오류가 발생했습니다.");
         }
       }
 
-      async function emitEvent() {
-        helpOutput.classList.add("hidden");
-        setStatus("이벤트 emit 중...");
-        try {
-          const runId = getRunId();
-          const eventType = eventTypeInput.value.trim();
-          if (!eventType) {
-            throw new Error("eventType is required");
-          }
-          const payload = parsePayload(eventPayloadInput.value);
-          const response = await fetch(runApiUrl(`/api/runs/${encodeURIComponent(runId)}/events`), {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify({ eventType, payload }),
-          });
-          if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`${response.status}: ${errorText || response.statusText}`);
-          }
-          const result = await response.json();
-          if (result.state) {
-            stateOutput.textContent = JSON.stringify(result.state, null, 2);
-          }
-          if (result.event) {
-            setEventHistory([result.event], true);
-          } else {
-            setEventHistory(eventHistory, false);
-          }
-          setStatus("이벤트 emit 완료");
-        } catch (error) {
-          setStatus(String(error), true);
+      async function init() {
+        const response = await fetch(`${API_ORIGIN}/api/workflows/${WORKFLOW_ID}/schema`);
+        if (!response.ok) {
+          throw new Error(`workflow 로드 실패: ${response.status}`);
         }
+        const schema = await response.json();
+        renderWorkflow(schema);
       }
 
-      document.getElementById("btn-state").addEventListener("click", loadState);
-      document.getElementById("btn-events").addEventListener("click", loadEvents);
-      document.getElementById("btn-stream").addEventListener("click", openStream);
-      document.getElementById("btn-stop").addEventListener("click", closeStream);
-      document.getElementById("btn-create-run").addEventListener("click", createRun);
-      document.getElementById("btn-emit").addEventListener("click", emitEvent);
+      runButton.addEventListener("click", () => {
+        startRun();
+      });
+
+      init().catch((error) => {
+        workflowContainer.innerHTML = "<div class=\"empty\">workflow를 불러오지 못했습니다.</div>";
+        runButton.disabled = true;
+        alert(error.message || "초기화 실패");
+      });
     </script>
   </body>
 </html>

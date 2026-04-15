@@ -19,7 +19,9 @@ from .run_error_contract import (
     normalize_run_error,
 )
 from .resync_controller import resolve_replay_from
+from .demo_workflow_runner import DemoWorkflowRunner
 from .run_orchestrator import RunOrchestrator
+from .schema_registry import WorkflowSchemaRegistry
 from .run_state_machine import is_terminal_state
 
 HEARTBEAT_MS = 20_000
@@ -99,9 +101,14 @@ def _heartbeat(now: datetime | None = None) -> str:
     return f": heartbeat {now_iso}\n\n"
 
 
-def create_run_state_router(*, store):
+def create_run_state_router(*, store, workflow_registry: WorkflowSchemaRegistry | None = None, demo_runner: DemoWorkflowRunner | None = None):
     router = APIRouter()
     orchestrator = RunOrchestrator(store=store)
+    workflow_registry = workflow_registry or WorkflowSchemaRegistry()
+    demo_runner = demo_runner or DemoWorkflowRunner(
+        orchestrator=orchestrator,
+        schema_registry=workflow_registry,
+    )
 
     def _validation_error(request_id: str, message: str):
         return JSONResponse(
@@ -293,6 +300,38 @@ def create_run_state_router(*, store):
             }
         except ValueError as error:
             return _validation_error(request_id, str(error))
+        except Exception as error:
+            return await _on_error(error, request_id)
+
+    @router.post("/api/runs/{run_id}/demo/run")
+    async def run_demo_workflow(run_id: str):
+        request_id = str(uuid.uuid4())
+        try:
+            run_state = store.get_run_state(run_id)
+            if is_terminal_state(run_state["state"]):
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "code": RUN_ERROR_CODES["INVALID_RUN_TRANSITION"],
+                        "message": RUN_ERROR_MESSAGES[RUN_ERROR_CODES["INVALID_RUN_TRANSITION"]],
+                        "requestId": request_id,
+                    },
+                    headers={"Cache-Control": "no-cache"},
+                )
+
+            workflow_id = run_state.get("workflowId")
+            if not workflow_id:
+                return _validation_error(
+                    request_id,
+                    "workflowId is required for demo run",
+                )
+
+            asyncio.create_task(demo_runner.run_workflow(run_id, workflow_id=workflow_id))
+            return {
+                "runId": run_id,
+                "workflowId": workflow_id,
+                "status": "running",
+            }
         except Exception as error:
             return await _on_error(error, request_id)
 

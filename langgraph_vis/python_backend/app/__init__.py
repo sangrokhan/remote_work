@@ -12,6 +12,7 @@ __all__ = [
     "history_api",
     "history_store",
     "run_orchestrator",
+    "demo_workflow_runner",
     "schema_registry",
     "schema_api",
     "run_state_api",
