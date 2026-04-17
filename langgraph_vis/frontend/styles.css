@@ -1,0 +1,111 @@
+:root {
+  --bg: #050d1e;
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --idle: #1f2937;
+  --ready: #0f766e;
+  --running: #0ea5e9;
+  --done: #16a34a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Pretendard", "Noto Sans KR", Arial, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 20% 0%, #1f4f6e2b, transparent 35%),
+    radial-gradient(circle at 80% 20%, #0f766e2b, transparent 35%),
+    var(--bg);
+}
+
+.wrap {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 28px 20px;
+}
+
+h1 {
+  margin: 0 0 14px;
+  font-size: 22px;
+}
+
+.lead {
+  color: var(--muted);
+  margin: 0 0 20px;
+}
+
+.workflow {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.node-card {
+  background: #111827;
+  border: 1px solid var(--idle);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.node-card.ready {
+  border-color: color-mix(in oklab, var(--ready), #ffffff 20%);
+  box-shadow: 0 0 0 2px #14b8a633;
+  background: #072a2b;
+}
+
+.node-card.running {
+  border-color: var(--running);
+  background: #0c2e46;
+  box-shadow: 0 0 0 2px #38bdf822;
+}
+
+.node-card.done {
+  border-color: var(--done);
+  background: #092a18;
+}
+
+.node-label {
+  margin: 0;
+  font-weight: 700;
+}
+
+.node-meta {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.controls {
+  display: flex;
+  justify-content: flex-start;
+}
+
+button {
+  appearance: none;
+  border: 0;
+  padding: 10px 24px;
+  border-radius: 10px;
+  background: #0f766e;
+  color: #e2f8f7;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.empty {
+  color: var(--muted);
+}
+
+.arrow {
+  text-align: center;
+  color: #718096;
+}
