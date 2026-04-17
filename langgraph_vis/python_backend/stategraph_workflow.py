@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import time
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -15,38 +16,61 @@ class DemoState(TypedDict):
     refiner_output: str
     final_output: str
     hop_count: int
+    planner_delay: float
+    executor_delay: float
+    refiner_delay: float
+    synthesizer_delay: float
+
+
+def _random_node_delay() -> float:
+    return random.uniform(1.0, 5.0)
+
+
+def _sleep_node() -> float:
+    delay = _random_node_delay()
+    time.sleep(delay)
+    return delay
 
 
 def _planner(state: DemoState) -> dict:
+    delay = _sleep_node()
     return {
-        "planner_output": f"[planner] 계획 생성 완료: {state['llm_input']}",
+        "planner_output": f"[planner] 계획 생성 완료: {state['llm_input']} ({delay:.1f}s)",
         "hop_count": state.get("hop_count", 0) + 1,
+        "planner_delay": delay,
     }
 
 
 def _executor(state: DemoState) -> dict:
+    delay = _sleep_node()
     return {
-        "executor_output": f"[executor] 실행 결과: {state.get('planner_output', '')}",
+        "executor_output": f"[executor] 실행 결과: {state.get('planner_output', '')} ({delay:.1f}s)",
         "hop_count": state.get("hop_count", 0) + 1,
+        "executor_delay": delay,
     }
 
 
 def _refiner(state: DemoState) -> dict:
+    delay = _sleep_node()
     return {
-        "refiner_output": f"[refiner] 정제 결과: {state.get('executor_output', '')}",
+        "refiner_output": f"[refiner] 정제 결과: {state.get('executor_output', '')} ({delay:.1f}s)",
         "hop_count": state.get("hop_count", 0) + 1,
+        "refiner_delay": delay,
     }
 
 
 def _synthesizer(state: DemoState) -> dict:
+    delay = _sleep_node()
     return {
         "final_output": (
             f"[synthesizer] 최종 출력: "
             f"{state.get('planner_output', '')} -> "
             f"{state.get('executor_output', '')} -> "
-            f"{state.get('refiner_output', '')}"
+            f"{state.get('refiner_output', '')} "
+            f"({delay:.1f}s)"
         ),
         "hop_count": state.get("hop_count", 0) + 1,
+        "synthesizer_delay": delay,
     }
 
 
@@ -108,5 +132,9 @@ def run_demo_workflow(llm_input: str) -> dict:
         "refiner_output": "",
         "final_output": "",
         "hop_count": 0,
+        "planner_delay": 0.0,
+        "executor_delay": 0.0,
+        "refiner_delay": 0.0,
+        "synthesizer_delay": 0.0,
     }
     return graph.invoke(initial_state)
