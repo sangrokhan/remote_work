@@ -48,6 +48,8 @@
     "__end__": "end",
   };
 
+  const ACTIVE_FADE_MS = 350;
+
   function resolveNodeStyle(nodeId) {
     const lowered = String(nodeId || "").toLowerCase();
     if (NODE_ID_ALIASES[lowered]) {
@@ -355,10 +357,17 @@
     let isRunning = false;
     let schema = null;
 
-    function renderStatusStyle() {
+    function renderStatusStyle({ fadeOut = false } = {}) {
       if (!cy) return;
+      const transitionDuration = fadeOut ? `${ACTIVE_FADE_MS}ms` : "0ms";
       cy.nodes().forEach((node) => {
-        node.style(makeNodeClassStyle(node.id(), false));
+        const baseStyle = makeNodeClassStyle(node.id(), false);
+        node.style({
+          ...baseStyle,
+          "transition-property": "background-color, border-color, border-width",
+          "transition-duration": transitionDuration,
+          "transition-timing-function": "ease-in-out",
+        });
       });
     }
 
@@ -529,12 +538,19 @@
       return schema;
     }
 
-    function clearActiveState() {
+    function clearActiveState({ fadeOut = false } = {}) {
       if (!cy) return;
       cy.nodes().removeClass("active");
-      renderStatusStyle();
+      renderStatusStyle({ fadeOut });
       const done = cy.nodes().filter((node) => node.data("id") === "__end__");
-      done.forEach((node) => node.style(makeNodeClassStyle(node.id(), false)));
+      done.forEach((node) => {
+        node.style({
+          ...makeNodeClassStyle(node.id(), false),
+          "transition-property": "background-color, border-color, border-width",
+          "transition-duration": fadeOut ? `${ACTIVE_FADE_MS}ms` : "0ms",
+          "transition-timing-function": "ease-in-out",
+        });
+      });
     }
 
     function getIdleActiveNodeId() {
@@ -558,20 +574,11 @@
         "background-color": palette.active.bg,
         "border-color": palette.active.border,
         "border-width": 4,
+        "transition-duration": "0ms",
+        "transition-property": "background-color, border-color, border-width",
+        "transition-timing-function": "ease-in-out",
       });
       el.addClass("active");
-    }
-
-    function updateNodeByStage(nodeId, stage) {
-      if (stage === "start") {
-        setActiveNode(nodeId);
-        return;
-      }
-      if (stage === "end") {
-        clearActiveState();
-        return;
-      }
-      setActiveNode(nodeId);
     }
 
     async function runWorkflow() {
@@ -596,14 +603,14 @@
           response,
           (nodeId, stage) => {
             if (stage === "end") {
-              clearActiveState();
+              clearActiveState({ fadeOut: true });
               return;
             }
             if (stage === "start") {
-              window.setTimeout(() => updateNodeByStage(nodeId, "start"), 20);
+              setActiveNode(nodeId);
               return;
             }
-            updateNodeByStage(nodeId, stage);
+            setActiveNode(nodeId);
           },
           (eventData) => {
             if (eventData?.node && eventData?.state) {
@@ -618,7 +625,7 @@
           },
           () => {
             updateStatus("완료");
-            window.setTimeout(() => clearActiveState(), 80);
+            clearActiveState({ fadeOut: true });
             appendOutput("실행 완료");
           },
           () => {
