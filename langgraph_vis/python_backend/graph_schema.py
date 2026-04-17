@@ -267,6 +267,14 @@ def serialize_stategraph_to_json(graph: Any) -> Dict[str, Any]:
             edge_payload["condition"] = edge.get("condition")
         minimal_edges.append(edge_payload)
 
+    for edge in minimal_edges:
+        source = edge.get("from")
+        target = edge.get("to")
+        if source and source not in node_ids:
+            node_ids.append(source)
+        if target and target not in node_ids:
+            node_ids.append(target)
+
     return {
         "nodes": [{"id": node_id} for node_id in node_ids],
         "edges": minimal_edges,

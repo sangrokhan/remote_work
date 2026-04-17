@@ -522,6 +522,10 @@
       }
 
       renderStatusStyle();
+      const idleNodeId = getIdleActiveNodeId();
+      if (idleNodeId) {
+        setActiveNode(idleNodeId);
+      }
       return schema;
     }
 
@@ -531,6 +535,25 @@
       renderStatusStyle();
       const done = cy.nodes().filter((node) => node.data("id") === "__end__");
       done.forEach((node) => node.style(makeNodeClassStyle(node.id(), false)));
+    }
+
+    function getIdleActiveNodeId() {
+      if (!schema || !schema.nodes?.length) {
+        return null;
+      }
+      const ids = schema.nodes.map((node) => node.data?.id).filter(Boolean);
+      if (ids.includes("__start__")) return "__start__";
+      return ids[0] || null;
+    }
+
+    function getRunStartNodeId() {
+      if (!schema || !schema.nodes?.length) {
+        return null;
+      }
+      const ids = schema.nodes.map((node) => node.data?.id).filter(Boolean);
+      if (ids.includes("planner")) return "planner";
+      if (ids.includes("__start__")) return "__start__";
+      return ids[0] || null;
     }
 
     function setActiveNode(nodeId) {
@@ -560,6 +583,10 @@
       output.textContent = "";
       updateStatus("실행 중...");
       clearActiveState();
+      const initialNodeId = getRunStartNodeId();
+      if (initialNodeId) {
+        setActiveNode(initialNodeId);
+      }
 
       try {
         const response = await fetch(options.runEndpoint);
@@ -582,6 +609,7 @@
             }
           },
           () => {
+            setActiveNode("__end__");
             updateStatus("완료");
             appendOutput("실행 완료");
           },
