@@ -296,6 +296,7 @@
     if (typeof window.cytoscape.use === "function" && window.cytoscape.use) {
       const dagreExtension =
         window.cytoscapeDagre ||
+        window.CytoscapeDagre ||
         window.dagre ||
         window.CytoscapeDagre;
       if (typeof dagreExtension === "function") {
@@ -375,16 +376,13 @@
         container: graphContainer,
         elements: [...schema.nodes, ...schema.edges],
         layout: {
-          name: "dagre",
+          name: "preset",
           rankDir: "TB",
-          nodeSep: 32,
-          rankSep: 55,
-          animate: false,
-          spacingFactor: 1.2,
-          edgeSep: 12,
-          ranker: "tight-tree",
           fit: true,
           padding: 12,
+          stop: function () {
+            cy.fit(undefined, 12);
+          },
         },
         style: [
           {
@@ -439,6 +437,34 @@
           },
         ],
       });
+
+      const dagreLayout = {
+        name: "dagre",
+        rankDir: "TB",
+        nodeSep: 32,
+        rankSep: 55,
+        animate: false,
+        spacingFactor: 1.2,
+        edgeSep: 12,
+        ranker: "tight-tree",
+        fit: true,
+        padding: 12,
+      };
+
+      const fallbackLayout = {
+        name: "breadthfirst",
+        directed: true,
+        spacingFactor: 1.3,
+        avoidOverlap: true,
+        fit: true,
+        padding: 12,
+      };
+
+      try {
+        cy.layout(dagreLayout).run();
+      } catch (error) {
+        cy.layout(fallbackLayout).run();
+      }
 
       renderStatusStyle();
       return schema;
