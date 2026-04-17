@@ -77,7 +77,7 @@ def _synthesizer(state: DemoState) -> dict:
 def _executor_route(state: DemoState) -> str:
     if state.get("hop_count", 0) >= 6:
         return "to_synthesizer"
-    return "to_refiner" if random.random() < 0.55 else "to_synthesizer"
+    return "to_refiner" if random.random() < 0.5 else "to_synthesizer"
 
 
 def _refiner_route(state: DemoState) -> str:
