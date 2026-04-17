@@ -260,7 +260,7 @@
               }
               onMessage(data);
               if (typeof data?.node === "string") {
-                onNodeUpdate(data.node);
+                onNodeUpdate(data.node, data.stage);
               }
             } catch (err) {
               onMessage({ text: payload });
@@ -546,16 +546,6 @@
       return ids[0] || null;
     }
 
-    function getRunStartNodeId() {
-      if (!schema || !schema.nodes?.length) {
-        return null;
-      }
-      const ids = schema.nodes.map((node) => node.data?.id).filter(Boolean);
-      if (ids.includes("planner")) return "planner";
-      if (ids.includes("__start__")) return "__start__";
-      return ids[0] || null;
-    }
-
     function setActiveNode(nodeId) {
       if (!cy) return;
       const next = normalizeNodeId(nodeId);
@@ -572,6 +562,18 @@
       el.addClass("active");
     }
 
+    function updateNodeByStage(nodeId, stage) {
+      if (stage === "start") {
+        setActiveNode(nodeId);
+        return;
+      }
+      if (stage === "end") {
+        clearActiveState();
+        return;
+      }
+      setActiveNode(nodeId);
+    }
+
     async function runWorkflow() {
       if (isRunning) return;
       if (!cy) {
@@ -583,10 +585,6 @@
       output.textContent = "";
       updateStatus("실행 중...");
       clearActiveState();
-      const initialNodeId = getRunStartNodeId();
-      if (initialNodeId) {
-        setActiveNode(initialNodeId);
-      }
 
       try {
         const response = await fetch(options.runEndpoint);
@@ -596,7 +594,17 @@
 
         await parseSseAndHandle(
           response,
-          (nodeId) => setActiveNode(nodeId),
+          (nodeId, stage) => {
+            if (stage === "end") {
+              clearActiveState();
+              return;
+            }
+            if (stage === "start") {
+              window.setTimeout(() => updateNodeByStage(nodeId, "start"), 20);
+              return;
+            }
+            updateNodeByStage(nodeId, stage);
+          },
           (eventData) => {
             if (eventData?.node && eventData?.state) {
               appendOutput(
@@ -609,8 +617,8 @@
             }
           },
           () => {
-            setActiveNode("__end__");
             updateStatus("완료");
+            window.setTimeout(() => clearActiveState(), 80);
             appendOutput("실행 완료");
           },
           () => {
