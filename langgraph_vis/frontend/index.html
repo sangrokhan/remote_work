@@ -6,12 +6,21 @@
     <title>Workflow Stream</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-<body>
-    <main>
-      <pre id="graph-output" aria-live="polite"></pre>
-      <button id="run-btn" type="button">Run</button>
-      <pre id="output" aria-live="polite"></pre>
+  <body>
+    <main class="workflow-page">
+      <section class="workflow-log">
+        <button id="run-btn" type="button">Run</button>
+        <div id="graph-status" aria-live="polite"></div>
+        <pre id="output" aria-live="polite"></pre>
+      </section>
+      <aside class="workflow-canvas-area">
+        <div id="workflow-graph" aria-label="workflow graph" role="img"></div>
+      </aside>
     </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.3/dist/cytoscape.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+    <script src="/static/workflow_graph_widget.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>
