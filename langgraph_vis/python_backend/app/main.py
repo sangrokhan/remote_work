@@ -27,6 +27,7 @@ def run_workflow_stream() -> Response:
         "executor_output": "",
         "refiner_output": "",
         "final_output": "",
+        "hop_count": 0,
     }
 
     def stream_updates() -> Generator[str, None, None]:
