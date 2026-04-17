@@ -375,15 +375,6 @@
       cy = window.cytoscape({
         container: graphContainer,
         elements: [...schema.nodes, ...schema.edges],
-        layout: {
-          name: "preset",
-          rankDir: "TB",
-          fit: true,
-          padding: 12,
-          stop: function () {
-            cy.fit(undefined, 12);
-          },
-        },
         style: [
           {
             selector: "node",
@@ -461,9 +452,29 @@
       };
 
       try {
-        cy.layout(dagreLayout).run();
+        const dagreLayoutInstance = cy.layout(dagreLayout);
+        if (dagreLayoutInstance && typeof dagreLayoutInstance.run === "function") {
+          dagreLayoutInstance.run();
+        } else if (dagreLayoutInstance && typeof dagreLayoutInstance.start === "function") {
+          dagreLayoutInstance.start();
+        }
       } catch (error) {
-        cy.layout(fallbackLayout).run();
+        try {
+          const fallbackLayoutInstance = cy.layout(fallbackLayout);
+          if (
+            fallbackLayoutInstance &&
+            typeof fallbackLayoutInstance.run === "function"
+          ) {
+            fallbackLayoutInstance.run();
+          } else if (
+            fallbackLayoutInstance &&
+            typeof fallbackLayoutInstance.start === "function"
+          ) {
+            fallbackLayoutInstance.start();
+          }
+        } catch (_) {
+          // keep the graph rendered with default cytoscape positions if fallback fails
+        }
       }
 
       renderStatusStyle();
