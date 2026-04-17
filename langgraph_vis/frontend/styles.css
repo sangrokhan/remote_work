@@ -1,0 +1,21 @@
+body {
+  margin: 0;
+  background: #ffffff;
+  color: #111111;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+main {
+  padding: 16px;
+}
+
+button {
+  padding: 10px 18px;
+}
+
+#output {
+  margin-top: 12px;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.5;
+}
