@@ -344,7 +344,6 @@
           "text-outline-color": palette.active.text,
           "border-width": 4,
           "text-outline-width": 2,
-          "box-shadow": palette.active.shadow,
         };
       }
       return {
@@ -354,7 +353,6 @@
         "text-outline-color": baseColor.text,
         "border-width": 2,
         "text-outline-width": 1,
-        "box-shadow": "none",
       };
     };
 
@@ -388,9 +386,9 @@
             selector: "node",
             style: {
               shape: "round-rectangle",
-              width: "label",
+              width: 130,
               "min-width": 130,
-              height: "label",
+              height: 46,
               "min-height": 42,
               padding: "10px",
               "text-wrap": "wrap",
@@ -398,9 +396,9 @@
               "text-valign": "center",
               "text-halign": "center",
               "font-size": 12,
-              "font-family": "Arial, 'Segoe UI', sans-serif",
+              "font-family": "Arial, Segoe UI, sans-serif",
               "font-weight": 600,
-              "border-radius": 10,
+              "corner-radius": 10,
               "border-style": "solid",
               "border-width": 2,
               "background-color": "data(bg)",
@@ -418,8 +416,9 @@
               "target-arrow-shape": "triangle",
               "target-arrow-color": "#7c879d",
               "arrow-scale": 1.5,
-              "arrow-color": "#7c879d",
+              "text-background-color": "#f9fafb",
               "font-size": 10,
+              "font-family": "Arial, Segoe UI, sans-serif",
               color: "#4b5563",
             },
           },
