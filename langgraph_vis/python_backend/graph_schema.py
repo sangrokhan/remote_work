@@ -184,7 +184,14 @@ def _extract_node_values(graph: Any) -> List[Any]:
         "node_names",
     ):
         if hasattr(graph, path):
-            return _ensure_list(getattr(graph, path))
+            value = getattr(graph, path)
+            if isinstance(value, Mapping):
+                return list(value.keys())
+            if isinstance(value, tuple):
+                return list(value)
+            if isinstance(value, list):
+                return value
+            return _ensure_list(value)
 
     if hasattr(graph, "__dict__"):
         for key in (
@@ -195,7 +202,14 @@ def _extract_node_values(graph: Any) -> List[Any]:
             "node_names",
         ):
             if key in graph.__dict__:
-                return _ensure_list(graph.__dict__[key])
+                value = graph.__dict__[key]
+                if isinstance(value, Mapping):
+                    return list(value.keys())
+                if isinstance(value, tuple):
+                    return list(value)
+                if isinstance(value, list):
+                    return value
+                return _ensure_list(value)
     return []
 
 
