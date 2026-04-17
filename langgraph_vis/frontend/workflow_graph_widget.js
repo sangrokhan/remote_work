@@ -386,6 +386,7 @@
             selector: "node",
             style: {
               shape: "round-rectangle",
+              content: "data(label)",
               width: 130,
               "min-width": 130,
               height: 46,
