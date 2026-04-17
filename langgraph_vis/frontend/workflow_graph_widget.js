@@ -340,7 +340,6 @@
         return {
           "background-color": palette.active.bg,
           "border-color": palette.active.border,
-          color: palette.active.text,
           "border-width": 4,
         };
       }
@@ -545,11 +544,7 @@
       el.style({
         "background-color": palette.active.bg,
         "border-color": palette.active.border,
-        color: palette.active.text,
-        "text-outline-color": palette.active.text,
         "border-width": 4,
-        "text-outline-width": 2,
-        "box-shadow": palette.active.shadow,
       });
       el.addClass("active");
     }
