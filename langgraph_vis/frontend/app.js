@@ -1,8 +1,29 @@
 const runButton = document.getElementById("run-btn");
+const graphOutput = document.getElementById("graph-output");
 const output = document.getElementById("output");
 
 function appendLine(message) {
   output.textContent += `${message}\n`;
+}
+
+function formatGraphJson(data) {
+  return JSON.stringify(data, null, 2);
+}
+
+async function loadGraph() {
+  graphOutput.textContent = "그래프 로딩 중...";
+  try {
+    const response = await fetch("/graph");
+    if (!response.ok) {
+      graphOutput.textContent = `그래프 로딩 실패: HTTP ${response.status}`;
+      return;
+    }
+
+    const data = await response.json();
+    graphOutput.textContent = `Graph Schema\n${formatGraphJson(data)}`;
+  } catch (error) {
+    graphOutput.textContent = `그래프 로딩 실패: ${error.message}`;
+  }
 }
 
 runButton.addEventListener("click", async () => {
@@ -59,3 +80,5 @@ runButton.addEventListener("click", async () => {
   appendLine("실행 완료");
   runButton.disabled = false;
 });
+
+loadGraph();
