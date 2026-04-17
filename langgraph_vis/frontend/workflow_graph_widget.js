@@ -140,8 +140,16 @@
     const nodes = [];
     const edges = [];
 
-    const rawNodes = schema?.nodes || [];
-    const rawEdges = schema?.edges || [];
+    const rawNodes =
+      schema?.nodes ||
+      schema?.data?.nodes ||
+      schema?.elements?.nodes ||
+      [];
+    const rawEdges =
+      schema?.edges ||
+      schema?.data?.edges ||
+      schema?.elements?.edges ||
+      [];
 
     for (const rawNode of rawNodes) {
       for (const entry of normalizeNodeEntry(rawNode)) {
@@ -429,51 +437,89 @@
         ],
       });
 
-      const dagreLayout = {
-        name: "dagre",
-        rankDir: "TB",
-        nodeSep: 32,
-        rankSep: 55,
-        animate: false,
-        spacingFactor: 1.2,
-        edgeSep: 12,
-        ranker: "tight-tree",
-        fit: true,
-        padding: 12,
-      };
+      function applyLayout(layouts) {
+        for (const candidate of layouts) {
+          try {
+            const layout = cy.layout(candidate);
+            if (layout && typeof layout.run === "function") {
+              layout.run();
+              return true;
+            }
+            if (layout && typeof layout.start === "function") {
+              layout.start();
+              return true;
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+        return false;
+      }
 
-      const fallbackLayout = {
-        name: "breadthfirst",
-        directed: true,
-        spacingFactor: 1.3,
-        avoidOverlap: true,
-        fit: true,
-        padding: 12,
-      };
+      const hasAutoLayout = applyLayout([
+        {
+          name: "dagre",
+          rankDir: "TB",
+          nodeSep: 32,
+          rankSep: 55,
+          animate: false,
+          spacingFactor: 1.2,
+          edgeSep: 12,
+          ranker: "tight-tree",
+          fit: true,
+          padding: 12,
+        },
+        {
+          name: "cose",
+          nodeRepulsion: 120000,
+          gravity: 0.5,
+          animate: false,
+          fit: true,
+          padding: 24,
+        },
+        {
+          name: "breadthfirst",
+          directed: true,
+          spacingFactor: 1.3,
+          avoidOverlap: true,
+          fit: true,
+          padding: 12,
+        },
+      ]);
+
+      if (!hasAutoLayout) {
+        const spacing = 140;
+        cy.nodes().forEach((node, index) => {
+          node.position({
+            x: (index % 2) * spacing + 60,
+            y: Math.floor(index / 2) * spacing + 60,
+          });
+        });
+      }
 
       try {
-        const dagreLayoutInstance = cy.layout(dagreLayout);
-        if (dagreLayoutInstance && typeof dagreLayoutInstance.run === "function") {
-          dagreLayoutInstance.run();
-        } else if (dagreLayoutInstance && typeof dagreLayoutInstance.start === "function") {
-          dagreLayoutInstance.start();
+        if (cy.nodes().length > 0 && typeof cy.fit === "function") {
+          cy.fit(cy.elements(), 20);
         }
       } catch (error) {
         try {
-          const fallbackLayoutInstance = cy.layout(fallbackLayout);
-          if (
-            fallbackLayoutInstance &&
-            typeof fallbackLayoutInstance.run === "function"
-          ) {
-            fallbackLayoutInstance.run();
-          } else if (
-            fallbackLayoutInstance &&
-            typeof fallbackLayoutInstance.start === "function"
-          ) {
-            fallbackLayoutInstance.start();
+          if (typeof cy.fit === "function") {
+            const nodes = cy.nodes();
+            const width = graphContainer.clientWidth || 320;
+            const height = graphContainer.clientHeight || 240;
+            const bbox = nodes.boundingBox();
+            if (!width || !height || !bbox || bbox.w <= 0 || bbox.h <= 0) {
+              nodes.forEach((node, index) => {
+                node.position({
+                  x: 60 + (index * 140) % width,
+                  y: 60 + Math.floor((index * 140) / width) * 140,
+                });
+              });
+            }
+            cy.fit(nodes, 24);
           }
         } catch (_) {
-          // keep the graph rendered with default cytoscape positions if fallback fails
+          // keep default rendering as final fallback
         }
       }
 

@@ -74,12 +74,16 @@ body {
   width: 20vw;
   min-width: 260px;
   max-width: 20%;
+  min-height: 100vh;
   border-left: 1px solid var(--panel-border);
   background: var(--panel-bg);
   padding: 8px;
+  display: flex;
+  align-items: stretch;
 }
 
 #workflow-graph {
+  position: relative;
   width: 100%;
   height: calc(100vh - 16px);
   border: 1px solid var(--panel-border);
