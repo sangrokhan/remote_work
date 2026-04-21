@@ -2,6 +2,11 @@
 
 ## 개발 진행 가이드 (MVP/PoC 우선)
 
+### 0) 기본 구성원칙 (고정)
+- Backend는 Python 기반으로 구성한다.
+- Frontend는 **HTML + JavaScript + CSS**로 구성한다.
+- 임의의 workflow PoC/데모 구현 시에도 이 구성 원칙을 유지한다.
+
 ### 1) 개발 시작 원칙
 - 코드 수정 전, 해당 주차의 `plan.md`, `context.md`, `checklist.md`를 먼저 읽고 의존성/완료 기준을 확인한다.
 - 구현 범위는 이번 주차 계획의 `산출물`과 `완료 기준`에 한정한다.
