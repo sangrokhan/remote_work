@@ -45,6 +45,8 @@ class AgenticRAGGraph:
                 }
             elif kind == "on_chain_end":
                 output = event.get("data", {}).get("output", {})
+                if not isinstance(output, dict):
+                    output = {}
                 msg = str(next(iter(output.values()), f"{node} 완료"))
                 yield {
                     "event": "node_finished",

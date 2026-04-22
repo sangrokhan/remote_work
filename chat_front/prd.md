@@ -80,16 +80,12 @@ class RunWorkflowRequest(BaseModel):
 
 ### 3.4 워크플로우 그래프 구조
 
-**데모 그래프** (`stategraph_workflow.py`):
+**실 그래프** (`langgraph_flow/agents/graph.py`, `stategraph_workflow.py` 대체 완료):
 
 ```
-START → planner → executor → refiner → (planner | synthesizer)
-                            ↘ synthesizer → END
-```
+START → planner → executor → (refiner | synthesizer) → END
 
-**Agentic RAG 그래프** (`langgraph_flow/agents/graph.py`, WIP):
-
-```
+Agentic RAG:
 START → retriever → var_constructor → var_binder → planner → executor → (refiner | synthesizer) → END
 ```
 
@@ -258,6 +254,7 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | `AgenticRAGGraph` 클래스 및 노드 스텁 | ✅ |
 | `BaseLLM` ABC + 모델 스텁 3종 | ✅ |
 | `get_llm` 팩토리 | ✅ |
+| `stategraph_workflow.py` → `langgraph_flow` 이전 | ✅ 완료 (Task 6, 2026-04-22) |
+| 엔드-투-엔드 배포 검증 (Docker, SSE, 오류 처리) | ✅ 완료 (Task 6, 2026-04-22) |
 | 실제 LLM 호출 (노드 구현) | ⬜ WIP |
 | BGE3 임베딩 기반 retriever | ⬜ WIP |
-| `stategraph_workflow.py` → `langgraph_flow` 이전 | ⬜ WIP |
