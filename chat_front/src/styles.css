@@ -38,13 +38,11 @@ body {
 
 #root {
   height: 100vh;
-  min-height: 600px;
 }
 
 .app-shell {
   position: relative;
   height: 100vh;
-  min-height: 600px;
   width: 100%;
   min-width: 900px;
   overflow: hidden;
@@ -74,6 +72,7 @@ body {
 
 .chat-header {
   height: 72px;
+  flex-shrink: 0;
   border-bottom: 1px solid rgba(105, 116, 130, 0.2);
   display: flex;
   align-items: center;
@@ -137,6 +136,7 @@ body {
 }
 
 .chat-composer-area {
+  flex-shrink: 0;
   padding: 0 3% 8px;
 }
 
