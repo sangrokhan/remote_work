@@ -226,26 +226,36 @@ body {
   gap: 10px;
   scroll-behavior: smooth;
   background: #f6f9fd;
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+}
+
+.messages::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.messages.messages-scrollbar-visible {
   scrollbar-width: thin;
   scrollbar-color: #c9d4e4 #edf1f7;
 }
 
-.messages::-webkit-scrollbar {
+.messages.messages-scrollbar-visible::-webkit-scrollbar {
   width: 8px;
 }
 
-.messages::-webkit-scrollbar-track {
+.messages.messages-scrollbar-visible::-webkit-scrollbar-track {
   background: #edf1f7;
   border-radius: 999px;
 }
 
-.messages::-webkit-scrollbar-thumb {
+.messages.messages-scrollbar-visible::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: linear-gradient(180deg, #c3d0e4, #b0bed4);
   border: 2px solid #edf1f7;
 }
 
-.messages::-webkit-scrollbar-thumb:hover {
+.messages.messages-scrollbar-visible::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(180deg, #aec0d8, #a0b2cb);
 }
 
@@ -444,6 +454,45 @@ body {
   margin-top: 4px;
   overflow: auto;
   min-height: 0;
+}
+
+.panel-state {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-soft);
+}
+
+.panel-state-error {
+  color: #7f2d39;
+}
+
+.graph-json {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #263246;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #fbfdff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.graph-view {
+  min-height: 0;
+  height: calc(100vh - 190px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.workflow-graph {
+  width: 100%;
+  height: 100%;
 }
 
 .log-line {

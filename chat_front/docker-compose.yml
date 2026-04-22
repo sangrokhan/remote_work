@@ -1,7 +1,17 @@
 version: '3.9'
 services:
+  workflow-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "10001:8000"
+    restart: unless-stopped
+
   chat-front:
     build: .
     ports:
       - "10000:80"
+    depends_on:
+      - workflow-api
     restart: unless-stopped
