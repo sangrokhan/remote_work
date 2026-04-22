@@ -68,15 +68,15 @@ class AgenticRAGGraph:
 def create_agentic_rag_graph(agentic_rag: bool = False) -> AgenticRAGGraph:
     builder = StateGraph(AgentState)
 
-    builder.add_node("planner", planner_node)
-    builder.add_node("executor", executor_node)
-    builder.add_node("refiner", refiner_node)
-    builder.add_node("synthesizer", synthesizer_node)
+    builder.add_node("planner", planner_node.invoke)
+    builder.add_node("executor", executor_node.invoke)
+    builder.add_node("refiner", refiner_node.invoke)
+    builder.add_node("synthesizer", synthesizer_node.invoke)
 
     if agentic_rag:
-        builder.add_node("retriever", retriever_node)
-        builder.add_node("var_constructor", var_constructor_node)
-        builder.add_node("var_binder", var_binder_node)
+        builder.add_node("retriever", retriever_node.invoke)
+        builder.add_node("var_constructor", var_constructor_node.invoke)
+        builder.add_node("var_binder", var_binder_node.invoke)
         builder.add_edge(START, "retriever")
         builder.add_edge("retriever", "var_constructor")
         builder.add_edge("var_constructor", "var_binder")

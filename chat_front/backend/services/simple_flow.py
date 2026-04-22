@@ -14,20 +14,21 @@ if TYPE_CHECKING:
     from app.models import RunWorkflowRequest
 
 
-async def run_simple_flow(req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
-    llm = get_llm(req.model)
+class SimpleService:
+    async def process(self, req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
+        llm = get_llm(req.model)
 
-    yield {"event": "node_started", "node": "llm", "name": "llm", "stage": "start", "message": "LLM 호출 중"}
+        yield {"event": "node_started", "node": "llm", "name": "llm", "stage": "start", "message": "LLM 호출 중"}
 
-    result = llm.generate(prompt=req.input, context="")
+        result = llm.generate(prompt=req.input, context="")
 
-    yield {
-        "event": "node_finished",
-        "node": "llm",
-        "name": "llm",
-        "stage": "end",
-        "message": result,
-        "payload": {"final_output": result},
-    }
+        yield {
+            "event": "node_finished",
+            "node": "llm",
+            "name": "llm",
+            "stage": "end",
+            "message": result,
+            "payload": {"final_output": result},
+        }
 
-    yield {"event": "workflow_complete", "message": "완료"}
+        yield {"event": "workflow_complete", "message": "완료"}

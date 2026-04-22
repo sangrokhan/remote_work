@@ -17,24 +17,25 @@ if TYPE_CHECKING:
     from app.models import RunWorkflowRequest
 
 
-async def run_agentic_rag_flow(req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
-    llm = get_llm(req.model)
-    graph = create_agentic_rag_graph(agentic_rag=True)
+class AgenticService:
+    async def process(self, req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
+        llm = get_llm(req.model)
+        graph = create_agentic_rag_graph(agentic_rag=True)
 
-    state = {
-        "input": req.input,
-        "agentic_rag": True,
-        "planner_output": "",
-        "executor_output": "",
-        "refiner_output": "",
-        "retriever_output": "",
-        "var_bindings": "",
-        "final_output": "",
-        "hop_count": 0,
-    }
-    config = RunnableConfig(configurable={"llm": llm})
+        state = {
+            "input": req.input,
+            "agentic_rag": True,
+            "planner_output": "",
+            "executor_output": "",
+            "refiner_output": "",
+            "retriever_output": "",
+            "var_bindings": "",
+            "final_output": "",
+            "hop_count": 0,
+        }
+        config = RunnableConfig(configurable={"llm": llm})
 
-    async for event in graph.invoke(state, config):
-        yield event
+        async for event in graph.invoke(state, config):
+            yield event
 
-    yield {"event": "workflow_complete", "message": "완료 (Agentic RAG)"}
+        yield {"event": "workflow_complete", "message": "완료 (Agentic RAG)"}

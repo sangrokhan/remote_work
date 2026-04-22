@@ -21,8 +21,11 @@ from app.models import RunWorkflowRequest
 from graph_schema import serialize_stategraph_to_json
 from langgraph_flow.agents.graph import create_agentic_rag_graph
 from langgraph_flow.core.factory import list_models
-from services.simple_flow import run_simple_flow
-from services.agentic_rag_flow import run_agentic_rag_flow
+from services.simple_flow import SimpleService
+from services.agentic_rag_flow import AgenticService
+
+_simple_service = SimpleService()
+_agentic_service = AgenticService()
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -76,7 +79,8 @@ async def run_workflow_sse(req: RunWorkflowRequest) -> StreamingResponse:
         yield f"event: run_started\ndata: {json.dumps(init, ensure_ascii=False)}\n\n"
 
         try:
-            flow = run_agentic_rag_flow(req) if req.agentic_rag else run_simple_flow(req)
+            svc = _agentic_service if req.agentic_rag else _simple_service
+            flow = svc.process(req)
             async for event in flow:
                 event_type = event.get("event", "workflow_event")
                 yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
