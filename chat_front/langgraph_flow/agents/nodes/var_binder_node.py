@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import random
+import time
+
 from langchain_core.runnables import RunnableConfig
 
 from langgraph_flow.agents.state import AgentState
+from langgraph_flow.prompts.var_binder import VAR_BINDER_PROMPT
 
 
 def var_binder_node(state: AgentState, config: RunnableConfig) -> dict:
-    # TODO: bind variables into planner context
-    return {}
+    llm = config["configurable"]["llm"]
+    time.sleep(random.uniform(0.5, 2.0))
+    result = llm.generate(prompt=VAR_BINDER_PROMPT, context=state.get("var_bindings", ""))
+    return {"retriever_output": result}
