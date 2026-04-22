@@ -11,7 +11,7 @@ services:
   chat-front:
     build: .
     ports:
-      - "10000:80"
+      - "10000:10000"
     depends_on:
       - workflow-api
     restart: unless-stopped

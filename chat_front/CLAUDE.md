@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Work approach
+
+Before responding to any request, proactively search for a matching skill or persona and invoke it. If a skill exists that fits the task — even partially — use it. Do not rationalize skipping it.
+
 ## Mandatory workflow (from `AGENTS.md`)
 
 Every user-facing change must follow this order:
@@ -18,7 +22,7 @@ Every user-facing change must follow this order:
 
 `docker-compose.yml` runs two services:
 
-- `chat-front` (React/Vite built into an nginx image) → `http://localhost:10000`
+- `chat-front` (React/Vite, served via `vite preview`) → `http://localhost:10000`
 - `workflow-api` (FastAPI + LangGraph) → `http://localhost:10001`
   - REST: `GET /graph`, `GET /health`
   - WebSocket: `/ws/connect`
@@ -56,10 +60,6 @@ One file, ~1000 lines, holds the entire UI. Key mechanisms:
 - **Cytoscape style caveats** (PRD §23): use `content: (node) => node.data('label')`, never `label:`. Avoid `max-width`, `max-height`, `shadow-*`, `wheelSensitivity` — they trigger console warnings.
 - **Messages container** — custom scroll UX (PRD §20): auto-scrolls to bottom on new messages; the scrollbar is hidden unless the user is actively scrolling an overflowing list (`messages-scrollbar-visible` class toggled with a 1.2s timer).
 
-### nginx (`nginx.conf`)
-
-Serves the built SPA. `index.html` is force-`no-store` so redeploys don't serve a stale shell referencing missing hashed bundles; JS/CSS are cached immutably.
-
 ## Reference material
 
-`langgraph_vis/` is the **original** reference implementation the backend was ported from (see PRD §12). Do not edit it as production code — treat it as a spec/reference. The current backend lives in `backend/`.
+The current backend lives in `backend/`.
