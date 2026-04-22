@@ -1,7 +1,7 @@
 """GaussO4 backend LLM stub. Returns formatted dummy output for testing."""
 from __future__ import annotations
 
-from langgraph_flow.core.base import BaseLLM
+from llm.base import BaseLLM
 
 
 class GaussO4(BaseLLM):

@@ -1,27 +1,26 @@
 """
-LLM factory for langgraph_flow. Exposes MODEL_REGISTRY, get_llm(), and list_models().
-list_models() is called by the backend /models endpoint at startup.
+Embedding provider factory for langgraph_flow.
+get_embedding_provider() is the entry point for the retriever node.
+list_models() exposes LLM model names to the /models endpoint.
 """
 from __future__ import annotations
 
-from langgraph_flow.core.base import BaseLLM
-from langgraph_flow.core.models.gauss_o4 import GaussO4
-from langgraph_flow.core.models.gauss_o4_think import GaussO4Think
-from langgraph_flow.core.models.gemma4_e4b_it import Gemma4E4BIt
+from langgraph_flow.core.base import EmbeddingProvider
+from langgraph_flow.core.bge3_provider import BGE3Provider
 
-MODEL_REGISTRY: dict[str, type[BaseLLM]] = {
-    "GaussO4": GaussO4,
-    "GaussO4-think": GaussO4Think,
-    "Gemma4-E4B-it": Gemma4E4BIt,
+EMBEDDING_REGISTRY: dict[str, type[EmbeddingProvider]] = {
+    "bge3": BGE3Provider,
 }
 
+_LLM_MODEL_NAMES = ["GaussO4", "GaussO4-think", "Gemma4-E4B-it"]
 
-def get_llm(model_name: str) -> BaseLLM:
-    cls = MODEL_REGISTRY.get(model_name)
+
+def get_embedding_provider(name: str = "bge3") -> EmbeddingProvider:
+    cls = EMBEDDING_REGISTRY.get(name)
     if cls is None:
-        raise ValueError(f"Unknown model: {model_name!r}. Available: {list(MODEL_REGISTRY)}")
+        raise ValueError(f"Unknown embedding provider: {name!r}. Available: {list(EMBEDDING_REGISTRY)}")
     return cls()
 
 
 def list_models() -> list[str]:
-    return list(MODEL_REGISTRY.keys())
+    return _LLM_MODEL_NAMES

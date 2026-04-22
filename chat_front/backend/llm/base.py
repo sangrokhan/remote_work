@@ -1,7 +1,7 @@
 """
-Abstract base class for all embedding providers in langgraph_flow.
-Used by the retriever node for agentic RAG document retrieval.
-Concrete providers declare ENV_URL_KEY / ENV_KEY_KEY to load config from .env.
+Abstract base class for all LLM implementations in the backend.
+Concrete models declare ENV_URL_KEY / ENV_KEY_KEY to load credentials from .env.
+Explicit constructor args override env values (for request-time injection).
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-class EmbeddingProvider(ABC):
+class BaseLLM(ABC):
     ENV_URL_KEY: str = ""
     ENV_KEY_KEY: str = ""
 
@@ -22,5 +22,4 @@ class EmbeddingProvider(ABC):
         self.api_key = api_key or os.getenv(self.ENV_KEY_KEY, "")
 
     @abstractmethod
-    def embed(self, text: str) -> list[float]:
-        ...
+    def generate(self, prompt: str, context: str) -> str: ...

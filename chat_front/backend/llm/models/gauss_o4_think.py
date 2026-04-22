@@ -1,7 +1,7 @@
 """GaussO4Think backend LLM stub. Wraps output in <thinking> tags to simulate chain-of-thought."""
 from __future__ import annotations
 
-from langgraph_flow.core.base import BaseLLM
+from llm.base import BaseLLM
 
 
 class GaussO4Think(BaseLLM):

@@ -1,7 +1,7 @@
 """Gemma4-E4B-it backend LLM stub. Returns context-prefixed dummy output for testing."""
 from __future__ import annotations
 
-from langgraph_flow.core.base import BaseLLM
+from llm.base import BaseLLM
 
 
 class Gemma4E4BIt(BaseLLM):
