@@ -77,6 +77,8 @@ async def run_workflow_sse(req: RunWorkflowRequest) -> StreamingResponse:
             async for event in graph.invoke(state, config):
                 event_type = event.get("event", "workflow_event")
                 yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+            complete = {"event": "workflow_complete", "run_id": req.run_id}
+            yield f"event: workflow_complete\ndata: {json.dumps(complete, ensure_ascii=False)}\n\n"
         except Exception as exc:
             err = {"event": "workflow_error", "message": str(exc)}
             yield f"event: workflow_error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n"
