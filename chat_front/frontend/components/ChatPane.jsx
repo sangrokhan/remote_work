@@ -11,6 +11,7 @@ export function ChatPane({
   agenticRag,
   onAgenticRagToggle,
   isRight,
+  models,
 }) {
   const { containerRef, isScrollable, hasOverflow } = useScrollBehavior(messages)
 
@@ -23,6 +24,7 @@ export function ChatPane({
           onModelChange={onModelChange}
           agenticRag={agenticRag}
           onAgenticRagToggle={onAgenticRagToggle}
+          models={models}
         />
       )}
       <div

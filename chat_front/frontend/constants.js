@@ -1,7 +1,5 @@
 export const PANEL_WIDTH = '25%'
 
-export const MODEL_LIST = ['gpt-4.1', 'gpt-4o-mini', 'gpt-4o']
-
 export const INITIAL_LEFT_MESSAGES = [
   { id: 1, role: 'assistant', text: '안녕하세요. 무엇을 도와드릴까요?' },
 ]

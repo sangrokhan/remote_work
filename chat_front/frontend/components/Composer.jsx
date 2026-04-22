@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react'
-import { MODEL_LIST } from '../constants'
 
 export function Composer({
   text,
@@ -10,6 +9,7 @@ export function Composer({
   isModelMenuOpen,
   onModelMenuToggle,
   isSplitMode,
+  models = [],
 }) {
   const composerRef = useRef(null)
   const modelMenuRef = useRef(null)
@@ -79,7 +79,7 @@ export function Composer({
 
           {isModelMenuOpen && !isSplitMode && (
             <div className="model-menu" role="listbox" aria-label="모델 목록">
-              {MODEL_LIST.map((model) => (
+              {models.map((model) => (
                 <button
                   key={model}
                   type="button"

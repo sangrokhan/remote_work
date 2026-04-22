@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Settings, SquareSplitHorizontal } from 'lucide-react'
 
-import { PANEL_WIDTH, MODEL_LIST, INITIAL_LEFT_MESSAGES, INITIAL_RIGHT_MESSAGES } from './constants'
+import { PANEL_WIDTH, INITIAL_LEFT_MESSAGES, INITIAL_RIGHT_MESSAGES } from './constants'
 import { useWorkflowSocket } from './hooks/useWorkflowSocket'
 import { useWorkflowSSE } from './hooks/useWorkflowSSE'
 import { useWorkflowGraph } from './hooks/useWorkflowGraph'
+import { useModels } from './hooks/useModels'
 import { ChatPane } from './components/ChatPane'
 import { Composer } from './components/Composer'
 import { WorkflowPanel } from './components/WorkflowPanel'
@@ -26,8 +27,15 @@ function App() {
   const [rightMessages, setRightMessages] = useState(INITIAL_RIGHT_MESSAGES)
   const [text, setText] = useState('')
 
-  const [selectedModel, setSelectedModel] = useState(MODEL_LIST[0])
-  const [rightSelectedModel, setRightSelectedModel] = useState(MODEL_LIST[0])
+  const { models } = useModels()
+
+  const [selectedModel, setSelectedModel] = useState('')
+  const [rightSelectedModel, setRightSelectedModel] = useState('')
+
+  useEffect(() => {
+    if (models.length > 0 && !selectedModel) setSelectedModel(models[0])
+    if (models.length > 0 && !rightSelectedModel) setRightSelectedModel(models[0])
+  }, [models])
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false)
 
   const [maxTokens, setMaxTokens] = useState(1024)
@@ -220,6 +228,7 @@ function App() {
             agenticRag={leftAgenticRag}
             onAgenticRagToggle={() => setLeftAgenticRag((v) => !v)}
             isRight={false}
+            models={models}
           />
           {isResultPanelOpen && (
             <ChatPane
@@ -231,6 +240,7 @@ function App() {
               agenticRag={rightAgenticRag}
               onAgenticRagToggle={() => setRightAgenticRag((v) => !v)}
               isRight
+              models={models}
             />
           )}
         </div>
@@ -244,6 +254,7 @@ function App() {
           isModelMenuOpen={isModelMenuOpen}
           onModelMenuToggle={setIsModelMenuOpen}
           isSplitMode={isResultPanelOpen}
+          models={models}
         />
       </main>
 

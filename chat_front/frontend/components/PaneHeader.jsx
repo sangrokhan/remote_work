@@ -1,6 +1,4 @@
-import { MODEL_LIST } from '../constants'
-
-export function PaneHeader({ title, selectedModel, onModelChange, agenticRag, onAgenticRagToggle }) {
+export function PaneHeader({ title, selectedModel, onModelChange, agenticRag, onAgenticRagToggle, models = [] }) {
   return (
     <div className="pane-header">
       <span className="pane-title">{title}</span>
@@ -11,7 +9,7 @@ export function PaneHeader({ title, selectedModel, onModelChange, agenticRag, on
           onChange={(e) => onModelChange(e.target.value)}
           aria-label={`${title} 모델 선택`}
         >
-          {MODEL_LIST.map((m) => (
+          {models.map((m) => (
             <option key={m} value={m}>{m}</option>
           ))}
         </select>
