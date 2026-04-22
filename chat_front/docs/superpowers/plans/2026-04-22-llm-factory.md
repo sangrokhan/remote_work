@@ -2,11 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add an LLM factory (`backend/llm/`) that creates dummy model objects by name and passes them through LangGraph `RunnableConfig` so each workflow node can call `llm.generate(prompt, context)`.
+**Goal:** Add an LLM factory (`langgraph/core/`) that creates dummy model objects by name and passes them through LangGraph `RunnableConfig` so each workflow node can call `llm.generate(prompt, context)`.
 
-**Architecture:** A `BaseLLM` abstract class defines the interface. `get_llm(model_name, api_url, api_key)` returns the correct dummy implementation. At workflow start, the factory instantiates the model and injects it into `RunnableConfig(configurable={"llm": llm})`, which each node receives as its second argument.
+**Architecture:** A `BaseLLM` abstract class defines the interface. `get_llm(model_name, api_url, api_key)` returns the correct dummy implementation. At workflow start, the factory instantiates the model and injects it into `RunnableConfig(configurable={"llm": llm})`, which each node receives as its second argument. The demo backend (`backend/stategraph_workflow.py`) imports from `langgraph.core.factory`.
 
 **Tech Stack:** Python, LangChain `RunnableConfig`, pytest, FastAPI/Pydantic
+
+**Test execution:** Always run from repo root with `PYTHONPATH=backend`:
+```bash
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -m pytest backend/tests/ -v
+```
 
 ---
 
@@ -14,42 +20,61 @@
 
 | Action | Path | Responsibility |
 |--------|------|----------------|
-| Create | `backend/llm/__init__.py` | Package marker |
-| Create | `backend/llm/base.py` | `BaseLLM` abstract class |
-| Create | `backend/llm/factory.py` | `get_llm()` factory function + `MODEL_REGISTRY` |
-| Create | `backend/llm/models/__init__.py` | Package marker |
-| Create | `backend/llm/models/gauss_o4.py` | `GaussO4` dummy |
-| Create | `backend/llm/models/gauss_o4_think.py` | `GaussO4Think` dummy |
-| Create | `backend/llm/models/gemma4_e4b_it.py` | `Gemma4E4BIt` dummy |
+| Create | `langgraph/__init__.py` | Package marker |
+| Create | `langgraph/core/__init__.py` | Package marker |
+| Modify | `langgraph/core/base.py` | `BaseLLM` abstract class (was empty stub) |
+| Create | `langgraph/core/models/__init__.py` | Package marker |
+| Create | `langgraph/core/models/gauss_o4.py` | `GaussO4` dummy |
+| Create | `langgraph/core/models/gauss_o4_think.py` | `GaussO4Think` dummy |
+| Create | `langgraph/core/models/gemma4_e4b_it.py` | `Gemma4E4BIt` dummy |
+| Modify | `langgraph/core/factory.py` | `get_llm()` + `MODEL_REGISTRY` (was empty stub) |
 | Create | `backend/tests/__init__.py` | Package marker |
+| Create | `backend/tests/conftest.py` | Add repo root to sys.path for imports |
 | Create | `backend/tests/test_llm.py` | Tests for base, models, factory |
 | Create | `backend/tests/test_workflow_integration.py` | Tests nodes use RunnableConfig LLM |
 | Modify | `backend/app/models.py` | Add `api_url`, `api_key` fields |
 | Modify | `backend/stategraph_workflow.py` | Add `RunnableConfig` to 4 nodes + factory call |
+| Modify | `backend/Dockerfile` | Add `COPY langgraph /app/langgraph` |
 
 ---
 
 ## Task 1: BaseLLM abstract class
 
 **Files:**
-- Create: `backend/llm/__init__.py`
-- Create: `backend/llm/base.py`
+- Create: `langgraph/__init__.py`
+- Create: `langgraph/core/__init__.py`
+- Modify: `langgraph/core/base.py`
 - Create: `backend/tests/__init__.py`
+- Create: `backend/tests/conftest.py`
 - Create: `backend/tests/test_llm.py`
 
 - [ ] **Step 1: Create package markers**
 
 ```bash
-touch backend/llm/__init__.py backend/tests/__init__.py
+touch langgraph/__init__.py langgraph/core/__init__.py backend/tests/__init__.py
 ```
 
-- [ ] **Step 2: Write failing test**
+- [ ] **Step 2: Create `backend/tests/conftest.py`**
+
+This makes `langgraph` importable when running tests with `PYTHONPATH=backend` from repo root.
+
+```python
+import sys
+import os
+
+# Add repo root so `langgraph` package is importable
+_repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+```
+
+- [ ] **Step 3: Write failing test**
 
 Create `backend/tests/test_llm.py`:
 
 ```python
 import pytest
-from llm.base import BaseLLM
+from langgraph.core.base import BaseLLM
 
 
 def test_base_llm_is_abstract():
@@ -76,15 +101,16 @@ def test_concrete_subclass_works():
     assert llm.api_key == "k"
 ```
 
-- [ ] **Step 3: Run test — expect FAIL**
+- [ ] **Step 4: Run test — expect FAIL**
 
 ```bash
-cd backend && python -m pytest tests/test_llm.py::test_base_llm_is_abstract -v
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -m pytest backend/tests/test_llm.py::test_base_llm_is_abstract -v
 ```
 
-Expected: `ModuleNotFoundError: No module named 'llm'`
+Expected: `ImportError` or `TypeError` (BaseLLM is empty stub, not abstract yet)
 
-- [ ] **Step 4: Implement `backend/llm/base.py`**
+- [ ] **Step 5: Implement `langgraph/core/base.py`**
 
 ```python
 from __future__ import annotations
@@ -101,19 +127,20 @@ class BaseLLM(ABC):
     def generate(self, prompt: str, context: str) -> str: ...
 ```
 
-- [ ] **Step 5: Run tests — expect PASS**
+- [ ] **Step 6: Run tests — expect PASS**
 
 ```bash
-cd backend && python -m pytest tests/test_llm.py -v
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -m pytest backend/tests/test_llm.py -v
 ```
 
 Expected: 3 passed
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add backend/llm/__init__.py backend/llm/base.py backend/tests/__init__.py backend/tests/test_llm.py
-git commit -m "feat: add BaseLLM abstract interface"
+git add langgraph/__init__.py langgraph/core/__init__.py langgraph/core/base.py backend/tests/__init__.py backend/tests/conftest.py backend/tests/test_llm.py
+git commit -m "feat: add BaseLLM abstract interface in langgraph/core"
 ```
 
 ---
@@ -121,18 +148,18 @@ git commit -m "feat: add BaseLLM abstract interface"
 ## Task 2: Dummy model implementations
 
 **Files:**
-- Create: `backend/llm/models/__init__.py`
-- Create: `backend/llm/models/gauss_o4.py`
-- Create: `backend/llm/models/gauss_o4_think.py`
-- Create: `backend/llm/models/gemma4_e4b_it.py`
+- Create: `langgraph/core/models/__init__.py`
+- Create: `langgraph/core/models/gauss_o4.py`
+- Create: `langgraph/core/models/gauss_o4_think.py`
+- Create: `langgraph/core/models/gemma4_e4b_it.py`
 - Modify: `backend/tests/test_llm.py`
 
 - [ ] **Step 1: Write failing tests — append to `backend/tests/test_llm.py`**
 
 ```python
-from llm.models.gauss_o4 import GaussO4
-from llm.models.gauss_o4_think import GaussO4Think
-from llm.models.gemma4_e4b_it import Gemma4E4BIt
+from langgraph.core.models.gauss_o4 import GaussO4
+from langgraph.core.models.gauss_o4_think import GaussO4Think
+from langgraph.core.models.gemma4_e4b_it import Gemma4E4BIt
 
 
 def test_gauss_o4_generate():
@@ -165,23 +192,24 @@ def test_all_models_are_base_llm():
 - [ ] **Step 2: Run — expect FAIL**
 
 ```bash
-cd backend && python -m pytest tests/test_llm.py -k "gauss or gemma" -v
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -m pytest backend/tests/test_llm.py -k "gauss or gemma" -v
 ```
 
-Expected: `ModuleNotFoundError: No module named 'llm.models'`
+Expected: `ModuleNotFoundError: No module named 'langgraph.core.models'`
 
 - [ ] **Step 3: Create package marker**
 
 ```bash
-touch backend/llm/models/__init__.py
+mkdir -p langgraph/core/models && touch langgraph/core/models/__init__.py
 ```
 
-- [ ] **Step 4: Implement `backend/llm/models/gauss_o4.py`**
+- [ ] **Step 4: Implement `langgraph/core/models/gauss_o4.py`**
 
 ```python
 from __future__ import annotations
 
-from llm.base import BaseLLM
+from langgraph.core.base import BaseLLM
 
 
 class GaussO4(BaseLLM):
@@ -189,12 +217,12 @@ class GaussO4(BaseLLM):
         return f"[GaussO4] {prompt[:30]} → {context[:80]}"
 ```
 
-- [ ] **Step 5: Implement `backend/llm/models/gauss_o4_think.py`**
+- [ ] **Step 5: Implement `langgraph/core/models/gauss_o4_think.py`**
 
 ```python
 from __future__ import annotations
 
-from llm.base import BaseLLM
+from langgraph.core.base import BaseLLM
 
 
 class GaussO4Think(BaseLLM):
@@ -202,12 +230,12 @@ class GaussO4Think(BaseLLM):
         return f"[GaussO4-think] <thinking>{prompt[:30]}</thinking> → {context[:80]}"
 ```
 
-- [ ] **Step 6: Implement `backend/llm/models/gemma4_e4b_it.py`**
+- [ ] **Step 6: Implement `langgraph/core/models/gemma4_e4b_it.py`**
 
 ```python
 from __future__ import annotations
 
-from llm.base import BaseLLM
+from langgraph.core.base import BaseLLM
 
 
 class Gemma4E4BIt(BaseLLM):
@@ -218,7 +246,8 @@ class Gemma4E4BIt(BaseLLM):
 - [ ] **Step 7: Run tests — expect PASS**
 
 ```bash
-cd backend && python -m pytest tests/test_llm.py -v
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -m pytest backend/tests/test_llm.py -v
 ```
 
 Expected: 7 passed
@@ -226,7 +255,7 @@ Expected: 7 passed
 - [ ] **Step 8: Commit**
 
 ```bash
-git add backend/llm/models/ backend/tests/test_llm.py
+git add langgraph/core/models/ backend/tests/test_llm.py
 git commit -m "feat: add GaussO4, GaussO4Think, Gemma4E4BIt dummy models"
 ```
 
@@ -235,13 +264,13 @@ git commit -m "feat: add GaussO4, GaussO4Think, Gemma4E4BIt dummy models"
 ## Task 3: Factory function
 
 **Files:**
-- Create: `backend/llm/factory.py`
+- Modify: `langgraph/core/factory.py`
 - Modify: `backend/tests/test_llm.py`
 
 - [ ] **Step 1: Write failing tests — append to `backend/tests/test_llm.py`**
 
 ```python
-from llm.factory import get_llm
+from langgraph.core.factory import get_llm
 
 
 def test_factory_returns_gauss_o4():
@@ -269,20 +298,21 @@ def test_factory_unknown_model_raises():
 - [ ] **Step 2: Run — expect FAIL**
 
 ```bash
-cd backend && python -m pytest tests/test_llm.py -k "factory" -v
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -m pytest backend/tests/test_llm.py -k "factory" -v
 ```
 
-Expected: `ModuleNotFoundError: No module named 'llm.factory'`
+Expected: `ImportError` (factory.py is empty stub)
 
-- [ ] **Step 3: Implement `backend/llm/factory.py`**
+- [ ] **Step 3: Implement `langgraph/core/factory.py`**
 
 ```python
 from __future__ import annotations
 
-from llm.base import BaseLLM
-from llm.models.gauss_o4 import GaussO4
-from llm.models.gauss_o4_think import GaussO4Think
-from llm.models.gemma4_e4b_it import Gemma4E4BIt
+from langgraph.core.base import BaseLLM
+from langgraph.core.models.gauss_o4 import GaussO4
+from langgraph.core.models.gauss_o4_think import GaussO4Think
+from langgraph.core.models.gemma4_e4b_it import Gemma4E4BIt
 
 MODEL_REGISTRY: dict[str, type[BaseLLM]] = {
     "GaussO4": GaussO4,
@@ -301,7 +331,8 @@ def get_llm(model_name: str, api_url: str, api_key: str) -> BaseLLM:
 - [ ] **Step 4: Run all tests — expect PASS**
 
 ```bash
-cd backend && python -m pytest tests/test_llm.py -v
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -m pytest backend/tests/test_llm.py -v
 ```
 
 Expected: 11 passed
@@ -309,7 +340,7 @@ Expected: 11 passed
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/llm/factory.py backend/tests/test_llm.py
+git add langgraph/core/factory.py backend/tests/test_llm.py
 git commit -m "feat: add LLM factory with MODEL_REGISTRY"
 ```
 
@@ -344,7 +375,8 @@ class RunWorkflowRequest(BaseModel):
 - [ ] **Step 2: Verify import still works**
 
 ```bash
-cd backend && python -c "from app.models import RunWorkflowRequest; r = RunWorkflowRequest(run_id='x', input='y'); print(r.model, r.api_url)"
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -c "from app.models import RunWorkflowRequest; r = RunWorkflowRequest(run_id='x', input='y'); print(r.model, r.api_url)"
 ```
 
 Expected: `GaussO4 `
@@ -374,7 +406,7 @@ from __future__ import annotations
 import pytest
 from langchain_core.runnables import RunnableConfig
 
-from llm.models.gauss_o4 import GaussO4
+from langgraph.core.models.gauss_o4 import GaussO4
 from stategraph_workflow import DemoState, _planner, _executor, _refiner, _synthesizer
 
 
@@ -427,18 +459,19 @@ def test_synthesizer_uses_llm(gauss_config, base_state):
 - [ ] **Step 2: Run — expect FAIL**
 
 ```bash
-cd backend && python -m pytest tests/test_workflow_integration.py -v
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -m pytest backend/tests/test_workflow_integration.py -v
 ```
 
 Expected: `TypeError: _planner() takes 1 positional argument but 2 were given`
 
 - [ ] **Step 3: Update `backend/stategraph_workflow.py` — add imports**
 
-At the top of the file, add after existing imports:
+At the top of the file, after existing imports, add:
 
 ```python
 from langchain_core.runnables import RunnableConfig
-from llm.factory import get_llm
+from langgraph.core.factory import get_llm
 ```
 
 - [ ] **Step 4: Update `_planner`**
@@ -501,7 +534,7 @@ def _executor(state: DemoState, config: RunnableConfig) -> dict:
 
 - [ ] **Step 6: Update `_refiner`**
 
-Replace existing `_refiner` function with:
+Replace existing `_refiner` with:
 ```python
 def _refiner(state: DemoState, config: RunnableConfig) -> dict:
     llm = config["configurable"]["llm"]
@@ -519,7 +552,7 @@ def _refiner(state: DemoState, config: RunnableConfig) -> dict:
 
 - [ ] **Step 7: Update `_synthesizer`**
 
-Replace existing `_synthesizer` function with:
+Replace existing `_synthesizer` with:
 ```python
 def _synthesizer(state: DemoState, config: RunnableConfig) -> dict:
     llm = config["configurable"]["llm"]
@@ -534,21 +567,42 @@ def _synthesizer(state: DemoState, config: RunnableConfig) -> dict:
     }
 ```
 
-- [ ] **Step 8: Update `run_demo_workflow_events` — create LLM and config, pass to nodes**
+- [ ] **Step 8: Update `run_demo_workflow_events` — create LLM and config**
 
-Find `run_demo_workflow_events` and update the function body. After `logger.debug(...)` and state initialization, add:
+Find `run_demo_workflow_events`. After `logger.debug(...)` and state initialization, add:
 
 ```python
     llm = get_llm(req.model, req.api_url, req.api_key)
     config = RunnableConfig(configurable={"llm": llm})
 ```
 
-Then update every direct node call in the generator body from e.g. `_planner(state)` to `_planner(state, config)`. Do the same for `_executor(state, config)`, `_refiner(state, config)`, `_synthesizer(state, config)`.
+Then update every direct node call: `_planner(state)` → `_planner(state, config)`, same for `_executor`, `_refiner`, `_synthesizer`.
 
-Also update `run_demo_workflow(llm_input)` to pass a default config so LangGraph invocation doesn't break:
+- [ ] **Step 9: Update `run_demo_workflow` to avoid breaking LangGraph invoke**
 
+Replace:
 ```python
 def run_demo_workflow(llm_input: str) -> dict:
+    graph = build_workflow_graph()
+    initial_state: DemoState = {
+        "llm_input": llm_input,
+        "planner_output": "",
+        "executor_output": "",
+        "refiner_output": "",
+        "final_output": "",
+        "hop_count": 0,
+        "planner_delay": 0.0,
+        "executor_delay": 0.0,
+        "refiner_delay": 0.0,
+        "synthesizer_delay": 0.0,
+    }
+    return graph.invoke(initial_state)
+```
+
+With:
+```python
+def run_demo_workflow(llm_input: str) -> dict:
+    from langgraph.core.models.gauss_o4 import GaussO4
     graph = build_workflow_graph()
     llm = GaussO4(api_url="", api_key="")
     config = RunnableConfig(configurable={"llm": llm})
@@ -567,25 +621,25 @@ def run_demo_workflow(llm_input: str) -> dict:
     return graph.invoke(initial_state, config=config)
 ```
 
-Add import at top of file: `from llm.models.gauss_o4 import GaussO4`
-
-- [ ] **Step 9: Run integration tests — expect PASS**
+- [ ] **Step 10: Run integration tests — expect PASS**
 
 ```bash
-cd backend && python -m pytest tests/test_workflow_integration.py -v
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -m pytest backend/tests/test_workflow_integration.py -v
 ```
 
 Expected: 4 passed
 
-- [ ] **Step 10: Run all tests — expect full PASS**
+- [ ] **Step 11: Run all tests — expect full PASS**
 
 ```bash
-cd backend && python -m pytest tests/ -v
+cd /home/han/.openclaw/workspace/remote_work/chat_front
+PYTHONPATH=backend python -m pytest backend/tests/ -v
 ```
 
 Expected: 15 passed
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add backend/stategraph_workflow.py backend/tests/test_workflow_integration.py
@@ -594,15 +648,32 @@ git commit -m "feat: integrate LLM factory into workflow nodes via RunnableConfi
 
 ---
 
-## Task 6: Deploy and verify
+## Task 6: Update Dockerfile and deploy
 
-- [ ] **Step 1: Build and start**
+**Files:**
+- Modify: `backend/Dockerfile`
+
+- [ ] **Step 1: Edit `backend/Dockerfile`**
+
+Replace:
+```dockerfile
+COPY backend /app
+```
+
+With:
+```dockerfile
+COPY backend /app
+COPY langgraph /app/langgraph
+```
+
+- [ ] **Step 2: Build and start**
 
 ```bash
+cd /home/han/.openclaw/workspace/remote_work/chat_front
 docker compose up --build -d
 ```
 
-- [ ] **Step 2: Check services up**
+- [ ] **Step 3: Check services up**
 
 ```bash
 docker compose ps
@@ -610,7 +681,7 @@ docker compose ps
 
 Expected: both `chat-front` and `workflow-api` show `Up`
 
-- [ ] **Step 3: Health check**
+- [ ] **Step 4: Health check**
 
 ```bash
 curl http://localhost:10001/health
@@ -618,7 +689,7 @@ curl http://localhost:10001/health
 
 Expected: `{"status":"ok"}`
 
-- [ ] **Step 4: Test run with model selection**
+- [ ] **Step 5: Test run with model selection**
 
 ```bash
 curl -N -X POST http://localhost:10001/api/run \
@@ -628,7 +699,7 @@ curl -N -X POST http://localhost:10001/api/run \
 
 Expected: SSE stream with `workflow_event` messages containing `[GaussO4]` in node outputs
 
-- [ ] **Step 5: Test unknown model error**
+- [ ] **Step 6: Test unknown model error**
 
 ```bash
 curl -N -X POST http://localhost:10001/api/run \
@@ -638,8 +709,9 @@ curl -N -X POST http://localhost:10001/api/run \
 
 Expected: SSE `workflow_error` event with `Unknown model: UnknownModel`
 
-- [ ] **Step 6: Commit deploy verification**
+- [ ] **Step 7: Commit**
 
 ```bash
-git commit --allow-empty -m "chore: deploy verified - LLM factory working"
+git add backend/Dockerfile
+git commit -m "chore: copy langgraph package into backend Docker image"
 ```

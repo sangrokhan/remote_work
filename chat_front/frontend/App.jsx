@@ -46,7 +46,6 @@ function App() {
   const cyRef = useRef(null)
 
   const {
-    workflowSocketRef,
     workflowExecutionRef,
     applyWorkflowNodeHighlight,
     clearWorkflowNodeHighlight,
@@ -95,11 +94,6 @@ function App() {
 
   useEffect(() => {
     if (!isPanelOpen) return
-    const socket = workflowSocketRef.current
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send('get_graph')
-      return
-    }
     const controller = new AbortController()
     loadWorkflowGraph({ signal: controller.signal })
     return () => controller.abort()

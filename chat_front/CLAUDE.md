@@ -23,43 +23,116 @@ Every user-facing change must follow this order:
 `docker-compose.yml` runs two services:
 
 - `chat-front` (React/Vite, served via `vite preview`) → `http://localhost:10000`
-- `workflow-api` (FastAPI + LangGraph) → `http://localhost:10001`
-  - REST: `GET /graph`, `GET /health`
-  - WebSocket: `/ws/connect`
+- `workflow-api` (FastAPI) → `http://localhost:10001`
+  - `GET  /health` — liveness check
+  - `GET  /graph`  — LangGraph schema `{nodes, edges}` (loaded once at startup)
+  - `POST /api/run` — SSE stream; accepts `RunWorkflowRequest` JSON body, streams `run_started` then per-node events then `workflow_complete` / `workflow_error`
 
 Frontend discovers the backend via `.env`:
-- `VITE_WORKFLOW_WS_URL` (default `ws://localhost:10001/ws/connect`)
 - `VITE_WORKFLOW_GRAPH_URL` (default `http://localhost:10001/graph`)
-
-If `VITE_WORKFLOW_WS_URL` is unset, `App.jsx` derives the WS URL from `VITE_WORKFLOW_GRAPH_URL` by swapping scheme and path.
+- `VITE_WORKFLOW_RUN_URL`   (default `http://localhost:10001/api/run`)
 
 ## Commands
 
 - Full dev loop: `docker compose up --build -d` then `docker compose ps`
-- Frontend only (host): `npm install && npm run dev` (Vite). `npm run build` / `npm run preview` are also defined. There is **no lint or test script** for the frontend.
+- Frontend only (host): `npm install && npm run dev` (Vite). `npm run build` / `npm run preview` also defined. No lint or test script.
 - Backend only (host): `pip install -r backend/requirements.txt` then `uvicorn app.main:app --host 0.0.0.0 --port 8000` from inside `backend/`.
-- The backend requires `uvicorn[standard]` (not plain `uvicorn`) so the `websockets` runtime is present — otherwise `/ws/connect` returns 404 with "No supported WebSocket library detected". This is a real bug that has happened; see PRD §19.
+
+## Source tree
+
+```
+chat_front/
+├── backend/                        # FastAPI service
+│   ├── app/
+│   │   ├── main.py                 # FastAPI app; GET /graph, POST /api/run (SSE)
+│   │   └── models.py               # RunWorkflowRequest (model, agentic_rag, response_mode, max_tokens, api_url, api_key)
+│   ├── graph_schema.py             # StateGraph → {nodes, edges} JSON
+│   ├── stategraph_workflow.py      # Demo graph + run_demo_workflow_events_async (thread+asyncio.Queue)
+│   └── requirements.txt
+│
+├── langgraph_flow/                      # Real LangGraph agent implementation (WIP, all files empty)
+│   ├── agents/
+│   │   ├── graph.py                # Compiled StateGraph wiring all nodes/edges
+│   │   ├── state.py                # AgentState TypedDict
+│   │   ├── nodes/
+│   │   │   ├── planner_node.py     # Generates execution plan
+│   │   │   ├── executor_node.py    # Executes plan step
+│   │   │   ├── refiner_node.py     # Refines executor output
+│   │   │   ├── synthesizer_node.py # Final answer synthesis
+│   │   │   ├── retriever_node.py   # Agentic RAG retrieval
+│   │   │   ├── var_binder_node.py  # Binds retrieved vars to state
+│   │   │   └── var_constructor_node.py  # Constructs query variables
+│   │   └── edges/
+│   │       └── routing_logic.py    # Conditional edge functions
+│   ├── core/
+│   │   ├── base.py                 # BaseLLM abstract class (generate(prompt, context) -> str)
+│   │   ├── factory.py              # get_llm(model_name, api_url, api_key) -> BaseLLM
+│   │   └── bge3_provider.py        # BGE3 embedding provider for RAG
+│   ├── prompts/
+│   │   ├── planner.py
+│   │   ├── executor.py
+│   │   ├── refiner.py
+│   │   ├── synthesizer.py
+│   │   ├── var_binder.py
+│   │   └── var_constructor.py
+│   └── tools/
+│       └── registry.py             # Tool registry for agent tool use
+│
+├── frontend/                       # React/Vite frontend
+│   ├── App.jsx                     # Root component; split-mode, sendMessage, panel state
+│   ├── constants.js                # MODEL_LIST, PANEL_WIDTH, initial messages
+│   ├── styles.css
+│   ├── components/
+│   │   ├── ChatPane.jsx            # Single chat panel (messages + header)
+│   │   ├── Composer.jsx            # Input box + model selector + send button
+│   │   ├── MessageBubble.jsx       # User/assistant message rendering
+│   │   ├── PaneHeader.jsx          # Split-mode per-pane header (model select, RAG toggle)
+│   │   ├── SettingsModal.jsx       # response_mode, max_tokens settings
+│   │   └── WorkflowPanel.jsx       # Cytoscape graph visualization panel
+│   ├── hooks/
+│   │   ├── useWorkflowSocket.js    # Graph-only: loadWorkflowGraph (REST), highlight utils
+│   │   ├── useWorkflowSSE.js       # POST /api/run + ReadableStream SSE parser; panel-bound callbacks
+│   │   ├── useWorkflowGraph.js     # Cytoscape instance lifecycle (create/destroy on isPanelOpen)
+│   │   └── useScrollBehavior.js    # Auto-scroll + scrollbar visibility toggle
+│   └── utils/
+│       └── nodeUtils.js            # normalizeNodeId, resolveNodeVisual, palette
+│
+├── docker-compose.yml
+├── Dockerfile                      # Frontend container
+├── backend/Dockerfile              # Backend container
+├── prd.md                          # Feature state source of truth
+└── docs/superpowers/specs/
+    └── 2026-04-22-llm-factory-design.md  # LLM factory + model integration spec
+```
 
 ## Architecture
 
 ### Backend (`backend/`)
 
-- `stategraph_workflow.py` — LangGraph `StateGraph` with 4 nodes: `planner → executor → (refiner | synthesizer)`, `refiner → (planner | synthesizer)`. Each node sleeps 1–5s (simulated work). `build_workflow_graph()` returns the compiled graph used for schema serialization; `run_demo_workflow_events(input)` is a **generator that yields per-node events** driving the WebSocket stream — it does not use LangGraph's own execution path, it reimplements the branching so it can emit `node_started` / `node_finished` / `node_routed` events at each stage.
-- `graph_schema.py` — Converts a compiled `StateGraph` into `{nodes, edges}` JSON via introspection (handles `__start__` / `__end__` sentinels).
-- `app/main.py` — FastAPI app. The WebSocket loop handles: `ping` → `pong`; `graph` / `get_graph` / `refresh` → graph payload; `{type:"run_workflow", input, run_id}` → streams `workflow_started`, many `workflow_event`s, then `workflow_complete` or `workflow_error`. Every workflow event carries `{run_id, event, node, name, stage, message, payload?}` where `stage ∈ {start, end, routing, error}`.
+- `app/main.py` — FastAPI. `GET /graph` returns static schema. `POST /api/run` accepts `RunWorkflowRequest`, emits SSE: `run_started` (model/RAG info) → many `workflow_event`s → `workflow_complete` / `workflow_error`. Each event: `{event, node, name, stage, message, payload?}` where `stage ∈ {start, end, routing, error}`.
+- `app/models.py` — `RunWorkflowRequest`: `run_id, input, model, response_mode, max_tokens, agentic_rag, api_url, api_key`.
+- `stategraph_workflow.py` — Demo `StateGraph` (4 nodes, random routing, simulated delays). `run_demo_workflow_events_async(req)` wraps the blocking sync generator in a daemon thread + `asyncio.Queue` so FastAPI can stream without blocking the event loop.
+- `graph_schema.py` — Introspects compiled `StateGraph` → `{nodes, edges}` JSON; handles `__start__`/`__end__` sentinels.
 
-### Frontend (`src/App.jsx`)
+### LangGraph (`langgraph_flow/`)
 
-One file, ~1000 lines, holds the entire UI. Key mechanisms:
+Real agent implementation — currently empty stubs. Intended to replace the demo workflow in `stategraph_workflow.py`.
 
-- **WebSocket lifecycle** is mounted once on app start (not tied to panel open). The socket is kept open with a 20s ping. On error/close, the app falls back to `fetch(GRAPH_API_URL)` for the schema.
-- **Panel state** (`isPanelOpen`) — when true, triggers `get_graph` on the existing socket (or REST fallback); when false, destroys the Cytoscape instance and clears highlights.
-- **Run tracking** — each `sendMessage()` generates a `runId` (via `crypto.randomUUID()`), creates an assistant bubble tagged with that `runId`, and sends `{type:"run_workflow", run_id, input, model, response_mode, max_tokens}`. Subsequent `workflow_event` messages with matching `run_id` append lines to the same bubble. `workflowExecutionRef` (a `useRef`, not state) holds `{runId, isRunning, activeNode}` so highlight updates don't re-render.
-- **Node highlight** — on `node_started` or `stage === 'start'`, the current node gets the `wf-active` Cytoscape class. Cleared on `workflow_complete` / `workflow_error` or when the panel closes. `normalizeWorkflowNodeId` maps `START`/`END` → `__start__`/`__end__` to match the backend's LangGraph sentinel names.
-- **Graph rendering** — Cytoscape with the `dagre` layout (`rankDir: TB`, `fit: false`, fixed `zoom: 1` so nodes don't auto-shrink). Nodes are fixed 180×80 rounded rectangles; the palette per node kind lives in `WORKFLOW_NODE_PALETTE`. Edge labels for conditions are intentionally **not** rendered (PRD §14.1).
-- **Cytoscape style caveats** (PRD §23): use `content: (node) => node.data('label')`, never `label:`. Avoid `max-width`, `max-height`, `shadow-*`, `wheelSensitivity` — they trigger console warnings.
-- **Messages container** — custom scroll UX (PRD §20): auto-scrolls to bottom on new messages; the scrollbar is hidden unless the user is actively scrolling an overflowing list (`messages-scrollbar-visible` class toggled with a 1.2s timer).
+- `core/base.py` — `BaseLLM` ABC with `generate(prompt, context) -> str`
+- `core/factory.py` — `get_llm(model_name, api_url, api_key)` dispatches to concrete model class
+- `core/bge3_provider.py` — BGE3 embedding provider for agentic RAG retrieval
+- `agents/graph.py` — Full graph: `planner → executor → (refiner | synthesizer)`, with optional `retriever → var_constructor → var_binder` RAG path when `agentic_rag=true`
+- `agents/state.py` — `AgentState` TypedDict shared across all nodes
+- `agents/nodes/` — One file per node; each receives `(state, config)` where `config["configurable"]["llm"]` is the factory-injected LLM
+- `prompts/` — Per-node prompt strings
+
+### Frontend (`frontend/`)
+
+- **Split mode** — `isResultPanelOpen` activates two `ChatPane`s side-by-side. `sendMessage()` fires two independent `POST /api/run` SSE streams with per-panel `model` and `agentic_rag`. Each stream's callbacks are closed over its panel's `setMessages` — no run_id routing needed.
+- **SSE flow** — `useWorkflowSSE.streamWorkflow()` fetches `/api/run`, parses `ReadableStream` line-by-line. `run_started` → prepends model/RAG info line. `node_started` → calls `applyWorkflowNodeHighlight`. `workflow_complete` / `workflow_error` → clears highlight, sets bubble status.
+- **Graph panel** — `useWorkflowSocket.loadWorkflowGraph()` fetches `GET /graph` (REST only, no WS). `useWorkflowGraph` creates/destroys Cytoscape instance on `isPanelOpen`. `cyRef` lives in `App.jsx` and is passed to both hooks so highlights and the graph share the same instance.
+- **Cytoscape caveats**: use `content: (node) => node.data('label')`, never `label:`. Avoid `max-width`, `max-height`, `shadow-*`, `wheelSensitivity`.
 
 ## Reference material
 
-The current backend lives in `backend/`.
+LLM factory design spec: `docs/superpowers/specs/2026-04-22-llm-factory-design.md`

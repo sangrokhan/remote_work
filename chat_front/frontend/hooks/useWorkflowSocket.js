@@ -1,10 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
 
 const BACKEND_PORT = 10001
 const _host = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
 const _isSecure = typeof window !== 'undefined' && window.location.protocol === 'https:'
 const GRAPH_API_URL = `${_isSecure ? 'https' : 'http'}://${_host}:${BACKEND_PORT}/graph`
-const GRAPH_WS_URL = `${_isSecure ? 'wss' : 'ws'}://${_host}:${BACKEND_PORT}/ws/connect`
 
 const normalizeNodeId = (value) => {
   if (value == null) return ''
@@ -40,14 +39,7 @@ export function useWorkflowSocket({
   setWorkflowRenderError,
   setWorkflowConnectionState,
 }) {
-  const workflowSocketRef = useRef(null)
   const workflowExecutionRef = useRef({ runId: null, isRunning: false, activeNode: '' })
-
-  const setWorkflowFromPayload = (payload) => {
-    setWorkflowGraph(payload)
-    setWorkflowError('')
-    setIsWorkflowLoading(false)
-  }
 
   const loadWorkflowGraph = async (opts = {}) => {
     const { signal } = opts
@@ -55,15 +47,24 @@ export function useWorkflowSocket({
       setIsWorkflowLoading(true)
       setWorkflowError('')
       setWorkflowRenderError('')
+      setWorkflowConnectionState('connecting')
     }
     try {
       const response = await fetch(GRAPH_API_URL, { signal })
       if (!response.ok) throw new Error(`워크플로우 API 응답 오류 (${response.status})`)
       const payload = await response.json()
-      if (!signal?.aborted) setWorkflowFromPayload(payload)
+      if (!signal?.aborted) {
+        setWorkflowGraph(payload)
+        setWorkflowError('')
+        setIsWorkflowLoading(false)
+        setWorkflowConnectionState('ready')
+      }
     } catch (error) {
       if (error.name === 'AbortError') return
-      if (!signal?.aborted) setWorkflowError(error.message || '워크플로우 구성 조회 실패')
+      if (!signal?.aborted) {
+        setWorkflowError(error.message || '워크플로우 구성 조회 실패')
+        setWorkflowConnectionState('error')
+      }
     } finally {
       if (!signal?.aborted) setIsWorkflowLoading(false)
     }
@@ -87,80 +88,7 @@ export function useWorkflowSocket({
     target.addClass('wf-active')
   }
 
-  useEffect(() => {
-    let reconnectOnClose = false
-    let aborted = false
-    const controller = new AbortController()
-    let pingTimerId = null
-    setWorkflowConnectionState('connecting')
-
-    const socket = new WebSocket(GRAPH_WS_URL)
-    workflowSocketRef.current = socket
-
-    socket.addEventListener('open', () => {
-      if (aborted) return
-      reconnectOnClose = true
-      setWorkflowConnectionState('open')
-      if (isPanelOpenRef.current) socket.send('get_graph')
-      pingTimerId = window.setInterval(() => {
-        if (socket.readyState === WebSocket.OPEN) socket.send('ping')
-      }, 20000)
-    })
-
-    socket.addEventListener('message', async (event) => {
-      if (aborted) return
-      try {
-        const parsed = JSON.parse(event.data)
-        if (parsed?.type === 'connected') {
-          setWorkflowConnectionState('ready')
-          setWorkflowError('')
-          return
-        }
-        if (parsed?.type === 'graph' && parsed.payload) {
-          setWorkflowFromPayload(parsed.payload)
-          return
-        }
-      } catch (_error) {
-        if (typeof event.data === 'string' && event.data.startsWith('echo:')) return
-      }
-    })
-
-    socket.addEventListener('error', () => {
-      if (aborted) return
-      setWorkflowError('워크플로우 WebSocket 연결 오류')
-      setWorkflowConnectionState('error')
-      loadWorkflowGraph({ signal: controller.signal })
-    })
-
-    socket.addEventListener('close', (event) => {
-      if (pingTimerId) {
-        window.clearInterval(pingTimerId)
-        pingTimerId = null
-      }
-      if (aborted) return
-      setWorkflowConnectionState('closed')
-      workflowSocketRef.current = null
-      if (reconnectOnClose && !event.wasClean) {
-        setWorkflowError('워크플로우 WebSocket 연결이 종료되었습니다.')
-        loadWorkflowGraph({ signal: controller.signal })
-      }
-    })
-
-    return () => {
-      aborted = true
-      if (pingTimerId) window.clearInterval(pingTimerId)
-      controller.abort()
-      reconnectOnClose = false
-      if (workflowSocketRef.current && workflowSocketRef.current.readyState <= 1) {
-        workflowSocketRef.current.close(1000)
-      }
-      workflowSocketRef.current = null
-      setWorkflowConnectionState('closed')
-    }
-  }, [])
-
   return {
-    workflowSocketRef,
     workflowExecutionRef,
     applyWorkflowNodeHighlight,
     clearWorkflowNodeHighlight,
