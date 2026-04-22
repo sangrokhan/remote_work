@@ -1,3 +1,13 @@
+"""
+FastAPI entry point.
+
+Endpoints
+---------
+GET  /health       liveness probe
+GET  /graph        LangGraph schema {nodes, edges} for Cytoscape visualization
+POST /api/run      SSE stream — routes to simple_flow (agentic_rag=false)
+                   or agentic_rag_flow (agentic_rag=true)
+"""
 from __future__ import annotations
 
 import json
@@ -6,12 +16,11 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from langchain_core.runnables import RunnableConfig
-
 from app.models import RunWorkflowRequest
 from graph_schema import serialize_stategraph_to_json
 from langgraph_flow.agents.graph import create_agentic_rag_graph
-from llm.factory import get_llm
+from services.simple_flow import run_simple_flow
+from services.agentic_rag_flow import run_agentic_rag_flow
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -60,25 +69,10 @@ async def run_workflow_sse(req: RunWorkflowRequest) -> StreamingResponse:
         yield f"event: run_started\ndata: {json.dumps(init, ensure_ascii=False)}\n\n"
 
         try:
-            llm = get_llm(req.model, req.api_url, req.api_key)
-            config = RunnableConfig(configurable={"llm": llm})
-            state = {
-                "input": req.input,
-                "agentic_rag": req.agentic_rag,
-                "planner_output": "",
-                "executor_output": "",
-                "refiner_output": "",
-                "retriever_output": "",
-                "var_bindings": "",
-                "final_output": "",
-                "hop_count": 0,
-            }
-            graph = create_agentic_rag_graph(req.agentic_rag)
-            async for event in graph.invoke(state, config):
+            flow = run_agentic_rag_flow(req) if req.agentic_rag else run_simple_flow(req)
+            async for event in flow:
                 event_type = event.get("event", "workflow_event")
                 yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-            complete = {"event": "workflow_complete", "run_id": req.run_id}
-            yield f"event: workflow_complete\ndata: {json.dumps(complete, ensure_ascii=False)}\n\n"
         except Exception as exc:
             err = {"event": "workflow_error", "message": str(exc)}
             yield f"event: workflow_error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n"

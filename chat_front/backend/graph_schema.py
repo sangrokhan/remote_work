@@ -1,3 +1,8 @@
+"""
+Serializes a compiled LangGraph StateGraph into a generic {nodes, edges} JSON
+consumed by the frontend Cytoscape visualization (GET /graph).
+Handles varying internal graph representations across LangGraph versions.
+"""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping

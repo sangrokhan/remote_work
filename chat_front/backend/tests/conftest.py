@@ -1,3 +1,7 @@
+"""
+pytest configuration. Adds the repo root to sys.path so langgraph_flow
+is importable without installation during test runs.
+"""
 import sys
 import os
 

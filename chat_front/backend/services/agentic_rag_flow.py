@@ -1,3 +1,9 @@
+"""
+Agentic RAG flow service.
+
+Multi-hop graph: retriever → var_constructor → var_binder → planner → executor → (refiner | synthesizer).
+Used when agentic_rag=true. LLM injected via RunnableConfig configurable.
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, AsyncGenerator

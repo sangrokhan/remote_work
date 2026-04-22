@@ -1,3 +1,4 @@
+"""Gemma4-E4B-it langgraph_flow stub. Instruction-tuned 4B model placeholder."""
 from __future__ import annotations
 
 from langgraph_flow.core.base import BaseLLM

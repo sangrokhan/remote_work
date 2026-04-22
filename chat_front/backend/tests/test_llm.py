@@ -1,3 +1,6 @@
+"""
+Unit tests for BaseLLM ABC, all three concrete model stubs, and get_llm() factory.
+"""
 import pytest
 from llm.base import BaseLLM
 from llm.models.gauss_o4 import GaussO4

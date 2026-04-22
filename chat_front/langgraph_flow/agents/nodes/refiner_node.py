@@ -1,3 +1,7 @@
+"""
+Refiner node — reviews executor output and improves quality before synthesis.
+Writes refiner_output to state. May loop back to planner via refiner_route.
+"""
 from __future__ import annotations
 
 import random

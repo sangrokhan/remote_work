@@ -1,3 +1,7 @@
+"""
+LLM factory for langgraph_flow. Exposes MODEL_REGISTRY, get_llm(), and list_models().
+list_models() is called by the backend /models endpoint at startup.
+"""
 from __future__ import annotations
 
 from langgraph_flow.core.base import BaseLLM

@@ -1,3 +1,4 @@
+"""GaussO4Think backend LLM stub. Wraps output in <thinking> tags to simulate chain-of-thought."""
 from __future__ import annotations
 
 from llm.base import BaseLLM

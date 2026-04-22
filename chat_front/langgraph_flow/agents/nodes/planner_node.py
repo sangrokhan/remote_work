@@ -1,3 +1,7 @@
+"""
+Planner node — analyzes user input and produces a step-by-step execution plan.
+Writes planner_output to state. LLM injected via config["configurable"]["llm"].
+"""
 from __future__ import annotations
 
 from langchain_core.runnables import RunnableConfig

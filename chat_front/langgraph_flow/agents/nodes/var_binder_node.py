@@ -1,3 +1,7 @@
+"""
+Var binder node — binds constructed variables into planner context.
+Reads var_bindings, overwrites retriever_output so planner sees enriched context.
+"""
 from __future__ import annotations
 
 import random

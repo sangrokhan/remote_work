@@ -1,3 +1,7 @@
+"""
+Executor node — executes each step of the planner's plan and generates results.
+Writes executor_output to state. Simulates latency with random sleep (WIP).
+"""
 from __future__ import annotations
 
 import random

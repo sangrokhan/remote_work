@@ -1,3 +1,7 @@
+"""
+Abstract base class for all LLM implementations in the backend.
+Concrete models must implement generate(prompt, context) -> str.
+"""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

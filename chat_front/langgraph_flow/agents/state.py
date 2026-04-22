@@ -1,3 +1,7 @@
+"""
+AgentState — shared state TypedDict passed between all LangGraph nodes.
+Every node reads from and writes to this dict; LangGraph merges partial returns.
+"""
 from __future__ import annotations
 
 from typing import TypedDict

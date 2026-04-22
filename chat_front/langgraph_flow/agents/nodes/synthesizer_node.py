@@ -1,3 +1,7 @@
+"""
+Synthesizer node — terminal node. Combines refiner/executor output into the final answer.
+Writes final_output to state. Always leads to END.
+"""
 from __future__ import annotations
 
 import random

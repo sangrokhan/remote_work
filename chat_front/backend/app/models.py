@@ -1,3 +1,7 @@
+"""
+Request model for POST /api/run.
+Carries all per-request parameters from the frontend to the flow services.
+"""
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

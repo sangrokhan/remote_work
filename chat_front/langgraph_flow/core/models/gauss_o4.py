@@ -1,3 +1,4 @@
+"""GaussO4 langgraph_flow stub. Replace generate() with real API call when endpoint is ready."""
 from __future__ import annotations
 
 from langgraph_flow.core.base import BaseLLM

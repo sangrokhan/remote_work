@@ -1,3 +1,7 @@
+"""
+LLM factory for the backend. Maps model name strings to concrete BaseLLM subclasses.
+get_llm() is the single entry point used by flow services.
+"""
 from __future__ import annotations
 
 from llm.base import BaseLLM

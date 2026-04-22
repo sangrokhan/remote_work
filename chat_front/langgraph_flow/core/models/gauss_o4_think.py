@@ -1,3 +1,4 @@
+"""GaussO4Think langgraph_flow stub. Simulates chain-of-thought output format."""
 from __future__ import annotations
 
 from langgraph_flow.core.base import BaseLLM

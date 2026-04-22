@@ -1,10 +1,13 @@
+"""
+Simple (non-agentic) flow service.
+
+Single-turn: user input → LLM.generate() → result.
+No graph traversal. Used when agentic_rag=false.
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, AsyncGenerator
 
-from langchain_core.runnables import RunnableConfig
-
-from langgraph_flow.agents.graph import create_agentic_rag_graph
 from llm.factory import get_llm
 
 if TYPE_CHECKING:
@@ -13,22 +16,18 @@ if TYPE_CHECKING:
 
 async def run_simple_flow(req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
     llm = get_llm(req.model, req.api_url, req.api_key)
-    graph = create_agentic_rag_graph(agentic_rag=False)
 
-    state = {
-        "input": req.input,
-        "agentic_rag": False,
-        "planner_output": "",
-        "executor_output": "",
-        "refiner_output": "",
-        "retriever_output": "",
-        "var_bindings": "",
-        "final_output": "",
-        "hop_count": 0,
+    yield {"event": "node_started", "node": "llm", "name": "llm", "stage": "start", "message": "LLM 호출 중"}
+
+    result = llm.generate(prompt=req.input, context="")
+
+    yield {
+        "event": "node_finished",
+        "node": "llm",
+        "name": "llm",
+        "stage": "end",
+        "message": result,
+        "payload": {"final_output": result},
     }
-    config = RunnableConfig(configurable={"llm": llm})
-
-    async for event in graph.invoke(state, config):
-        yield event
 
     yield {"event": "workflow_complete", "message": "완료"}

@@ -1,3 +1,10 @@
+"""
+Conditional edge functions for the AgenticRAG graph.
+
+start_route     — selects retriever (agentic) or planner (simple) at graph entry
+executor_route  — routes to refiner or synthesizer based on hop_count / random
+refiner_route   — routes back to planner or forward to synthesizer
+"""
 from __future__ import annotations
 
 import random

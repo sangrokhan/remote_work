@@ -1,3 +1,10 @@
+"""
+AgenticRAGGraph — compiles and runs the LangGraph StateGraph.
+
+create_agentic_rag_graph(agentic_rag)  builds the graph (with or without RAG path)
+AgenticRAGGraph.invoke()               streams node events as an async generator
+                                       yielding {event, node, stage, message, payload} dicts
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, AsyncGenerator

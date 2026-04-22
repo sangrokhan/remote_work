@@ -1,3 +1,7 @@
+"""
+Integration tests for LangGraph agent nodes.
+Verifies each node calls the injected LLM and returns the expected state keys.
+"""
 from __future__ import annotations
 
 import pytest

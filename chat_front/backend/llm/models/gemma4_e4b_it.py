@@ -1,3 +1,4 @@
+"""Gemma4-E4B-it backend LLM stub. Returns context-prefixed dummy output for testing."""
 from __future__ import annotations
 
 from llm.base import BaseLLM

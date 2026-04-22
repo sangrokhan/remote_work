@@ -1,3 +1,7 @@
+"""
+Var constructor node — constructs query variables from retriever output.
+Reads retriever_output, writes var_bindings to state.
+"""
 from __future__ import annotations
 
 import random

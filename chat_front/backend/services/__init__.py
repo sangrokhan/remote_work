@@ -1,3 +1,4 @@
+# Flow service registry — main.py selects by req.agentic_rag
 from services.simple_flow import run_simple_flow
 from services.agentic_rag_flow import run_agentic_rag_flow
 

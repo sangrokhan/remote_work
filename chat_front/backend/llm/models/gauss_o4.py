@@ -1,3 +1,4 @@
+"""GaussO4 backend LLM stub. Returns formatted dummy output for testing."""
 from __future__ import annotations
 
 from llm.base import BaseLLM

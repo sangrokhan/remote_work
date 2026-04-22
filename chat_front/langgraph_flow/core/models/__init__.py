@@ -1,3 +1,4 @@
+# Model stubs for langgraph_flow — replace with real implementations when LLM endpoints are ready
 from langgraph_flow.core.models.gauss_o4 import GaussO4
 from langgraph_flow.core.models.gauss_o4_think import GaussO4Think
 from langgraph_flow.core.models.gemma4_e4b_it import Gemma4E4BIt
