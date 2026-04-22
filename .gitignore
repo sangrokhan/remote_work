@@ -149,3 +149,7 @@ data/
 
 # Experiment outputs
 outputs/
+
+# Frontend
+chat_front/node_modules/
+chat_front/.playwright-mcp/
