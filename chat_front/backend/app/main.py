@@ -6,20 +6,12 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from langchain_core.runnables import RunnableConfig
 
 from app.models import RunWorkflowRequest
-from stategraph_workflow import build_workflow_graph, run_demo_workflow_events_async
 from graph_schema import serialize_stategraph_to_json
-
-try:
-    from langgraph_flow.core.factory import list_models as _list_models
-    from langgraph_flow.services.simple_flow import run_simple_flow
-    from langgraph_flow.services.agentic_rag_flow import run_agentic_rag_flow
-    _MODELS = _list_models()
-    _USE_LANGGRAPH = True
-except Exception as _import_err:
-    _MODELS = ["GaussO4", "GaussO4-think", "Gemma4-E4B-it"]
-    _USE_LANGGRAPH = False
+from langgraph_flow.agents.graph import create_agentic_rag_graph
+from llm.factory import get_llm
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -36,17 +28,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_workflow_graph = build_workflow_graph()
+_workflow_graph = create_agentic_rag_graph(False)._graph
 
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
-
-
-@app.get("/models")
-def get_models() -> dict:
-    return {"models": _MODELS}
 
 
 @app.get("/graph")
@@ -71,16 +58,25 @@ async def run_workflow_sse(req: RunWorkflowRequest) -> StreamingResponse:
             "max_tokens": req.max_tokens,
         }
         yield f"event: run_started\ndata: {json.dumps(init, ensure_ascii=False)}\n\n"
+
         try:
-            if _USE_LANGGRAPH:
-                flow = run_agentic_rag_flow(req) if req.agentic_rag else run_simple_flow(req)
-                async for event in flow:
-                    event_type = event.get("event", "workflow_event")
-                    yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-            else:
-                async for event in run_demo_workflow_events_async(req):
-                    event_type = event.get("event", "workflow_event")
-                    yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+            llm = get_llm(req.model, req.api_url, req.api_key)
+            config = RunnableConfig(configurable={"llm": llm})
+            state = {
+                "input": req.input,
+                "agentic_rag": req.agentic_rag,
+                "planner_output": "",
+                "executor_output": "",
+                "refiner_output": "",
+                "retriever_output": "",
+                "var_bindings": "",
+                "final_output": "",
+                "hop_count": 0,
+            }
+            graph = create_agentic_rag_graph(req.agentic_rag)
+            async for event in graph.invoke(state, config):
+                event_type = event.get("event", "workflow_event")
+                yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:
             err = {"event": "workflow_error", "message": str(exc)}
             yield f"event: workflow_error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n"
@@ -90,5 +86,3 @@ async def run_workflow_sse(req: RunWorkflowRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
