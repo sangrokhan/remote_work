@@ -1,7 +1,9 @@
 FROM node:20-alpine
 WORKDIR /app
+ARG NPM_REGISTRY
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci --include=dev
 COPY . .
 ARG VITE_WORKFLOW_WS_URL
 ARG VITE_WORKFLOW_GRAPH_URL
