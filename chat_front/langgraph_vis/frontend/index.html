@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Workflow Stream</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="workflow-page">
+      <section class="workflow-log">
+        <button id="run-btn" type="button">Run</button>
+        <div id="graph-status" aria-live="polite"></div>
+        <pre id="output" aria-live="polite"></pre>
+      </section>
+      <aside class="workflow-canvas-area">
+        <div id="workflow-graph" aria-label="workflow graph" role="img"></div>
+      </aside>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.3/dist/cytoscape.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/graphlib@2.1.8/dist/graphlib.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+    <script src="/static/workflow_graph_widget.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
