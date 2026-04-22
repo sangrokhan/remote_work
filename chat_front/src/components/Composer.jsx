@@ -94,7 +94,7 @@ export function Composer({
             </div>
           )}
 
-          <button type="submit" className="composer-send-btn" aria-label="메시지 전송">
+          <button type="submit" className="composer-send-btn" aria-label="메시지 전송" style={{ marginLeft: 'auto' }}>
             <svg viewBox="0 0 18 18" aria-hidden>
               <path
                 d="M9 16V3M9 3L5 7M9 3L13 7"
