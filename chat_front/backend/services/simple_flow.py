@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 async def run_simple_flow(req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
-    llm = get_llm(req.model, req.api_url, req.api_key)
+    llm = get_llm(req.model)
 
     yield {"event": "node_started", "node": "llm", "name": "llm", "stage": "start", "message": "LLM 호출 중"}
 

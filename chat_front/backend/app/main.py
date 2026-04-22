@@ -4,6 +4,7 @@ FastAPI entry point.
 Endpoints
 ---------
 GET  /health       liveness probe
+GET  /models       available model names (loaded from langgraph_flow registry)
 GET  /graph        LangGraph schema {nodes, edges} for Cytoscape visualization
 POST /api/run      SSE stream — routes to simple_flow (agentic_rag=false)
                    or agentic_rag_flow (agentic_rag=true)
@@ -19,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from app.models import RunWorkflowRequest
 from graph_schema import serialize_stategraph_to_json
 from langgraph_flow.agents.graph import create_agentic_rag_graph
+from langgraph_flow.core.factory import list_models
 from services.simple_flow import run_simple_flow
 from services.agentic_rag_flow import run_agentic_rag_flow
 
@@ -43,6 +45,11 @@ _workflow_graph = create_agentic_rag_graph(False)._graph
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/models")
+def get_models() -> dict:
+    return {"models": list_models()}
 
 
 @app.get("/graph")

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 async def run_agentic_rag_flow(req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
-    llm = get_llm(req.model, req.api_url, req.api_key)
+    llm = get_llm(req.model)
     graph = create_agentic_rag_graph(agentic_rag=True)
 
     state = {
