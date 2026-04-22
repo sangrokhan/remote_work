@@ -9,7 +9,11 @@ services:
     restart: unless-stopped
 
   chat-front:
-    build: .
+    build:
+      context: .
+      args:
+        VITE_WORKFLOW_WS_URL: ws://192.168.1.5:10001/ws/connect
+        VITE_WORKFLOW_GRAPH_URL: http://192.168.1.5:10001/graph
     ports:
       - "10000:10000"
     depends_on:
