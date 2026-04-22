@@ -1,5 +1,5 @@
 # Flow service registry — main.py selects by req.agentic_rag
-from services.simple_flow import run_simple_flow
-from services.agentic_rag_flow import run_agentic_rag_flow
+from services.simple_flow import SimpleService
+from services.agentic_rag_flow import AgenticService
 
-__all__ = ["run_simple_flow", "run_agentic_rag_flow"]
+__all__ = ["SimpleService", "AgenticService"]
