@@ -1,7 +1,7 @@
 """
-Abstract base class for all LLM implementations in the backend.
-Concrete models declare ENV_URL_KEY / ENV_KEY_KEY to load credentials from .env.
-Explicit constructor args override env values (for request-time injection).
+Abstract base class for LLM implementations in langgraph_flow.
+Nodes import this via config["configurable"]["llm"]; never instantiated directly.
+Concrete models declare ENV_URL_KEY / ENV_KEY_KEY to auto-load credentials from .env.
 """
 from __future__ import annotations
 
@@ -22,4 +22,5 @@ class BaseLLM(ABC):
         self.api_key = api_key or os.getenv(self.ENV_KEY_KEY, "")
 
     @abstractmethod
-    def generate(self, prompt: str, context: str) -> str: ...
+    def generate(self, prompt: str, context: str = "") -> str:
+        ...

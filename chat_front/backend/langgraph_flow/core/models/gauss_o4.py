@@ -5,5 +5,8 @@ from langgraph_flow.core.base import BaseLLM
 
 
 class GaussO4(BaseLLM):
+    ENV_URL_KEY = "GAUSS_O4_API_URL"
+    ENV_KEY_KEY = "GAUSS_O4_API_KEY"
+
     def generate(self, prompt: str, context: str = "") -> str:
         return f"[GaussO4] {prompt[:30]} → {context[:50]}"

@@ -20,7 +20,7 @@ def get_llm(model_name: str, api_url: str = "", api_key: str = "") -> BaseLLM:
     cls = MODEL_REGISTRY.get(model_name)
     if cls is None:
         raise ValueError(f"Unknown model: {model_name!r}. Available: {list(MODEL_REGISTRY)}")
-    return cls()
+    return cls(api_url=api_url, api_key=api_key)
 
 
 def list_models() -> list[str]:
