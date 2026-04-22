@@ -3,6 +3,7 @@ from langgraph.core.base import BaseLLM
 from langgraph.core.models.gauss_o4 import GaussO4
 from langgraph.core.models.gauss_o4_think import GaussO4Think
 from langgraph.core.models.gemma4_e4b_it import Gemma4E4BIt
+from langgraph.core.factory import get_llm
 
 
 def test_base_llm_is_abstract():
@@ -54,3 +55,25 @@ def test_all_models_are_base_llm():
     for cls in [GaussO4, GaussO4Think, Gemma4E4BIt]:
         llm = cls(api_url="", api_key="")
         assert isinstance(llm, BaseLLM)
+
+
+def test_factory_returns_gauss_o4():
+    llm = get_llm("GaussO4", "http://example.com", "key")
+    assert isinstance(llm, GaussO4)
+    assert llm.api_url == "http://example.com"
+    assert llm.api_key == "key"
+
+
+def test_factory_returns_gauss_o4_think():
+    llm = get_llm("GaussO4-think", "http://example.com", "key")
+    assert isinstance(llm, GaussO4Think)
+
+
+def test_factory_returns_gemma4():
+    llm = get_llm("Gemma4-E4B-it", "http://example.com", "key")
+    assert isinstance(llm, Gemma4E4BIt)
+
+
+def test_factory_unknown_model_raises():
+    with pytest.raises(ValueError, match="Unknown model: bogus"):
+        get_llm("bogus", "", "")
