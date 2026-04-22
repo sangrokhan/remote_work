@@ -7,7 +7,10 @@ import threading
 import time
 from typing import TYPE_CHECKING, AsyncGenerator, Generator, TypedDict
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
+
+from llm.factory import get_llm
 
 if TYPE_CHECKING:
     from app.models import RunWorkflowRequest
@@ -40,44 +43,57 @@ def _sleep_node() -> float:
     return delay
 
 
-def _planner(state: DemoState) -> dict:
+def _planner(state: DemoState, config: RunnableConfig) -> dict:
+    llm = config["configurable"]["llm"]
     delay = _sleep_node()
+    result = llm.generate(
+        prompt="입력을 분석하고 실행 계획을 수립하세요.",
+        context=state["llm_input"],
+    )
     return {
-        "planner_output": f"[planner] 계획 생성 완료: {state['llm_input']} ({delay:.1f}s)",
+        "planner_output": result,
         "hop_count": state.get("hop_count", 0) + 1,
         "planner_delay": delay,
     }
 
 
-def _executor(state: DemoState) -> dict:
+def _executor(state: DemoState, config: RunnableConfig) -> dict:
+    llm = config["configurable"]["llm"]
     delay = _sleep_node()
+    result = llm.generate(
+        prompt="계획을 실행하고 결과를 생성하세요.",
+        context=state.get("planner_output", ""),
+    )
     return {
-        "executor_output": f"[executor] 실행 결과: {state.get('planner_output', '')} ({delay:.1f}s)",
+        "executor_output": result,
         "hop_count": state.get("hop_count", 0) + 1,
         "executor_delay": delay,
     }
 
 
-def _refiner(state: DemoState) -> dict:
+def _refiner(state: DemoState, config: RunnableConfig) -> dict:
+    llm = config["configurable"]["llm"]
     delay = _sleep_node()
+    result = llm.generate(
+        prompt="실행 결과를 검토하고 개선점을 제안하세요.",
+        context=state.get("executor_output", ""),
+    )
     return {
-        "refiner_output": f"[refiner] 정제 결과: {state.get('executor_output', '')} ({delay:.1f}s)",
+        "refiner_output": result,
         "hop_count": state.get("hop_count", 0) + 1,
         "refiner_delay": delay,
     }
 
 
-def _synthesizer(state: DemoState) -> dict:
+def _synthesizer(state: DemoState, config: RunnableConfig) -> dict:
+    llm = config["configurable"]["llm"]
     delay = _sleep_node()
+    result = llm.generate(
+        prompt="모든 결과를 종합하여 최종 답변을 작성하세요.",
+        context=state.get("refiner_output", state.get("executor_output", "")),
+    )
     return {
-        "final_output": (
-            f"[synthesizer] 최종 출력: "
-            f"{state.get('planner_output', '')} -> "
-            f"{state.get('executor_output', '')} -> "
-            f"{state.get('refiner_output', '')} "
-            f"({delay:.1f}s)"
-        ),
-        "hop_count": state.get("hop_count", 0) + 1,
+        "final_output": result,
         "synthesizer_delay": delay,
     }
 
@@ -159,6 +175,8 @@ def run_demo_workflow_events(req: RunWorkflowRequest) -> Generator[dict, None, N
         req.response_mode,
         req.max_tokens,
     )
+    llm = get_llm(req.model, req.api_url, req.api_key)
+    config = RunnableConfig(configurable={"llm": llm})
     llm_input = req.input
     state: DemoState = {
         "llm_input": llm_input,
@@ -187,7 +205,7 @@ def run_demo_workflow_events(req: RunWorkflowRequest) -> Generator[dict, None, N
                 "planner 실행됨",
                 stage="start",
             )
-            result = _planner(state)
+            result = _planner(state, config)
             state.update(result)
             yield _emit_running_event(
                 "node_finished",
@@ -206,7 +224,7 @@ def run_demo_workflow_events(req: RunWorkflowRequest) -> Generator[dict, None, N
                 "executor 실행됨",
                 stage="start",
             )
-            result = _executor(state)
+            result = _executor(state, config)
             state.update(result)
             yield _emit_running_event(
                 "node_finished",
@@ -233,7 +251,7 @@ def run_demo_workflow_events(req: RunWorkflowRequest) -> Generator[dict, None, N
                 "refiner 실행됨",
                 stage="start",
             )
-            result = _refiner(state)
+            result = _refiner(state, config)
             state.update(result)
             yield _emit_running_event(
                 "node_finished",
@@ -260,7 +278,7 @@ def run_demo_workflow_events(req: RunWorkflowRequest) -> Generator[dict, None, N
                 "synthesizer 실행됨",
                 stage="start",
             )
-            result = _synthesizer(state)
+            result = _synthesizer(state, config)
             state.update(result)
             yield _emit_running_event(
                 "node_finished",
@@ -290,7 +308,10 @@ def run_demo_workflow_events(req: RunWorkflowRequest) -> Generator[dict, None, N
 
 def run_demo_workflow(llm_input: str) -> dict:
     """Run the workflow and return the final graph state."""
+    from llm.models.gauss_o4 import GaussO4
     graph = build_workflow_graph()
+    llm = GaussO4(api_url="", api_key="")
+    config = RunnableConfig(configurable={"llm": llm})
     initial_state: DemoState = {
         "llm_input": llm_input,
         "planner_output": "",
@@ -303,7 +324,7 @@ def run_demo_workflow(llm_input: str) -> dict:
         "refiner_delay": 0.0,
         "synthesizer_delay": 0.0,
     }
-    return graph.invoke(initial_state)
+    return graph.invoke(initial_state, config=config)
 
 
 async def run_demo_workflow_events_async(req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:

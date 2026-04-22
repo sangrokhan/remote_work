@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from langgraph.core.base import BaseLLM
-from langgraph.core.models.gauss_o4 import GaussO4
-from langgraph.core.models.gauss_o4_think import GaussO4Think
-from langgraph.core.models.gemma4_e4b_it import Gemma4E4BIt
+from llm.base import BaseLLM
+from llm.models.gauss_o4 import GaussO4
+from llm.models.gauss_o4_think import GaussO4Think
+from llm.models.gemma4_e4b_it import Gemma4E4BIt
 
 MODEL_REGISTRY: dict[str, type[BaseLLM]] = {
     "GaussO4": GaussO4,

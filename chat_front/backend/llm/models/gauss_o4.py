@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from langgraph.core.base import BaseLLM
+from llm.base import BaseLLM
 
 
 class GaussO4(BaseLLM):

@@ -1,9 +1,9 @@
 import pytest
-from langgraph.core.base import BaseLLM
-from langgraph.core.models.gauss_o4 import GaussO4
-from langgraph.core.models.gauss_o4_think import GaussO4Think
-from langgraph.core.models.gemma4_e4b_it import Gemma4E4BIt
-from langgraph.core.factory import get_llm
+from llm.base import BaseLLM
+from llm.models.gauss_o4 import GaussO4
+from llm.models.gauss_o4_think import GaussO4Think
+from llm.models.gemma4_e4b_it import Gemma4E4BIt
+from llm.factory import get_llm
 
 
 def test_base_llm_is_abstract():
