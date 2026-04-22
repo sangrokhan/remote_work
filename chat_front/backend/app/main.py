@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
+import logging
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
-from stategraph_workflow import build_workflow_graph, run_demo_workflow_events
+from app.models import RunWorkflowRequest
+from stategraph_workflow import build_workflow_graph, run_demo_workflow_events_async
 from graph_schema import serialize_stategraph_to_json
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("workflow_api")
 
 app = FastAPI(title="LangGraph Vis")
 app.add_middleware(
@@ -37,6 +45,38 @@ def serve_graph_schema() -> dict:
     return serialize_stategraph_to_json(_workflow_graph)
 
 
+@app.post("/api/run")
+async def run_workflow_sse(req: RunWorkflowRequest) -> StreamingResponse:
+    logger.debug(
+        "POST /api/run: model=%s agentic_rag=%s response_mode=%s max_tokens=%s input_len=%d",
+        req.model, req.agentic_rag, req.response_mode, req.max_tokens, len(req.input),
+    )
+
+    async def event_gen():
+        init = {
+            "event": "run_started",
+            "run_id": req.run_id,
+            "model": req.model,
+            "agentic_rag": req.agentic_rag,
+            "response_mode": req.response_mode,
+            "max_tokens": req.max_tokens,
+        }
+        yield f"event: run_started\ndata: {json.dumps(init, ensure_ascii=False)}\n\n"
+        try:
+            async for event in run_demo_workflow_events_async(req):
+                event_type = event.get("event", "workflow_event")
+                yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            err = {"event": "workflow_error", "message": str(exc)}
+            yield f"event: workflow_error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 def _safe_text(value: object, fallback: str = '') -> str:
     if value is None:
         return fallback
@@ -51,8 +91,15 @@ def _safe_json_message(data: object) -> dict:
     return {}
 
 
+def _parse_json_or_string(text: str) -> object:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
 @app.websocket("/ws/connect")
-async def websocket_wait(websocket: WebSocket) -> None:
+async def websocket_graph(websocket: WebSocket) -> None:
     await websocket.accept()
     await websocket.send_json({"type": "connected", "status": "ready"})
 
@@ -65,11 +112,6 @@ async def websocket_wait(websocket: WebSocket) -> None:
 
             payload = _safe_json_message(_safe_text(incoming).strip() and _parse_json_or_string(incoming))
             incoming_type = payload.get("type") if isinstance(payload, dict) else None
-            run_id = None
-            if isinstance(payload, dict):
-                run_id = _safe_text(payload.get("run_id"))
-                if not run_id:
-                    run_id = str(uuid.uuid4())
 
             if incoming in {"graph", "refresh", "get_graph"} or incoming_type == "get_graph":
                 await websocket.send_json(
@@ -77,55 +119,11 @@ async def websocket_wait(websocket: WebSocket) -> None:
                 )
                 continue
 
-            if incoming_type == "run_workflow":
-                user_input = _safe_text(payload.get("input") if isinstance(payload, dict) else None, '')
-                if not user_input:
-                    await websocket.send_json(
-                        {
-                            "type": "workflow_error",
-                            "run_id": run_id,
-                            "message": "워크플로우 입력값이 없습니다.",
-                        }
-                    )
-                    continue
-
-                await websocket.send_json(
-                    {"type": "workflow_started", "run_id": run_id, "message": "워크플로우 실행됨"}
-                )
-
-                try:
-                    for event in run_demo_workflow_events(user_input):
-                        payload = {
-                            "type": "workflow_event",
-                            "run_id": run_id,
-                            **event,
-                        }
-                        await websocket.send_json(payload)
-                        await asyncio.sleep(0)
-                    await websocket.send_json(
-                        {"type": "workflow_complete", "run_id": run_id, "message": "워크플로우 완료"}
-                    )
-                except Exception as error:
-                    await websocket.send_json(
-                        {
-                            "type": "workflow_error",
-                            "run_id": run_id,
-                            "message": f"워크플로우 실행 중 오류: {error}",
-                        }
-                    )
-                continue
-
             if incoming == "close":
                 await websocket.close(code=1000)
                 return
+
             await websocket.send_text(f"echo: {incoming}")
             await asyncio.sleep(0)
     except WebSocketDisconnect:
         return
-
-
-def _parse_json_or_string(text: str) -> object:
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return text

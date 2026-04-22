@@ -3,6 +3,7 @@ import { Settings, SquareSplitHorizontal } from 'lucide-react'
 
 import { PANEL_WIDTH, MODEL_LIST, INITIAL_LEFT_MESSAGES, INITIAL_RIGHT_MESSAGES } from './constants'
 import { useWorkflowSocket } from './hooks/useWorkflowSocket'
+import { useWorkflowSSE } from './hooks/useWorkflowSSE'
 import { useWorkflowGraph } from './hooks/useWorkflowGraph'
 import { ChatPane } from './components/ChatPane'
 import { Composer } from './components/Composer'
@@ -32,8 +33,8 @@ function App() {
   const [maxTokens, setMaxTokens] = useState(1024)
   const [responseMode, setResponseMode] = useState('normal')
 
-  const [leftAgenticRag, setLeftAgenticRag] = useState(false)
-  const [rightAgenticRag, setRightAgenticRag] = useState(false)
+  const [leftAgenticRag, setLeftAgenticRag] = useState(true)
+  const [rightAgenticRag, setRightAgenticRag] = useState(true)
 
   const [workflowGraph, setWorkflowGraph] = useState(null)
   const [isWorkflowLoading, setIsWorkflowLoading] = useState(false)
@@ -47,15 +48,12 @@ function App() {
   const {
     workflowSocketRef,
     workflowExecutionRef,
-    appendMessageLineByRunId,
-    updateRunMessageMetaByRunId,
     applyWorkflowNodeHighlight,
     clearWorkflowNodeHighlight,
     loadWorkflowGraph,
   } = useWorkflowSocket({
     isPanelOpenRef,
     cyRef,
-    setMessages,
     setWorkflowGraph,
     setWorkflowError,
     setIsWorkflowLoading,
@@ -63,10 +61,13 @@ function App() {
     setWorkflowConnectionState,
   })
 
+  const { streamWorkflow } = useWorkflowSSE()
+
   const { graphContainerRef } = useWorkflowGraph({
     isPanelOpen,
     workflowGraph,
     workflowExecutionRef,
+    cyRef,
     applyWorkflowNodeHighlight,
     clearWorkflowNodeHighlight,
     setWorkflowRenderError,
@@ -118,40 +119,54 @@ function App() {
     const trimmed = text.trim()
     if (!trimmed) return
 
-    const runId = buildRunId()
+    const leftRunId = buildRunId()
     const now = Date.now()
+    setText('')
 
     setMessages((prev) => [
       ...prev,
       { id: now, role: 'user', text: trimmed },
-      { id: now + 1, role: 'assistant', text: '워크플로우 실행 요청 전송됨', runId },
+      { id: now + 1, role: 'assistant', text: '워크플로우 실행됨', runId: leftRunId },
     ])
-    setText('')
+
+    const makeAppend = (setter, runId) => (line) =>
+      setter((prev) => prev.map((m) =>
+        m.runId === runId ? { ...m, text: m.text ? `${m.text}\n${line}` : line } : m
+      ))
+    const makeUpdate = (setter, runId) => (updates) =>
+      setter((prev) => prev.map((m) => (m.runId === runId ? { ...m, ...updates } : m)))
+
+    streamWorkflow({
+      params: { run_id: leftRunId, input: trimmed, model: selectedModel, response_mode: responseMode, max_tokens: maxTokens, agentic_rag: leftAgenticRag },
+      appendLine: makeAppend(setMessages, leftRunId),
+      updateMeta: makeUpdate(setMessages, leftRunId),
+      onNodeEvent: (eventType, data) => {
+        const nodeId = data.node || data.name
+        if (nodeId && (eventType === 'node_started' || data.stage === 'start')) {
+          workflowExecutionRef.current = { runId: leftRunId, isRunning: true, activeNode: nodeId }
+          applyWorkflowNodeHighlight(nodeId)
+        }
+        if (eventType === 'workflow_complete' || eventType === 'workflow_error') {
+          workflowExecutionRef.current = { ...workflowExecutionRef.current, isRunning: false }
+          clearWorkflowNodeHighlight()
+        }
+      },
+    })
 
     if (isResultPanelOpen) {
+      const rightRunId = buildRunId()
       setRightMessages((prev) => [
         ...prev,
         { id: now + 2, role: 'user', text: trimmed },
-        { id: now + 3, role: 'assistant', text: '(두 번째 백엔드 응답 대기 중...)' },
+        { id: now + 3, role: 'assistant', text: '워크플로우 실행됨', runId: rightRunId },
       ])
+      streamWorkflow({
+        params: { run_id: rightRunId, input: trimmed, model: rightSelectedModel, response_mode: responseMode, max_tokens: maxTokens, agentic_rag: rightAgenticRag },
+        appendLine: makeAppend(setRightMessages, rightRunId),
+        updateMeta: makeUpdate(setRightMessages, rightRunId),
+        onNodeEvent: () => {},
+      })
     }
-
-    const socket = workflowSocketRef.current
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        type: 'run_workflow',
-        run_id: runId,
-        input: trimmed,
-        model: selectedModel,
-        response_mode: responseMode,
-        max_tokens: maxTokens,
-        agentic_rag: leftAgenticRag,
-      }))
-      return
-    }
-
-    appendMessageLineByRunId(runId, 'WebSocket이 닫혀 있어 실행 요청을 전송할 수 없습니다.')
-    updateRunMessageMetaByRunId(runId, { status: 'error' })
   }
 
   return (

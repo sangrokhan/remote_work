@@ -18,10 +18,7 @@ const normalizeNodeId = (value) => {
   return String(value)
 }
 
-const WORKFLOW_NODE_ALIASES = {
-  '__start__': 'start',
-  '__end__': 'end',
-}
+const WORKFLOW_NODE_ALIASES = { '__start__': 'start', '__end__': 'end' }
 
 const normalizeWorkflowNodeId = (nodeId) => {
   const normalized = normalizeNodeId(nodeId).trim()
@@ -37,7 +34,6 @@ const normalizeWorkflowNodeId = (nodeId) => {
 export function useWorkflowSocket({
   isPanelOpenRef,
   cyRef,
-  setMessages,
   setWorkflowGraph,
   setWorkflowError,
   setIsWorkflowLoading,
@@ -73,27 +69,6 @@ export function useWorkflowSocket({
     }
   }
 
-  const appendMessageLineByRunId = (runId, nextText) => {
-    if (!runId || !nextText) return
-    const safeText = String(nextText)
-    setMessages((prev) =>
-      prev.map((message) => {
-        if (message.role !== 'assistant' || message.runId !== runId) return message
-        return { ...message, text: message.text ? `${message.text}\n${safeText}` : safeText }
-      })
-    )
-  }
-
-  const updateRunMessageMetaByRunId = (runId, updates) => {
-    if (!runId) return
-    setMessages((prev) =>
-      prev.map((message) => {
-        if (message.role !== 'assistant' || message.runId !== runId) return message
-        return { ...message, ...updates }
-      })
-    )
-  }
-
   const clearWorkflowNodeHighlight = () => {
     const cy = cyRef.current
     if (!cy) return
@@ -110,36 +85,6 @@ export function useWorkflowSocket({
     workflowExecutionRef.current.activeNode = targetNodeId
     cy.nodes().removeClass('wf-active')
     target.addClass('wf-active')
-  }
-
-  const isActiveRun = (runId) => {
-    const state = workflowExecutionRef.current
-    if (!runId) return false
-    return !state.runId || !state.isRunning || state.runId === runId
-  }
-
-  const startWorkflowRun = (runId) => {
-    workflowExecutionRef.current = { runId, isRunning: true, activeNode: '' }
-    clearWorkflowNodeHighlight()
-  }
-
-  const finishWorkflowRun = (runId) => {
-    const state = workflowExecutionRef.current
-    if (state.runId && state.runId !== runId) return
-    clearWorkflowNodeHighlight()
-    workflowExecutionRef.current = { ...state, runId, isRunning: false, activeNode: '' }
-  }
-
-  const updateActiveWorkflowNode = (runId, nodeId, shouldHighlight = true) => {
-    if (!runId || !nodeId) return
-    if (!isActiveRun(runId)) return
-    workflowExecutionRef.current = {
-      ...workflowExecutionRef.current,
-      runId,
-      isRunning: true,
-      activeNode: normalizeWorkflowNodeId(nodeId),
-    }
-    if (shouldHighlight) applyWorkflowNodeHighlight(nodeId)
   }
 
   useEffect(() => {
@@ -175,34 +120,6 @@ export function useWorkflowSocket({
           setWorkflowFromPayload(parsed.payload)
           return
         }
-        if (parsed?.type === 'workflow_started') {
-          startWorkflowRun(parsed.run_id)
-          appendMessageLineByRunId(parsed.run_id, parsed.message || 'workflow 실행됨')
-          return
-        }
-        if (parsed?.type === 'workflow_event' && parsed.run_id) {
-          const nodeId = parsed.node || parsed.name
-          const eventType = String(parsed.event || '').trim()
-          const eventStage = String(parsed.stage || '').trim()
-          if (isActiveRun(parsed.run_id) && nodeId && (eventType === 'node_started' || eventStage === 'start')) {
-            updateActiveWorkflowNode(parsed.run_id, nodeId)
-          }
-          if (parsed.message) appendMessageLineByRunId(parsed.run_id, parsed.message)
-          if (parsed.payload?.final_output) appendMessageLineByRunId(parsed.run_id, parsed.payload.final_output)
-          return
-        }
-        if (parsed?.type === 'workflow_complete' && parsed.run_id) {
-          finishWorkflowRun(parsed.run_id)
-          appendMessageLineByRunId(parsed.run_id, parsed.message || 'workflow 완료')
-          updateRunMessageMetaByRunId(parsed.run_id, { status: 'done' })
-          return
-        }
-        if (parsed?.type === 'workflow_error' && parsed.run_id) {
-          finishWorkflowRun(parsed.run_id)
-          appendMessageLineByRunId(parsed.run_id, parsed.message || 'workflow 오류')
-          updateRunMessageMetaByRunId(parsed.run_id, { status: 'error' })
-          return
-        }
       } catch (_error) {
         if (typeof event.data === 'string' && event.data.startsWith('echo:')) return
       }
@@ -210,12 +127,6 @@ export function useWorkflowSocket({
 
     socket.addEventListener('error', () => {
       if (aborted) return
-      const currentRunId = workflowExecutionRef.current.runId
-      if (currentRunId && workflowExecutionRef.current.isRunning) {
-        appendMessageLineByRunId(currentRunId, 'WebSocket 오류로 연결이 끊어졌습니다. 워크플로우 실행이 중단되었습니다.')
-        updateRunMessageMetaByRunId(currentRunId, { status: 'disconnected' })
-        finishWorkflowRun(currentRunId)
-      }
       setWorkflowError('워크플로우 WebSocket 연결 오류')
       setWorkflowConnectionState('error')
       loadWorkflowGraph({ signal: controller.signal })
@@ -225,14 +136,6 @@ export function useWorkflowSocket({
       if (pingTimerId) {
         window.clearInterval(pingTimerId)
         pingTimerId = null
-      }
-      const currentRunId = workflowExecutionRef.current.runId
-      if (currentRunId && workflowExecutionRef.current.isRunning) {
-        if (!aborted) {
-          appendMessageLineByRunId(currentRunId, '연결이 끊어졌습니다. 워크플로우 실행이 중단되었습니다.')
-          updateRunMessageMetaByRunId(currentRunId, { status: 'disconnected' })
-        }
-        finishWorkflowRun(currentRunId)
       }
       if (aborted) return
       setWorkflowConnectionState('closed')
@@ -259,8 +162,6 @@ export function useWorkflowSocket({
   return {
     workflowSocketRef,
     workflowExecutionRef,
-    appendMessageLineByRunId,
-    updateRunMessageMetaByRunId,
     applyWorkflowNodeHighlight,
     clearWorkflowNodeHighlight,
     loadWorkflowGraph,

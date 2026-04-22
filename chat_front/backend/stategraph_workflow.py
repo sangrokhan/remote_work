@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import random
+import threading
 import time
-from typing import Generator, TypedDict
+from typing import TYPE_CHECKING, AsyncGenerator, Generator, TypedDict
 
 from langgraph.graph import END, START, StateGraph
+
+if TYPE_CHECKING:
+    from app.models import RunWorkflowRequest
+
+logger = logging.getLogger("workflow_api")
 
 
 class DemoState(TypedDict):
@@ -142,8 +150,16 @@ def _emit_running_event(
     return event
 
 
-def run_demo_workflow_events(llm_input: str) -> Generator[dict, None, None]:
+def run_demo_workflow_events(req: RunWorkflowRequest) -> Generator[dict, None, None]:
     """Execute the workflow and yield progress events per node."""
+    logger.debug(
+        "workflow starting: model=%s agentic_rag=%s response_mode=%s max_tokens=%s",
+        req.model,
+        req.agentic_rag,
+        req.response_mode,
+        req.max_tokens,
+    )
+    llm_input = req.input
     state: DemoState = {
         "llm_input": llm_input,
         "planner_output": "",
@@ -288,3 +304,28 @@ def run_demo_workflow(llm_input: str) -> dict:
         "synthesizer_delay": 0.0,
     }
     return graph.invoke(initial_state)
+
+
+async def run_demo_workflow_events_async(req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _run() -> None:
+        try:
+            for event in run_demo_workflow_events(req):
+                loop.call_soon_threadsafe(queue.put_nowait, event)
+        except Exception as exc:
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                _emit_running_event("workflow_error", "scheduler", str(exc), stage="error"),
+            )
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        yield item

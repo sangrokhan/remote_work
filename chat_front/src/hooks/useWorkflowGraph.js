@@ -9,12 +9,12 @@ export function useWorkflowGraph({
   isPanelOpen,
   workflowGraph,
   workflowExecutionRef,
+  cyRef,
   applyWorkflowNodeHighlight,
   clearWorkflowNodeHighlight,
   setWorkflowRenderError,
 }) {
   const graphContainerRef = useRef(null)
-  const cyRef = useRef(null)
 
   useEffect(() => {
     if (!isPanelOpen || !workflowGraph || !graphContainerRef.current) {
@@ -179,5 +179,5 @@ export function useWorkflowGraph({
     }
   }, [isPanelOpen, workflowGraph])
 
-  return { graphContainerRef, cyRef }
+  return { graphContainerRef }
 }
