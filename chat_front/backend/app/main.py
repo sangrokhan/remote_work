@@ -11,6 +11,16 @@ from app.models import RunWorkflowRequest
 from stategraph_workflow import build_workflow_graph, run_demo_workflow_events_async
 from graph_schema import serialize_stategraph_to_json
 
+try:
+    from langgraph_flow.core.factory import list_models as _list_models
+    from langgraph_flow.services.simple_flow import run_simple_flow
+    from langgraph_flow.services.agentic_rag_flow import run_agentic_rag_flow
+    _MODELS = _list_models()
+    _USE_LANGGRAPH = True
+except Exception as _import_err:
+    _MODELS = ["GaussO4", "GaussO4-think", "Gemma4-E4B-it"]
+    _USE_LANGGRAPH = False
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -32,6 +42,11 @@ _workflow_graph = build_workflow_graph()
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/models")
+def get_models() -> dict:
+    return {"models": _MODELS}
 
 
 @app.get("/graph")
@@ -57,9 +72,15 @@ async def run_workflow_sse(req: RunWorkflowRequest) -> StreamingResponse:
         }
         yield f"event: run_started\ndata: {json.dumps(init, ensure_ascii=False)}\n\n"
         try:
-            async for event in run_demo_workflow_events_async(req):
-                event_type = event.get("event", "workflow_event")
-                yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if _USE_LANGGRAPH:
+                flow = run_agentic_rag_flow(req) if req.agentic_rag else run_simple_flow(req)
+                async for event in flow:
+                    event_type = event.get("event", "workflow_event")
+                    yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+            else:
+                async for event in run_demo_workflow_events_async(req):
+                    event_type = event.get("event", "workflow_event")
+                    yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:
             err = {"event": "workflow_error", "message": str(exc)}
             yield f"event: workflow_error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n"
