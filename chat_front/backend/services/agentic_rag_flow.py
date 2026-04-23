@@ -24,16 +24,18 @@ logger = logging.getLogger(__name__)
 
 
 class AgenticService:
+    def __init__(self) -> None:
+        self._graph = create_agentic_rag_graph()
+
     async def process(self, req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
         llm = get_llm(req.model)
-        graph = create_agentic_rag_graph()
         state = create_initial_state(req.input)
         config = RunnableConfig(configurable={"llm": llm})
 
         logger.debug("AgenticService.process: model=%s input_len=%d", req.model, len(req.input))
 
         final_payload: dict = {}
-        async for event in graph.invoke(state, config):
+        async for event in self._graph.invoke(state, config):
             if event.get("node") == "synthesizer" and event.get("event") == "node_finished":
                 final_payload = event.get("payload", {})
             yield event
