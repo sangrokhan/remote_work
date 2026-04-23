@@ -47,7 +47,8 @@ class PlannerNode:
         ]
         try:
             response = await llm.ainvoke(messages)
-            binding_context = json.loads(response.content or "{}")
+            content = response if isinstance(response, str) else getattr(response, "content", "{}")
+            binding_context = json.loads(content or "{}")
             binding_context.setdefault("query_entities", {"features": [], "keywords": []})
             binding_context.setdefault("previous_features", [])
             binding_context.setdefault("explicit_dependencies", [])
@@ -97,7 +98,8 @@ class PlannerNode:
                 SystemMessage(content=enhanced_prompt),
                 HumanMessage(content=user_query),
             ])
-            subtasks = self._parse_planner_response(response.content)
+            response_content = response if isinstance(response, str) else getattr(response, "content", "")
+            subtasks = self._parse_planner_response(response_content)
             return {**state, "subtasks": subtasks, "current_step": current_step + 1, "next": "executor", "user_query": state.get("user_query", "")}
 
         except Exception:
