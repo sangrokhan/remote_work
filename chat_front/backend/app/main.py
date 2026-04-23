@@ -83,8 +83,15 @@ async def run_workflow_sse(req: RunWorkflowRequest) -> StreamingResponse:
             flow = svc.process(req)
             async for event in flow:
                 event_type = event.get("event", "workflow_event")
+                logger.debug("SSE → event=%s node=%s stage=%s msg=%s",
+                             event_type,
+                             event.get("node", "-"),
+                             event.get("stage", "-"),
+                             str(event.get("message", ""))[:120])
                 yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+            logger.debug("SSE stream complete: run_id=%s", req.run_id)
         except Exception as exc:
+            logger.error("SSE error: %s", exc, exc_info=True)
             err = {"event": "workflow_error", "message": str(exc)}
             yield f"event: workflow_error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n"
 

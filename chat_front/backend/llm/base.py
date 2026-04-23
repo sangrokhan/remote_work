@@ -6,8 +6,11 @@ Concrete models declare ENV_URL_KEY / ENV_KEY_KEY / MODEL_NAME.
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, ClassVar, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from dotenv import load_dotenv
 from langchain_core.language_models import BaseLanguageModel
@@ -63,9 +66,17 @@ class BaseLLM(BaseLanguageModel):
         return await self._llm.agenerate_prompt(prompts, stop=stop, callbacks=callbacks, **kwargs)
 
     def invoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> str:
+        input_str = str(input)
+        logger.debug("LLM.invoke [%s] send: %s", self.MODEL_NAME, input_str[:200])
         response = self._llm.invoke(input, config=config, **kwargs)
-        return response.content if hasattr(response, "content") else str(response)
+        content = response.content if hasattr(response, "content") else str(response)
+        logger.debug("LLM.invoke [%s] recv: %s", self.MODEL_NAME, content[:200])
+        return content
 
     async def ainvoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> str:
+        input_str = str(input)
+        logger.debug("LLM.ainvoke [%s] send: %s", self.MODEL_NAME, input_str[:200])
         response = await self._llm.ainvoke(input, config=config, **kwargs)
-        return response.content if hasattr(response, "content") else str(response)
+        content = response.content if hasattr(response, "content") else str(response)
+        logger.debug("LLM.ainvoke [%s] recv: %s", self.MODEL_NAME, content[:200])
+        return content
