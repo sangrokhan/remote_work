@@ -3,9 +3,12 @@ import requests
 from typing import Optional, Dict, Any
 from abc import ABC, abstractmethod
 from pymilvus import MilvusClient, AnnSearchRequest, RRFRanker
-import app.core.config as config
-from app.core.logger import logger
-from app.core.embedding.registry import get_embedding_provider
+import logging
+
+import langgraph_flow.config as config
+from langgraph_flow.core.factory import get_embedding_provider
+
+logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 # Get embedding provider from registry (proper resource management)
