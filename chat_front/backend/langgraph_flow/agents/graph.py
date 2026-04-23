@@ -70,7 +70,7 @@ class AgenticRAGGraph:
         self,
         state: AgentState,
         config: RunnableConfig,
-    ) -> AgentState:
+    ) -> AsyncGenerator[dict, None]:
         yield self.stepby_invoke(state, config=config)
         # return await self._graph.ainvoke(state, config=config)
 
