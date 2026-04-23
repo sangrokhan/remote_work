@@ -42,8 +42,6 @@ class BaseLLM(BaseLanguageModel):
         return values
 
     def model_post_init(self, __context: Any) -> None:
-        if not self.api_url:
-            raise ValueError(f"{self.__class__.__name__}: api_url is not set (check {self.ENV_URL_KEY} in backend/.env)")
         headers: Dict[str, str] = {"Authorization": f"Basic {self.api_key}"} if self.api_key else {}
         headers.update(self.default_headers)
         self._llm = ChatOpenAI(
@@ -64,8 +62,10 @@ class BaseLLM(BaseLanguageModel):
     async def agenerate_prompt(self, prompts: List[PromptValue], stop=None, callbacks=None, **kwargs) -> LLMResult:
         return await self._llm.agenerate_prompt(prompts, stop=stop, callbacks=callbacks, **kwargs)
 
-    def invoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any):
-        return self._llm.invoke(input, config=config, **kwargs)
+    def invoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> str:
+        response = self._llm.invoke(input, config=config, **kwargs)
+        return response.content if hasattr(response, "content") else str(response)
 
-    async def ainvoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any):
-        return await self._llm.ainvoke(input, config=config, **kwargs)
+    async def ainvoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> str:
+        response = await self._llm.ainvoke(input, config=config, **kwargs)
+        return response.content if hasattr(response, "content") else str(response)
