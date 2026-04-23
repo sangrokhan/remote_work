@@ -61,17 +61,15 @@ class BaseLLM(BaseLanguageModel):
         return await self._llm.agenerate_prompt(prompts, stop=stop, callbacks=callbacks, **kwargs)
 
     def invoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> str:
-        input_str = str(input)
-        logger.debug("LLM.invoke [%s] send: %s", self.MODEL_NAME, input_str[:200])
+        logger.debug("LLM.invoke [%s] send: %s", self.MODEL_NAME, str(input))
         response = self._llm.invoke(input, config=config, **kwargs)
         content = response.content if hasattr(response, "content") else str(response)
-        logger.debug("LLM.invoke [%s] recv: %s", self.MODEL_NAME, content[:200])
+        logger.debug("LLM.invoke [%s] recv: %s", self.MODEL_NAME, content)
         return content
 
     async def ainvoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> str:
-        input_str = str(input)
-        logger.debug("LLM.ainvoke [%s] send: %s", self.MODEL_NAME, input_str[:200])
+        logger.debug("LLM.ainvoke [%s] send: %s", self.MODEL_NAME, str(input))
         response = await self._llm.ainvoke(input, config=config, **kwargs)
         content = response.content if hasattr(response, "content") else str(response)
-        logger.debug("LLM.ainvoke [%s] recv: %s", self.MODEL_NAME, content[:200])
+        logger.debug("LLM.ainvoke [%s] recv: %s", self.MODEL_NAME, content)
         return content
