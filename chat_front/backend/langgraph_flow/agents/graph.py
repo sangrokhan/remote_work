@@ -14,9 +14,12 @@ Methods:
 """
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict
 
 from langchain_core.runnables import RunnableConfig
+
+logger = logging.getLogger(__name__)
 from langgraph.graph import END, START, StateGraph
 
 from langgraph_flow.agents.state import AgentState
@@ -89,8 +92,10 @@ class AgenticRAGGraph:
         state: AgentState,
         config: RunnableConfig,
     ) -> AsyncGenerator[dict, None]:
+        logger.debug("AgenticRAGGraph.invoke: start | query=%s", str(state.get("user_query", ""))[:80])
         async for event in self.stepby_invoke(state, config=self._inject_registry(config)):
             yield event
+        logger.debug("AgenticRAGGraph.invoke: done")
         # else: result = await self._graph.ainvoke(state, config=config); yield {"event": "workflow_complete", "payload": result}
 
     async def ainvoke(
@@ -111,6 +116,7 @@ class AgenticRAGGraph:
                 continue
             kind = event["event"]
             if kind == "on_chain_start":
+                logger.debug("[FLOW] → %s start", node)
                 yield {
                     "event": "node_started",
                     "node": node,
@@ -123,6 +129,8 @@ class AgenticRAGGraph:
                 if not isinstance(output, dict):
                     output = {}
                 msg = str(next(iter(output.values()), f"{node} 완료"))
+                next_node = output.get("next", "?")
+                logger.debug("[FLOW] ← %s end | next=%s | keys=%s", node, next_node, list(output.keys()))
                 yield {
                     "event": "node_finished",
                     "node": node,
