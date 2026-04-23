@@ -17,3 +17,8 @@ HYBRID_SEARCH_WEIGHTS = {
     "contents_sparse": float(os.getenv("WEIGHT_CONTENTS_SPARSE", "0.2")),
     "meta_dense": float(os.getenv("WEIGHT_META_DENSE", "0.1")),
 }
+
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "bgem3")
+EMBEDDING_URL = os.getenv("EMBEDDING_URL", "")
+BGEM3_BASE_URL = os.getenv("BGEM3_BASE_URL", "")
+BGEM3_API_KEY = os.getenv("BGEM3_API_KEY", "")
