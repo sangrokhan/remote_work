@@ -49,7 +49,10 @@ export function useWorkflowSSE() {
         onNodeEvent?.(eventType, data)
         if (data.message) appendLine(data.message)
         if (data.payload?.final_output) appendLine(data.payload.final_output)
-        if (eventType === 'workflow_complete') updateMeta({ status: 'done' })
+        if (eventType === 'workflow_complete') {
+          if (data.final_response) appendLine(data.final_response)
+          updateMeta({ status: 'done' })
+        }
         if (eventType === 'workflow_error') updateMeta({ status: 'error' })
       }
     } catch (err) {
