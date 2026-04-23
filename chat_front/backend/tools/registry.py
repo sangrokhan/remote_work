@@ -33,7 +33,7 @@ class RetrieverTool(BaseTool):
 
     def _get_original_retriever(self):
         if self._original_retriever is None:
-            from retriever import RetrieverTool as OriginalRetrieverTool
+            from tools.retriever import RetrieverTool as OriginalRetrieverTool
 
             self._original_retriever = OriginalRetrieverTool
         return self._original_retriever
