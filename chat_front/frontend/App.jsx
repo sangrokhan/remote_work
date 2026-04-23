@@ -180,7 +180,7 @@ function App() {
         <header className="chat-header">
           <div className="chat-title-wrap">
             <img src="/logo.png" alt="logo" className="chat-logo" />
-            <h1>Chat Interface</h1>
+            <h1>Agentic RAG</h1>
           </div>
           <div className="header-actions">
             <button

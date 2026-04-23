@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 class RunWorkflowRequest(BaseModel):
     run_id: str
     input: str
-    model: str = Field(default="GaussO4")
+    model: str = Field(default="Gemma4-E4B-it")
     response_mode: str = Field(default="normal")
     max_tokens: int = Field(default=1024)
     agentic_rag: bool = Field(default=False)

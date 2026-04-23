@@ -33,10 +33,13 @@ class RetrieverTool(BaseTool):
 
     def _get_original_retriever(self):
         if self._original_retriever is None:
-            from tools.retriever import RetrieverTool as OriginalRetrieverTool
-
-            self._original_retriever = OriginalRetrieverTool
-        return self._original_retriever
+            try:
+                from tools.retriever import RetrieverTool as OriginalRetrieverTool
+                self._original_retriever = OriginalRetrieverTool
+            except ImportError as e:
+                logger.warning("RetrieverTool 로드 실패 (closed-system 모듈 없음): %s", e)
+                self._original_retriever = False  # 재시도 방지
+        return self._original_retriever if self._original_retriever is not False else None
 
     async def ainvoke(self, input_data: Dict[str, Any]) -> Any:
         """
@@ -56,6 +59,8 @@ class RetrieverTool(BaseTool):
             logger.info(f"   [Retriever] top_k: {top_k}")
 
             original_retriever = self._get_original_retriever()
+            if original_retriever is None:
+                return {"query": query, "results": [], "status": "unavailable"}
 
             # 동기 함수를 비동기로 실행
             loop = asyncio.get_event_loop()

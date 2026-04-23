@@ -11,9 +11,9 @@ from llm.models.gauss_o4_think import GaussO4Think
 from llm.models.gemma4_e4b_it import Gemma4E4BIt
 
 MODEL_REGISTRY: dict[str, BaseLanguageModel] = {
+    "Gemma4-E4B-it": Gemma4E4BIt(),
     "GaussO4": GaussO4(),
     "GaussO4-think": GaussO4Think(),
-    "Gemma4-E4B-it": Gemma4E4BIt(),
 }
 
 
