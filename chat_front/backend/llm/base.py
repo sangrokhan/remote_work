@@ -1,25 +1,22 @@
 """
-Abstract base class for all LLM implementations in the backend.
-Inherits BaseLanguageModel so all models are LangChain-compatible.
-Concrete models declare ENV_URL_KEY / ENV_KEY_KEY / MODEL_NAME,
-create their own AsyncOpenAI client, and implement invoke() / ainvoke().
+Abstract base class for all LLM implementations.
+Inherits BaseLanguageModel for type compatibility.
+Creates a ChatOpenAI instance in model_post_init and delegates all calls to it.
+Concrete models declare ENV_URL_KEY / ENV_KEY_KEY / MODEL_NAME.
 """
 from __future__ import annotations
 
 import os
-from abc import abstractmethod
-from typing import Any, ClassVar, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 from dotenv import load_dotenv
 from langchain_core.language_models import BaseLanguageModel
-from langchain_core.messages import BaseMessage
-from langchain_core.outputs import Generation, LLMResult
+from langchain_core.outputs import LLMResult
 from langchain_core.prompt_values import PromptValue
-from pydantic import Field, model_validator
+from langchain_openai import ChatOpenAI
+from pydantic import Field, PrivateAttr, model_validator
 
 load_dotenv()
-
-LanguageModelInput = str | list[BaseMessage] | PromptValue
 
 
 class BaseLLM(BaseLanguageModel):
@@ -29,6 +26,10 @@ class BaseLLM(BaseLanguageModel):
 
     api_url: str = Field(default="")
     api_key: str = Field(default="")
+    temperature: float = Field(default=0.7)
+    default_headers: dict = Field(default_factory=dict)
+
+    _llm: ChatOpenAI = PrivateAttr(default=None)
 
     @model_validator(mode="before")
     @classmethod
@@ -40,28 +41,29 @@ class BaseLLM(BaseLanguageModel):
             values["api_key"] = os.getenv(cls.ENV_KEY_KEY, "")
         return values
 
+    def model_post_init(self, __context: Any) -> None:
+        headers: Dict[str, str] = {"Authorization": f"Basic {self.api_key}"} if self.api_key else {}
+        headers.update(self.default_headers)
+        self._llm = ChatOpenAI(
+            model=self.MODEL_NAME,
+            base_url=self.api_url or None,
+            api_key=self.api_key or "dummy",
+            temperature=self.temperature,
+            default_headers=headers or None,
+        )
+
     @property
     def _llm_type(self) -> str:
         return self.__class__.__name__.lower()
 
-    @staticmethod
-    def _to_str(input: LanguageModelInput) -> str:
-        if isinstance(input, str):
-            return input
-        if isinstance(input, PromptValue):
-            return input.to_string()
-        return "\n".join(m.content for m in input if hasattr(m, "content"))
-
     def generate_prompt(self, prompts: List[PromptValue], stop=None, callbacks=None, **kwargs) -> LLMResult:
-        generations = [[Generation(text=self.invoke(p.to_string()))] for p in prompts]
-        return LLMResult(generations=generations)
+        return self._llm.generate_prompt(prompts, stop=stop, callbacks=callbacks, **kwargs)
 
     async def agenerate_prompt(self, prompts: List[PromptValue], stop=None, callbacks=None, **kwargs) -> LLMResult:
-        generations = [[Generation(text=await self.ainvoke(p.to_string()))] for p in prompts]
-        return LLMResult(generations=generations)
+        return await self._llm.agenerate_prompt(prompts, stop=stop, callbacks=callbacks, **kwargs)
 
-    @abstractmethod
-    def invoke(self, input: LanguageModelInput, config: Optional[Any] = None, **kwargs: Any) -> str: ...
+    def invoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any):
+        return self._llm.invoke(input, config=config, **kwargs)
 
-    @abstractmethod
-    async def ainvoke(self, input: LanguageModelInput, config: Optional[Any] = None, **kwargs: Any) -> str: ...
+    async def ainvoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any):
+        return await self._llm.ainvoke(input, config=config, **kwargs)
