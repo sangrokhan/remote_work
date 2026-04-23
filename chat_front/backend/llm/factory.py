@@ -21,3 +21,7 @@ def get_llm(model_name: str) -> BaseLLM:
     if cls is None:
         raise ValueError(f"Unknown model: {model_name}")
     return cls()
+
+
+def list_models() -> list[str]:
+    return list(MODEL_REGISTRY.keys())

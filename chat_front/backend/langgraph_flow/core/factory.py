@@ -1,7 +1,6 @@
 """
 Embedding provider factory for langgraph_flow.
 get_embedding_provider() is the entry point for the retriever node.
-list_models() exposes LLM model names to the /models endpoint.
 """
 from __future__ import annotations
 
@@ -12,15 +11,8 @@ EMBEDDING_REGISTRY: dict[str, type[EmbeddingProvider]] = {
     "bge3": BGE3Provider,
 }
 
-_LLM_MODEL_NAMES = ["GaussO4", "GaussO4-think", "Gemma4-E4B-it"]
-
-
 def get_embedding_provider(name: str = "bge3") -> EmbeddingProvider:
     cls = EMBEDDING_REGISTRY.get(name)
     if cls is None:
         raise ValueError(f"Unknown embedding provider: {name!r}. Available: {list(EMBEDDING_REGISTRY)}")
     return cls()
-
-
-def list_models() -> list[str]:
-    return _LLM_MODEL_NAMES

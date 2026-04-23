@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from app.models import RunWorkflowRequest
 from graph_schema import serialize_stategraph_to_json
 from langgraph_flow.agents.graph import create_agentic_rag_graph
-from langgraph_flow.core.factory import list_models
+from llm.factory import list_models
 from services.simple_flow import SimpleService
 from services.agentic_rag_flow import AgenticService
 
