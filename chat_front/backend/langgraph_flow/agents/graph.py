@@ -70,6 +70,13 @@ class AgenticRAGGraph:
         self,
         state: AgentState,
         config: RunnableConfig,
+    ) -> AgentState:
+        return await self._graph.ainvoke(state, config=config)
+
+    async def stepby_invoke(
+        self,
+        state: AgentState,
+        config: RunnableConfig,
     ) -> AsyncGenerator[dict, None]:
         async for event in self._graph.astream_events(state, config=config, version="v2"):
             node = event.get("metadata", {}).get("langgraph_node", "")
