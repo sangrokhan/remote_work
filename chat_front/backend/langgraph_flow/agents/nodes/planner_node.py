@@ -209,7 +209,7 @@ class PlannerNode:
 
         try:
             response = await llm.ainvoke(messages)
-            content = response.content or "{}"
+            content = response or "{}"
             binding_context = json.loads(content)
 
             # 기본 구조 보장
