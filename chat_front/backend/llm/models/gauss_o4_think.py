@@ -13,3 +13,7 @@ class GaussO4Think(BaseLLM):
     def invoke(self, input: LanguageModelInput, config: Optional[Any] = None, **kwargs: Any) -> str:
         prompt = self._to_str(input)
         return f"[GaussO4-think] <thinking>{prompt[:30]}</thinking>"
+
+    async def ainvoke(self, input: LanguageModelInput, config: Optional[Any] = None, **kwargs: Any) -> str:
+        prompt = self._to_str(input)
+        return f"[GaussO4-think] <thinking>{prompt[:30]}</thinking>"

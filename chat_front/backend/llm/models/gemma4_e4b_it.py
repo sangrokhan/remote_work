@@ -13,3 +13,7 @@ class Gemma4E4BIt(BaseLLM):
     def invoke(self, input: LanguageModelInput, config: Optional[Any] = None, **kwargs: Any) -> str:
         prompt = self._to_str(input)
         return f"[Gemma4-E4B-it] {prompt[:60]}"
+
+    async def ainvoke(self, input: LanguageModelInput, config: Optional[Any] = None, **kwargs: Any) -> str:
+        prompt = self._to_str(input)
+        return f"[Gemma4-E4B-it] {prompt[:60]}"
