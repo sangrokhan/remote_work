@@ -85,8 +85,13 @@ class ExecutorNode:
                     "status": "success",
                 })
             else:
-                # THINK 타입은 execution_history에 저장
                 result = await self._execute_think_subtask(subtask, tool_registry, resolved_bindings, llm)
+                retriever_outputs.append({
+                    "subtask_id": subtask_id,
+                    "query": subtask.get("goal", subtask.get("description", "")),
+                    "result": result,
+                    "status": "success",
+                })
 
             # 실행 결과 저장
             execution_history.setdefault(subtask_id, []).append({
