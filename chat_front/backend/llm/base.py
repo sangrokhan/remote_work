@@ -42,11 +42,13 @@ class BaseLLM(BaseLanguageModel):
         return values
 
     def model_post_init(self, __context: Any) -> None:
+        if not self.api_url:
+            raise ValueError(f"{self.__class__.__name__}: api_url is not set (check {self.ENV_URL_KEY} in backend/.env)")
         headers: Dict[str, str] = {"Authorization": f"Basic {self.api_key}"} if self.api_key else {}
         headers.update(self.default_headers)
         self._llm = ChatOpenAI(
             model=self.MODEL_NAME,
-            base_url=self.api_url or None,
+            base_url=self.api_url,
             api_key=self.api_key or "dummy",
             temperature=self.temperature,
             default_headers=headers or None,
