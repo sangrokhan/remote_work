@@ -28,7 +28,7 @@ async function* parseSSE(body) {
 }
 
 export function useWorkflowSSE() {
-  const streamWorkflow = async ({ params, appendLine, updateMeta, onNodeEvent }) => {
+  const streamWorkflow = async ({ params, replaceLine, updateMeta, onNodeEvent }) => {
     try {
       const res = await fetch(RUN_API_URL, {
         method: 'POST',
@@ -36,27 +36,38 @@ export function useWorkflowSSE() {
         body: JSON.stringify(params),
       })
       if (!res.ok) {
-        appendLine(`HTTP 오류: ${res.status}`)
+        replaceLine(`HTTP 오류: ${res.status}`)
         updateMeta({ status: 'error' })
         return
       }
       for await (const { eventType, data } of parseSSE(res.body)) {
         if (eventType === 'run_started') {
           const ragLabel = data.agentic_rag ? ' [Agentic RAG]' : ''
-          appendLine(`모델: ${data.model}${ragLabel}`)
+          replaceLine(`모델: ${data.model}${ragLabel}`)
           continue
         }
         onNodeEvent?.(eventType, data)
-        if (data.message) appendLine(data.message)
-        if (data.payload?.final_output) appendLine(data.payload.final_output)
+        // 진행 상황은 이전 내용을 교체 (단계별 진행 표시)
+        if (data.node) {
+          const stage = data.stage === 'start' ? '실행 중...' : data.stage === 'end' ? '완료' : (data.message || '')
+          const summary = data.payload ? JSON.stringify(data.payload).slice(0, 80) : ''
+          replaceLine(`[${data.node}] ${stage}${summary ? `\n${summary}` : ''}`)
+        } else if (data.message) {
+          replaceLine(data.message)
+        }
+        if (data.payload?.final_output) replaceLine(data.payload.final_output)
         if (eventType === 'workflow_complete') {
-          if (data.final_response) appendLine(data.final_response)
+          // 최종 결과만 표시 — 진행 내용 교체
+          replaceLine(data.final_response || '')
           updateMeta({ status: 'done' })
         }
-        if (eventType === 'workflow_error') updateMeta({ status: 'error' })
+        if (eventType === 'workflow_error') {
+          replaceLine(data.message || '오류가 발생했습니다.')
+          updateMeta({ status: 'error' })
+        }
       }
     } catch (err) {
-      appendLine(`연결 오류: ${err.message}`)
+      replaceLine(`연결 오류: ${err.message}`)
       updateMeta({ status: 'error' })
     }
   }

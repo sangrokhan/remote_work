@@ -131,16 +131,16 @@ function App() {
       { id: now + 1, role: 'assistant', text: '워크플로우 실행됨', runId: leftRunId },
     ])
 
-    const makeAppend = (setter, runId) => (line) =>
+    const makeReplace = (setter, runId) => (line) =>
       setter((prev) => prev.map((m) =>
-        m.runId === runId ? { ...m, text: m.text ? `${m.text}\n${line}` : line } : m
+        m.runId === runId ? { ...m, text: line } : m
       ))
     const makeUpdate = (setter, runId) => (updates) =>
       setter((prev) => prev.map((m) => (m.runId === runId ? { ...m, ...updates } : m)))
 
     streamWorkflow({
       params: { run_id: leftRunId, input: trimmed, model: selectedModel, response_mode: responseMode, max_tokens: maxTokens, agentic_rag: leftAgenticRag },
-      appendLine: makeAppend(setMessages, leftRunId),
+      replaceLine: makeReplace(setMessages, leftRunId),
       updateMeta: makeUpdate(setMessages, leftRunId),
       onNodeEvent: (eventType, data) => {
         const nodeId = data.node || data.name
@@ -164,7 +164,7 @@ function App() {
       ])
       streamWorkflow({
         params: { run_id: rightRunId, input: trimmed, model: rightSelectedModel, response_mode: responseMode, max_tokens: maxTokens, agentic_rag: rightAgenticRag },
-        appendLine: makeAppend(setRightMessages, rightRunId),
+        replaceLine: makeReplace(setRightMessages, rightRunId),
         updateMeta: makeUpdate(setRightMessages, rightRunId),
         onNodeEvent: () => {},
       })
