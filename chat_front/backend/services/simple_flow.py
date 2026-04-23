@@ -31,4 +31,4 @@ class SimpleService:
             "payload": {"final_output": result},
         }
 
-        yield {"event": "workflow_complete", "message": "완료"}
+        yield {"event": "workflow_complete", "message": "완료", "final_response": result}
