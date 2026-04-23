@@ -18,7 +18,15 @@ HYBRID_SEARCH_WEIGHTS = {
     "meta_dense": float(os.getenv("WEIGHT_META_DENSE", "0.1")),
 }
 
-EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "bgem3")
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "bge3")
 EMBEDDING_URL = os.getenv("EMBEDDING_URL", "")
 BGEM3_BASE_URL = os.getenv("BGEM3_BASE_URL", "")
 BGEM3_API_KEY = os.getenv("BGEM3_API_KEY", "")
+
+def get_embedding_config():
+    return {
+        "embedding_url": EMBEDDING_URL,
+        "embedding_provider": EMBEDDING_PROVIDER,
+        "bgem3_base_url": BGEM3_BASE_URL,
+        "bgem3_api_key": BGEM3_API_KEY,
+    }
