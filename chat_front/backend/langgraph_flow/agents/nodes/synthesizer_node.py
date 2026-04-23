@@ -88,7 +88,49 @@ class SynthesizerNode:
 
     async def _generate_llm_response(self, state: AgentState, llm: BaseLanguageModel) -> str:
         """LLM을 사용한 최종 응답 생성 - Agentic RAG 구조"""
-        retriever_outputs = state.get("retriever_outputs", [])
+        # ── pre-synthesizer state snapshot ───────────────────────────────────
+        subtasks = state.get("subtasks", [])
+        subtask_results = state.get("subtask_results", [])
+        retriever_history = state.get("retriever_history", [])
+        resolved_bindings = state.get("resolved_bindings", {})
+        execution_history = state.get("execution_history", {})
+        retriever_outputs_raw = state.get("retriever_outputs", [])
+
+        logger.info("=" * 60)
+        logger.info("[SYNTHESIZER] pre-synthesis state snapshot")
+        logger.info("  user_query     : %s", state.get("user_query", ""))
+        logger.info("  subtasks       : %d total", len(subtasks))
+        for i, t in enumerate(subtasks):
+            logger.info("    [%d] id=%s action=%s", i, t.get("id"), t.get("action", t.get("tool", "?")))
+        logger.info("  subtask_results: %d items", len(subtask_results))
+        for i, r in enumerate(subtask_results):
+            status = r.get("status", "?")
+            sid = r.get("subtask_id", r.get("id", "?"))
+            content_preview = str(r.get("content", r.get("result", "")))[:120]
+            logger.info("    [%d] subtask_id=%s status=%s content_preview=%s", i, sid, status, content_preview)
+        logger.info("  retriever_outputs: %d items", len(retriever_outputs_raw))
+        for i, o in enumerate(retriever_outputs_raw):
+            if isinstance(o, dict):
+                src = o.get("source", "?")
+                sid = o.get("subtask_id", "?")
+                preview = str(o.get("content", o.get("result", "")))[:120]
+                logger.info("    [%d] source=%s subtask_id=%s preview=%s", i, src, sid, preview)
+            else:
+                logger.info("    [%d] %s", i, str(o)[:120])
+        logger.info("  retriever_history: %d queries", len(retriever_history))
+        for i, h in enumerate(retriever_history):
+            logger.info("    [%d] subtask_id=%s query=%s", i, h.get("subtask_id"), str(h.get("query", ""))[:80])
+        logger.info("  resolved_bindings: %s", list(resolved_bindings.keys()))
+        total_exec = len(execution_history)
+        ok_exec = sum(
+            1 for execs in execution_history.values()
+            for e in execs if e.get("status") == "success"
+        )
+        logger.info("  execution_history: %d tasks, %d successful", total_exec, ok_exec)
+        logger.info("=" * 60)
+        # ─────────────────────────────────────────────────────────────────────
+
+        retriever_outputs = retriever_outputs_raw
         retriever_outputs_text = ""
 
         # refiner 결과 우선 처리
