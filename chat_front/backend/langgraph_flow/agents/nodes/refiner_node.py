@@ -450,7 +450,7 @@ reference_features 필드에 검색 결과에서 사용된 모든 feature의 fea
         ]
 
         try:
-            response = await llm.ainvoke(messages)
+            response = await llm.bind(temperature=0.7).ainvoke(messages)
             content = response.content or "{}"
 
             print(f"=== DEBUG: Refiner LLM 응답 ===")

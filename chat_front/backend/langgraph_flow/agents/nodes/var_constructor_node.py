@@ -96,7 +96,7 @@ async def construct_binding_context(state: AgentState,
         ]
 
         # LLM 호출
-        response = await llm.ainvoke(messages)
+        response = await llm.bind(temperature=0.7).ainvoke(messages)
 
         # 응답 파싱
         content = response.content or "{}"

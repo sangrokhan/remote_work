@@ -316,7 +316,7 @@ class ExecutorNode:
                         content="당신은 THINK 타입의 작업을 처리하는 어시스턴트입니다. 주어진 작업을 분석하고 적절한 응답을 생성하세요."),
                     HumanMessage(content=f"작업: {goal}")
                 ]
-                response = await llm.ainvoke(messages)
+                response = await llm.bind(temperature=0.7).ainvoke(messages)
                 return response.content
             else:
                 raise ValueError(f"Tool '{tool_name}' not found in registry and no LLM available")

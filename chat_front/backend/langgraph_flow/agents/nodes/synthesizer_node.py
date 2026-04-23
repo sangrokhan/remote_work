@@ -196,7 +196,7 @@ class SynthesizerNode:
             HumanMessage(content=user_query),
         ]
 
-        response = await llm.ainvoke(messages)
+        response = await llm.bind(temperature=0.7).ainvoke(messages)
         # ainvoke는 str 반환, 혹은 AIMessage — 둘 다 처리
         return response if isinstance(response, str) else getattr(response, "content", "")
 

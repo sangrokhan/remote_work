@@ -46,7 +46,7 @@ class PlannerNode:
             HumanMessage(content=f"User Query: {state.get('user_query', '')}"),
         ]
         try:
-            response = await llm.ainvoke(messages)
+            response = await llm.bind(temperature=0.7).ainvoke(messages)
             content = response if isinstance(response, str) else getattr(response, "content", "{}")
             binding_context = json.loads(content or "{}")
             binding_context.setdefault("query_entities", {"features": [], "keywords": []})
@@ -94,7 +94,7 @@ class PlannerNode:
 
             user_query = f"사용자 질문: {state.get('user_query', '')}\n{user_context}현재 단계: {current_step + 1}/{max_steps}"
 
-            response = await llm.ainvoke([
+            response = await llm.bind(temperature=0.7).ainvoke([
                 SystemMessage(content=enhanced_prompt),
                 HumanMessage(content=user_query),
             ])
@@ -208,7 +208,7 @@ class PlannerNode:
         ]
 
         try:
-            response = await llm.ainvoke(messages)
+            response = await llm.bind(temperature=0.7).ainvoke(messages)
             content = response or "{}"
             binding_context = json.loads(content)
 
@@ -327,7 +327,7 @@ class PlannerNode:
                 HumanMessage(content=user_query)
             ]
 
-            response = await llm.ainvoke(messages)
+            response = await llm.bind(temperature=0.7).ainvoke(messages)
             print("=== DEBUG: Planner LLM 호출 완료 ===")
 
             # 응답 파싱
