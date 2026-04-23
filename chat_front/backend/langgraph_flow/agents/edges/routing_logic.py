@@ -35,7 +35,7 @@ def route_after_executor(state: AgentState) -> str:
 
 
 def route_after_refiner(state: AgentState) -> str:
-    current_step = state.get("current_step", 0) + 1
+    current_step = state.get("current_step", 0)
     if state.get("is_finished", False) or current_step >= state.get("max_steps", 10):
         logger.debug("[ROUTE] refiner → synthesizer | step=%d max=%d is_finished=%s",
                      current_step, state.get("max_steps", 10), state.get("is_finished"))

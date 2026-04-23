@@ -67,6 +67,7 @@ class ExecutorNode:
         execution_history = state.get("execution_history", {}).copy()
         retry_counts = state.get("retry_counts", {}).copy()
         retriever_outputs = []
+        retriever_history = list(state.get("retriever_history", []))
         current_step = state.get("current_step", 0)
         max_steps = state.get("max_steps", 10)
         is_finished = state.get("is_finished", False)
@@ -129,6 +130,12 @@ class ExecutorNode:
                 # THINK 타입은 execution_history에 저장
                 result = await self._execute_think_subtask(subtask, tool_registry, state,
                                                            resolved_bindings, llm)
+                retriever_history.append({
+                    "subtask_id": subtask_id,
+                    "query": subtask.get("goal", subtask.get("description", "")),
+                    "result": {"results": [str(result)]} if result else {"results": []},
+                    "status": "success",
+                })
 
             # 실행 결과 저장
             if subtask_id not in execution_history:
@@ -165,6 +172,7 @@ class ExecutorNode:
             execution_history=execution_history,
             retry_counts=retry_counts,
             retriever_outputs=retriever_outputs,
+            retriever_history=retriever_history,
             current_executing_subtask_id=subtask_id,
             next="retriever"
         )
