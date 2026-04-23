@@ -31,6 +31,7 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+logging.getLogger().setLevel(logging.DEBUG)
 logger = logging.getLogger("workflow_api")
 
 app = FastAPI(title="LangGraph Vis")
