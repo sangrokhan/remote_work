@@ -8,10 +8,6 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 
 class EmbeddingProvider(ABC):
     ENV_URL_KEY: str = ""

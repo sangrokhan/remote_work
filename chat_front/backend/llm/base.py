@@ -12,15 +12,11 @@ from typing import Any, ClassVar, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from dotenv import load_dotenv
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.outputs import LLMResult
 from langchain_core.prompt_values import PromptValue
 from langchain_openai import ChatOpenAI
 from pydantic import Field, PrivateAttr, model_validator
-
-load_dotenv()
-
 
 class BaseLLM(BaseLanguageModel):
     ENV_URL_KEY: ClassVar[str] = ""
@@ -37,7 +33,6 @@ class BaseLLM(BaseLanguageModel):
     @model_validator(mode="before")
     @classmethod
     def _load_env(cls, values: dict) -> dict:
-        load_dotenv()
         if not values.get("api_url"):
             values["api_url"] = os.getenv(cls.ENV_URL_KEY, "")
         if not values.get("api_key"):

@@ -1,7 +1,4 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 MILVUS_HOST = os.getenv("MILVUS_HOST", "http://localhost:19530")
 DB_NAME = os.getenv("MILVUS_DB_NAME", "default")
