@@ -7,7 +7,7 @@ AgenticRAGGraph.invoke()               streams node events as an async generator
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
@@ -74,6 +74,13 @@ class AgenticRAGGraph:
         async for event in self.stepby_invoke(state, config=config):
             yield event
         # else: result = await self._graph.ainvoke(state, config=config); yield {"event": "workflow_complete", "payload": result}
+
+    async def ainvoke(
+        self,
+        state: AgentState,
+        config: RunnableConfig,
+    ) -> Dict[str, Any]:
+        return await self._graph.ainvoke(state, config=config)
 
     async def stepby_invoke(
         self,
