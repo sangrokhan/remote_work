@@ -65,11 +65,13 @@ class BaseLLM(BaseLanguageModel):
         response = self._llm.invoke(input, config=config, **kwargs)
         content = response.content if hasattr(response, "content") else str(response)
         logger.debug("LLM.invoke [%s] recv: %s", self.MODEL_NAME, content)
-        return content
+        #return content
+        return response
 
     async def ainvoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> str:
         logger.debug("LLM.ainvoke [%s] send: %s", self.MODEL_NAME, str(input))
         response = await self._llm.ainvoke(input, config=config, **kwargs)
         content = response.content if hasattr(response, "content") else str(response)
         logger.debug("LLM.ainvoke [%s] recv: %s", self.MODEL_NAME, content)
-        return content
+        #return content
+        return response
