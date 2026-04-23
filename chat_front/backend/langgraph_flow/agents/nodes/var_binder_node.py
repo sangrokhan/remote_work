@@ -190,7 +190,7 @@ async def _resolve_bindings_with_llm(bindings: dict, subtask_results: list,
     ]
 
     print("=== DEBUG: Binding resolution LLM 호출 시작 ===")
-    response = await llm.bind(temperature=0.7).ainvoke(resolution_messages)
+    response = await llm.bind(temperature=0.1).ainvoke(resolution_messages)
     print("=== DEBUG: Binding resolution LLM 호출 완료 ===")
 
     content = response.content or "{}"
