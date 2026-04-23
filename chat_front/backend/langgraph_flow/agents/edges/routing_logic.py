@@ -1,9 +1,9 @@
 """
 Conditional edge functions for the AgenticRAG graph.
 
-start_route     — selects retriever (agentic) or planner (simple) at graph entry
-executor_route  — routes to refiner or synthesizer based on hop_count / random
-refiner_route   — routes back to planner or forward to synthesizer
+route_after_planner   — routes to var_binder (subtasks exist) or synthesizer (none)
+route_after_executor  — routes to refiner or synthesizer based on retrieval result
+route_after_refiner   — loops back to var_binder or exits to synthesizer
 """
 from __future__ import annotations
 
@@ -12,17 +12,19 @@ import random
 from langgraph_flow.agents.state import AgentState
 
 
-def start_route(state: AgentState) -> str:
-    return "retriever" if state.get("agentic_rag") else "planner"
-
-
-def executor_route(state: AgentState) -> str:
+def route_after_planner(state: AgentState) -> str:
     if state.get("hop_count", 0) >= 6:
-        return "to_synthesizer"
-    return "to_refiner" if random.random() < 0.5 else "to_synthesizer"
+        return "synthesizer"
+    return "var_binder" if random.random() < 0.5 else "synthesizer"
 
 
-def refiner_route(state: AgentState) -> str:
+def route_after_executor(state: AgentState) -> str:
+    if state.get("hop_count", 0) >= 6:
+        return "synthesizer"
+    return "refiner" if random.random() < 0.5 else "synthesizer"
+
+
+def route_after_refiner(state: AgentState) -> str:
     if state.get("hop_count", 0) >= 10:
-        return "to_planner"
-    return "to_synthesizer" if random.random() < 0.5 else "to_planner"
+        return "synthesizer"
+    return "var_binder" if random.random() < 0.5 else "synthesizer"
