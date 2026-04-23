@@ -7,7 +7,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph_flow.agents.state import AgentState, update_state
-from langgraph_flow.tools.registry import ToolRegistry
+from tools.registry import ToolRegistry
 from langgraph_flow.prompts.executor import EXECUTOR_SYSTEM_PROMPT
 
 # 디버그를 위한 전역 카운터

@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models import BaseLanguageModel
 from langgraph_flow.agents.state import AgentState, update_state
-from langgraph_flow.tools.registry import ToolRegistry
+from tools.registry import ToolRegistry
 
 
 class RetrieverNode:
