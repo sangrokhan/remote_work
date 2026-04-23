@@ -35,7 +35,7 @@ class AgenticService:
         }
         config = RunnableConfig(configurable={"llm": llm})
 
-        async for event in graph.invoke(state, config):
+        async for event in graph.astream(state, config):
             yield event
 
         yield {"event": "workflow_complete", "message": "완료 (Agentic RAG)"}
