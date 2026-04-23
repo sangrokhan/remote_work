@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 class AgenticService:
     async def process(self, req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
         llm = get_llm(req.model)
-        graph = create_agentic_rag_graph(agentic_rag=True)
+        graph = create_agentic_rag_graph()
 
         state = {
             "input": req.input,

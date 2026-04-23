@@ -29,8 +29,42 @@ _GRAPH_NODES = frozenset({
 
 
 class AgenticRAGGraph:
-    def __init__(self, compiled_graph) -> None:
-        self._graph = compiled_graph
+    def __init__(self) -> None:
+        self._graph = self._build()
+
+    @property
+    def graph(self):
+        return self._graph
+
+    def _build(self):
+        builder = StateGraph(AgentState)
+
+        builder.add_node("planner", planner_node.invoke)
+        builder.add_node("executor", executor_node.invoke)
+        builder.add_node("refiner", refiner_node.invoke)
+        builder.add_node("synthesizer", synthesizer_node.invoke)
+        builder.add_node("retriever", retriever_node.invoke)
+        builder.add_node("var_constructor", var_constructor_node.invoke)
+        builder.add_node("var_binder", var_binder_node.invoke)
+
+        builder.add_edge(START, "retriever")
+        builder.add_edge("retriever", "var_constructor")
+        builder.add_edge("var_constructor", "var_binder")
+        builder.add_edge("var_binder", "planner")
+        builder.add_edge("planner", "executor")
+        builder.add_conditional_edges(
+            "executor",
+            executor_route,
+            {"to_refiner": "refiner", "to_synthesizer": "synthesizer"},
+        )
+        builder.add_conditional_edges(
+            "refiner",
+            refiner_route,
+            {"to_synthesizer": "synthesizer", "to_planner": "planner"},
+        )
+        builder.add_edge("synthesizer", END)
+
+        return builder.compile()
 
     async def invoke(
         self,
@@ -65,36 +99,5 @@ class AgenticRAGGraph:
                 }
 
 
-def create_agentic_rag_graph(agentic_rag: bool = False) -> AgenticRAGGraph:
-    builder = StateGraph(AgentState)
-
-    builder.add_node("planner", planner_node.invoke)
-    builder.add_node("executor", executor_node.invoke)
-    builder.add_node("refiner", refiner_node.invoke)
-    builder.add_node("synthesizer", synthesizer_node.invoke)
-
-    if agentic_rag:
-        builder.add_node("retriever", retriever_node.invoke)
-        builder.add_node("var_constructor", var_constructor_node.invoke)
-        builder.add_node("var_binder", var_binder_node.invoke)
-        builder.add_edge(START, "retriever")
-        builder.add_edge("retriever", "var_constructor")
-        builder.add_edge("var_constructor", "var_binder")
-        builder.add_edge("var_binder", "planner")
-    else:
-        builder.add_edge(START, "planner")
-
-    builder.add_edge("planner", "executor")
-    builder.add_conditional_edges(
-        "executor",
-        executor_route,
-        {"to_refiner": "refiner", "to_synthesizer": "synthesizer"},
-    )
-    builder.add_conditional_edges(
-        "refiner",
-        refiner_route,
-        {"to_synthesizer": "synthesizer", "to_planner": "planner"},
-    )
-    builder.add_edge("synthesizer", END)
-
-    return AgenticRAGGraph(builder.compile())
+def create_agentic_rag_graph() -> AgenticRAGGraph:
+    return AgenticRAGGraph()

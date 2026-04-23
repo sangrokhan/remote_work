@@ -42,7 +42,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_workflow_graph = create_agentic_rag_graph(False)._graph
+_workflow_graph = create_agentic_rag_graph().graph
 
 
 @app.get("/health")
