@@ -106,3 +106,9 @@ def create_initial_state(user_query: str) -> AgentState:
         messages=[],
         next="var_constructor",
     )
+
+
+def update_state(current_state: AgentState, **kwargs) -> AgentState:
+    updated_state = current_state.copy()
+    updated_state.update(kwargs)
+    return updated_state
