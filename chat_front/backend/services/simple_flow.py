@@ -20,7 +20,7 @@ class SimpleService:
 
         yield {"event": "node_started", "node": "llm", "name": "llm", "stage": "start", "message": "LLM 호출 중"}
 
-        result = llm.invoke(req.input)
+        result = await llm.ainvoke(req.input)
 
         yield {
             "event": "node_finished",

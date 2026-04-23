@@ -66,10 +66,10 @@ class PlannerNode:
         is_finished = state.get("is_finished", False)
 
         if is_finished or current_step >= max_steps:
-            return {**state, "is_finished": True, "next": "synthesizer"}
+            return {"is_finished": True, "next": "synthesizer"}
 
         if state.get("subtasks"):
-            return {**state, "next": "executor"}
+            return {"next": "executor"}
 
         if llm is None:
             default_subtasks = [{
@@ -80,7 +80,7 @@ class PlannerNode:
                 "dependencies": [],
                 "bindings": {},
             }]
-            return {**state, "subtasks": default_subtasks, "current_step": current_step + 1, "next": "executor"}
+            return {"subtasks": default_subtasks, "current_step": current_step + 1, "next": "executor"}
 
         try:
             binding_context = await self._extract_binding_context_with_llm(state, llm)
@@ -100,10 +100,10 @@ class PlannerNode:
             ])
             response_content = response if isinstance(response, str) else getattr(response, "content", "")
             subtasks = self._parse_planner_response(response_content)
-            return {**state, "subtasks": subtasks, "current_step": current_step + 1, "next": "executor", "user_query": state.get("user_query", "")}
+            return {"subtasks": subtasks, "current_step": current_step + 1, "next": "executor"}
 
         except Exception:
-            return {**state, "next": "synthesizer"}
+            return {"next": "synthesizer"}
 
     def _parse_planner_response(self, response_content: str) -> List[Dict[str, Any]]:
         def normalize(subtask: Any, idx: int) -> Dict[str, Any]:

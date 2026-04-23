@@ -130,56 +130,39 @@ class SynthesizerNode:
         logger.info("=" * 60)
         # ─────────────────────────────────────────────────────────────────────
 
-        retriever_outputs = retriever_outputs_raw
         retriever_outputs_text = ""
 
-        # refiner 결과 우선 처리
-        refiner_outputs = [o for o in retriever_outputs if isinstance(o, dict) and o.get("source") == "refiner"]
-        if refiner_outputs:
+        # 1순위: subtask_results의 refined 답변 (refiner가 저장하는 주 결과)
+        if subtask_results:
             retriever_outputs_text += "=== 정제된 최종 결과 ===\n"
-            for output in refiner_outputs:
-                content = output.get("content", "")
-                if content:
-                    retriever_outputs_text += f"{content}\n\n"
+            for result in subtask_results:
+                task_id = result.get("id", result.get("subtask_id", "?"))
+                answer = result.get("subtask_answer") or result.get("refined_text", "")
+                if answer:
+                    retriever_outputs_text += f"[Subtask {task_id}]\n{answer}\n\n"
 
-        # 일반 retriever 결과 처리 (최대 10개)
-        regular_outputs = [o for o in retriever_outputs if not (isinstance(o, dict) and o.get("source") == "refiner")]
-        if regular_outputs:
+        # 2순위: subtasks에서 verdict=True인 항목의 subtask_answer (subtask_results에 없을 경우)
+        if not retriever_outputs_text:
+            completed_subtasks = [s for s in subtasks if s.get("verdict") is True]
+            if completed_subtasks:
+                retriever_outputs_text += "=== 정제된 최종 결과 ===\n"
+                for s in completed_subtasks:
+                    answer = s.get("subtask_answer") or s.get("refined_text", "")
+                    if answer:
+                        retriever_outputs_text += f"[Subtask {s.get('id', '?')}]\n{answer}\n\n"
+
+        # 3순위: retriever_history 원본 (refiner를 거치지 않은 경우)
+        if not retriever_outputs_text and retriever_history:
             retriever_outputs_text += "=== 검색된 문서 정보 ===\n"
-            processed_count = 0
-            for output in regular_outputs:
-                if processed_count >= 10:
-                    break
-                try:
-                    if isinstance(output, dict):
-                        subtask_id = output.get("subtask_id", "unknown")
-                        if "result" in output:
-                            result = output["result"]
-                            if isinstance(result, list) and result:
-                                item = result[0]
-                                content = item.get("text", item.get("content", str(item))) if isinstance(item, dict) else str(item)
-                            elif isinstance(result, dict):
-                                content = result.get("text", result.get("content", str(result)))
-                            else:
-                                content = str(result)
-                        elif "content" in output:
-                            content = output["content"]
-                        else:
-                            continue
-                        retriever_outputs_text += f"[Subtask {subtask_id}]\n내용: {content}\n\n"
-                        processed_count += 1
-                    elif isinstance(output, str):
-                        try:
-                            parsed = json.loads(output)
-                            subtask_id = parsed.get("subtask_id", "unknown") if isinstance(parsed, dict) else "unknown"
-                            content = parsed.get("content", parsed.get("text", str(parsed))) if isinstance(parsed, dict) else output
-                        except Exception:
-                            subtask_id, content = "unknown", output
-                        retriever_outputs_text += f"[Subtask {subtask_id}]\n내용: {content}\n\n"
-                        processed_count += 1
-                except Exception as e:
-                    logger.debug("Error processing retriever output: %s", e)
-                    continue
+            for h in retriever_history[:10]:
+                result = h.get("result", {})
+                if isinstance(result, dict):
+                    items = result.get("results", [])
+                    for item in (items if isinstance(items, list) else [])[:3]:
+                        text = item.get("text", item.get("content", "")) if isinstance(item, dict) else str(item)
+                        if text:
+                            retriever_outputs_text += f"[Subtask {h.get('subtask_id', '?')}]\n{text}\n\n"
+                            break
 
         # 대화 히스토리 (최근 3개)
         history_text = ""

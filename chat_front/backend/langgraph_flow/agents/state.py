@@ -81,6 +81,7 @@ class AgentState(TypedDict):
     is_finished: Annotated[bool, lambda old, new: new if new is not None else old]
     final_response: Annotated[str, lambda old, new: new if new is not None else old]
 
+    binding_context: Annotated[Dict[str, Any], lambda old, new: new if new is not None else old]
     messages: Annotated[List[Dict[str, Any]], add_messages]
     next: Annotated[str, lambda old, new: new if new is not None else old]
 
@@ -103,12 +104,11 @@ def create_initial_state(user_query: str) -> AgentState:
         max_steps=10,
         is_finished=False,
         final_response="",
+        binding_context={},
         messages=[],
         next="var_constructor",
     )
 
 
-def update_state(current_state: AgentState, **kwargs) -> AgentState:
-    updated_state = current_state.copy()
-    updated_state.update(kwargs)
-    return updated_state
+def update_state(current_state: AgentState, **kwargs) -> dict:
+    return kwargs
