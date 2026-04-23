@@ -20,7 +20,7 @@ class SimpleService:
 
         yield {"event": "node_started", "node": "llm", "name": "llm", "stage": "start", "message": "LLM 호출 중"}
 
-        result = llm.generate(prompt=req.input, context="")
+        result = llm.invoke(req.input)
 
         yield {
             "event": "node_finished",

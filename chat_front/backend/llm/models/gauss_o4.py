@@ -1,12 +1,15 @@
 """GaussO4 backend LLM stub. Returns formatted dummy output for testing."""
 from __future__ import annotations
 
-from llm.base import BaseLLM
+from typing import Any, Optional
+
+from llm.base import BaseLLM, LanguageModelInput
 
 
 class GaussO4(BaseLLM):
     ENV_URL_KEY = "GAUSS_O4_API_URL"
     ENV_KEY_KEY = "GAUSS_O4_API_KEY"
 
-    def generate(self, prompt: str, context: str) -> str:
-        return f"[GaussO4] {prompt[:30]} → {context[:80]}"
+    def invoke(self, input: LanguageModelInput, config: Optional[Any] = None, **kwargs: Any) -> str:
+        prompt = self._to_str(input)
+        return f"[GaussO4] {prompt[:30]}"

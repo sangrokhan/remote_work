@@ -4,6 +4,8 @@ get_llm() is the single entry point used by flow services.
 """
 from __future__ import annotations
 
+from langchain_core.language_models import BaseLanguageModel
+
 from llm.base import BaseLLM
 from llm.models.gauss_o4 import GaussO4
 from llm.models.gauss_o4_think import GaussO4Think
@@ -16,7 +18,7 @@ MODEL_REGISTRY: dict[str, type[BaseLLM]] = {
 }
 
 
-def get_llm(model_name: str) -> BaseLLM:
+def get_llm(model_name: str) -> BaseLanguageModel:
     cls = MODEL_REGISTRY.get(model_name)
     if cls is None:
         raise ValueError(f"Unknown model: {model_name}")
