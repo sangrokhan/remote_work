@@ -71,7 +71,8 @@ class AgenticRAGGraph:
         state: AgentState,
         config: RunnableConfig,
     ) -> AgentState:
-        return await self._graph.ainvoke(state, config=config)
+        yield self.stepby_invoke(state, config=config)
+        # return await self._graph.ainvoke(state, config=config)
 
     async def stepby_invoke(
         self,
