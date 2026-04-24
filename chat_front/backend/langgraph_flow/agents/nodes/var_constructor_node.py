@@ -116,7 +116,16 @@ async def construct_binding_context(state: AgentState,
         response = await llm.bind(temperature=0.1).ainvoke(messages)
 
         # 응답 파싱 (마크다운 코드 블록 제거)
-        content = response.content or "{}"
+        raw = response.content if hasattr(response, "content") else response
+        if isinstance(raw, list):
+            content = " ".join(
+                b.get("text", "") if isinstance(b, dict) else str(b) for b in raw
+            )
+        elif isinstance(raw, (str, bytes, bytearray)):
+            content = raw if raw else "{}"
+        else:
+            content = str(raw) if raw else "{}"
+        logger.debug("VarConstructorNode: raw type=%s raw_preview=%s", type(raw).__name__, str(raw)[:100])
         content = content.strip()
         if content.startswith("```"):
             content = content.split("```", 2)[1]
@@ -125,7 +134,6 @@ async def construct_binding_context(state: AgentState,
             content = content.rsplit("```", 1)[0].strip()
         if not content:
             content = "{}"
-        logger.debug("VarConstructorNode: raw content after strip: %s", content[:200])
         binding_context = json.loads(content)
 
         # 기본 구조 보장
