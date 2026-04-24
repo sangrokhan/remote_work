@@ -4,6 +4,7 @@ export function Composer({
   text,
   onTextChange,
   onSubmit,
+  onSampleQuestion,
   selectedModel,
   onModelChange,
   isModelMenuOpen,
@@ -61,6 +62,20 @@ export function Composer({
           rows={3}
         />
         <div className="composer-controls" ref={modelMenuRef}>
+          <button
+            type="button"
+            className="sample-question-btn"
+            aria-label="샘플 질문 불러오기"
+            onClick={onSampleQuestion}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="8" cy="8" r="6.5" />
+              <path d="M6 6.5a2 2 0 1 1 2 2v1" />
+              <circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none" />
+            </svg>
+            <span>질문 예시</span>
+          </button>
+
           {!isSplitMode && (
             <button
               type="button"

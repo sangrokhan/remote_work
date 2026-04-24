@@ -6,6 +6,7 @@ import { useWorkflowSocket } from './hooks/useWorkflowSocket'
 import { useWorkflowSSE } from './hooks/useWorkflowSSE'
 import { useWorkflowGraph } from './hooks/useWorkflowGraph'
 import { useModels } from './hooks/useModels'
+import { useSampleQuestion } from './hooks/useSampleQuestion'
 import { ChatPane } from './components/ChatPane'
 import { Composer } from './components/Composer'
 import { WorkflowPanel } from './components/WorkflowPanel'
@@ -28,6 +29,7 @@ function App() {
   const [text, setText] = useState('')
 
   const { models } = useModels()
+  const { pick: pickSampleQuestion } = useSampleQuestion()
 
   const [selectedModel, setSelectedModel] = useState('')
   const [rightSelectedModel, setRightSelectedModel] = useState('')
@@ -249,6 +251,7 @@ function App() {
           text={text}
           onTextChange={setText}
           onSubmit={sendMessage}
+          onSampleQuestion={() => setText(pickSampleQuestion())}
           selectedModel={selectedModel}
           onModelChange={setSelectedModel}
           isModelMenuOpen={isModelMenuOpen}
