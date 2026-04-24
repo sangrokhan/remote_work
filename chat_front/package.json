@@ -9,12 +9,14 @@
     "preview": "vite preview --host 0.0.0.0 --port 4173"
   },
   "dependencies": {
+    "cytoscape": "^3.30.2",
+    "cytoscape-dagre": "^2.5.0",
+    "dagre": "^0.8.5",
+    "lucide-react": "^0.525.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "cytoscape-dagre": "^2.5.0",
-    "cytoscape": "^3.30.2",
-    "dagre": "^0.8.5",
-    "lucide-react": "^0.525.0"
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.3",
