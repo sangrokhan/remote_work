@@ -251,9 +251,9 @@ def _resolve_bindings_fallback(bindings: dict, subtask_results: list) -> dict:
     for binding_key, binding_ref in bindings.items():
         print(f"=== DEBUG: Binding '{binding_key}': '{binding_ref}' 해결 중 ===")
 
-        if isinstance(binding_ref, str) and binding_ref.startswith("$task_"):
-            # Parse $task_{id}.{field} format
-            parts = binding_ref.replace("$task_", "").split(".")
+        if isinstance(binding_ref, str) and (binding_ref.startswith("$task_") or binding_ref.startswith("$subtask_")):
+            # Parse $task_{id}.{field} or $subtask_{id}.{field} format
+            parts = binding_ref.replace("$subtask_", "").replace("$task_", "").split(".")
             if len(parts) == 2:
                 task_id, field_name = parts
                 task_id_int = int(task_id)

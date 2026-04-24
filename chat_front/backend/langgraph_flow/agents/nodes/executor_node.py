@@ -290,9 +290,11 @@ class ExecutorNode:
                     updated_goal = updated_goal.replace(key, str(value))
                 # 2) key가 변수명인 경우 구성된 placeholder 형식으로 대체
                 placeholders = [
-                    f"${{{key}}}",        # ${feature_id}
-                    f"$task_0.{key}",     # $task_0.feature_id
-                    f"${{task_0.{key}}}", # ${task_0.feature_id}
+                    f"${{{key}}}",           # ${feature_id}
+                    f"$task_0.{key}",        # $task_0.feature_id
+                    f"${{task_0.{key}}}",    # ${task_0.feature_id}
+                    f"$subtask_0.{key}",     # $subtask_0.feature_id
+                    f"${{subtask_0.{key}}}", # ${subtask_0.feature_id}
                 ]
                 for placeholder in placeholders:
                     if placeholder in updated_goal:
@@ -304,11 +306,11 @@ class ExecutorNode:
                                "(resolved_bindings non-empty but no placeholder in goal)")
             goal = updated_goal
 
-        # fallback: auto-resolve remaining $task_N.field from state subtask_results
-        if "$task_" in goal:
+        # fallback: auto-resolve remaining $task_N.field / $subtask_N.field from state subtask_results
+        if "$task_" in goal or "$subtask_" in goal:
             subtask_results = state.get("subtask_results", [])
             results_by_id = {str(r.get("id", r.get("task_id", ""))): r for r in subtask_results}
-            for match in re.finditer(r'\$task_(\d+)\.(\w+)', goal):
+            for match in re.finditer(r'\$(?:sub)?task_(\d+)\.(\w+)', goal):
                 placeholder, task_id, field = match.group(0), match.group(1), match.group(2)
                 result = results_by_id.get(task_id)
                 if not result:
@@ -328,7 +330,7 @@ class ExecutorNode:
                 else:
                     logger.warning("[Executor:RETRIEVE] auto-resolve failed: %s (field=%s missing in result)",
                                    placeholder, field)
-            if "$task_" in goal:
+            if "$task_" in goal or "$subtask_" in goal:
                 logger.warning("[Executor:RETRIEVE] subtask_id=%s unresolved placeholders remain: %s",
                                subtask.get("id"), goal)
 
@@ -374,7 +376,13 @@ class ExecutorNode:
             for key, value in resolved_bindings.items():
                 if key in updated_goal:
                     updated_goal = updated_goal.replace(key, str(value))
-                for placeholder in [f"${{{key}}}", f"$task_0.{key}", f"${{task_0.{key}}}"]:
+                for placeholder in [
+                    f"${{{key}}}",
+                    f"$task_0.{key}",
+                    f"${{task_0.{key}}}",
+                    f"$subtask_0.{key}",
+                    f"${{subtask_0.{key}}}",
+                ]:
                     if placeholder in updated_goal:
                         updated_goal = updated_goal.replace(placeholder, str(value))
             goal = updated_goal
