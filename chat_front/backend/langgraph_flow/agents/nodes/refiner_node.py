@@ -189,10 +189,9 @@ class RefinerNode:
                     print(
                         f"=== DEBUG: subtask_results 내용: {completed_subtask.get('reference_features', [])} ===")
 
-                # reference_features 업데이트
+                # reference_features 업데이트 (reducer가 기존 state와 merge)
                 if reference_features_found:
-                    update_kwargs[
-                        "reference_features"] = reference_features + reference_features_found
+                    update_kwargs["reference_features"] = reference_features_found
 
             updated_state = update_state(state, **update_kwargs)
 
