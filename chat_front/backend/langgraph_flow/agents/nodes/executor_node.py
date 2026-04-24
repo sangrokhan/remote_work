@@ -132,11 +132,12 @@ class ExecutorNode:
 
             if task_type == "RETRIEVE":
                 # RETRIEVE 타입은 retriever_outputs에 저장
-                result = await self._execute_retrieve_subtask(subtask, tool_registry, state,
-                                                              resolved_bindings, llm)
+                resolved_query, result = await self._execute_retrieve_subtask(
+                    subtask, tool_registry, state, resolved_bindings, llm
+                )
                 retriever_outputs.append({
                     "subtask_id": subtask_id,
-                    "query": subtask.get("goal", subtask.get("description", "")),
+                    "query": resolved_query,  # resolved goal for correct dedup in merge_retriever_history
                     "result": result,
                     "status": "success"
                 })
@@ -262,21 +263,23 @@ class ExecutorNode:
         if resolved_bindings:
             updated_goal = goal
             for key, value in resolved_bindings.items():
-                # 다양한 placeholder 형식 지원
+                # 1) key 자체가 placeholder인 경우 직접 대체 (e.g. "$task_0.feature_id": "FGR-1234")
+                if key in updated_goal:
+                    updated_goal = updated_goal.replace(key, str(value))
+                # 2) key가 변수명인 경우 구성된 placeholder 형식으로 대체
                 placeholders = [
-                    f"${{{key}}}",  # ${feature_id}
-                    f"$task_0.{key}",  # $task_0.feature_id (직접 참조)
-                    f"${{task_0.{key}}}"  # ${task_0.feature_id}
+                    f"${{{key}}}",        # ${feature_id}
+                    f"$task_0.{key}",     # $task_0.feature_id
+                    f"${{task_0.{key}}}", # ${task_0.feature_id}
                 ]
                 for placeholder in placeholders:
                     if placeholder in updated_goal:
                         updated_goal = updated_goal.replace(placeholder, str(value))
-                        print(f"=== DEBUG: Placeholder '{placeholder}' → '{value}'로 대체 ===")
+                        logger.debug("[Executor] placeholder '%s' → '%s'", placeholder, value)
 
-            # unresolved가 남아있으면 원래 placeholder 유지
-            if "unresolved_" in updated_goal:
-                print(f"=== DEBUG: WARNING - unresolved binding이 남아있음 ===")
-                print(f"=== DEBUG: updated_goal: {updated_goal} ===")
+            if "$" in updated_goal and ("task_" in updated_goal or "{" in updated_goal):
+                logger.warning("[Executor] subtask_id=%s unresolved placeholders remain: %s",
+                               subtask.get("id"), updated_goal)
 
             goal = updated_goal
 
@@ -285,14 +288,7 @@ class ExecutorNode:
         if tool is None:
             raise ValueError("Retriever tool not found in registry")
 
-        # 툴 실행 파라미터 구성
-        tool_args = {"query": goal}
-
-        # top_k 파라미터가 있는 경우 추가
-        if "top_k" in subtask:
-            tool_args["top_k"] = subtask["top_k"]
-        else:
-            tool_args["top_k"] = 5  # 기본값
+        tool_args = {"query": goal, "top_k": subtask.get("top_k", 5)}
 
         logger.info(
             "[Retriever] subtask_id=%s original_goal=%s resolved_query=%s",
@@ -300,7 +296,7 @@ class ExecutorNode:
         )
 
         # 툴 실행
-        return await tool.ainvoke(tool_args)
+        return goal, await tool.ainvoke(tool_args)
 
     async def _execute_think_subtask(self, subtask: Dict, tool_registry: ToolRegistry,
                                      state: AgentState, resolved_bindings: dict,
@@ -324,9 +320,11 @@ class ExecutorNode:
         if resolved_bindings:
             updated_goal = goal
             for key, value in resolved_bindings.items():
-                placeholder = f"${{{key}}}"
-                if placeholder in updated_goal:
-                    updated_goal = updated_goal.replace(placeholder, str(value))
+                if key in updated_goal:
+                    updated_goal = updated_goal.replace(key, str(value))
+                for placeholder in [f"${{{key}}}", f"$task_0.{key}", f"${{task_0.{key}}}"]:
+                    if placeholder in updated_goal:
+                        updated_goal = updated_goal.replace(placeholder, str(value))
             goal = updated_goal
 
         # description 기반으로 적절한 툴 선택
