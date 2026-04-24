@@ -1,6 +1,7 @@
 # langgraph_agenticrag/src/agents/nodes/var_binder_node.py
 
 import json
+import logging
 import re
 from typing import Dict, Any, Optional, List
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -9,6 +10,8 @@ from langchain_core.runnables import RunnableConfig
 
 from langgraph_flow.agents.state import AgentState, update_state
 from langgraph_flow.prompts.var_binder import BINDER_SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
 
 
 class VarBinderNode:
@@ -68,14 +71,19 @@ async def resolve_bindings(state: AgentState,
     executable_subtask = _get_next_executable_subtask(subtasks, subtask_results, execution_history)
 
     if not executable_subtask:
-        # 실행할 subtask가 없으면 synthesizer로
+        logger.info("[VarBinder] no executable subtask → synthesizer")
         return update_state(state, next="synthesizer")
 
     # 바인딩 정보 추출
     bindings = executable_subtask.get("bindings", {})
+    logger.info(
+        "[VarBinder] selected subtask_id=%s bindings=%s subtask_results_count=%d",
+        executable_subtask.get("id"), list(bindings.keys()), len(subtask_results)
+    )
 
     # 바인딩이 없으면 바로 executor로
     if not bindings:
+        logger.info("[VarBinder] subtask_id=%s no bindings → executor directly", executable_subtask["id"])
         return update_state(
             state,
             current_executing_subtask_id=executable_subtask["id"],
@@ -85,7 +93,9 @@ async def resolve_bindings(state: AgentState,
 
     # subtask_results가 비어있으면 폴백 사용
     if not subtask_results:
+        logger.warning("[VarBinder] subtask_id=%s no subtask_results → fallback resolution", executable_subtask["id"])
         resolved_bindings = _resolve_bindings_fallback(bindings, [])
+        logger.info("[VarBinder] fallback resolved=%s", resolved_bindings)
         return update_state(
             state,
             current_executing_subtask_id=executable_subtask["id"],
@@ -106,7 +116,7 @@ async def resolve_bindings(state: AgentState,
                 },
                 llm
             )
-
+            logger.info("[VarBinder] LLM resolved subtask_id=%s result=%s", executable_subtask["id"], resolved_bindings)
             return update_state(
                 state,
                 current_executing_subtask_id=executable_subtask["id"],
@@ -114,11 +124,11 @@ async def resolve_bindings(state: AgentState,
                 next="executor"
             )
         except Exception as e:
-            print(f"VarBinder LLM error: {e}")
-            # 에러 시 폴백 사용
+            logger.error("[VarBinder] LLM resolution error subtask_id=%s: %s → fallback", executable_subtask["id"], e)
 
     # 폴백: 직접 binding 해결
     resolved_bindings = _resolve_bindings_fallback(bindings, subtask_results)
+    logger.info("[VarBinder] fallback resolved subtask_id=%s result=%s", executable_subtask["id"], resolved_bindings)
 
     return update_state(
         state,
@@ -147,27 +157,36 @@ def _get_next_executable_subtask(subtasks: List[Dict], subtask_results: List[Dic
         if task_id is not None:
             completed_ids.add(task_id)
 
+    logger.debug("[VarBinder] completed_ids=%s", completed_ids)
     for subtask in subtasks:
         task_id = subtask.get("id")
 
         # 이미 완료된 subtask는 건너뜀
         if task_id in completed_ids:
+            logger.debug("[VarBinder] skip subtask_id=%s (in completed_ids)", task_id)
             continue
 
         # verdict가 True이면 완료된 것으로 간주
         if subtask.get("verdict", False) is True:
+            logger.debug("[VarBinder] skip subtask_id=%s (verdict=True)", task_id)
             continue
 
         # 의존성 확인
         dependencies = subtask.get("dependencies", [])
         if not dependencies:
+            logger.debug("[VarBinder] selected subtask_id=%s (no dependencies)", task_id)
             return subtask
 
         # 모든 의존성이 완료되었는지 확인
         all_deps_completed = all(dep_id in completed_ids for dep_id in dependencies)
         if all_deps_completed:
+            logger.debug("[VarBinder] selected subtask_id=%s (all deps met: %s)", task_id, dependencies)
             return subtask
+        else:
+            pending = [d for d in dependencies if d not in completed_ids]
+            logger.debug("[VarBinder] skip subtask_id=%s (pending deps: %s)", task_id, pending)
 
+    logger.info("[VarBinder] no executable subtask found")
     return None
 
 
