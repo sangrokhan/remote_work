@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models import BaseLanguageModel
@@ -277,11 +278,30 @@ class ExecutorNode:
                         updated_goal = updated_goal.replace(placeholder, str(value))
                         logger.debug("[Executor] placeholder '%s' → '%s'", placeholder, value)
 
-            if "$" in updated_goal and ("task_" in updated_goal or "{" in updated_goal):
-                logger.warning("[Executor] subtask_id=%s unresolved placeholders remain: %s",
-                               subtask.get("id"), updated_goal)
-
             goal = updated_goal
+
+        # fallback: auto-resolve remaining $task_N.field from state subtask_results
+        if "$task_" in goal:
+            subtask_results = state.get("subtask_results", [])
+            results_by_id = {str(r.get("id", r.get("task_id", ""))): r for r in subtask_results}
+            for match in re.finditer(r'\$task_(\d+)\.(\w+)', goal):
+                placeholder, task_id, field = match.group(0), match.group(1), match.group(2)
+                result = results_by_id.get(task_id)
+                if not result:
+                    continue
+                value = None
+                for feat in result.get("reference_features", []):
+                    if field in feat:
+                        value = feat[field]
+                        break
+                if value is None:
+                    value = result.get(field) or result.get("subtask_answer", "")
+                if value:
+                    goal = goal.replace(placeholder, str(value))
+                    logger.info("[Executor] auto-resolved %s → %s", placeholder, value)
+            if "$task_" in goal:
+                logger.warning("[Executor] subtask_id=%s unresolved placeholders remain: %s",
+                               subtask.get("id"), goal)
 
         # retriever 툴 실행
         tool = tool_registry.get_tool("retriever")
