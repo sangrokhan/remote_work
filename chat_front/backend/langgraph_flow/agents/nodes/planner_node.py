@@ -177,6 +177,7 @@ class PlannerNode:
             return state_copy
 
         try:
+            # TODO: Review this duplicate works
             print("=== DEBUG: Binding context 추출 시작 ===")
             # Binding context 추출
             binding_context = await self._extract_binding_context_with_llm(state, llm)

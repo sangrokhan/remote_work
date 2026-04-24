@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from typing import Dict, Any, List, Optional
 from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models import BaseLanguageModel
@@ -9,6 +10,8 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph_flow.agents.state import AgentState, update_state
 from tools.registry import ToolRegistry
 from langgraph_flow.prompts.executor import EXECUTOR_SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
 
 # 디버그를 위한 전역 카운터
 executor_call_count = 0
@@ -253,6 +256,7 @@ class ExecutorNode:
             실행 결과
         """
         goal = subtask.get("goal", subtask.get("description", ""))
+        original_goal = goal
 
         # var_binder에서 해결한 resolved_bindings 적용
         if resolved_bindings:
@@ -290,7 +294,10 @@ class ExecutorNode:
         else:
             tool_args["top_k"] = 5  # 기본값
 
-        print(f"=== DEBUG: Retriever 호출 - query: {goal[:99]}... ===")
+        logger.info(
+            "[Retriever] subtask_id=%s original_goal=%s resolved_query=%s",
+            subtask.get("id"), original_goal, goal
+        )
 
         # 툴 실행
         return await tool.ainvoke(tool_args)
