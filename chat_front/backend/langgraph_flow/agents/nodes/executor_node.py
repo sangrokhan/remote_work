@@ -304,6 +304,19 @@ class ExecutorNode:
             if updated_goal == goal:
                 logger.warning("[Executor:RETRIEVE] NO substitution applied "
                                "(resolved_bindings non-empty but no placeholder in goal)")
+                # safety net: enrich query with concrete binding values so retriever
+                # embeds feature_id / feature_name / literals even if goal lacks placeholders
+                merged = {**subtask.get("bindings", {}), **resolved_bindings}
+                concrete = {
+                    k: v for k, v in merged.items()
+                    if isinstance(v, str) and not v.startswith("$") and not v.startswith("unresolved_")
+                }
+                if concrete:
+                    extras = " ".join(str(v) for v in concrete.values())
+                    updated_goal = f"{goal} [{extras}]"
+                    logger.info("[Executor:RETRIEVE] enriched query with bindings: %s", concrete)
+                else:
+                    logger.warning("[Executor:RETRIEVE] no concrete bindings available to enrich query")
             goal = updated_goal
 
         # fallback: auto-resolve remaining $task_N.field / $subtask_N.field from state subtask_results
