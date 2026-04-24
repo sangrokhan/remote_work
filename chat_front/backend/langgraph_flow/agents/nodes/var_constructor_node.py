@@ -115,8 +115,17 @@ async def construct_binding_context(state: AgentState,
         # LLM 호출
         response = await llm.bind(temperature=0.1).ainvoke(messages)
 
-        # 응답 파싱
+        # 응답 파싱 (마크다운 코드 블록 제거)
         content = response.content or "{}"
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.split("```", 2)[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.rsplit("```", 1)[0].strip()
+        if not content:
+            content = "{}"
+        logger.debug("VarConstructorNode: raw content after strip: %s", content[:200])
         binding_context = json.loads(content)
 
         # 기본 구조 보장
