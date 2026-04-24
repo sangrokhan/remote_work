@@ -325,7 +325,16 @@ class ExecutorNode:
                     HumanMessage(content=f"작업: {goal}")
                 ]
                 response = await llm.bind(temperature=0.7).ainvoke(messages)
-                return response.content
+                content = response.content or "{}"
+                content = content.strip()
+                if content.startswith("```"):
+                    content = content.split("```", 2)[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                    content = content.rsplit("```", 1)[0].strip()
+                if not content:
+                    content = "{}"
+                return content
             else:
                 raise ValueError(f"Tool '{tool_name}' not found in registry and no LLM available")
 

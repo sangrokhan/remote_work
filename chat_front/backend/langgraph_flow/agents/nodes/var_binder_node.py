@@ -195,7 +195,14 @@ async def _resolve_bindings_with_llm(bindings: dict, subtask_results: list,
 
     content = response.content or "{}"
     print(f"=== DEBUG: Binding resolution 응답: {content[:200]}... ===")
-
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("```", 2)[1]
+        if content.startswith("json"):
+            content = content[4:]
+        content = content.rsplit("```", 1)[0].strip()
+    if not content:
+        content = "{}"
     resolved_bindings = json.loads(content)
     print(f"=== DEBUG: Resolved Bindings: {resolved_bindings} ===")
     return resolved_bindings

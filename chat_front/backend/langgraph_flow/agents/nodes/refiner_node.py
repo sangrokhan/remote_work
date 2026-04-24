@@ -452,7 +452,14 @@ reference_features 필드에 검색 결과에서 사용된 모든 feature의 fea
         try:
             response = await llm.bind(temperature=0.7).ainvoke(messages)
             content = response.content or "{}"
-
+            content = content.strip()
+            if content.startswith("```"):
+                content = content.split("```", 2)[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.rsplit("```", 1)[0].strip()
+            if not content:
+                content = "{}"
             print(f"=== DEBUG: Refiner LLM 응답 ===")
             print(content[:500] if len(content) > 500 else content)
 

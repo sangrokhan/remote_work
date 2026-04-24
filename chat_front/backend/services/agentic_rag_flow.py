@@ -41,7 +41,8 @@ class AgenticService:
             yield event
 
         logger.debug("AgenticService.process complete: final_payload keys=%s", list(final_payload.keys()))
-
+        logger.debug("final_payload: %s", final_payload)
+        
         yield {
             "event": "workflow_complete",
             "message": "완료 (Agentic RAG)",

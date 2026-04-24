@@ -77,7 +77,15 @@ class PlannerNode:
 
         try:
             response = await llm.bind(temperature=0.1).ainvoke(messages)
-            content = response or "{}"
+            content = response.content or "{}"
+            content = content.strip()
+            if content.startswith("```"):
+                content = content.split("```", 2)[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.rsplit("```", 1)[0].strip()
+            if not content:
+                content = "{}"
             binding_context = json.loads(content)
 
             # 기본 구조 보장
@@ -238,7 +246,16 @@ class PlannerNode:
 
         try:
             # JSON 파싱 시도
-            response_dict = json.loads(response_content)
+            content = response_content or "{}"
+            content = content.strip()
+            if content.startswith("```"):
+                content = content.split("```", 2)[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.rsplit("```", 1)[0].strip()
+            if not content:
+                content = "{}"
+            response_dict = json.loads(content)
             if isinstance(response_dict, dict) and "subtasks" in response_dict:
                 subtasks = response_dict["subtasks"]
                 # subtasks 구조 검증 및 정규화
