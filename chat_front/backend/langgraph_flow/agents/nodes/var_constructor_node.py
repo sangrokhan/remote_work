@@ -1,10 +1,13 @@
 # langgraph_agenticrag/src/agents/nodes/var_constructor_node.py
 
 import json
+import logging
 from typing import Dict, Any, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.runnables import RunnableConfig
+
+logger = logging.getLogger(__name__)
 
 from langgraph_flow.agents.state import AgentState, InputState, create_initial_state, update_state
 from langgraph_flow.prompts.var_constructor import CONSTRUCTOR_SYSTEM_PROMPT
@@ -73,8 +76,8 @@ async def construct_binding_context(state: AgentState,
     Returns:
         업데이트된 상태
     """
-    # LLM이 제공되지 않은 경우 (테스트용) 기본 응답 반환
     if llm is None:
+        logger.error("VarConstructorNode: LLM not provided — falling back to default binding context")
         default_context = {
             "query_entities": {"main_concept": ["task_0.main_concept"]},
             "previous_features": [],
@@ -96,7 +99,7 @@ async def construct_binding_context(state: AgentState,
         ]
 
         # LLM 호출
-        response = await llm.bind(temperature=0.7).ainvoke(messages)
+        response = await llm.bind(temperature=0.1).ainvoke(messages)
 
         # 응답 파싱
         content = response.content or "{}"
@@ -121,7 +124,7 @@ async def construct_binding_context(state: AgentState,
 
     except Exception as e:
         # 에러 발생 시 planner로 이동
-        print(f"VarConstructor error: {e}")
+        logger.error("VarConstructorNode: construct_binding_context error: %s", e)
         return update_state(state, next="planner")
 
 
