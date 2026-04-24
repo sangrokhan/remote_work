@@ -260,12 +260,33 @@ class ExecutorNode:
         goal = subtask.get("goal", subtask.get("description", ""))
         original_goal = goal
 
+        # ===== DIAGNOSTIC LOGGING =====
+        logger.info("=" * 80)
+        logger.info("[Executor:RETRIEVE] ENTER subtask_id=%s", subtask.get("id"))
+        logger.info("[Executor:RETRIEVE] subtask.goal         = %r", goal)
+        logger.info("[Executor:RETRIEVE] subtask.task_type    = %r", subtask.get("task_type"))
+        logger.info("[Executor:RETRIEVE] subtask.dependencies = %r", subtask.get("dependencies"))
+        logger.info("[Executor:RETRIEVE] subtask.bindings     = %r", subtask.get("bindings"))
+        logger.info("[Executor:RETRIEVE] subtask.verdict      = %r", subtask.get("verdict"))
+        logger.info("[Executor:RETRIEVE] subtask.top_k        = %r", subtask.get("top_k"))
+        logger.info("[Executor:RETRIEVE] resolved_bindings    = %r", resolved_bindings)
+        sr_summary = [
+            {"id": r.get("id", r.get("task_id")),
+             "verdict": r.get("verdict"),
+             "ref_features": r.get("reference_features", []),
+             "subtask_answer_preview": (r.get("subtask_answer", "") or "")[:120]}
+            for r in state.get("subtask_results", [])
+        ]
+        logger.info("[Executor:RETRIEVE] subtask_results[] = %s", sr_summary)
+        # ================================
+
         # var_binder에서 해결한 resolved_bindings 적용
         if resolved_bindings:
             updated_goal = goal
             for key, value in resolved_bindings.items():
                 # 1) key 자체가 placeholder인 경우 직접 대체 (e.g. "$task_0.feature_id": "FGR-1234")
                 if key in updated_goal:
+                    logger.info("[Executor:RETRIEVE] key-match  '%s' → '%s'", key, value)
                     updated_goal = updated_goal.replace(key, str(value))
                 # 2) key가 변수명인 경우 구성된 placeholder 형식으로 대체
                 placeholders = [
@@ -275,9 +296,12 @@ class ExecutorNode:
                 ]
                 for placeholder in placeholders:
                     if placeholder in updated_goal:
+                        logger.info("[Executor:RETRIEVE] placeholder-match '%s' → '%s'", placeholder, value)
                         updated_goal = updated_goal.replace(placeholder, str(value))
-                        logger.debug("[Executor] placeholder '%s' → '%s'", placeholder, value)
 
+            if updated_goal == goal:
+                logger.warning("[Executor:RETRIEVE] NO substitution applied "
+                               "(resolved_bindings non-empty but no placeholder in goal)")
             goal = updated_goal
 
         # fallback: auto-resolve remaining $task_N.field from state subtask_results
@@ -288,6 +312,8 @@ class ExecutorNode:
                 placeholder, task_id, field = match.group(0), match.group(1), match.group(2)
                 result = results_by_id.get(task_id)
                 if not result:
+                    logger.warning("[Executor:RETRIEVE] auto-resolve miss: %s (no result for task_id=%s)",
+                                   placeholder, task_id)
                     continue
                 value = None
                 for feat in result.get("reference_features", []):
@@ -298,10 +324,16 @@ class ExecutorNode:
                     value = result.get(field) or result.get("subtask_answer", "")
                 if value:
                     goal = goal.replace(placeholder, str(value))
-                    logger.info("[Executor] auto-resolved %s → %s", placeholder, value)
+                    logger.info("[Executor:RETRIEVE] auto-resolved %s → %s", placeholder, value)
+                else:
+                    logger.warning("[Executor:RETRIEVE] auto-resolve failed: %s (field=%s missing in result)",
+                                   placeholder, field)
             if "$task_" in goal:
-                logger.warning("[Executor] subtask_id=%s unresolved placeholders remain: %s",
+                logger.warning("[Executor:RETRIEVE] subtask_id=%s unresolved placeholders remain: %s",
                                subtask.get("id"), goal)
+
+        logger.info("[Executor:RETRIEVE] FINAL query sent to retriever = %r", goal)
+        logger.info("=" * 80)
 
         # retriever 툴 실행
         tool = tool_registry.get_tool("retriever")
