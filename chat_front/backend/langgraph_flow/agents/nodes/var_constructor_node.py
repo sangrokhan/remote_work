@@ -115,17 +115,10 @@ async def construct_binding_context(state: AgentState,
         # LLM 호출
         response = await llm.bind(temperature=0.1).ainvoke(messages)
 
+        
         # 응답 파싱 (마크다운 코드 블록 제거)
-        raw = response.content if hasattr(response, "content") else response
-        if isinstance(raw, list):
-            content = " ".join(
-                b.get("text", "") if isinstance(b, dict) else str(b) for b in raw
-            )
-        elif isinstance(raw, (str, bytes, bytearray)):
-            content = raw if raw else "{}"
-        else:
-            content = str(raw) if raw else "{}"
-        logger.debug("VarConstructorNode: raw type=%s raw_preview=%s", type(raw).__name__, str(raw)[:100])
+        content=response.content or "{}"
+        logger.debug("VarConstructorNode: %s", content[:100])
         content = content.strip()
         if content.startswith("```"):
             content = content.split("```", 2)[1]
