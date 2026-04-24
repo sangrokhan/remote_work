@@ -31,8 +31,18 @@ class VarBinderNode:
         """
         # config에서 LLM 가져오기
         llm = None
-        if config and "llm" in config:
-            llm = config["llm"]
+        if config is not None:
+            # dict 형식의 config 처리
+            if isinstance(config, dict):
+                llm = config.get("llm")
+                if llm is None and "configurable" in config:
+                    llm = config["configurable"].get("llm")
+            # RunnableConfig 객체 처리
+            elif hasattr(config, 'configurable') and config.configurable:
+                llm = config.configurable.get("llm")
+            # 다른 객체 형식 처리
+            elif hasattr(config, 'get'):
+                llm = config.get("llm")
 
         return await resolve_bindings(state, llm)
 

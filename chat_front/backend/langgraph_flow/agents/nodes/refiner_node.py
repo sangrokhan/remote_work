@@ -30,14 +30,18 @@ class RefinerNode:
             업데이트된 상태
         """
         llm = None
-        if config and "llm" in config:
-            llm = config["llm"]
-        elif config and hasattr(config,
-                                'configurable') and config.configurable and "llm" in config.configurable:
-            llm = config.configurable["llm"]
-        elif isinstance(config, dict) and "configurable" in config and "llm" in config[
-            "configurable"]:
-            llm = config["configurable"]["llm"]
+        if config is not None:
+            # dict 형식의 config 처리
+            if isinstance(config, dict):
+                llm = config.get("llm")
+                if llm is None and "configurable" in config:
+                    llm = config["configurable"].get("llm")
+            # RunnableConfig 객체 처리
+            elif hasattr(config, 'configurable') and config.configurable:
+                llm = config.configurable.get("llm")
+            # 다른 객체 형식 처리
+            elif hasattr(config, 'get'):
+                llm = config.get("llm")
 
         return await self.refine_results(state, llm)
 
