@@ -30,7 +30,7 @@ class AgenticService:
     async def process(self, req: RunWorkflowRequest) -> AsyncGenerator[dict, None]:
         llm = get_llm(req.model)
         state = create_initial_state(req.input)
-        config = RunnableConfig(configurable={"llm": llm})
+        config = RunnableConfig(configurable={"llm": llm}, recursion_limit=50)
 
         logger.debug("AgenticService.process: model=%s input_len=%d", req.model, len(req.input))
 
