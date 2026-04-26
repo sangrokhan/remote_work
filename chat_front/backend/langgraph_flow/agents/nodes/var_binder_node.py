@@ -303,38 +303,61 @@ def _resolve_bindings_fallback(bindings: dict, subtask_results: list) -> dict:
                         latest_by_id[rid] = r
 
                 # envelope payload 평면화 후 lookup
+                # 여러 reference_features 엔트리에서 field_name 값 모두 수집 (순서 보존 dedupe).
+                # 단수면 기존처럼 단일 문자열, 복수면 공백 join — 다운스트림 substitution과 호환.
                 matched = latest_by_id.get(subtask_id_int)
                 if matched is not None:
                     payload = _result_payload(matched)
                     ref_features = payload["reference_features"]
-                    if ref_features and len(ref_features) > 0:
+                    collected: List[str] = []
+                    seen_vals: set = set()
+                    if ref_features:
                         for ref in ref_features:
                             if field_name in ref:
-                                found_value = ref[field_name]
-                                print(f"=== DEBUG: reference_features에서 찾음: {found_value} ===")
-                                break
+                                val = ref[field_name]
+                                if val is None:
+                                    continue
+                                val_str = str(val).strip()
+                                if not val_str or val_str in seen_vals:
+                                    continue
+                                seen_vals.add(val_str)
+                                collected.append(val_str)
+
+                    if collected:
+                        found_value = collected[0] if len(collected) == 1 else " ".join(collected)
+                        print(f"=== DEBUG: reference_features에서 찾음 (n={len(collected)}): {found_value} ===")
 
                     # reference_features에 없으면 subtask_answer에서 추출 시도
                     if found_value is None:
                         subtask_answer = payload["subtask_answer"]
                         refined_text = payload["refined_text"]
+                        haystack = subtask_answer + refined_text
 
-                        # feature_id 패턴 찾기 (예: FGR-BC0311)
+                        # feature_id 패턴 찾기 (예: FGR-BC0311) — 모든 매치 dedupe 후 join
                         if field_name == "feature_id":
-                            feature_id_match = re.search(r'FGR-[A-Z]{2}\d{4}',
-                                                         subtask_answer + refined_text)
-                            if feature_id_match:
-                                found_value = feature_id_match.group(0)
-                                print(f"=== DEBUG: 텍스트에서 feature_id 추출: {found_value} ===")
+                            matches = re.findall(r'FGR-[A-Z]{2}\d{4}', haystack)
+                            unique_ids: List[str] = []
+                            seen_ids: set = set()
+                            for m in matches:
+                                if m not in seen_ids:
+                                    seen_ids.add(m)
+                                    unique_ids.append(m)
+                            if unique_ids:
+                                found_value = unique_ids[0] if len(unique_ids) == 1 else " ".join(unique_ids)
+                                print(f"=== DEBUG: 텍스트에서 feature_id 추출 (n={len(unique_ids)}): {found_value} ===")
 
                         # feature_name 패턴 찾기
                         elif field_name == "feature_name":
-                            lines = (subtask_answer + refined_text).split('\n')
-                            for line in lines:
+                            names: List[str] = []
+                            seen_names: set = set()
+                            for line in haystack.split('\n'):
                                 if 'feature' in line.lower() and 'name' in line.lower():
-                                    found_value = line.split(':')[
-                                        -1].strip() if ':' in line else line.strip()
-                                    break
+                                    name = line.split(':')[-1].strip() if ':' in line else line.strip()
+                                    if name and name not in seen_names:
+                                        seen_names.add(name)
+                                        names.append(name)
+                            if names:
+                                found_value = names[0] if len(names) == 1 else " ".join(names)
 
                 if found_value:
                     resolved[binding_key] = found_value

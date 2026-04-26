@@ -259,6 +259,16 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | 실제 LLM 호출 (노드 구현) | ⬜ WIP |
 | BGE3 임베딩 기반 retriever | ⬜ WIP |
 | Subtask 바인딩 placeholder 통일 (`$task_N` → `$subtask_N`) | ✅ 완료 (2026-04-26) |
+| var_binder fallback 다중 feature 보존 | ✅ 완료 (2026-04-26) |
+
+### 9.2 var_binder fallback 다중 feature 보존 (2026-04-26)
+
+기존 fallback이 `reference_features` 리스트에서 첫 매치만 채택해 N개 feature 중 1개만 다음 subtask로 전달되는 버그 수정.
+
+- **증상**: 5개 문서에서 5개 feature_id 추출했음에도 binding resolution 후 단일 ID만 retriever 쿼리에 임베딩됨
+- **수정**: `_resolve_bindings_fallback` (`var_binder_node.py`)에서 `field_name` 값들을 모든 `reference_features` 엔트리에서 수집·dedupe(순서 보존) 후 공백 join으로 단일 문자열 반환
+- **regex fallback 동기화**: `subtask_answer` + `refined_text`에서 `feature_id` 추출도 `re.search` → `re.findall` + dedupe로 변경
+- **다운스트림 영향 없음**: 기존 substitution 코드(`goal.replace(placeholder, str(value))`)와 호환 — 단일 값일 때는 기존 단일 ID, 다중 값일 때는 `"FGR-A FGR-B"` 공백 구분 문자열로 retriever에 전달됨
 
 ### 9.1 Subtask placeholder 통일 (2026-04-26)
 
