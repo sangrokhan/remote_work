@@ -211,8 +211,9 @@ class PlannerNode:
             response = await llm.bind(temperature=0.2).ainvoke(messages)
             print("=== DEBUG: Planner LLM 호출 완료 ===")
 
-            # 응답 파싱
+            # 응답 파싱 + 검증/정규화 (id 강제, dep cleaning, binding-derived deps, DAG 보장)
             subtasks = self._parse_planner_response(response.content)
+            subtasks = self._validate_subtasks(subtasks)
             print(f"=== DEBUG: 생성된 Subtasks: {subtasks} ===")
 
             # 상태 업데이트 - 원본 agentic rag 방식: subtasks에 저장
@@ -326,6 +327,67 @@ class PlannerNode:
             }]
             print(f"=== DEBUG: 파싱된 subtasks (텍스트): {len(result)} ===")
             return result
+
+    def _validate_subtasks(self, subtasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Subtask 정규화 + 검증 패스.
+        - id를 위치(0-base 연속)로 강제 재할당, LLM 원본 id는 remap에 보존
+        - dependencies: int 강제, unknown / self / forward (>= self.id) 엣지 제거
+        - bindings의 $task_N / $subtask_N 참조에서 누락된 dep 자동 보강
+        - "dep < self.id" 규칙으로 DAG 자동 보장 (순환 감지 불필요)
+        """
+        if not subtasks:
+            return subtasks
+
+        # 1. id를 위치로 강제. 원본 id → 새 id 매핑
+        id_remap: Dict[Any, int] = {}
+        for i, s in enumerate(subtasks):
+            old_id = s.get("id")
+            if old_id is not None and old_id not in id_remap:
+                id_remap[old_id] = i
+            s["id"] = i
+
+        valid_ids = set(range(len(subtasks)))
+        binding_pat = re.compile(r"\$(?:task|subtask)_(\d+)")
+
+        for i, s in enumerate(subtasks):
+            # 2. explicit dependencies cleaning
+            deps_raw = s.get("dependencies", []) or []
+            cleaned: List[int] = []
+            for d in deps_raw:
+                try:
+                    d_int = int(d)
+                except (TypeError, ValueError):
+                    print(f"=== WARN: subtask {i} dep '{d}' not int — dropped ===")
+                    continue
+                d_new = id_remap.get(d_int, d_int)
+                if d_new not in valid_ids:
+                    print(f"=== WARN: subtask {i} dep {d_int} unknown — dropped ===")
+                    continue
+                if d_new == i:
+                    print(f"=== WARN: subtask {i} self-ref dep — dropped ===")
+                    continue
+                if d_new > i:
+                    print(f"=== WARN: subtask {i} forward dep {d_new} — dropped ===")
+                    continue
+                if d_new not in cleaned:
+                    cleaned.append(d_new)
+
+            # 3. bindings에서 dep 보강
+            bindings = s.get("bindings", {}) or {}
+            for ref in bindings.values():
+                if not isinstance(ref, str):
+                    continue
+                for m in binding_pat.finditer(ref):
+                    d_int = int(m.group(1))
+                    d_new = id_remap.get(d_int, d_int)
+                    if d_new in valid_ids and d_new < i and d_new not in cleaned:
+                        cleaned.append(d_new)
+                        print(f"=== INFO: subtask {i} dep {d_new} inferred from binding ===")
+
+            s["dependencies"] = cleaned
+
+        return subtasks
 
 
 # 노드 인스턴스 생성
