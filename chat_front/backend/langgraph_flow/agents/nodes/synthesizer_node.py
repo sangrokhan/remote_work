@@ -93,7 +93,6 @@ class SynthesizerNode:
         subtask_results = state.get("subtask_results", [])
         retriever_history = state.get("retriever_history", [])
         resolved_bindings = state.get("resolved_bindings", {})
-        execution_history = state.get("execution_history", {})
         retriever_outputs_raw = state.get("retriever_outputs", [])
 
         logger.info("=" * 60)
@@ -121,12 +120,13 @@ class SynthesizerNode:
         for i, h in enumerate(retriever_history):
             logger.info("    [%d] subtask_id=%s query=%s", i, h.get("subtask_id"), str(h.get("query", ""))[:80])
         logger.info("  resolved_bindings: %s", list(resolved_bindings.keys()))
-        total_exec = len(execution_history)
-        ok_exec = sum(
-            1 for execs in execution_history.values()
-            for e in execs if e.get("status") == "success"
+        verdict_ok = sum(1 for s in subtasks if s.get("verdict") is True)
+        verdict_exceeded = sum(1 for s in subtasks if s.get("verdict") == "exceeded")
+        verdict_pending = len(subtasks) - verdict_ok - verdict_exceeded
+        logger.info(
+            "  subtask verdict: %d total, %d ok, %d exceeded, %d pending",
+            len(subtasks), verdict_ok, verdict_exceeded, verdict_pending,
         )
-        logger.info("  execution_history: %d tasks, %d successful", total_exec, ok_exec)
         logger.info("=" * 60)
         # ─────────────────────────────────────────────────────────────────────
 
@@ -183,17 +183,15 @@ class SynthesizerNode:
             for msg in history[-3:]:
                 history_text += f"{msg['role']}: {msg['content']}\n"
 
-        # 실행 히스토리 요약
+        # 실행 히스토리 요약 (verdict 기준 — retrieve 성공 ≠ 답 성공)
         execution_summary = ""
-        execution_history = state.get("execution_history", {})
-        if execution_history:
-            total_tasks = len(execution_history)
-            successful_tasks = sum(
-                1 for executions in execution_history.values()
-                for execution in executions
-                if execution.get("status") == "success"
+        if subtasks:
+            ok_tasks = sum(1 for s in subtasks if s.get("verdict") is True)
+            exceeded_tasks = sum(1 for s in subtasks if s.get("verdict") == "exceeded")
+            execution_summary = (
+                f"\n=== 실행 히스토리 요약 ===\n"
+                f"총 작업 수: {len(subtasks)}, 성공: {ok_tasks}, 재시도 초과: {exceeded_tasks}\n"
             )
-            execution_summary = f"\n=== 실행 히스토리 요약 ===\n총 작업 수: {total_tasks}, 성공한 작업 수: {successful_tasks}\n"
 
         user_query = (
             f"사용자 질문: {state.get('user_query', '')}\n\n"

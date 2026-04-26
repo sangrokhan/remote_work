@@ -65,11 +65,10 @@ async def resolve_bindings(state: AgentState,
     # subtasks에서 실행 가능한 subtask 찾기
     subtasks = state.get("subtasks", [])
     subtask_results = state.get("subtask_results", [])
-    execution_history = state.get("execution_history", {})
     prev_resolved = state.get("resolved_bindings") or {}
 
     # 실행 가능한 subtask 찾기 (verdict가 False인 것 중 의존성이 해결된 것)
-    executable_subtask = _get_next_executable_subtask(subtasks, subtask_results, execution_history)
+    executable_subtask = _get_next_executable_subtask(subtasks, subtask_results)
 
     if not executable_subtask:
         logger.info("[VarBinder] no executable subtask → synthesizer")
@@ -144,16 +143,14 @@ async def resolve_bindings(state: AgentState,
     )
 
 
-def _get_next_executable_subtask(subtasks: List[Dict], subtask_results: List[Dict],
-                                 execution_history: Dict) -> Optional[Dict]:
+def _get_next_executable_subtask(subtasks: List[Dict], subtask_results: List[Dict]) -> Optional[Dict]:
     """
     실행 가능한 다음 subtask를 찾는 함수
-    
+
     Args:
         subtasks: 전체 subtask 리스트
-        subtask_results: 완료된 subtask 결과들
-        execution_history: 실행 이력
-        
+        subtask_results: 완료된 subtask 결과들 (verdict True/exceeded 기준)
+
     Returns:
         실행 가능한 subtask 또는 None
     """
