@@ -27,10 +27,13 @@ def route_after_planner(state: AgentState) -> str:
 def route_after_executor(state: AgentState) -> str:
     retriever_history = state.get("retriever_history", [])
     current_executing_id = state.get("current_executing_subtask_id")
-    has_result = any(h.get("subtask_id") == current_executing_id for h in retriever_history)
-    route = "refiner" if has_result else "synthesizer"
-    logger.debug("[ROUTE] executor → %s | current_subtask=%s has_result=%s",
-                 route, current_executing_id, has_result)
+    has_success = any(
+        h.get("subtask_id") == current_executing_id and h.get("status") == "success"
+        for h in retriever_history
+    )
+    route = "refiner" if has_success else "synthesizer"
+    logger.debug("[ROUTE] executor → %s | current_subtask=%s has_success=%s",
+                 route, current_executing_id, has_success)
     return route
 
 
