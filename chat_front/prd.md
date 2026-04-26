@@ -260,6 +260,15 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | BGE3 임베딩 기반 retriever | ⬜ WIP |
 | Subtask 바인딩 placeholder 통일 (`$task_N` → `$subtask_N`) | ✅ 완료 (2026-04-26) |
 | var_binder fallback 다중 feature 보존 | ✅ 완료 (2026-04-26) |
+| executor auto-resolve 다중 feature 보존 | ✅ 완료 (2026-04-26) |
+
+### 9.3 executor auto-resolve 다중 feature 보존 (2026-04-26)
+
+`_execute_retrieve_subtask` fallback이 `$subtask_N.field` placeholder 치환 시 첫 매치만 사용하여 var_binder가 못 푼 placeholder의 다중 feature가 단수로 collapse되는 버그 수정.
+
+- **증상**: var_binder 단계에서 해결 못한 placeholder가 executor로 넘어와 auto-resolve될 때 5개 feature 중 1개만 retriever 쿼리에 임베딩됨
+- **수정**: `executor_node.py:343-355`에서 `for feat in ref_features` 첫-매치-break 루프를 dedupe collect-all 후 공백 join으로 교체 (var_binder fallback과 동일 정책)
+- **다운스트림 영향 없음**: 기존 `goal.replace(placeholder, str(value))` 와 호환 — 다중 값은 `"FGR-A FGR-B"` 공백 구분 문자열로 substitute
 
 ### 9.2 var_binder fallback 다중 feature 보존 (2026-04-26)
 

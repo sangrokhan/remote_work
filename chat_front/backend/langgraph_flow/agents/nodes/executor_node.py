@@ -341,12 +341,23 @@ class ExecutorNode:
                     continue
                 payload = result.get("result") or {}
                 ref_features = payload.get("reference_features") or result.get("reference_features", [])
-                value = None
+                # 모든 reference_features 엔트리에서 field 값 수집 (순서 보존 dedupe).
+                # 단수면 단일 문자열, 복수면 공백 join — var_binder fallback과 동일 정책.
+                collected: List[str] = []
+                seen_vals: set = set()
                 for feat in ref_features:
                     if field in feat:
-                        value = feat[field]
-                        break
-                if value is None:
+                        raw = feat[field]
+                        if raw is None:
+                            continue
+                        v = str(raw).strip()
+                        if not v or v in seen_vals:
+                            continue
+                        seen_vals.add(v)
+                        collected.append(v)
+                if collected:
+                    value = collected[0] if len(collected) == 1 else " ".join(collected)
+                else:
                     value = (
                         payload.get(field)
                         or result.get(field)
