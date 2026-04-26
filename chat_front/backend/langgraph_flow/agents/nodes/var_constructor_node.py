@@ -115,7 +115,6 @@ async def construct_binding_context(state: AgentState,
         # LLM 호출
         response = await llm.bind(temperature=0.1).ainvoke(messages)
 
-        
         # 응답 파싱 (마크다운 코드 블록 제거)
         content=response.content or "{}"
         logger.debug("VarConstructorNode: %s", content[:100])
