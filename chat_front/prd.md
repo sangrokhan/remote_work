@@ -275,6 +275,7 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 - **user_content 확장**: 위 3개 블록을 "현재 Subtask" 앞에 주입, "이전 결과·누적 feature를 고려해 중복은 제외하고 신규 feature는 누락 없이 포함" 지시 추가
 - **데드코드 제거**: 미사용 `subtask_context` 지역변수 삭제
 - **토큰 캡**: subtask_answer 300자, goal preview 80자 제한으로 토큰 폭증 방지
+- **공유 유틸 추출 (2026-04-26 리팩터)**: `agents/_subtask_utils.py` 신설 — `result_payload` / `pick_latest_successful` / `truncate` / `format_features`. refiner·var_binder 양쪽이 envelope 평면화·최신 attempt 선택·feature 포맷·문자열 자르기를 공유. 매직넘버는 `GOAL_PREVIEW_MAX`/`ANSWER_PREVIEW_MAX` 모듈 상수로 승격, dead `lambda x:(x is None,x)` 정렬·`.rstrip(": ")` 핵 제거.
 
 ### 9.3 executor auto-resolve 다중 feature 보존 (2026-04-26)
 

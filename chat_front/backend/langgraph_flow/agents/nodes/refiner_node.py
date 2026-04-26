@@ -6,7 +6,16 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models import BaseLanguageModel
 from langgraph_flow.agents.state import AgentState, update_state
+from langgraph_flow.agents._subtask_utils import (
+    format_features,
+    pick_latest_successful,
+    result_payload,
+    truncate,
+)
 from langgraph_flow.prompts.refiner import REFINER_PROMPT_TEMPLATE
+
+GOAL_PREVIEW_MAX = 80
+ANSWER_PREVIEW_MAX = 300
 
 
 class RefinerNode:
@@ -540,12 +549,7 @@ reference_features 필드에 검색 결과에서 사용된 모든 feature의 fea
                 "verdict": False
             }
 
-    def _format_plan_overview(self, subtasks: List[Dict], current_id: Any,
-                              goal_max: int = 80) -> str:
-        """
-        전체 plan을 간략 표 형태 텍스트로 포맷.
-        각 라인: [id] (current/done/pending) goal_preview
-        """
+    def _format_plan_overview(self, subtasks: List[Dict], current_id: Any) -> str:
         if not subtasks:
             return "(plan 없음)"
         lines = []
@@ -560,64 +564,31 @@ reference_features 필드에 검색 결과에서 사용된 모든 feature의 fea
                 status = "exceeded"
             else:
                 status = "pending"
-            goal = (s.get("goal") or s.get("description") or "").strip()
-            if len(goal) > goal_max:
-                goal = goal[:goal_max] + "..."
+            goal = truncate((s.get("goal") or s.get("description") or "").strip(), GOAL_PREVIEW_MAX)
             lines.append(f"  [{sid}] ({status}) {goal}")
         return "\n".join(lines)
 
-    def _format_other_subtask_results(self, state: AgentState, current_id: Any,
-                                      answer_max: int = 300) -> str:
-        """
-        현재 subtask 외 verdict=True 결과들의 (id별 최신 attempt) 요약.
-        - subtask_answer 발췌 (answer_max 자르기)
-        - reference_features 압축 표기
-        """
-        subtask_results = state.get("subtask_results", [])
-        latest_per_id: Dict[Any, Dict] = {}
-        for r in subtask_results:
-            if r.get("verdict") is not True:
-                continue
-            sid = r.get("id")
-            if sid is None or sid == current_id:
-                continue
-            if sid not in latest_per_id or r.get("attempt", 0) > latest_per_id[sid].get("attempt", 0):
-                latest_per_id[sid] = r
+    def _format_other_subtask_results(self, state: AgentState, current_id: Any) -> str:
+        latest_per_id = pick_latest_successful(
+            state.get("subtask_results", []), exclude_id=current_id
+        )
         if not latest_per_id:
             return "(이전 완료 subtask 없음)"
         lines = []
-        for sid in sorted(latest_per_id.keys(), key=lambda x: (x is None, x)):
-            r = latest_per_id[sid]
-            payload = r.get("result") or {}
-            answer = (
-                payload.get("subtask_answer")
-                or payload.get("refined_text")
-                or r.get("subtask_answer", "")
-            ).strip()
-            if len(answer) > answer_max:
-                answer = answer[:answer_max] + "..."
-            ref_features = payload.get("reference_features") or r.get("reference_features", [])
-            ref_compact = ", ".join(
-                f"{f.get('feature_id', '?')}:{f.get('feature_name', '')}".strip(":")
-                for f in ref_features if isinstance(f, dict)
-            ) or "(없음)"
+        for sid in sorted(latest_per_id.keys()):
+            payload = result_payload(latest_per_id[sid])
+            answer = truncate(
+                (payload["subtask_answer"] or payload["refined_text"]).strip(),
+                ANSWER_PREVIEW_MAX,
+            )
+            ref_compact = format_features(payload["reference_features"], sep=", ")
             lines.append(f"[Subtask {sid}]")
             lines.append(f"  answer: {answer or '(빈 답변)'}")
             lines.append(f"  features: {ref_compact}")
         return "\n".join(lines)
 
     def _format_cumulative_features(self, features: List[Dict]) -> str:
-        """state-level 누적 reference_features를 한 줄씩 표기."""
-        if not features:
-            return "(누적 feature 없음)"
-        lines = []
-        for f in features:
-            if not isinstance(f, dict):
-                continue
-            fid = f.get("feature_id", "?")
-            fname = f.get("feature_name", "")
-            lines.append(f"  - {fid}: {fname}".rstrip(": "))
-        return "\n".join(lines) if lines else "(누적 feature 없음)"
+        return format_features(features, line_prefix="  - ", empty="(누적 feature 없음)")
 
     def _format_results_for_refiner(self, results: List[Dict]) -> str:
         """

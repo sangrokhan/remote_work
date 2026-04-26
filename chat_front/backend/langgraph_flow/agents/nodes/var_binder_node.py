@@ -9,23 +9,13 @@ from langchain_core.language_models import BaseLanguageModel
 from langchain_core.runnables import RunnableConfig
 
 from langgraph_flow.agents.state import AgentState, update_state
+from langgraph_flow.agents._subtask_utils import (
+    pick_latest_successful,
+    result_payload as _result_payload,
+)
 from langgraph_flow.prompts.var_binder import BINDER_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
-
-
-def _result_payload(entry: Dict) -> Dict:
-    """subtask_results entry에서 결과 payload 추출.
-
-    H4 fix: refiner는 envelope `{id, attempt, verdict, result: {...}}` 형태로 push.
-    구 형태(평면 키)도 backward-compat 위해 fallback.
-    """
-    payload = entry.get("result") or {}
-    return {
-        "subtask_answer": payload.get("subtask_answer") or entry.get("subtask_answer", ""),
-        "refined_text": payload.get("refined_text") or entry.get("refined_text", ""),
-        "reference_features": payload.get("reference_features") or entry.get("reference_features", []),
-    }
 
 
 class VarBinderNode:
@@ -224,23 +214,9 @@ async def _resolve_bindings_with_llm(bindings: dict, subtask_results: list,
     if not bindings:
         return {}
 
-    # subtask_results를 dict 형태로 변환 (subtask_id → result payload)
-    # verdict=True인 entry 중 attempt가 가장 큰 것만 사용 (최신 성공 결과)
-    # envelope 봉투 평면화: LLM 프롬프트엔 결과 payload만 노출 (id/attempt/verdict 제외)
-    seen_attempt: Dict[str, int] = {}
-    subtask_results_dict: Dict[str, Dict] = {}
-    for result in subtask_results:
-        if result.get("verdict") is not True:
-            continue
-        subtask_id = result.get("id")
-        if subtask_id is None:
-            continue
-        key = str(subtask_id)
-        attempt = result.get("attempt", 0)
-        if key in seen_attempt and seen_attempt[key] >= attempt:
-            continue
-        seen_attempt[key] = attempt
-        subtask_results_dict[key] = _result_payload(result)
+    # envelope 평면화: LLM 프롬프트엔 결과 payload만 노출 (id/attempt/verdict 제외)
+    latest = pick_latest_successful(subtask_results, key_as_str=True)
+    subtask_results_dict: Dict[str, Dict] = {k: _result_payload(v) for k, v in latest.items()}
 
     resolution_messages = [
         SystemMessage(content=BINDER_SYSTEM_PROMPT),
