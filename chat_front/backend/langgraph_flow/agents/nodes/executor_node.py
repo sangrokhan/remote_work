@@ -209,6 +209,9 @@ class ExecutorNode:
         """
         executable = []
 
+        # ID 기반 lookup (var_binder/routing_logic과 동일 의미). 위치 인덱스 사용 금지.
+        subtasks_by_id = {s.get("id"): s for s in subtasks if s.get("id") is not None}
+
         for i, subtask in enumerate(subtasks):
             task_id = subtask.get("id", i)
 
@@ -218,20 +221,19 @@ class ExecutorNode:
             if verdict is True or verdict == "exceeded":
                 continue
 
-            # 의존관계 확인
+            # 의존관계 확인 (ID 매칭)
             dependencies = subtask.get("dependencies", [])
             if not dependencies:
-                # 의존이 없는 subtask는 즉시 실행 가능
                 executable.append(subtask)
                 continue
 
-            # 모든 의존 subtask가 완료되었는지 확인
             all_dependencies_met = True
-            for dep_index in dependencies:
-                if dep_index >= len(subtasks):
+            for dep_id in dependencies:
+                dep_subtask = subtasks_by_id.get(dep_id)
+                if dep_subtask is None:
                     all_dependencies_met = False
                     break
-                dep_verdict = subtasks[dep_index].get("verdict", False)
+                dep_verdict = dep_subtask.get("verdict", False)
                 if not (dep_verdict is True or dep_verdict == "exceeded"):
                     all_dependencies_met = False
                     break
