@@ -52,13 +52,13 @@ def route_after_refiner(state: AgentState) -> str:
         if s.get("verdict") is True or s.get("verdict") == "exceeded"
     }
 
-    for i, subtask in enumerate(subtasks):
-        task_id = subtask.get("id", i)
-        if task_id in completed:
+    for subtask in subtasks:
+        subtask_id = subtask.get("id")
+        if subtask_id in completed:
             continue
         deps = subtask.get("dependencies", [])
         if not deps or all(d in completed for d in deps):
-            logger.debug("[ROUTE] refiner → var_binder | next_subtask=%s step=%d", task_id, current_step)
+            logger.debug("[ROUTE] refiner → var_binder | next_subtask=%s step=%d", subtask_id, current_step)
             return "var_binder"
 
     logger.debug("[ROUTE] refiner → synthesizer | all subtasks completed=%s", completed)

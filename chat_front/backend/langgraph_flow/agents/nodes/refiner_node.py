@@ -75,23 +75,23 @@ class RefinerNode:
         retriever_history = state.get("retriever_history", [])
 
         # 현재 실행 중인 subtask ID 사용 (executor에서 설정)
-        latest_task_id = state.get("current_executing_subtask_id")
-        print(f"=== DEBUG: Refiner - Executor에서 전달받은 Subtask ID: {latest_task_id} ===")
+        latest_subtask_id = state.get("current_executing_subtask_id")
+        print(f"=== DEBUG: Refiner - Executor에서 전달받은 Subtask ID: {latest_subtask_id} ===")
 
         # 현재 subtask의 결과가 retriever_history에 있는지 확인
         has_result = any(
-            h.get("subtask_id") == latest_task_id
+            h.get("subtask_id") == latest_subtask_id
             for h in retriever_history
         )
 
         if not has_result:
-            print(f"=== DEBUG: Refiner - Subtask {latest_task_id}의 검색 결과 없음 - synthesizer로 이동 ===")
+            print(f"=== DEBUG: Refiner - Subtask {latest_subtask_id}의 검색 결과 없음 - synthesizer로 이동 ===")
             return update_state(state, next="synthesizer")
 
         # retriever_history에서 현재 subtask의 결과만 추출
         retriever_outputs = [
             h for h in retriever_history
-            if h.get("subtask_id") == latest_task_id
+            if h.get("subtask_id") == latest_subtask_id
         ]
         print(f"=== DEBUG: Refiner - retriever_history에서 추출한 결과: {len(retriever_outputs)}개 ===")
 
@@ -128,14 +128,14 @@ class RefinerNode:
             updated_subtasks = []
             for subtask in subtasks:
                 subtask_copy = subtask.copy()
-                if subtask_copy.get("id") == latest_task_id:
+                if subtask_copy.get("id") == latest_subtask_id:
                     subtask_copy["verdict"] = verdict
                     subtask_copy["subtask_answer"] = subtask_answer
                     subtask_copy["refined_text"] = refined_text
                     subtask_copy["reference_features"] = reference_features_found
-                    print(f"=== DEBUG: Subtask {latest_task_id} verdict 설정: {verdict} ===")
+                    print(f"=== DEBUG: Subtask {latest_subtask_id} verdict 설정: {verdict} ===")
                     print(
-                        f"=== DEBUG: Subtask {latest_task_id} reference_features: {reference_features_found} ===")
+                        f"=== DEBUG: Subtask {latest_subtask_id} reference_features: {reference_features_found} ===")
                 updated_subtasks.append(subtask_copy)
 
             # ⭐ current_step 증가 (원본 코드의 iteration_count += 1과 동일)
@@ -154,24 +154,24 @@ class RefinerNode:
             # 재시도 로직 - 원본 agent_service.py와 동일한 로직
             if not verdict:
                 # 재시도 횟수 증가
-                current_retries = retry_counts.get(latest_task_id, 0)
-                retry_counts[latest_task_id] = current_retries + 1
-                print(f"=== DEBUG: Subtask {latest_task_id} 재시도 {current_retries + 1}/3 ===")
+                current_retries = retry_counts.get(latest_subtask_id, 0)
+                retry_counts[latest_subtask_id] = current_retries + 1
+                print(f"=== DEBUG: Subtask {latest_subtask_id} 재시도 {current_retries + 1}/3 ===")
 
                 # 최대 재시도 초과 시 exceeded로 설정 (원본과 동일)
                 if current_retries + 1 >= 3:
                     for subtask in updated_subtasks:
-                        if subtask.get("id") == latest_task_id:
+                        if subtask.get("id") == latest_subtask_id:
                             subtask["verdict"] = "exceeded"
                             subtask["subtask_answer"] = "최대 재시도 횟수를 초과하여 요청을 중단합니다."
                             subtask["retry_reason"] = "최대 재시도 횟수(3회) 초과"
                             print(
-                                f"=== DEBUG: Subtask {latest_task_id} 최대 재시도 초과 - exceeded 설정 ===")
+                                f"=== DEBUG: Subtask {latest_subtask_id} 최대 재시도 초과 - exceeded 설정 ===")
 
                     # exceeded된 subtask도 subtask_results에 추가 (원본과 동일)
                     exceeded_subtask = None
                     for subtask in updated_subtasks:
-                        if subtask.get("id") == latest_task_id:
+                        if subtask.get("id") == latest_subtask_id:
                             exceeded_subtask = subtask.copy()
                             break
                     if exceeded_subtask:
@@ -182,14 +182,14 @@ class RefinerNode:
             if verdict:
                 completed_subtask = None
                 for subtask in updated_subtasks:
-                    if subtask.get("id") == latest_task_id and subtask.get("verdict"):
+                    if subtask.get("id") == latest_subtask_id and subtask.get("verdict"):
                         completed_subtask = subtask.copy()
                         break
 
                 if completed_subtask:
                     # subtask_results에 완료된 subtask 추가 (binding resolution에서 사용)
                     update_kwargs["subtask_results"] = [completed_subtask]
-                    print(f"=== DEBUG: subtask_results에 추가됨: Task {latest_task_id} ===")
+                    print(f"=== DEBUG: subtask_results에 추가됨: Task {latest_subtask_id} ===")
                     print(
                         f"=== DEBUG: subtask_results 내용: {completed_subtask.get('reference_features', [])} ===")
 
@@ -408,11 +408,11 @@ class RefinerNode:
             정제된 결과 dict (refined_text, subtask_answer, reference_features, verdict, retry_reason)
         """
         # 현재 subtask 정보 가져오기
-        latest_task_id = state.get("current_executing_subtask_id", 0)
+        latest_subtask_id = state.get("current_executing_subtask_id", 0)
         subtasks = state.get("subtasks", [])
         current_subtask = None
         for subtask in subtasks:
-            if subtask.get("id") == latest_task_id:
+            if subtask.get("id") == latest_subtask_id:
                 current_subtask = subtask
                 break
 
@@ -420,7 +420,7 @@ class RefinerNode:
         retriever_history = state.get("retriever_history", [])
         retriever_outputs = [
             h for h in retriever_history
-            if h.get("subtask_id") == latest_task_id
+            if h.get("subtask_id") == latest_subtask_id
         ]
         raw_extracted_features = self._extract_features_from_raw_results(retriever_outputs)
         print(f"=== DEBUG: 원본 데이터에서 추출된 features: {raw_extracted_features} ===")

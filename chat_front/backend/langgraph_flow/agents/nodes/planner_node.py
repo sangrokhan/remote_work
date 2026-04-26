@@ -268,7 +268,7 @@ class PlannerNode:
                 normalized_subtasks = []
                 for i, subtask in enumerate(subtasks):
                     normalized_subtask = {
-                        "id": subtask.get("subtask_id", subtask.get("id", i)),
+                        "id": subtask.get("id", i),
                         "goal": subtask.get("goal", subtask.get("description", str(subtask))),
                         "task_type": subtask.get("task_type", "THINK"),
                         "verdict": subtask.get("verdict", False),
@@ -284,7 +284,7 @@ class PlannerNode:
                 for i, subtask in enumerate(response_dict):
                     if isinstance(subtask, dict):
                         normalized_subtask = {
-                            "id": subtask.get("subtask_id", subtask.get("id", i)),
+                            "id": subtask.get("id", i),
                             "goal": subtask.get("goal", subtask.get("description", str(subtask))),
                             "task_type": subtask.get("task_type", "THINK"),
                             "verdict": subtask.get("verdict", False),
@@ -333,7 +333,7 @@ class PlannerNode:
         Subtask 정규화 + 검증 패스.
         - id를 위치(0-base 연속)로 강제 재할당, LLM 원본 id는 remap에 보존
         - dependencies: int 강제, unknown / self / forward (>= self.id) 엣지 제거
-        - bindings의 $task_N / $subtask_N 참조에서 누락된 dep 자동 보강
+        - bindings의 $subtask_N 참조에서 누락된 dep 자동 보강
         - "dep < self.id" 규칙으로 DAG 자동 보장 (순환 감지 불필요)
         """
         if not subtasks:
@@ -348,7 +348,7 @@ class PlannerNode:
             s["id"] = i
 
         valid_ids = set(range(len(subtasks)))
-        binding_pat = re.compile(r"\$(?:task|subtask)_(\d+)")
+        binding_pat = re.compile(r"\$subtask_(\d+)")
 
         for i, s in enumerate(subtasks):
             # 2. explicit dependencies cleaning

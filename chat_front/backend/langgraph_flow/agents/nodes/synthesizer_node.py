@@ -105,7 +105,7 @@ class SynthesizerNode:
         logger.info("  subtask_results: %d items", len(subtask_results))
         for i, r in enumerate(subtask_results):
             status = r.get("status", "?")
-            sid = r.get("subtask_id", r.get("id", "?"))
+            sid = r.get("id", "?")
             content_preview = str(r.get("content", r.get("result", "")))[:120]
             logger.info("    [%d] subtask_id=%s status=%s content_preview=%s", i, sid, status, content_preview)
         logger.info("  retriever_outputs: %d items", len(retriever_outputs_raw))
@@ -136,10 +136,10 @@ class SynthesizerNode:
         if subtask_results:
             retriever_outputs_text += "=== 정제된 최종 결과 ===\n"
             for result in subtask_results:
-                task_id = result.get("id", result.get("subtask_id", "?"))
+                subtask_id = result.get("id", "?")
                 answer = result.get("subtask_answer") or result.get("refined_text", "")
                 if answer:
-                    retriever_outputs_text += f"[Subtask {task_id}]\n{answer}\n\n"
+                    retriever_outputs_text += f"[Subtask {subtask_id}]\n{answer}\n\n"
 
         # 2순위: subtasks에서 verdict=True인 항목의 subtask_answer (subtask_results에 없을 경우)
         if not retriever_outputs_text:

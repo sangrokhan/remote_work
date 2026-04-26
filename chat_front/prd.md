@@ -258,3 +258,14 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | 엔드-투-엔드 배포 검증 (Docker, SSE, 오류 처리) | ✅ 완료 (Task 6, 2026-04-22) |
 | 실제 LLM 호출 (노드 구현) | ⬜ WIP |
 | BGE3 임베딩 기반 retriever | ⬜ WIP |
+| Subtask 바인딩 placeholder 통일 (`$task_N` → `$subtask_N`) | ✅ 완료 (2026-04-26) |
+
+### 9.1 Subtask placeholder 통일 (2026-04-26)
+
+LLM 바인딩 참조 문법을 `$task_N` / `$subtask_N` 혼용에서 `$subtask_N` 단일 형식으로 통합. 상태 키 `subtasks`/`subtask_results`/`subtask_id`와 의미 정합성 확보.
+
+- **포맷**: `$subtask_{id}.{field}` 또는 `${subtask_{id}.{field}}` (id는 0-base 정수, validator가 강제)
+- **파서 수정**: hardcoded `_0` 제거 → 정규식 `\$subtask_(\d+)\.(\w+)` 적용 → 임의 N 매칭
+- **프롬프트 동기화**: `prompts/planner.py`, `prompts/var_binder.py` — 예시를 `$subtask_0.field`로 변경
+- **부수 정리**: dead key fallback `r.get("task_id")` 제거 (refiner는 `id`만 기록), Python 변수 `task_id` → `subtask_id` 일관화 (executor / var_binder / synthesizer / refiner / routing_logic)
+- **planner 정규화**: `subtask.get("subtask_id", ...)` 듀얼 리드 제거 → `subtask.get("id", i)` 단일 키 사용

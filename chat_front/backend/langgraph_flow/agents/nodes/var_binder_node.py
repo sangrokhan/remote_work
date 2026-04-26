@@ -153,38 +153,38 @@ def _get_next_executable_subtask(subtasks: List[Dict], subtask_results: List[Dic
     """
     completed_ids = set()
     for result in subtask_results:
-        task_id = result.get("id", result.get("task_id"))
-        if task_id is not None:
-            completed_ids.add(task_id)
+        subtask_id = result.get("id")
+        if subtask_id is not None:
+            completed_ids.add(subtask_id)
 
     logger.debug("[VarBinder] completed_ids=%s", completed_ids)
     for subtask in subtasks:
-        task_id = subtask.get("id")
+        subtask_id = subtask.get("id")
 
         # 이미 완료된 subtask는 건너뜀
-        if task_id in completed_ids:
-            logger.debug("[VarBinder] skip subtask_id=%s (in completed_ids)", task_id)
+        if subtask_id in completed_ids:
+            logger.debug("[VarBinder] skip subtask_id=%s (in completed_ids)", subtask_id)
             continue
 
         # verdict가 True이면 완료된 것으로 간주
         if subtask.get("verdict", False) is True:
-            logger.debug("[VarBinder] skip subtask_id=%s (verdict=True)", task_id)
+            logger.debug("[VarBinder] skip subtask_id=%s (verdict=True)", subtask_id)
             continue
 
         # 의존성 확인
         dependencies = subtask.get("dependencies", [])
         if not dependencies:
-            logger.debug("[VarBinder] selected subtask_id=%s (no dependencies)", task_id)
+            logger.debug("[VarBinder] selected subtask_id=%s (no dependencies)", subtask_id)
             return subtask
 
         # 모든 의존성이 완료되었는지 확인
         all_deps_completed = all(dep_id in completed_ids for dep_id in dependencies)
         if all_deps_completed:
-            logger.debug("[VarBinder] selected subtask_id=%s (all deps met: %s)", task_id, dependencies)
+            logger.debug("[VarBinder] selected subtask_id=%s (all deps met: %s)", subtask_id, dependencies)
             return subtask
         else:
             pending = [d for d in dependencies if d not in completed_ids]
-            logger.debug("[VarBinder] skip subtask_id=%s (pending deps: %s)", task_id, pending)
+            logger.debug("[VarBinder] skip subtask_id=%s (pending deps: %s)", subtask_id, pending)
 
     logger.info("[VarBinder] no executable subtask found")
     return None
@@ -194,9 +194,9 @@ async def _resolve_bindings_with_llm(bindings: dict, subtask_results: list,
                                      subtask_context: dict, llm: BaseLanguageModel) -> dict:
     """
     Resolve abstract bindings to concrete values using LLM
-    
+
     - subtask_results에서 이전 subtask의 reference_features를 찾음
-    - $task_0.feature_id → subtask_results[0]["reference_features"][0]["feature_id"]
+    - $subtask_0.feature_id → subtask_results[0]["reference_features"][0]["feature_id"]
     """
     print(f"=== DEBUG: _resolve_bindings_with_llm 호출 ===")
     print(f"Bindings: {bindings}")
@@ -205,12 +205,12 @@ async def _resolve_bindings_with_llm(bindings: dict, subtask_results: list,
     if not bindings:
         return {}
 
-    # subtask_results를 dict 형태로 변환 (task_id → result)
+    # subtask_results를 dict 형태로 변환 (subtask_id → result)
     subtask_results_dict = {}
     for result in subtask_results:
-        task_id = result.get("id", result.get("task_id"))
-        if task_id is not None:
-            subtask_results_dict[str(task_id)] = result
+        subtask_id = result.get("id")
+        if subtask_id is not None:
+            subtask_results_dict[str(subtask_id)] = result
 
     resolution_messages = [
         SystemMessage(content=BINDER_SYSTEM_PROMPT),
@@ -240,9 +240,9 @@ async def _resolve_bindings_with_llm(bindings: dict, subtask_results: list,
 def _resolve_bindings_fallback(bindings: dict, subtask_results: list) -> dict:
     """
     Fallback method: Resolve abstract bindings to concrete values from previous subtask results
-    
-    - $task_0.feature_id → subtask_results[0]["reference_features"][0]["feature_id"]
-    - $task_0.feature_name → subtask_results[0]["reference_features"][0]["feature_name"]
+
+    - $subtask_0.feature_id → subtask_results[0]["reference_features"][0]["feature_id"]
+    - $subtask_0.feature_name → subtask_results[0]["reference_features"][0]["feature_name"]
     """
     if not bindings:
         return {}
@@ -251,20 +251,20 @@ def _resolve_bindings_fallback(bindings: dict, subtask_results: list) -> dict:
     for binding_key, binding_ref in bindings.items():
         print(f"=== DEBUG: Binding '{binding_key}': '{binding_ref}' 해결 중 ===")
 
-        if isinstance(binding_ref, str) and (binding_ref.startswith("$task_") or binding_ref.startswith("$subtask_")):
-            # Parse $task_{id}.{field} or $subtask_{id}.{field} format
-            parts = binding_ref.replace("$subtask_", "").replace("$task_", "").split(".")
+        if isinstance(binding_ref, str) and binding_ref.startswith("$subtask_"):
+            # Parse $subtask_{id}.{field} format
+            parts = binding_ref.replace("$subtask_", "").split(".")
             if len(parts) == 2:
-                task_id, field_name = parts
-                task_id_int = int(task_id)
+                subtask_id, field_name = parts
+                subtask_id_int = int(subtask_id)
 
-                # subtask_results에서 해당 task_id 찾기
+                # subtask_results에서 해당 subtask_id 찾기
                 found_value = None
 
-                # reference_features에서 찾기 
+                # reference_features에서 찾기
                 for result in subtask_results:
-                    result_id = result.get("id", result.get("task_id"))
-                    if result_id == task_id_int:
+                    result_id = result.get("id")
+                    if result_id == subtask_id_int:
                         ref_features = result.get("reference_features", [])
                         if ref_features and len(ref_features) > 0:
                             for ref in ref_features:
@@ -303,8 +303,8 @@ def _resolve_bindings_fallback(bindings: dict, subtask_results: list) -> dict:
                     resolved[binding_key] = found_value
                 else:
                     # 최종 폴백: unresolved 표시
-                    resolved[binding_key] = f"unresolved_{task_id}_{field_name}"
-                    print(f"=== DEBUG: Binding 해결 실패 - unresolved_{task_id}_{field_name} ===")
+                    resolved[binding_key] = f"unresolved_{subtask_id}_{field_name}"
+                    print(f"=== DEBUG: Binding 해결 실패 - unresolved_{subtask_id}_{field_name} ===")
         else:
             resolved[binding_key] = binding_ref
 

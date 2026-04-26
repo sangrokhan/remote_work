@@ -212,9 +212,7 @@ class ExecutorNode:
         # ID 기반 lookup (var_binder/routing_logic과 동일 의미). 위치 인덱스 사용 금지.
         subtasks_by_id = {s.get("id"): s for s in subtasks if s.get("id") is not None}
 
-        for i, subtask in enumerate(subtasks):
-            task_id = subtask.get("id", i)
-
+        for subtask in subtasks:
             # 이미 완료된 subtask는 건너뜀
             # verdict가 True이거나 "exceeded"이면 완료로 간주
             verdict = subtask.get("verdict", False)
@@ -273,7 +271,7 @@ class ExecutorNode:
         logger.info("[Executor:RETRIEVE] subtask.top_k        = %r", subtask.get("top_k"))
         logger.info("[Executor:RETRIEVE] resolved_bindings    = %r", resolved_bindings)
         sr_summary = [
-            {"id": r.get("id", r.get("task_id")),
+            {"id": r.get("id"),
              "verdict": r.get("verdict"),
              "ref_features": r.get("reference_features", []),
              "subtask_answer_preview": (r.get("subtask_answer", "") or "")[:120]}
@@ -286,22 +284,21 @@ class ExecutorNode:
         if resolved_bindings:
             updated_goal = goal
             for key, value in resolved_bindings.items():
-                # 1) key 자체가 placeholder인 경우 직접 대체 (e.g. "$task_0.feature_id": "FGR-1234")
+                # 1) key 자체가 placeholder인 경우 직접 대체 (e.g. "$subtask_0.feature_id": "FGR-1234")
                 if key in updated_goal:
                     logger.info("[Executor:RETRIEVE] key-match  '%s' → '%s'", key, value)
                     updated_goal = updated_goal.replace(key, str(value))
-                # 2) key가 변수명인 경우 구성된 placeholder 형식으로 대체
-                placeholders = [
-                    f"${{{key}}}",           # ${feature_id}
-                    f"$task_0.{key}",        # $task_0.feature_id
-                    f"${{task_0.{key}}}",    # ${task_0.feature_id}
-                    f"$subtask_0.{key}",     # $subtask_0.feature_id
-                    f"${{subtask_0.{key}}}", # ${subtask_0.feature_id}
-                ]
-                for placeholder in placeholders:
-                    if placeholder in updated_goal:
-                        logger.info("[Executor:RETRIEVE] placeholder-match '%s' → '%s'", placeholder, value)
-                        updated_goal = updated_goal.replace(placeholder, str(value))
+                # 2) bare ${key}
+                bare = f"${{{key}}}"
+                if bare in updated_goal:
+                    logger.info("[Executor:RETRIEVE] placeholder-match '%s' → '%s'", bare, value)
+                    updated_goal = updated_goal.replace(bare, str(value))
+                # 3) $subtask_N.{key} or ${subtask_N.{key}} for any N
+                pattern = re.compile(rf'\$\{{?subtask_\d+\.{re.escape(key)}\}}?')
+                def _sub(m, v=value):
+                    logger.info("[Executor:RETRIEVE] placeholder-match '%s' → '%s'", m.group(0), v)
+                    return str(v)
+                updated_goal = pattern.sub(_sub, updated_goal)
 
             if updated_goal == goal:
                 logger.warning("[Executor:RETRIEVE] NO substitution applied "
@@ -321,16 +318,16 @@ class ExecutorNode:
                     logger.warning("[Executor:RETRIEVE] no concrete bindings available to enrich query")
             goal = updated_goal
 
-        # fallback: auto-resolve remaining $task_N.field / $subtask_N.field from state subtask_results
-        if "$task_" in goal or "$subtask_" in goal:
+        # fallback: auto-resolve remaining $subtask_N.field from state subtask_results
+        if "$subtask_" in goal:
             subtask_results = state.get("subtask_results", [])
-            results_by_id = {str(r.get("id", r.get("task_id", ""))): r for r in subtask_results}
-            for match in re.finditer(r'\$(?:sub)?task_(\d+)\.(\w+)', goal):
-                placeholder, task_id, field = match.group(0), match.group(1), match.group(2)
-                result = results_by_id.get(task_id)
+            results_by_id = {str(r.get("id", "")): r for r in subtask_results}
+            for match in re.finditer(r'\$subtask_(\d+)\.(\w+)', goal):
+                placeholder, subtask_id, field = match.group(0), match.group(1), match.group(2)
+                result = results_by_id.get(subtask_id)
                 if not result:
-                    logger.warning("[Executor:RETRIEVE] auto-resolve miss: %s (no result for task_id=%s)",
-                                   placeholder, task_id)
+                    logger.warning("[Executor:RETRIEVE] auto-resolve miss: %s (no result for subtask_id=%s)",
+                                   placeholder, subtask_id)
                     continue
                 value = None
                 for feat in result.get("reference_features", []):
@@ -345,7 +342,7 @@ class ExecutorNode:
                 else:
                     logger.warning("[Executor:RETRIEVE] auto-resolve failed: %s (field=%s missing in result)",
                                    placeholder, field)
-            if "$task_" in goal or "$subtask_" in goal:
+            if "$subtask_" in goal:
                 logger.warning("[Executor:RETRIEVE] subtask_id=%s unresolved placeholders remain: %s",
                                subtask.get("id"), goal)
 
@@ -391,15 +388,13 @@ class ExecutorNode:
             for key, value in resolved_bindings.items():
                 if key in updated_goal:
                     updated_goal = updated_goal.replace(key, str(value))
-                for placeholder in [
-                    f"${{{key}}}",
-                    f"$task_0.{key}",
-                    f"${{task_0.{key}}}",
-                    f"$subtask_0.{key}",
-                    f"${{subtask_0.{key}}}",
-                ]:
-                    if placeholder in updated_goal:
-                        updated_goal = updated_goal.replace(placeholder, str(value))
+                # bare ${key}
+                bare = f"${{{key}}}"
+                if bare in updated_goal:
+                    updated_goal = updated_goal.replace(bare, str(value))
+                # $subtask_N.{key} or ${subtask_N.{key}} for any N
+                pattern = re.compile(rf'\$\{{?subtask_\d+\.{re.escape(key)}\}}?')
+                updated_goal = pattern.sub(str(value), updated_goal)
             goal = updated_goal
 
         # description 기반으로 적절한 툴 선택
