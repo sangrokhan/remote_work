@@ -93,7 +93,7 @@ async def construct_binding_context(state: AgentState,
     if llm is None:
         logger.error("VarConstructorNode: LLM not provided — falling back to default binding context")
         default_context = {
-            "query_entities": {"main_concept": ["task_0.main_concept"]},
+            "query_entities": {"main_concept": []},
             "previous_features": [],
             "explicit_dependencies": []
         }
