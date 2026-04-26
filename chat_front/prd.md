@@ -263,6 +263,15 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | executor auto-resolve 다중 feature 보존 | ✅ 완료 (2026-04-26) |
 | refiner cross-subtask context 주입 | ✅ 완료 (2026-04-26) |
 | var_binder LLM 경로 multi-value 프롬프트 보강 | ✅ 완료 (2026-04-26) |
+| executor substitution path 1 whole-token 가드 | ✅ 완료 (2026-04-26) |
+
+### 9.6 executor substitution path 1 whole-token 가드 (2026-04-26)
+
+BINDER 출력 스키마 v3(고정 키 `feature_id`/`feature_name`)와 호환되도록 executor의 substitution path 1을 whole-token 가드로 변경.
+
+- **증상**: path 1이 `if key in updated_goal:` 라는 substring 매칭을 사용해 bare 단어 키(`feature_id`, `feature_name`)가 `$subtask_0.feature_id` placeholder 내부 substring과 매칭되어 blanket `replace`로 placeholder 부분 치환·붕괴
+- **수정**: `executor_node.py` `_execute_retrieve_subtask` / `_execute_think_subtask` 두 substitution 루프 모두 path 1 조건을 `key.startswith("$") and key in updated_goal`로 강화 — `$` 접두사 literal 키만 직접 치환, bare 키는 path 3 정규식(`\$subtask_\d+\.{key}`)이 처리
+- **호환성**: 기존 `$subtask_N.field` 형태 placeholder 동작 보존, BINDER v3 스키마와 정합
 
 ### 9.5 var_binder LLM 경로 multi-value 프롬프트 보강 (2026-04-26)
 

@@ -284,8 +284,10 @@ class ExecutorNode:
         if resolved_bindings:
             updated_goal = goal
             for key, value in resolved_bindings.items():
-                # 1) key 자체가 placeholder인 경우 직접 대체 (e.g. "$subtask_0.feature_id": "FGR-1234")
-                if key in updated_goal:
+                # 1) key 자체가 placeholder literal일 때만 직접 대체 (e.g. "$subtask_0.feature_id").
+                # bare 단어 키(`feature_id`, `feature_name` 등)가 다른 placeholder 내부 substring을
+                # blanket replace 하지 않도록 `$` 접두사 가드. 그 외 키는 path 3 정규식이 처리.
+                if key.startswith("$") and key in updated_goal:
                     logger.info("[Executor:RETRIEVE] key-match  '%s' → '%s'", key, value)
                     updated_goal = updated_goal.replace(key, str(value))
                 # 2) bare ${key}
@@ -414,7 +416,8 @@ class ExecutorNode:
         if resolved_bindings:
             updated_goal = goal
             for key, value in resolved_bindings.items():
-                if key in updated_goal:
+                # bare 단어 키가 다른 placeholder 내부 substring을 침범하지 않도록 `$` 접두사 가드.
+                if key.startswith("$") and key in updated_goal:
                     updated_goal = updated_goal.replace(key, str(value))
                 # bare ${key}
                 bare = f"${{{key}}}"
