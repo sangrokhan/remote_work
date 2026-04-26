@@ -66,6 +66,7 @@ async def resolve_bindings(state: AgentState,
     subtasks = state.get("subtasks", [])
     subtask_results = state.get("subtask_results", [])
     execution_history = state.get("execution_history", {})
+    prev_resolved = state.get("resolved_bindings") or {}
 
     # 실행 가능한 subtask 찾기 (verdict가 False인 것 중 의존성이 해결된 것)
     executable_subtask = _get_next_executable_subtask(subtasks, subtask_results, execution_history)
@@ -87,15 +88,16 @@ async def resolve_bindings(state: AgentState,
         return update_state(
             state,
             current_executing_subtask_id=executable_subtask["id"],
-            resolved_bindings={},
+            resolved_bindings=prev_resolved,
             next="executor"
         )
 
     # subtask_results가 비어있으면 폴백 사용
     if not subtask_results:
         logger.warning("[VarBinder] subtask_id=%s no subtask_results → fallback resolution", executable_subtask["id"])
-        resolved_bindings = _resolve_bindings_fallback(bindings, [])
-        logger.info("[VarBinder] fallback resolved=%s", resolved_bindings)
+        new_resolved = _resolve_bindings_fallback(bindings, [])
+        resolved_bindings = {**prev_resolved, **new_resolved}
+        logger.info("[VarBinder] fallback resolved=%s merged_keys=%s", new_resolved, list(resolved_bindings.keys()))
         return update_state(
             state,
             current_executing_subtask_id=executable_subtask["id"],
@@ -106,7 +108,7 @@ async def resolve_bindings(state: AgentState,
     # LLM이 제공된 경우 LLM 기반 binding 해결
     if llm:
         try:
-            resolved_bindings = await _resolve_bindings_with_llm(
+            new_resolved = await _resolve_bindings_with_llm(
                 bindings,
                 subtask_results,
                 {
@@ -116,7 +118,9 @@ async def resolve_bindings(state: AgentState,
                 },
                 llm
             )
-            logger.info("[VarBinder] LLM resolved subtask_id=%s result=%s", executable_subtask["id"], resolved_bindings)
+            resolved_bindings = {**prev_resolved, **new_resolved}
+            logger.info("[VarBinder] LLM resolved subtask_id=%s new=%s merged_keys=%s",
+                        executable_subtask["id"], new_resolved, list(resolved_bindings.keys()))
             return update_state(
                 state,
                 current_executing_subtask_id=executable_subtask["id"],
@@ -127,8 +131,10 @@ async def resolve_bindings(state: AgentState,
             logger.error("[VarBinder] LLM resolution error subtask_id=%s: %s → fallback", executable_subtask["id"], e)
 
     # 폴백: 직접 binding 해결
-    resolved_bindings = _resolve_bindings_fallback(bindings, subtask_results)
-    logger.info("[VarBinder] fallback resolved subtask_id=%s result=%s", executable_subtask["id"], resolved_bindings)
+    new_resolved = _resolve_bindings_fallback(bindings, subtask_results)
+    resolved_bindings = {**prev_resolved, **new_resolved}
+    logger.info("[VarBinder] fallback resolved subtask_id=%s new=%s merged_keys=%s",
+                executable_subtask["id"], new_resolved, list(resolved_bindings.keys()))
 
     return update_state(
         state,
