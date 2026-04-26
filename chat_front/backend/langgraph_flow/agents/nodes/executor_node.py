@@ -319,9 +319,19 @@ class ExecutorNode:
             goal = updated_goal
 
         # fallback: auto-resolve remaining $subtask_N.field from state subtask_results
+        # verdict=True인 entry 중 attempt 최대값만 사용 (실패 attempt 제외)
         if "$subtask_" in goal:
             subtask_results = state.get("subtask_results", [])
-            results_by_id = {str(r.get("id", "")): r for r in subtask_results}
+            results_by_id: Dict[str, Dict] = {}
+            for r in subtask_results:
+                if r.get("verdict") is not True:
+                    continue
+                sid = str(r.get("id", ""))
+                if not sid:
+                    continue
+                existing = results_by_id.get(sid)
+                if existing is None or r.get("attempt", 0) > existing.get("attempt", 0):
+                    results_by_id[sid] = r
             for match in re.finditer(r'\$subtask_(\d+)\.(\w+)', goal):
                 placeholder, subtask_id, field = match.group(0), match.group(1), match.group(2)
                 result = results_by_id.get(subtask_id)

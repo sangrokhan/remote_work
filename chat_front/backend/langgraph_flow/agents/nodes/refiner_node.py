@@ -151,6 +151,9 @@ class RefinerNode:
 
             print(f"=== DEBUG: Current Step 증가: {current_step} ===")
 
+            # 시도 번호 캡처 (retry_counts 증가 전 — 이번 refiner 호출이 N번째 시도인지)
+            current_attempt = retry_counts.get(latest_subtask_id, 0)
+
             # 재시도 로직 - 원본 agent_service.py와 동일한 로직
             if not verdict:
                 # 재시도 횟수 증가
@@ -168,34 +171,26 @@ class RefinerNode:
                             print(
                                 f"=== DEBUG: Subtask {latest_subtask_id} 최대 재시도 초과 - exceeded 설정 ===")
 
-                    # exceeded된 subtask도 subtask_results에 추가 (원본과 동일)
-                    exceeded_subtask = None
-                    for subtask in updated_subtasks:
-                        if subtask.get("id") == latest_subtask_id:
-                            exceeded_subtask = subtask.copy()
-                            break
-                    if exceeded_subtask:
-                        update_kwargs["subtask_results"] = [exceeded_subtask]
-                        print(f"=== DEBUG: exceeded subtask 결과 추가됨 ===")
+            # verdict=True의 경우 reference_features 머지 (reducer가 기존 state와 merge)
+            if verdict and reference_features_found:
+                update_kwargs["reference_features"] = reference_features_found
 
-            # 완료된 subtask가 있으면 subtask_results에 추가 (binding resolution을 위해)
-            if verdict:
-                completed_subtask = None
-                for subtask in updated_subtasks:
-                    if subtask.get("id") == latest_subtask_id and subtask.get("verdict"):
-                        completed_subtask = subtask.copy()
-                        break
-
-                if completed_subtask:
-                    # subtask_results에 완료된 subtask 추가 (binding resolution에서 사용)
-                    update_kwargs["subtask_results"] = [completed_subtask]
-                    print(f"=== DEBUG: subtask_results에 추가됨: Task {latest_subtask_id} ===")
-                    print(
-                        f"=== DEBUG: subtask_results 내용: {completed_subtask.get('reference_features', [])} ===")
-
-                # reference_features 업데이트 (reducer가 기존 state와 merge)
-                if reference_features_found:
-                    update_kwargs["reference_features"] = reference_features_found
+            # 모든 시도(success/failure/exceeded)를 attempt 키와 함께 subtask_results에 push
+            # 같은 (id, attempt) 조합만 dedupe → retry 시 이전 시도 결과 보존
+            result_subtask = None
+            for subtask in updated_subtasks:
+                if subtask.get("id") == latest_subtask_id:
+                    result_subtask = subtask.copy()
+                    break
+            if result_subtask is not None:
+                result_subtask["attempt"] = current_attempt
+                if not verdict and isinstance(refined_data, dict):
+                    result_subtask.setdefault("retry_reason", refined_data.get("retry_reason", ""))
+                update_kwargs["subtask_results"] = [result_subtask]
+                print(
+                    f"=== DEBUG: subtask_results push: id={latest_subtask_id} "
+                    f"attempt={current_attempt} verdict={result_subtask.get('verdict')} ==="
+                )
 
             updated_state = update_state(state, **update_kwargs)
 

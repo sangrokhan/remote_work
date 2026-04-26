@@ -28,11 +28,15 @@ def merge_subtask_results(old: List[Dict], new: List[Dict]) -> List[Dict]:
         return new or []
     if not new:
         return old
-    merged: dict = {item["id"]: item for item in old if "id" in item}
+
+    def _key(item: Dict) -> tuple:
+        return (item["id"], item.get("attempt", 0))
+
+    merged: dict = {_key(item): item for item in old if "id" in item}
     no_id = [item for item in old if "id" not in item]
     for item in new:
         if "id" in item:
-            merged[item["id"]] = item
+            merged[_key(item)] = item
         else:
             no_id.append(item)
     return list(merged.values()) + no_id

@@ -160,7 +160,9 @@ def _get_next_executable_subtask(subtasks: List[Dict], subtask_results: List[Dic
     completed_ids = set()
     for result in subtask_results:
         subtask_id = result.get("id")
-        if subtask_id is not None:
+        verdict = result.get("verdict")
+        # verdict=True 또는 exceeded만 완료로 간주. 실패 attempt는 dep 해결에서 제외.
+        if subtask_id is not None and (verdict is True or verdict == "exceeded"):
             completed_ids.add(subtask_id)
 
     logger.debug("[VarBinder] completed_ids=%s", completed_ids)
@@ -212,11 +214,18 @@ async def _resolve_bindings_with_llm(bindings: dict, subtask_results: list,
         return {}
 
     # subtask_results를 dict 형태로 변환 (subtask_id → result)
+    # verdict=True인 entry 중 attempt가 가장 큰 것만 사용 (최신 성공 결과)
     subtask_results_dict = {}
     for result in subtask_results:
+        if result.get("verdict") is not True:
+            continue
         subtask_id = result.get("id")
-        if subtask_id is not None:
-            subtask_results_dict[str(subtask_id)] = result
+        if subtask_id is None:
+            continue
+        key = str(subtask_id)
+        existing = subtask_results_dict.get(key)
+        if existing is None or result.get("attempt", 0) > existing.get("attempt", 0):
+            subtask_results_dict[key] = result
 
     resolution_messages = [
         SystemMessage(content=BINDER_SYSTEM_PROMPT),
@@ -264,11 +273,23 @@ def _resolve_bindings_fallback(bindings: dict, subtask_results: list) -> dict:
                 subtask_id, field_name = parts
                 subtask_id_int = int(subtask_id)
 
-                # subtask_results에서 해당 subtask_id 찾기
+                # subtask_results에서 해당 subtask_id 찾기 (verdict=True인 최신 attempt만)
                 found_value = None
 
+                # id별 verdict=True 최신 attempt 미리 추출
+                latest_by_id = {}
+                for r in subtask_results:
+                    if r.get("verdict") is not True:
+                        continue
+                    rid = r.get("id")
+                    if rid is None:
+                        continue
+                    if rid not in latest_by_id or r.get("attempt", 0) > latest_by_id[rid].get("attempt", 0):
+                        latest_by_id[rid] = r
+
                 # reference_features에서 찾기
-                for result in subtask_results:
+                matched = latest_by_id.get(subtask_id_int)
+                for result in ([matched] if matched else []):
                     result_id = result.get("id")
                     if result_id == subtask_id_int:
                         ref_features = result.get("reference_features", [])

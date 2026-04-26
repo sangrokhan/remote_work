@@ -133,13 +133,24 @@ class SynthesizerNode:
         retriever_outputs_text = ""
 
         # 1순위: subtask_results의 refined 답변 (refiner가 저장하는 주 결과)
+        # id별 verdict=True 중 attempt 최대값만 (재시도 성공 시 최신만)
         if subtask_results:
-            retriever_outputs_text += "=== 정제된 최종 결과 ===\n"
-            for result in subtask_results:
-                subtask_id = result.get("id", "?")
-                answer = result.get("subtask_answer") or result.get("refined_text", "")
-                if answer:
-                    retriever_outputs_text += f"[Subtask {subtask_id}]\n{answer}\n\n"
+            latest_per_id: Dict[Any, Dict] = {}
+            for r in subtask_results:
+                if r.get("verdict") is not True:
+                    continue
+                sid = r.get("id")
+                if sid is None:
+                    continue
+                if sid not in latest_per_id or r.get("attempt", 0) > latest_per_id[sid].get("attempt", 0):
+                    latest_per_id[sid] = r
+            if latest_per_id:
+                retriever_outputs_text += "=== 정제된 최종 결과 ===\n"
+                for sid in sorted(latest_per_id.keys(), key=lambda x: (x is None, x)):
+                    result = latest_per_id[sid]
+                    answer = result.get("subtask_answer") or result.get("refined_text", "")
+                    if answer:
+                        retriever_outputs_text += f"[Subtask {sid}]\n{answer}\n\n"
 
         # 2순위: subtasks에서 verdict=True인 항목의 subtask_answer (subtask_results에 없을 경우)
         if not retriever_outputs_text:
