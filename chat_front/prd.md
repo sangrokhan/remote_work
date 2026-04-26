@@ -264,6 +264,20 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | refiner cross-subtask context 주입 | ✅ 완료 (2026-04-26) |
 | var_binder LLM 경로 multi-value 프롬프트 보강 | ✅ 완료 (2026-04-26) |
 | executor substitution path 1 whole-token 가드 | ✅ 완료 (2026-04-26) |
+| synthesizer plan/feature 컨텍스트 주입 | ✅ 완료 (2026-04-26) |
+
+### 9.7 synthesizer plan/feature 컨텍스트 주입 (2026-04-26)
+
+`_generate_llm_response`가 LLM에 `user_query` + 각 subtask의 `subtask_answer` 텍스트만 전달하던 구조를 plan 의도와 누적 feature를 보존해 종합하도록 보강.
+
+- **증상**: state-level 누적 `reference_features`(reducer가 dedupe로 누적한 모든 (id, name) 쌍)가 LLM 컨텍스트에 미주입되어 5개 doc → 5개 feature 모두 추출되었음에도 최종 답변에 일부만 노출되는 회귀 가능
+- **수정**: `synthesizer_node.py`에 4개 헬퍼 추가
+  - `_format_plan_overview` — 전체 subtasks의 id/status(done/exceeded/pending)/goal preview 표
+  - `_format_per_subtask_features` — `subtask_results`의 id별 최신 attempt `reference_features` 압축
+  - `_format_cumulative_features` — `state.reference_features` 누적 dedup 리스트
+  - `_format_failed_detail` — exceeded subtask의 `retry_reason` 노출
+- **user_query 확장**: 위 4개 블록을 "수집된 정보" 앞에 주입, "누적 reference_features의 모든 (feature_id, feature_name) 항목을 답변에 빠짐없이 인용" 지시 추가
+- **state·다운스트림 무변경**: synthesizer는 terminal 노드(END 직행)이므로 변경 영향 단방향
 
 ### 9.6 executor substitution path 1 whole-token 가드 (2026-04-26)
 

@@ -199,11 +199,24 @@ class SynthesizerNode:
                 f"총 작업 수: {len(subtasks)}, 성공: {ok_tasks}, 재시도 초과: {exceeded_tasks}\n"
             )
 
+        # plan/feature 컨텍스트 — feature 누락·정합성 손실 방지
+        plan_overview_text = self._format_plan_overview(subtasks)
+        per_subtask_features_text = self._format_per_subtask_features(state)
+        cumulative_features_text = self._format_cumulative_features(
+            state.get("reference_features", [])
+        )
+        failed_detail_text = self._format_failed_detail(subtasks, subtask_results)
+
         user_query = (
             f"사용자 질문: {state.get('user_query', '')}\n\n"
+            f"전체 실행 계획:\n{plan_overview_text}\n\n"
+            f"Subtask별 reference_features:\n{per_subtask_features_text}\n\n"
+            f"누적 reference_features (반드시 답변에 빠짐없이 노출):\n{cumulative_features_text}\n\n"
+            f"실패한 Subtask:\n{failed_detail_text}\n\n"
             f"수집된 정보:\n{retriever_outputs_text}{history_text}{execution_summary}\n\n"
             f"위 정보들을 바탕으로 사용자 질문에 대한 최종 답변을 생성해주세요. "
-            f"정제된 최종 결과를 중심으로 답변하고, 필요한 경우 검색된 문서 정보를 참고하여 상세한 답변을 제공해주세요."
+            f"누적 reference_features의 모든 (feature_id, feature_name) 항목을 답변에 인용하고, "
+            f"정제된 최종 결과를 중심으로 답변하세요."
         )
 
         messages = [
@@ -214,6 +227,85 @@ class SynthesizerNode:
         response = await llm.bind(temperature=0.4).ainvoke(messages)
         # ainvoke는 str 반환, 혹은 AIMessage — 둘 다 처리
         return response if isinstance(response, str) else getattr(response, "content", "")
+
+    def _format_plan_overview(self, subtasks: List[Dict], goal_max: int = 80) -> str:
+        """전체 plan의 id/status/goal preview 표."""
+        if not subtasks:
+            return "(plan 없음)"
+        lines = []
+        for s in subtasks:
+            sid = s.get("id", "?")
+            v = s.get("verdict", False)
+            if v is True:
+                status = "done"
+            elif v == "exceeded":
+                status = "exceeded"
+            else:
+                status = "pending"
+            goal = (s.get("goal") or s.get("description") or "").strip()
+            if len(goal) > goal_max:
+                goal = goal[:goal_max] + "..."
+            lines.append(f"  [{sid}] ({status}) {goal}")
+        return "\n".join(lines)
+
+    def _format_per_subtask_features(self, state: AgentState) -> str:
+        """subtask_results의 id별 최신 attempt에서 reference_features 압축 표기."""
+        subtask_results = state.get("subtask_results", [])
+        latest_per_id: Dict[Any, Dict] = {}
+        for r in subtask_results:
+            if r.get("verdict") is not True:
+                continue
+            sid = r.get("id")
+            if sid is None:
+                continue
+            if sid not in latest_per_id or r.get("attempt", 0) > latest_per_id[sid].get("attempt", 0):
+                latest_per_id[sid] = r
+        if not latest_per_id:
+            return "(per-subtask features 없음)"
+        lines = []
+        for sid in sorted(latest_per_id.keys(), key=lambda x: (x is None, x)):
+            r = latest_per_id[sid]
+            payload = r.get("result") or {}
+            ref_features = payload.get("reference_features") or r.get("reference_features", [])
+            if not ref_features:
+                continue
+            compact = ", ".join(
+                f"{f.get('feature_id', '?')}:{f.get('feature_name', '')}".strip(":")
+                for f in ref_features if isinstance(f, dict)
+            )
+            lines.append(f"  [Subtask {sid}] {compact}")
+        return "\n".join(lines) if lines else "(per-subtask features 없음)"
+
+    def _format_cumulative_features(self, features: List[Dict]) -> str:
+        """state-level 누적 reference_features를 한 줄씩 표기."""
+        if not features:
+            return "(누적 feature 없음)"
+        lines = []
+        for f in features:
+            if not isinstance(f, dict):
+                continue
+            fid = f.get("feature_id", "?")
+            fname = f.get("feature_name", "")
+            lines.append(f"  - {fid}: {fname}".rstrip(": "))
+        return "\n".join(lines) if lines else "(누적 feature 없음)"
+
+    def _format_failed_detail(self, subtasks: List[Dict],
+                              subtask_results: List[Dict]) -> str:
+        """exceeded verdict subtask의 retry_reason 노출."""
+        exceeded = [s for s in subtasks if s.get("verdict") == "exceeded"]
+        if not exceeded:
+            return "(없음)"
+        lines = []
+        for s in exceeded:
+            sid = s.get("id", "?")
+            reason = s.get("retry_reason", "")
+            if not reason:
+                for r in subtask_results:
+                    if r.get("id") == sid and r.get("verdict") == "exceeded":
+                        reason = r.get("retry_reason", "")
+                        break
+            lines.append(f"  [Subtask {sid}] {reason or '(사유 없음)'}")
+        return "\n".join(lines)
 
 
 synthesizer_node = SynthesizerNode()
