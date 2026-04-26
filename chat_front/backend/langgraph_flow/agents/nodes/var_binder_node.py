@@ -14,6 +14,20 @@ from langgraph_flow.prompts.var_binder import BINDER_SYSTEM_PROMPT
 logger = logging.getLogger(__name__)
 
 
+def _result_payload(entry: Dict) -> Dict:
+    """subtask_results entry에서 결과 payload 추출.
+
+    H4 fix: refiner는 envelope `{id, attempt, verdict, result: {...}}` 형태로 push.
+    구 형태(평면 키)도 backward-compat 위해 fallback.
+    """
+    payload = entry.get("result") or {}
+    return {
+        "subtask_answer": payload.get("subtask_answer") or entry.get("subtask_answer", ""),
+        "refined_text": payload.get("refined_text") or entry.get("refined_text", ""),
+        "reference_features": payload.get("reference_features") or entry.get("reference_features", []),
+    }
+
+
 class VarBinderNode:
     """Variable Binder 노드 클래스 - 바인딩 해결 전담"""
 
@@ -210,9 +224,11 @@ async def _resolve_bindings_with_llm(bindings: dict, subtask_results: list,
     if not bindings:
         return {}
 
-    # subtask_results를 dict 형태로 변환 (subtask_id → result)
+    # subtask_results를 dict 형태로 변환 (subtask_id → result payload)
     # verdict=True인 entry 중 attempt가 가장 큰 것만 사용 (최신 성공 결과)
-    subtask_results_dict = {}
+    # envelope 봉투 평면화: LLM 프롬프트엔 결과 payload만 노출 (id/attempt/verdict 제외)
+    seen_attempt: Dict[str, int] = {}
+    subtask_results_dict: Dict[str, Dict] = {}
     for result in subtask_results:
         if result.get("verdict") is not True:
             continue
@@ -220,9 +236,11 @@ async def _resolve_bindings_with_llm(bindings: dict, subtask_results: list,
         if subtask_id is None:
             continue
         key = str(subtask_id)
-        existing = subtask_results_dict.get(key)
-        if existing is None or result.get("attempt", 0) > existing.get("attempt", 0):
-            subtask_results_dict[key] = result
+        attempt = result.get("attempt", 0)
+        if key in seen_attempt and seen_attempt[key] >= attempt:
+            continue
+        seen_attempt[key] = attempt
+        subtask_results_dict[key] = _result_payload(result)
 
     resolution_messages = [
         SystemMessage(content=BINDER_SYSTEM_PROMPT),
@@ -274,7 +292,7 @@ def _resolve_bindings_fallback(bindings: dict, subtask_results: list) -> dict:
                 found_value = None
 
                 # id별 verdict=True 최신 attempt 미리 추출
-                latest_by_id = {}
+                latest_by_id: Dict[int, Dict] = {}
                 for r in subtask_results:
                     if r.get("verdict") is not True:
                         continue
@@ -284,44 +302,39 @@ def _resolve_bindings_fallback(bindings: dict, subtask_results: list) -> dict:
                     if rid not in latest_by_id or r.get("attempt", 0) > latest_by_id[rid].get("attempt", 0):
                         latest_by_id[rid] = r
 
-                # reference_features에서 찾기
+                # envelope payload 평면화 후 lookup
                 matched = latest_by_id.get(subtask_id_int)
-                for result in ([matched] if matched else []):
-                    result_id = result.get("id")
-                    if result_id == subtask_id_int:
-                        ref_features = result.get("reference_features", [])
-                        if ref_features and len(ref_features) > 0:
-                            for ref in ref_features:
-                                if field_name in ref:
-                                    found_value = ref[field_name]
-                                    print(f"=== DEBUG: reference_features에서 찾음: {found_value} ===")
+                if matched is not None:
+                    payload = _result_payload(matched)
+                    ref_features = payload["reference_features"]
+                    if ref_features and len(ref_features) > 0:
+                        for ref in ref_features:
+                            if field_name in ref:
+                                found_value = ref[field_name]
+                                print(f"=== DEBUG: reference_features에서 찾음: {found_value} ===")
+                                break
+
+                    # reference_features에 없으면 subtask_answer에서 추출 시도
+                    if found_value is None:
+                        subtask_answer = payload["subtask_answer"]
+                        refined_text = payload["refined_text"]
+
+                        # feature_id 패턴 찾기 (예: FGR-BC0311)
+                        if field_name == "feature_id":
+                            feature_id_match = re.search(r'FGR-[A-Z]{2}\d{4}',
+                                                         subtask_answer + refined_text)
+                            if feature_id_match:
+                                found_value = feature_id_match.group(0)
+                                print(f"=== DEBUG: 텍스트에서 feature_id 추출: {found_value} ===")
+
+                        # feature_name 패턴 찾기
+                        elif field_name == "feature_name":
+                            lines = (subtask_answer + refined_text).split('\n')
+                            for line in lines:
+                                if 'feature' in line.lower() and 'name' in line.lower():
+                                    found_value = line.split(':')[
+                                        -1].strip() if ':' in line else line.strip()
                                     break
-
-                        # reference_features에 없으면 subtask_answer에서 추출 시도
-                        if found_value is None:
-                            subtask_answer = result.get("subtask_answer", "")
-                            refined_text = result.get("refined_text", "")
-
-                            # feature_id 패턴 찾기 (예: FGR-BC0311)
-                            if field_name == "feature_id" or field_name == "feature_id":
-                                feature_id_match = re.search(r'FGR-[A-Z]{2}\d{4}',
-                                                             subtask_answer + refined_text)
-                                if feature_id_match:
-                                    found_value = feature_id_match.group(0)
-                                    print(f"=== DEBUG: 텍스트에서 feature_id 추출: {found_value} ===")
-
-                            # feature_name 패턴 찾기
-                            elif field_name == "feature_name":
-                                # 일반적인 feature name 패턴 찾기
-                                lines = (subtask_answer + refined_text).split('\n')
-                                for line in lines:
-                                    if 'feature' in line.lower() and 'name' in line.lower():
-                                        found_value = line.split(':')[
-                                            -1].strip() if ':' in line else line.strip()
-                                        break
-
-                        if found_value:
-                            break
 
                 if found_value:
                     resolved[binding_key] = found_value

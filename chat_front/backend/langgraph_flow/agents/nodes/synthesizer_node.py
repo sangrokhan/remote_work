@@ -148,7 +148,13 @@ class SynthesizerNode:
                 retriever_outputs_text += "=== 정제된 최종 결과 ===\n"
                 for sid in sorted(latest_per_id.keys(), key=lambda x: (x is None, x)):
                     result = latest_per_id[sid]
-                    answer = result.get("subtask_answer") or result.get("refined_text", "")
+                    payload = result.get("result") or {}
+                    answer = (
+                        payload.get("subtask_answer")
+                        or payload.get("refined_text")
+                        or result.get("subtask_answer")  # backward compat
+                        or result.get("refined_text", "")
+                    )
                     if answer:
                         retriever_outputs_text += f"[Subtask {sid}]\n{answer}\n\n"
 

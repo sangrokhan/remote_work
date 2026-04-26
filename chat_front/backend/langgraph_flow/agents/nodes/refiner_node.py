@@ -177,19 +177,34 @@ class RefinerNode:
 
             # 모든 시도(success/failure/exceeded)를 attempt 키와 함께 subtask_results에 push
             # 같은 (id, attempt) 조합만 dedupe → retry 시 이전 시도 결과 보존
-            result_subtask = None
-            for subtask in updated_subtasks:
-                if subtask.get("id") == latest_subtask_id:
-                    result_subtask = subtask.copy()
-                    break
-            if result_subtask is not None:
-                result_subtask["attempt"] = current_attempt
-                if not verdict and isinstance(refined_data, dict):
-                    result_subtask.setdefault("retry_reason", refined_data.get("retry_reason", ""))
-                update_kwargs["subtask_results"] = [result_subtask]
+            # subtask config (goal/action/bindings 등)는 봉투에서 제외 — concept 4(subtasks)와 분리
+            current_subtask_state = next(
+                (s for s in updated_subtasks if s.get("id") == latest_subtask_id),
+                None,
+            )
+            if current_subtask_state is not None:
+                entry_verdict = current_subtask_state.get("verdict")
+                result_payload = {
+                    "subtask_answer": current_subtask_state.get("subtask_answer", ""),
+                    "refined_text": current_subtask_state.get("refined_text", ""),
+                    "reference_features": current_subtask_state.get("reference_features", []),
+                }
+                result_entry = {
+                    "id": latest_subtask_id,
+                    "attempt": current_attempt,
+                    "verdict": entry_verdict,
+                    "result": result_payload,
+                }
+                if not entry_verdict and isinstance(refined_data, dict):
+                    rr = refined_data.get("retry_reason", "")
+                    if rr:
+                        result_entry["retry_reason"] = rr
+                if entry_verdict == "exceeded" and current_subtask_state.get("retry_reason"):
+                    result_entry.setdefault("retry_reason", current_subtask_state["retry_reason"])
+                update_kwargs["subtask_results"] = [result_entry]
                 print(
                     f"=== DEBUG: subtask_results push: id={latest_subtask_id} "
-                    f"attempt={current_attempt} verdict={result_subtask.get('verdict')} ==="
+                    f"attempt={current_attempt} verdict={entry_verdict} ==="
                 )
 
             updated_state = update_state(state, **update_kwargs)

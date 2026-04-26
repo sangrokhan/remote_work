@@ -339,13 +339,20 @@ class ExecutorNode:
                     logger.warning("[Executor:RETRIEVE] auto-resolve miss: %s (no result for subtask_id=%s)",
                                    placeholder, subtask_id)
                     continue
+                payload = result.get("result") or {}
+                ref_features = payload.get("reference_features") or result.get("reference_features", [])
                 value = None
-                for feat in result.get("reference_features", []):
+                for feat in ref_features:
                     if field in feat:
                         value = feat[field]
                         break
                 if value is None:
-                    value = result.get(field) or result.get("subtask_answer", "")
+                    value = (
+                        payload.get(field)
+                        or result.get(field)
+                        or payload.get("subtask_answer")
+                        or result.get("subtask_answer", "")
+                    )
                 if value:
                     goal = goal.replace(placeholder, str(value))
                     logger.info("[Executor:RETRIEVE] auto-resolved %s → %s", placeholder, value)
