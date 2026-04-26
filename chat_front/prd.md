@@ -261,6 +261,20 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | Subtask 바인딩 placeholder 통일 (`$task_N` → `$subtask_N`) | ✅ 완료 (2026-04-26) |
 | var_binder fallback 다중 feature 보존 | ✅ 완료 (2026-04-26) |
 | executor auto-resolve 다중 feature 보존 | ✅ 완료 (2026-04-26) |
+| refiner cross-subtask context 주입 | ✅ 완료 (2026-04-26) |
+
+### 9.4 refiner cross-subtask context 주입 (2026-04-26)
+
+`_llm_refine_with_verdict`가 LLM에 `user_query` + 현재 subtask + 현재 검색 결과만 전달하던 격리된 refine 구조를 cross-subtask 정합성을 갖도록 보강.
+
+- **증상**: refiner가 다른 subtask가 이미 추출한 feature/answer를 모름 → 중복 판단·정합성 검증 불가, 여러 subtask가 동일 feature를 중복 보고하거나 누락 위험
+- **수정**: `refiner_node.py`에 3개 헬퍼 추가
+  - `_format_plan_overview` — 전체 subtasks의 id/status(current/done/exceeded/pending)/goal preview 표
+  - `_format_other_subtask_results` — 현재 외 verdict=True 결과의 (id별 최신 attempt) subtask_answer(300자 캡) + reference_features 압축
+  - `_format_cumulative_features` — `state.reference_features` 누적 dedup 리스트
+- **user_content 확장**: 위 3개 블록을 "현재 Subtask" 앞에 주입, "이전 결과·누적 feature를 고려해 중복은 제외하고 신규 feature는 누락 없이 포함" 지시 추가
+- **데드코드 제거**: 미사용 `subtask_context` 지역변수 삭제
+- **토큰 캡**: subtask_answer 300자, goal preview 80자 제한으로 토큰 폭증 방지
 
 ### 9.3 executor auto-resolve 다중 feature 보존 (2026-04-26)
 
