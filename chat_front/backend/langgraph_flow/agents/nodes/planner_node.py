@@ -267,7 +267,7 @@ class PlannerNode:
                 normalized_subtasks = []
                 for i, subtask in enumerate(subtasks):
                     normalized_subtask = {
-                        "id": subtask.get("subtask_id", subtask.get("id", i + 1)),
+                        "id": subtask.get("subtask_id", subtask.get("id", i)),
                         "goal": subtask.get("goal", subtask.get("description", str(subtask))),
                         "task_type": subtask.get("task_type", "THINK"),
                         "verdict": subtask.get("verdict", False),
@@ -283,7 +283,7 @@ class PlannerNode:
                 for i, subtask in enumerate(response_dict):
                     if isinstance(subtask, dict):
                         normalized_subtask = {
-                            "id": subtask.get("subtask_id", subtask.get("id", i + 1)),
+                            "id": subtask.get("subtask_id", subtask.get("id", i)),
                             "goal": subtask.get("goal", subtask.get("description", str(subtask))),
                             "task_type": subtask.get("task_type", "THINK"),
                             "verdict": subtask.get("verdict", False),
@@ -292,7 +292,7 @@ class PlannerNode:
                         }
                     else:
                         normalized_subtask = {
-                            "id": i + 1,
+                            "id": i,
                             "goal": str(subtask),
                             "task_type": "THINK",
                             "verdict": False,
@@ -305,7 +305,7 @@ class PlannerNode:
             else:
                 # 기본 형식으로 변환
                 result = [{
-                    "id": 1,
+                    "id": 0,
                     "goal": str(response_dict),
                     "task_type": "THINK",
                     "verdict": False,
@@ -317,7 +317,7 @@ class PlannerNode:
         except json.JSONDecodeError:
             # JSON 파싱 실패 시 텍스트로 처리
             result = [{
-                "id": 1,
+                "id": 0,
                 "goal": response_content,
                 "task_type": "THINK",
                 "verdict": False,
