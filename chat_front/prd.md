@@ -262,6 +262,18 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | var_binder fallback 다중 feature 보존 | ✅ 완료 (2026-04-26) |
 | executor auto-resolve 다중 feature 보존 | ✅ 완료 (2026-04-26) |
 | refiner cross-subtask context 주입 | ✅ 완료 (2026-04-26) |
+| var_binder LLM 경로 multi-value 프롬프트 보강 | ✅ 완료 (2026-04-26) |
+
+### 9.5 var_binder LLM 경로 multi-value 프롬프트 보강 (2026-04-26)
+
+`_resolve_bindings_with_llm` 경로에서 LLM이 reference_features 다중 항목 중 첫 항목만 JSON으로 반환해 N→1 collapse가 발생하는 잔존 회귀 vector 차단.
+
+- **증상**: var_binder fallback은 dedupe+join 적용되었으나 LLM 경로(운영 기본 경로)는 BINDER_SYSTEM_PROMPT가 단일값 가정이라 collapse 가능
+- **수정**: `prompts/var_binder.py` 프롬프트를 multi-value 정책 + 4개 few-shot 예시로 확장
+  - 규칙 명시: "여러 항목 → 등장 순서 dedupe 후 공백 join 단일 문자열"
+  - few-shot: 다중 / 단일 / dedupe / 매칭 없음 4 케이스
+  - 출력 포맷 강제: 단일 JSON 객체, 코드블록 금지, 키 생략 정책
+- **코드 미수정**: 이번 변경은 프롬프트 한정. 이후 옵션 C(LLM 응답 후 fallback 보강 post-processing) 적용 여부는 별도 결정.
 
 ### 9.4 refiner cross-subtask context 주입 (2026-04-26)
 
