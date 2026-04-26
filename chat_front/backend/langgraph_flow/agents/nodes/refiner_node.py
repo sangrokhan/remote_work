@@ -145,6 +145,34 @@ class RefinerNode:
                     print(f"=== DEBUG: Subtask {latest_subtask_id} verdict 설정: {verdict} ===")
                     print(
                         f"=== DEBUG: Subtask {latest_subtask_id} reference_features: {reference_features_found} ===")
+
+                    # verdict=false 시 retry_reason 구조화 적용 → 다음 시도 goal 재작성
+                    if not verdict:
+                        rr_raw = refined_data.get("retry_reason")
+                        rr_dict = self._normalize_retry_reason(rr_raw)
+                        subtask_copy["retry_reason"] = rr_dict
+
+                        new_goal = (rr_dict.get("suggested_next_goal") or "").strip()
+                        if new_goal:
+                            if not subtask_copy.get("original_goal"):
+                                subtask_copy["original_goal"] = subtask_copy.get(
+                                    "goal", subtask_copy.get("description", "")
+                                )
+                            print(
+                                f"=== DEBUG: Subtask {latest_subtask_id} goal 재작성: "
+                                f"{subtask_copy.get('goal')!r} → {new_goal!r} ==="
+                            )
+                            subtask_copy["goal"] = new_goal
+
+                        new_excluded = rr_dict.get("excluded_doc_ids") or []
+                        if isinstance(new_excluded, list) and new_excluded:
+                            existing_excluded = subtask_copy.get("excluded_doc_ids") or []
+                            merged = list(dict.fromkeys([*existing_excluded, *new_excluded]))
+                            subtask_copy["excluded_doc_ids"] = merged
+                            print(
+                                f"=== DEBUG: Subtask {latest_subtask_id} excluded_doc_ids "
+                                f"누적: {merged} ==="
+                            )
                 updated_subtasks.append(subtask_copy)
 
             # ⭐ current_step 증가 (원본 코드의 iteration_count += 1과 동일)
@@ -237,6 +265,46 @@ class RefinerNode:
             else:
                 # 최대 재시도 횟수 초과 시 다음 노드로 이동
                 return update_state(state, next="synthesizer")
+
+    def _normalize_retry_reason(self, raw: Any) -> Dict[str, Any]:
+        """
+        retry_reason 입력을 표준 dict 형태로 정규화.
+
+        지원 입력:
+        - dict: 누락 필드 기본값으로 채워서 반환
+        - str: 자유 텍스트를 missing_info에 보존, suggested_next_goal은 비움
+                (다음 시도가 사실상 무의미하므로 LLM이 재구성 못한 케이스로 취급)
+        - None / 기타: 빈 표준 dict
+
+        반환 키:
+            failure_type, missing_info, irrelevant_aspects,
+            query_hints (List[str]), excluded_doc_ids (List[str]),
+            suggested_next_goal
+        """
+        defaults = {
+            "failure_type": "unknown",
+            "missing_info": "",
+            "irrelevant_aspects": "",
+            "query_hints": [],
+            "excluded_doc_ids": [],
+            "suggested_next_goal": "",
+        }
+        if isinstance(raw, dict):
+            out = dict(defaults)
+            for k in defaults:
+                if k in raw and raw[k] is not None:
+                    out[k] = raw[k]
+            # 리스트 필드 형식 보정
+            if not isinstance(out["query_hints"], list):
+                out["query_hints"] = [str(out["query_hints"])] if out["query_hints"] else []
+            if not isinstance(out["excluded_doc_ids"], list):
+                out["excluded_doc_ids"] = (
+                    [str(out["excluded_doc_ids"])] if out["excluded_doc_ids"] else []
+                )
+            return out
+        if isinstance(raw, str) and raw.strip():
+            return {**defaults, "missing_info": raw.strip()}
+        return dict(defaults)
 
     def _collect_retriever_results(self, retriever_outputs: List[Dict]) -> List[Dict]:
         """

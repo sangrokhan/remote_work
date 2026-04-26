@@ -392,7 +392,47 @@ class ExecutorNode:
         )
 
         # 툴 실행
-        return goal, await tool.ainvoke(tool_args)
+        result = await tool.ainvoke(tool_args)
+
+        # refiner가 채워둔 excluded_doc_ids 후처리 필터:
+        # 이미 검토했지만 무관하다고 판단된 feature_id를 다음 시도에서 제외.
+        excluded = subtask.get("excluded_doc_ids") or []
+        if excluded:
+            result = self._filter_excluded_docs(result, excluded, subtask.get("id"))
+
+        return goal, result
+
+    def _filter_excluded_docs(self, result: Any, excluded_ids: List[str],
+                              subtask_id: Any) -> Any:
+        """
+        retriever 결과에서 excluded_doc_ids에 해당하는 feature_id를 가진
+        문서를 제거. 결과 구조 보존 — `results` 리스트의 항목만 필터링.
+        """
+        if not isinstance(result, dict):
+            return result
+        results_list = result.get("results")
+        if not isinstance(results_list, list) or not results_list:
+            return result
+
+        excluded_set = set(excluded_ids)
+        filtered = []
+        dropped = 0
+        for item in results_list:
+            text = item if isinstance(item, str) else (
+                item.get("text", "") if isinstance(item, dict) else ""
+            )
+            ids_in_doc = re.findall(r'FGR-[A-Z]{2}\d{4}', text or "")
+            if any(fid in excluded_set for fid in ids_in_doc):
+                dropped += 1
+                continue
+            filtered.append(item)
+
+        if dropped:
+            logger.info(
+                "[Executor:RETRIEVE] subtask_id=%s excluded_doc filter dropped %d/%d docs (excluded=%s)",
+                subtask_id, dropped, len(results_list), excluded_set,
+            )
+        return {**result, "results": filtered}
 
     async def _execute_think_subtask(self, subtask: Dict, tool_registry: ToolRegistry,
                                      state: AgentState, resolved_bindings: dict,

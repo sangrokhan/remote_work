@@ -265,6 +265,23 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | var_binder LLM 경로 multi-value 프롬프트 보강 | ✅ 완료 (2026-04-26) |
 | executor substitution path 1 whole-token 가드 | ✅ 완료 (2026-04-26) |
 | synthesizer plan/feature 컨텍스트 주입 | ✅ 완료 (2026-04-26) |
+| refiner retry_reason 구조화 + goal 재작성 retry | ✅ 완료 (2026-04-26) |
+
+### 9.8 refiner retry_reason 구조화 + 다음 시도 goal 재작성 (2026-04-26)
+
+verdict=false 시 refiner가 동일 쿼리로 재시도하던 무의미 retry 루프를 retry_reason 구조화 → 다음 시도 goal 재작성 + excluded_doc_ids 후필터로 교체.
+
+- **증상**: 기존 prompt가 `retry_reason: ""` 한 줄 자유 문자열만 요구 → LLM이 한 문장 수준 사유 반환. var_constructor / var_binder / retriever 누구도 retry_reason을 읽지 않음 → 동일 subtask.goal로 동일 문서 N회 재검색하다 3회차 exceeded. retry 자체가 시간·토큰 낭비.
+- **prompts/refiner.py 재작성**: `retry_reason`을 dict 스키마로 강제
+  - 필드: `failure_type` (irrelevant_docs / missing_info / wrong_entity / partial_match / no_results), `missing_info`, `irrelevant_aspects`, `query_hints[]`, `excluded_doc_ids[]`, `suggested_next_goal`
+  - 규칙·failure_type 분류 가이드·few-shot 2건 추가 (missing_info / no_results)
+  - `suggested_next_goal` 비어있으면 안 됨 명시 — 비면 retry 무의미
+- **refiner_node.py**:
+  - `_normalize_retry_reason(raw)` 헬퍼 — dict / 자유 문자열 / None 모두 표준 dict로 정규화
+  - verdict=false 분기: subtask에 `retry_reason` (dict) 저장, `suggested_next_goal` 있으면 `subtask.goal`을 그것으로 교체 (원본은 `original_goal`에 보존), `excluded_doc_ids`는 누적 dedupe 머지
+- **executor_node.py**: `_execute_retrieve_subtask`가 retriever 호출 후 `subtask.excluded_doc_ids`에 매칭되는 `FGR-XXNNNN`을 포함한 doc을 결과에서 제거(`_filter_excluded_docs`). retriever 툴 시그니처 변경 없이 후필터로 처리.
+- **루프 안전망 유지**: refiner의 3회 재시도 cap·exceeded 처리·`route_after_refiner` safety cap 변경 없음. 다만 retry마다 goal과 excluded set이 달라져 의미 있는 시도가 됨.
+- **synthesizer 호환**: exceeded 시 subtask.retry_reason은 기존대로 `"최대 재시도 횟수(3회) 초과"` 문자열로 덮여서 synthesizer 출력 변화 없음. 비-exceeded 실패 attempt의 dict retry_reason은 synthesizer가 읽지 않음.
 
 ### 9.7 synthesizer plan/feature 컨텍스트 주입 (2026-04-26)
 
