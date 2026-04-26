@@ -57,6 +57,9 @@ class PlannerNode:
 
         return await self.plan_next_step(state, llm)
 
+    # DUPLICATED CODE — var_constructor_node.construct_binding_context already extracts this
+    # via the same CONSTRUCTOR_SYSTEM_PROMPT and stores it in state["binding_context"].
+    # Method body kept intact; invocation in plan_next_step is disabled.
     async def _extract_binding_context_with_llm(self, state: AgentState,
                                                 llm: BaseLanguageModel) -> dict:
         """
@@ -177,10 +180,11 @@ class PlannerNode:
             return state_copy
 
         try:
-            # TODO: Review this duplicate works
             print("=== DEBUG: Binding context 추출 시작 ===")
-            # Binding context 추출
-            binding_context = await self._extract_binding_context_with_llm(state, llm)
+            # Reuse binding_context from var_constructor_node (already extracted upstream).
+            binding_context = state.get("binding_context", {})
+            # DUPLICATED: var_constructor_node already extracts this. Kept commented for reference.
+            # binding_context = await self._extract_binding_context_with_llm(state, llm)
             print("=== DEBUG: Binding context 추출 완료 ===")
 
             # Enhanced system prompt with binding context
