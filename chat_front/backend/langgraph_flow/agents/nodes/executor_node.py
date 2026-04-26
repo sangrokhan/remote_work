@@ -314,8 +314,8 @@ class ExecutorNode:
                 }
                 if concrete:
                     extras = " ".join(str(v) for v in concrete.values())
-                    updated_goal = f"{goal} [{extras}]"
-                    logger.info("[Executor:RETRIEVE] enriched query with bindings: %s", concrete)
+                    updated_goal = f"[{extras}] {goal}"
+                    logger.info("[Executor:RETRIEVE] enriched query with bindings (prefix): %s", concrete)
                 else:
                     logger.warning("[Executor:RETRIEVE] no concrete bindings available to enrich query")
             goal = updated_goal
