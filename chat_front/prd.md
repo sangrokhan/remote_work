@@ -269,11 +269,15 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 `_resolve_bindings_with_llm` 경로에서 LLM이 reference_features 다중 항목 중 첫 항목만 JSON으로 반환해 N→1 collapse가 발생하는 잔존 회귀 vector 차단.
 
 - **증상**: var_binder fallback은 dedupe+join 적용되었으나 LLM 경로(운영 기본 경로)는 BINDER_SYSTEM_PROMPT가 단일값 가정이라 collapse 가능
-- **수정**: `prompts/var_binder.py` 프롬프트를 multi-value 정책 + 4개 few-shot 예시로 확장
-  - 규칙 명시: "여러 항목 → 등장 순서 dedupe 후 공백 join 단일 문자열"
-  - few-shot: 다중 / 단일 / dedupe / 매칭 없음 4 케이스
-  - 출력 포맷 강제: 단일 JSON 객체, 코드블록 금지, 키 생략 정책
-- **코드 미수정**: 이번 변경은 프롬프트 한정. 이후 옵션 C(LLM 응답 후 fallback 보강 post-processing) 적용 여부는 별도 결정.
+- **수정 v1**: 규칙 + 4개 few-shot으로 "여러 항목 → 공백 join 단일 문자열"을 강제
+- **수정 v2**: pair 형태(`FGR-X Name, ...`) 단일 문자열 — substring 충돌 우려로 폐기
+- **수정 v3 (현재)**: 출력을 두 고정 필드 `feature_id` / `feature_name`을 갖는 단일 JSON 객체로 정의
+  - bindings의 binding_key는 무시, previous_results 전체에서 (id, name) 쌍 dedupe(등장 순서 보존) 후 두 필드에 같은 순서로 `, ` join
+  - 두 필드는 항상 같은 항목 수·순서 유지 (인덱스 정합성)
+  - feature_name 빈 자리 보존(콤마 유지), feature_id 빈 항목은 스킵
+  - 매칭 없음 → 두 필드 모두 빈 문자열
+  - few-shot 6 케이스 (다중 / 단일 / dedupe / 다중 subtask 통합 / 빈 자리 / 매칭 없음)
+- **호환성 메모**: 본 스키마는 executor substitution path 3 (`\$subtask_\d+\.{key}` 정규식)과 정합. 단 path 1 (`if key in goal`) 의 substring 매칭 가드 부재로 `feature_id` 키가 `$subtask_0.feature_id` placeholder 내부 substring을 blanket replace할 위험 — 별도 코드 fix(path 1을 `$<key>` whole-token 가드로 변경) 필요.
 
 ### 9.4 refiner cross-subtask context 주입 (2026-04-26)
 
