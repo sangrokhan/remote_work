@@ -332,8 +332,11 @@ class PlannerNode:
         """
         Subtask 정규화 + 검증 패스.
         - id를 위치(0-base 연속)로 강제 재할당, LLM 원본 id는 remap에 보존
+        - goal/bindings 안의 `$subtask_OLD` placeholder를 새 id로 일괄 rewrite
         - dependencies: int 강제, unknown / self / forward (>= self.id) 엣지 제거
         - bindings의 $subtask_N 참조에서 누락된 dep 자동 보강
+        - goal 텍스트의 $subtask_N.field 참조에서 누락된 dep + bindings 자동 등록
+          (B 통합: dependencies 단일 진실 소스를 향해 bindings도 derived 가능하도록 확장)
         - "dep < self.id" 규칙으로 DAG 자동 보장 (순환 감지 불필요)
         """
         if not subtasks:
@@ -349,6 +352,28 @@ class PlannerNode:
 
         valid_ids = set(range(len(subtasks)))
         binding_pat = re.compile(r"\$subtask_(\d+)")
+        goal_field_pat = re.compile(r"\$subtask_(\d+)\.(\w+)")
+
+        # 1.5. id_remap이 비자명한 경우(LLM 원본 id ≠ 위치) goal/bindings의
+        # placeholder $subtask_OLD를 새 id로 rewrite. 이후 step 3/4는 매핑 lookup
+        # 없이 추출된 숫자를 새 id로 그대로 사용.
+        non_identity_remap = any(old != new for old, new in id_remap.items())
+        if non_identity_remap:
+            def _remap_placeholders(text: str) -> str:
+                def _sub(m):
+                    old = int(m.group(1))
+                    new = id_remap.get(old, old)
+                    return f"$subtask_{new}"
+                return binding_pat.sub(_sub, text)
+
+            for s in subtasks:
+                goal_text = s.get("goal")
+                if isinstance(goal_text, str) and "$subtask_" in goal_text:
+                    s["goal"] = _remap_placeholders(goal_text)
+                bindings = s.get("bindings") or {}
+                for k, v in list(bindings.items()):
+                    if isinstance(v, str) and "$subtask_" in v:
+                        bindings[k] = _remap_placeholders(v)
 
         for i, s in enumerate(subtasks):
             # 2. explicit dependencies cleaning
@@ -373,18 +398,35 @@ class PlannerNode:
                 if d_new not in cleaned:
                     cleaned.append(d_new)
 
-            # 3. bindings에서 dep 보강
+            # 3. bindings에서 dep 보강 (refs는 1.5에서 새 id로 rewrite됨)
             bindings = s.get("bindings", {}) or {}
             for ref in bindings.values():
                 if not isinstance(ref, str):
                     continue
                 for m in binding_pat.finditer(ref):
-                    d_int = int(m.group(1))
-                    d_new = id_remap.get(d_int, d_int)
+                    d_new = int(m.group(1))
                     if d_new in valid_ids and d_new < i and d_new not in cleaned:
                         cleaned.append(d_new)
                         print(f"=== INFO: subtask {i} dep {d_new} inferred from binding ===")
 
+            # 4. goal 텍스트에서 $subtask_N.field 추출
+            #    → dep 보강 + 동일 ref를 bindings에 자동 등록 (key 충돌 시 LLM 정의 우선)
+            goal_text = s.get("goal", "") or ""
+            if "$subtask_" in goal_text:
+                for m in goal_field_pat.finditer(goal_text):
+                    d_new = int(m.group(1))
+                    field = m.group(2)
+                    if d_new not in valid_ids or d_new >= i:
+                        continue
+                    if d_new not in cleaned:
+                        cleaned.append(d_new)
+                        print(f"=== INFO: subtask {i} dep {d_new} inferred from goal ===")
+                    if field not in bindings:
+                        ref = f"$subtask_{d_new}.{field}"
+                        bindings[field] = ref
+                        print(f"=== INFO: subtask {i} binding '{field}'='{ref}' inferred from goal ===")
+
+            s["bindings"] = bindings
             s["dependencies"] = cleaned
 
         return subtasks
