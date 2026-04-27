@@ -267,6 +267,25 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | synthesizer plan/feature 컨텍스트 주입 | ✅ 완료 (2026-04-26) |
 | refiner retry_reason 구조화 + goal 재작성 retry | ✅ 완료 (2026-04-26) |
 | refiner confirmed_features를 next_goal에 mix | ✅ 완료 (2026-04-27) |
+| refiner confirmed_features anchor 폐기 → seen_feature_ids id-only 누적 | ✅ 완료 (2026-04-27) |
+
+### 9.10 refiner confirmed_features anchor 폐기 → seen_feature_ids id-only 누적 (2026-04-27)
+
+verdict=false 시도에서 검색된 feature 를 다음 시도 anchor 로 끌고 가는 의미론 폐기. 실패 시도의 reference_features 는 의미 보장이 없으므로 prompt anchor 로 부적합. attempt 간 id-only dedup + excluded union 만 유지. refiner LLM input/output 토큰 절감 → latency 단축.
+
+- **동기**: 9.9 에서 도입한 confirmed_features dict 누적이 (a) refiner system prompt 의 가이드 (b) "관련 feature 명시" 섹션을 부풀리고, (b) `retry_reason.confirmed_features` 출력 필드를 강제해 LLM 출력 토큰을 늘리고, (c) 다음 시도 goal 본문에 anchor 줄을 붙여 input 토큰까지 늘렸음. verdict=false 라는 사실 자체가 "이 시도의 매칭은 의미 없다" 는 신호 → anchor 로 사용하면 다음 시도가 같은 무관 영역으로 회귀.
+- **prompts/refiner.py**:
+  - `retry_reason` JSON 스키마에서 `confirmed_features` 필드 제거
+  - 규칙 #5 (confirmed_features 기록 지시) 제거. 규칙 #4 에 "이전 시도 무관 항목은 자동 누적" 한 줄 추가.
+  - 가이드 (b) 를 "의존 subtask reference 명시" 로 축소 — 의존 subtask 산출물만 anchor 로, 이번 시도 검색 결과는 anchor 금지 명시
+  - 두 few-shot 예시에서 `confirmed_features` 필드 + `suggested_next_goal` 본문의 "이번 시도 confirmed" 줄 제거
+- **refiner_node.py**:
+  - `_normalize_retry_reason` 에서 `confirmed_features` 기본값/정규화 블록 제거
+  - `_merge_confirmed_features` 헬퍼 삭제
+  - verdict=false 분기 재작성: `subtask["confirmed_features"]` (dict 리스트) 폐기 → `subtask["seen_feature_ids"]` (str 리스트, dedup, excluded 차감) 로 교체. 이번 시도의 reference_features 와 이전 누적 seen 을 union → excluded_doc_ids union 차감 → 결과 저장. 다음 시도 prompt 에 anchor 주입 없음.
+  - excluded_doc_ids attempt 간 union 은 동일 분기 안에서 새 goal 재작성보다 먼저 실행 → seen 계산이 최신 excluded 를 반영
+- **호환**: state schema 변화는 subtask-local 키만(추가: `seen_feature_ids`, 폐기: `confirmed_features`). retry cap / exceeded / cross-subtask context / 다른 노드 인터페이스 무변경.
+- **기대 효과**: refiner system prompt ~10줄 단축 + 출력 JSON 1 필드 감소 + 다음 시도 goal 본문에서 anchor 줄 제거. 시도 횟수가 늘어도 input/output 이 단조 증가하지 않음.
 
 ### 9.9 refiner confirmed_features 누적 + suggested_next_goal mix (2026-04-27)
 

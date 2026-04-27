@@ -151,15 +151,39 @@ class RefinerNode:
                         rr_raw = refined_data.get("retry_reason")
                         rr_dict = self._normalize_retry_reason(rr_raw)
 
-                        # confirmed_features 누적 (이전 시도 + 이번 시도, excluded 제거)
-                        prior_confirmed = subtask_copy.get("confirmed_features") or []
-                        merged_confirmed = self._merge_confirmed_features(
-                            prior_confirmed,
-                            rr_dict.get("confirmed_features") or [],
-                            excluded=set(rr_dict.get("excluded_doc_ids") or []),
+                        # excluded_doc_ids 누적 (attempt 간 union)
+                        existing_excluded = subtask_copy.get("excluded_doc_ids") or []
+                        new_excluded = rr_dict.get("excluded_doc_ids") or []
+                        merged_excluded = list(
+                            dict.fromkeys([*existing_excluded, *new_excluded])
                         )
-                        rr_dict["confirmed_features"] = merged_confirmed
-                        subtask_copy["confirmed_features"] = merged_confirmed
+                        if merged_excluded:
+                            subtask_copy["excluded_doc_ids"] = merged_excluded
+                            if new_excluded:
+                                print(
+                                    f"=== DEBUG: Subtask {latest_subtask_id} excluded_doc_ids "
+                                    f"누적: {merged_excluded} ==="
+                                )
+
+                        # seen_feature_ids 누적 (id only, dedup, excluded 제거) — 다음 시도 dedup 용
+                        prior_seen = subtask_copy.get("seen_feature_ids") or []
+                        current_ref = refined_data.get("reference_features") or []
+                        excluded_set = set(merged_excluded)
+                        merged_seen: List[str] = []
+                        seen_set: set = set()
+                        for src in (prior_seen, current_ref):
+                            for item in src or []:
+                                if isinstance(item, str):
+                                    fid = item.strip()
+                                elif isinstance(item, dict):
+                                    fid = str(item.get("feature_id") or "").strip()
+                                else:
+                                    fid = ""
+                                if not fid or fid in seen_set or fid in excluded_set:
+                                    continue
+                                merged_seen.append(fid)
+                                seen_set.add(fid)
+                        subtask_copy["seen_feature_ids"] = merged_seen
                         subtask_copy["retry_reason"] = rr_dict
 
                         new_goal = (rr_dict.get("suggested_next_goal") or "").strip()
@@ -173,16 +197,6 @@ class RefinerNode:
                                 f"{subtask_copy.get('goal')!r} → {new_goal!r} ==="
                             )
                             subtask_copy["goal"] = new_goal
-
-                        new_excluded = rr_dict.get("excluded_doc_ids") or []
-                        if isinstance(new_excluded, list) and new_excluded:
-                            existing_excluded = subtask_copy.get("excluded_doc_ids") or []
-                            merged = list(dict.fromkeys([*existing_excluded, *new_excluded]))
-                            subtask_copy["excluded_doc_ids"] = merged
-                            print(
-                                f"=== DEBUG: Subtask {latest_subtask_id} excluded_doc_ids "
-                                f"누적: {merged} ==="
-                            )
                 updated_subtasks.append(subtask_copy)
 
             # ⭐ current_step 증가 (원본 코드의 iteration_count += 1과 동일)
@@ -297,7 +311,6 @@ class RefinerNode:
             "irrelevant_aspects": "",
             "query_hints": [],
             "excluded_doc_ids": [],
-            "confirmed_features": [],
             "suggested_next_goal": "",
         }
         if isinstance(raw, dict):
@@ -312,53 +325,10 @@ class RefinerNode:
                 out["excluded_doc_ids"] = (
                     [str(out["excluded_doc_ids"])] if out["excluded_doc_ids"] else []
                 )
-            # confirmed_features: list of {feature_id, feature_name} dicts only
-            cf = out["confirmed_features"]
-            if not isinstance(cf, list):
-                cf = []
-            normalized_cf: List[Dict[str, str]] = []
-            seen_cf_ids: set = set()
-            for item in cf:
-                if not isinstance(item, dict):
-                    continue
-                fid = str(item.get("feature_id") or "").strip()
-                fname = str(item.get("feature_name") or "").strip()
-                if not fid or fid in seen_cf_ids:
-                    continue
-                normalized_cf.append({"feature_id": fid, "feature_name": fname})
-                seen_cf_ids.add(fid)
-            # excluded_doc_ids에 들어간 항목은 confirmed에서 제외
-            excluded_set = set(out["excluded_doc_ids"])
-            normalized_cf = [c for c in normalized_cf if c["feature_id"] not in excluded_set]
-            out["confirmed_features"] = normalized_cf
             return out
         if isinstance(raw, str) and raw.strip():
             return {**defaults, "missing_info": raw.strip()}
         return dict(defaults)
-
-    def _merge_confirmed_features(
-        self,
-        prior: List[Dict[str, str]],
-        current: List[Dict[str, str]],
-        excluded: Optional[set] = None,
-    ) -> List[Dict[str, str]]:
-        """이전 시도 + 이번 시도의 confirmed_features 병합. excluded는 제거. id 기준 dedupe."""
-        excluded = excluded or set()
-        merged: List[Dict[str, str]] = []
-        seen: set = set()
-        for src in (prior, current):
-            if not isinstance(src, list):
-                continue
-            for item in src:
-                if not isinstance(item, dict):
-                    continue
-                fid = str(item.get("feature_id") or "").strip()
-                if not fid or fid in seen or fid in excluded:
-                    continue
-                fname = str(item.get("feature_name") or "").strip()
-                merged.append({"feature_id": fid, "feature_name": fname})
-                seen.add(fid)
-        return merged
 
     def _collect_retriever_results(self, retriever_outputs: List[Dict]) -> List[Dict]:
         """
