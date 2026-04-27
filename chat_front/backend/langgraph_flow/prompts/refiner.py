@@ -14,6 +14,7 @@ REFINER_PROMPT_TEMPLATE = """당신은 검색 결과를 분석하고 subtask의 
     "irrelevant_aspects": "검색 결과 중 subtask와 무관한 부분 (없으면 빈 문자열)",
     "query_hints": ["다음 재검색 시 추가하거나 변경할 키워드 (3~6개)"],
     "excluded_doc_ids": ["이미 검토했지만 무관하다고 판단된 feature_id (없으면 빈 배열)"],
+    "confirmed_features": [{"feature_id": "FGR-XXXX", "feature_name": "이번 시도에서 부분적으로라도 관련성이 확인된 feature (excluded_doc_ids와 중복되지 않음)"}],
     "suggested_next_goal": "위 정보를 반영해 다시 검색할 때 사용할 새로운 검색 쿼리(goal). 원본 goal의 의도는 유지하되 missing_info 키워드를 명시적으로 포함하고 irrelevant_aspects는 배제할 것. 한 문장 이내."
   }
 }
@@ -28,24 +29,26 @@ REFINER_PROMPT_TEMPLATE = """당신은 검색 결과를 분석하고 subtask의 
    - wrong_entity: 다른 feature/엔티티가 검색됨 → suggested_next_goal에서 정확한 엔티티 키워드로 교체
    - partial_match: 일부만 일치 → 누락된 부분을 suggested_next_goal에 추가
 4. excluded_doc_ids는 reference_features에 등장한 feature_id 중 무관한 것만 포함하세요. 추측하지 마세요.
+5. confirmed_features에는 이번 시도의 reference_features 중 부분적으로라도 관련성이 확인된 항목을 그대로 포함하세요 (excluded_doc_ids와 중복 금지). partial_match/missing_info의 경우 다음 재시도에서 이 feature를 앵커로 활용하므로 누락 없이 기록할 것.
 
-예시 (verdict=false, missing_info):
+예시 (verdict=false, missing_info — 5G inter-gNB 핸드오버):
 {
-  "refined_text": "결제 처리 흐름에 대한 일반 설명...",
+  "refined_text": "Xn 인터페이스 핸드오버 절차 일반 설명 + RRC Reconfiguration 부분 일치 문서...",
   "subtask_answer": "",
-  "reference_features": [{"feature_id": "FGR-AB1234", "feature_name": "결제 처리"}],
+  "reference_features": [{"feature_id": "FGR-HO0211", "feature_name": "Inter-gNB Handover Manager"}, {"feature_id": "FGR-RR0050", "feature_name": "RRC Reconfiguration"}],
   "verdict": false,
   "retry_reason": {
     "failure_type": "missing_info",
-    "missing_info": "환불 처리 기간(영업일 기준 며칠) 정보가 검색 결과에 없음",
-    "irrelevant_aspects": "결제 승인 흐름 설명은 환불 정책과 무관",
-    "query_hints": ["환불 처리 기간", "영업일", "환불 SLA", "환불 정책"],
-    "excluded_doc_ids": ["FGR-AB1234"],
-    "suggested_next_goal": "환불 정책에서 환불 처리 기간(영업일 기준)과 SLA를 명시한 문서 검색"
+    "missing_info": "Xn-AP HandoverRequest~HandoverRequestAck 시그널링 지연(ms 단위 측정값) 데이터가 검색 결과에 없음",
+    "irrelevant_aspects": "EUTRAN(LTE) X2 핸드오버 절차 설명은 5G NR Xn 핸드오버와 무관",
+    "query_hints": ["Xn-AP", "HandoverRequest 지연", "ms latency", "5G NR inter-gNB", "PDCP re-establishment"],
+    "excluded_doc_ids": ["FGR-HO0211"],
+    "confirmed_features": [{"feature_id": "FGR-RR0050", "feature_name": "RRC Reconfiguration"}],
+    "suggested_next_goal": "5G NR inter-gNB 핸드오버 시 Xn-AP HandoverRequest~Ack 시그널링 지연(ms)을 측정한 문서 검색"
   }
 }
 
-예시 (verdict=false, no_results):
+예시 (verdict=false, no_results — VoNR 지연 통계):
 {
   "refined_text": "(검색 결과 없음 또는 무관)",
   "subtask_answer": "",
@@ -53,11 +56,12 @@ REFINER_PROMPT_TEMPLATE = """당신은 검색 결과를 분석하고 subtask의 
   "verdict": false,
   "retry_reason": {
     "failure_type": "no_results",
-    "missing_info": "FGR-XX 시리즈의 통계 모듈 관련 문서를 못 찾음",
+    "missing_info": "VoNR(Voice over NR) end-to-end 지연(mouth-to-ear latency) 통계 모듈 문서를 못 찾음",
     "irrelevant_aspects": "",
-    "query_hints": ["통계", "리포트", "집계", "대시보드"],
+    "query_hints": ["VoNR", "mouth-to-ear", "IMS latency", "QoS Flow 5QI-1", "voice KPI"],
     "excluded_doc_ids": [],
-    "suggested_next_goal": "통계 리포트 또는 대시보드 집계 기능을 다루는 문서 검색"
+    "confirmed_features": [],
+    "suggested_next_goal": "VoNR 음성 호 mouth-to-ear 지연과 5QI-1 QoS Flow KPI를 다루는 문서 검색"
   }
 }
 """

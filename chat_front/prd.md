@@ -266,8 +266,23 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | executor substitution path 1 whole-token 가드 | ✅ 완료 (2026-04-26) |
 | synthesizer plan/feature 컨텍스트 주입 | ✅ 완료 (2026-04-26) |
 | refiner retry_reason 구조화 + goal 재작성 retry | ✅ 완료 (2026-04-26) |
+| refiner confirmed_features를 next_goal에 mix | ✅ 완료 (2026-04-27) |
 
-### 9.8 refiner retry_reason 구조화 + 다음 시도 goal 재작성 (2026-04-26)
+### 9.9 refiner confirmed_features 누적 + suggested_next_goal mix (2026-04-27)
+
+verdict=false 재시도 사이에 partial-match로 확인된 feature_id/name이 드롭되던 문제 해결. retry_reason에 `confirmed_features` 필드 추가, 시도 간 누적 후 새 goal 문장에 anchor로 부착.
+
+- **증상**: ① `state["reference_features"]`는 verdict=true일 때만 머지됨(`refiner_node.py:212`) → 실패 시도 발견 feature 누적 풀에 미반영. ② `subtask["reference_features"]`는 매 refine 호출마다 덮어씀(`refiner_node.py:144`) → 직전 시도 positive 매칭 손실. ③ `suggested_next_goal`은 한 문장 제약 → LLM이 ID를 직접 다시 명시하지 않으면 다음 시도 컨텍스트에서 사라짐. var_constructor/executor가 새 goal 문자열만 보고 partial-match anchor를 잃음.
+- **prompts/refiner.py**:
+  - `retry_reason` 스키마에 `confirmed_features: [{feature_id, feature_name}]` 추가 — excluded_doc_ids와 중복 금지
+  - 규칙 #5: 부분 관련성 확인된 feature를 누락 없이 기록하라는 지시 추가
+  - few-shot 예시 도메인을 cellular network로 교체 (5G NR inter-gNB handover missing_info, VoNR mouth-to-ear latency no_results)
+- **refiner_node.py**:
+  - `_normalize_retry_reason`에 `confirmed_features` 기본값/형식 보정 추가, excluded_doc_ids에 들어간 ID는 자동 제외
+  - `_merge_confirmed_features` 헬퍼 — 이전 시도 subtask.confirmed_features + 이번 시도분 dedup 머지
+  - `_mix_confirmed_into_goal` 헬퍼 — `suggested_next_goal` 문장 뒤에 `(이미 확인된 관련 feature: FGR-XXX(name), ...)` 앵커 부착 → downstream은 새 goal 문자열만 봐도 anchor 보존
+  - verdict=false 분기에서 누적 confirmed_features를 subtask에 저장하고 새 goal에 mix
+- **루프/스키마 호환**: cumulative `state["reference_features"]` 머지 가드(line 212)는 유지 — confirmed pool은 subtask-local. retry cap·exceeded 처리·다른 노드 인터페이스 무변경.
 
 verdict=false 시 refiner가 동일 쿼리로 재시도하던 무의미 retry 루프를 retry_reason 구조화 → 다음 시도 goal 재작성 + excluded_doc_ids 후필터로 교체.
 
