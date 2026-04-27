@@ -94,8 +94,9 @@ async def construct_binding_context(state: AgentState,
         logger.error("VarConstructorNode: LLM not provided — falling back to default binding context")
         default_context = {
             "query_entities": {"main_concept": []},
-            "previous_features": [],
-            "explicit_dependencies": []
+            # UNUSED: previous_features / explicit_dependencies 는 어떤 노드도 소비하지 않음.
+            # "previous_features": [],
+            # "explicit_dependencies": []
         }
 
         updated_state = update_state(
@@ -131,10 +132,11 @@ async def construct_binding_context(state: AgentState,
         # 기본 구조 보장
         if "query_entities" not in binding_context:
             binding_context["query_entities"] = {"features": [], "keywords": []}
-        if "previous_features" not in binding_context:
-            binding_context["previous_features"] = []
-        if "explicit_dependencies" not in binding_context:
-            binding_context["explicit_dependencies"] = []
+        # UNUSED: 아래 두 키는 코드에서 소비되지 않음 (planner 프롬프트 dump 외 사용처 없음).
+        # if "previous_features" not in binding_context:
+        #     binding_context["previous_features"] = []
+        # if "explicit_dependencies" not in binding_context:
+        #     binding_context["explicit_dependencies"] = []
 
         # 상태 업데이트
         updated_state = update_state(

@@ -94,10 +94,11 @@ class PlannerNode:
             # 기본 구조 보장
             if "query_entities" not in binding_context:
                 binding_context["query_entities"] = {"features": [], "keywords": []}
-            if "previous_features" not in binding_context:
-                binding_context["previous_features"] = []
-            if "explicit_dependencies" not in binding_context:
-                binding_context["explicit_dependencies"] = []
+            # UNUSED: previous_features / explicit_dependencies 는 어떤 노드도 소비하지 않음.
+            # if "previous_features" not in binding_context:
+            #     binding_context["previous_features"] = []
+            # if "explicit_dependencies" not in binding_context:
+            #     binding_context["explicit_dependencies"] = []
 
             print(f"Binding Context 결과: {binding_context}")
             return binding_context
@@ -105,8 +106,9 @@ class PlannerNode:
             print(f"Binding context extraction failed: {e}")
             return {
                 "query_entities": {"features": [], "keywords": []},
-                "previous_features": [],
-                "explicit_dependencies": []
+                # UNUSED: 아래 두 키는 소비되지 않음.
+                # "previous_features": [],
+                # "explicit_dependencies": []
             }
 
     async def plan_next_step(self, state: AgentState,
