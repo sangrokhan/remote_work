@@ -4,7 +4,8 @@ export function Composer({
   text,
   onTextChange,
   onSubmit,
-  onSampleQuestion,
+  onSampleQuestionEasy,
+  onSampleQuestionHard,
   selectedModel,
   onModelChange,
   isModelMenuOpen,
@@ -98,16 +99,31 @@ export function Composer({
           <div className="composer-right-actions">
             <button
               type="button"
-              className="sample-question-btn"
-              aria-label="샘플 질문 불러오기"
-              onClick={onSampleQuestion}
+              className="sample-question-btn sample-question-btn--easy"
+              aria-label="쉬운 샘플 질문 불러오기"
+              onClick={onSampleQuestionEasy}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="8" cy="8" r="6.5" />
+                <path d="M5.5 9.5c.5.7 1.4 1.2 2.5 1.2s2-.5 2.5-1.2" />
+                <circle cx="6" cy="6.5" r="0.6" fill="currentColor" stroke="none" />
+                <circle cx="10" cy="6.5" r="0.6" fill="currentColor" stroke="none" />
+              </svg>
+              <span>쉬운 질문</span>
+            </button>
+
+            <button
+              type="button"
+              className="sample-question-btn sample-question-btn--hard"
+              aria-label="어려운 샘플 질문 불러오기"
+              onClick={onSampleQuestionHard}
             >
               <svg viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="8" cy="8" r="6.5" />
                 <path d="M6 6.5a2 2 0 1 1 2 2v1" />
                 <circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none" />
               </svg>
-              <span>질문 예시</span>
+              <span>어려운 질문</span>
             </button>
 
           <button type="submit" className="composer-send-btn" aria-label="메시지 전송">

@@ -251,7 +251,8 @@ function App() {
           text={text}
           onTextChange={setText}
           onSubmit={sendMessage}
-          onSampleQuestion={() => setText(pickSampleQuestion())}
+          onSampleQuestionEasy={() => setText(pickSampleQuestion('easy'))}
+          onSampleQuestionHard={() => setText(pickSampleQuestion('hard'))}
           selectedModel={selectedModel}
           onModelChange={setSelectedModel}
           isModelMenuOpen={isModelMenuOpen}

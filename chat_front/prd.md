@@ -203,6 +203,13 @@ get_llm(model_name: str, api_url: str, api_key: str) -> BaseLLM
 - 응답 모드, 최대 토큰 설정.
 - 닫기: 닫기 버튼 / 배경 클릭 / ESC.
 
+### 5.8 샘플 질문 버튼 (✅ 구현)
+
+- Composer 우측에 두 개의 샘플 질문 버튼 노출: **쉬운 질문** / **어려운 질문**.
+- 각 버튼 클릭 시 `frontend/config/sample_questions.json`의 해당 난이도 풀(`easy` | `hard`)에서 랜덤 1건을 입력창에 채움.
+- 풀 구조: `{ "easy": [...], "hard": [...] }`. `useSampleQuestion().pick(difficulty)`가 난이도를 인자로 받음.
+- 색상: easy = 녹색 톤, hard = 주황/적색 톤(시각적 난이도 구분).
+
 ---
 
 ## 6. UI 컬러 팔레트
