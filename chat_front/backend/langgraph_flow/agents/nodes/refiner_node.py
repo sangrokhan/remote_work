@@ -268,6 +268,29 @@ class RefinerNode:
                     f"attempt={current_attempt} verdict={entry_verdict} ==="
                 )
 
+            # Compress retrieved docs into single-line statements + dedupe.
+            # Replaces this subtask's retriever_history rows wholesale → next
+            # refiner attempt sees compressed lines, not full raw docs.
+            excluded_for_compress = (
+                current_subtask_state.get("excluded_doc_ids", [])
+                if current_subtask_state else []
+            )
+            compressed_lines = self._compress_retriever_outputs(
+                retriever_outputs, excluded_ids=excluded_for_compress
+            )
+            update_kwargs["retriever_history"] = [{
+                "subtask_id": latest_subtask_id,
+                "query": f"<compressed:attempt={current_attempt}>",
+                "result": {"results": compressed_lines},
+                "compressed": True,
+                "_op": "replace_subtask",
+            }]
+            print(
+                f"=== DEBUG: retriever_history compressed: id={latest_subtask_id} "
+                f"raw_outputs={len(retriever_outputs)} → lines={len(compressed_lines)} "
+                f"excluded={len(excluded_for_compress)} ==="
+            )
+
             updated_state = update_state(state, **update_kwargs)
 
             return updated_state
@@ -681,6 +704,72 @@ reference_features 필드에 검색 결과에서 사용된 모든 feature의 fea
 
     def _format_cumulative_features(self, features: List[Dict]) -> str:
         return format_features(features, line_prefix="  - ", empty="(누적 feature 없음)")
+
+    def _compress_retriever_outputs(
+        self,
+        retriever_outputs: List[Dict],
+        excluded_ids: Optional[List[str]] = None,
+        per_doc_chars: int = 200,
+    ) -> List[str]:
+        """
+        Retriever 결과를 단일 라인 문자열로 압축.
+
+        - feature_id 단위로 dedup (이미 압축된 라인 + 새 raw 라인 혼재 처리)
+        - excluded_ids에 포함된 feature_id 제거
+        - 각 doc은 `[FGR-XXXX] feature_name — {요약 200자}` 형태 한 줄
+        """
+        import re
+
+        excluded = set(excluded_ids or [])
+        seen_ids: set = set()
+        lines: List[str] = []
+
+        compressed_prefix_pattern = re.compile(r'^\[FGR-[A-Z]{2}\d{4}\]')
+        feature_id_pattern = re.compile(r'FGR-[A-Z]{2}\d{4}')
+        feature_name_pattern = re.compile(r'"feature_name":\s*"([^"]+)"')
+
+        def _iter_items() -> List[str]:
+            collected = []
+            for output in retriever_outputs:
+                result = output.get("result", {})
+                if isinstance(result, dict):
+                    items = result.get("results", [])
+                elif isinstance(result, list):
+                    items = result
+                else:
+                    continue
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if isinstance(item, str):
+                        collected.append(item)
+                    elif isinstance(item, dict):
+                        text = item.get("text", "")
+                        if text:
+                            collected.append(text)
+            return collected
+
+        for text in _iter_items():
+            fid_match = feature_id_pattern.search(text)
+            fid = fid_match.group(0) if fid_match else None
+            if fid and (fid in excluded or fid in seen_ids):
+                continue
+            if fid:
+                seen_ids.add(fid)
+
+            # 이미 압축된 라인은 그대로 보존
+            if compressed_prefix_pattern.match(text):
+                lines.append(text)
+                continue
+
+            name_match = feature_name_pattern.search(text)
+            fname = name_match.group(1).strip() if name_match else ""
+
+            summary = re.sub(r'\s+', ' ', text).strip()[:per_doc_chars]
+            prefix = f"[{fid}] {fname} — " if fid else "[unknown] — "
+            lines.append(prefix + summary)
+
+        return lines
 
     def _format_results_for_refiner(self, results: List[Dict]) -> str:
         """

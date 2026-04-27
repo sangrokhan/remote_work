@@ -59,12 +59,27 @@ def merge_reference_features(old: List[Dict], new: List[Dict]) -> List[Dict]:
 
 def merge_retriever_history(old: List[Dict], new: List[Dict]) -> List[Dict]:
     if not old:
-        return new or []
+        old = []
     if not new:
         return old
+
+    # Replace ops: drop existing rows for given subtask_id before merging
+    replace_subtask_ids = {
+        item.get("subtask_id")
+        for item in new
+        if item.get("_op") == "replace_subtask" and item.get("subtask_id") is not None
+    }
+    if replace_subtask_ids:
+        old = [h for h in old if h.get("subtask_id") not in replace_subtask_ids]
+
+    cleaned_new = [
+        {k: v for k, v in item.items() if k != "_op"}
+        for item in new
+    ]
+
     existing_keys = {(item.get("subtask_id"), (item.get("query", ""))[:100]) for item in old}
     result = list(old)
-    for item in new:
+    for item in cleaned_new:
         key = (item.get("subtask_id"), (item.get("query", ""))[:100])
         if key not in existing_keys:
             result.append(item)
