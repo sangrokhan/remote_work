@@ -162,9 +162,8 @@ class RefinerNode:
                         subtask_copy["confirmed_features"] = merged_confirmed
                         subtask_copy["retry_reason"] = rr_dict
 
-                        base_goal = (rr_dict.get("suggested_next_goal") or "").strip()
-                        if base_goal:
-                            new_goal = self._mix_confirmed_into_goal(base_goal, merged_confirmed)
+                        new_goal = (rr_dict.get("suggested_next_goal") or "").strip()
+                        if new_goal:
                             if not subtask_copy.get("original_goal"):
                                 subtask_copy["original_goal"] = subtask_copy.get(
                                     "goal", subtask_copy.get("description", "")
@@ -360,22 +359,6 @@ class RefinerNode:
                 merged.append({"feature_id": fid, "feature_name": fname})
                 seen.add(fid)
         return merged
-
-    def _mix_confirmed_into_goal(
-        self, base_goal: str, confirmed: List[Dict[str, str]]
-    ) -> str:
-        """suggested_next_goal 문장 뒤에 확인된 feature 앵커를 부착.
-
-        downstream(var_constructor/executor)이 새 goal 문자열만 보더라도
-        앞선 시도에서 partial-match로 확인된 feature_id/name을 잃지 않도록 함.
-        """
-        if not confirmed:
-            return base_goal
-        anchors = ", ".join(
-            f"{c['feature_id']}({c['feature_name']})" if c.get("feature_name") else c["feature_id"]
-            for c in confirmed
-        )
-        return f"{base_goal} (이미 확인된 관련 feature: {anchors})"
 
     def _collect_retriever_results(self, retriever_outputs: List[Dict]) -> List[Dict]:
         """

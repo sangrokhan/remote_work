@@ -15,7 +15,7 @@ REFINER_PROMPT_TEMPLATE = """당신은 검색 결과를 분석하고 subtask의 
     "query_hints": ["다음 재검색 시 추가하거나 변경할 키워드 (3~6개)"],
     "excluded_doc_ids": ["이미 검토했지만 무관하다고 판단된 feature_id (없으면 빈 배열)"],
     "confirmed_features": [{"feature_id": "FGR-XXXX", "feature_name": "이번 시도에서 부분적으로라도 관련성이 확인된 feature (excluded_doc_ids와 중복되지 않음)"}],
-    "suggested_next_goal": "위 정보를 반영해 다시 검색할 때 사용할 새로운 검색 쿼리(goal). 원본 goal의 의도는 유지하되 missing_info 키워드를 명시적으로 포함하고 irrelevant_aspects는 배제할 것. 한 문장 이내."
+    "suggested_next_goal": "위 정보를 반영해 다음 시도에서 사용할 새로운 검색 goal. 한 문장으로 압축하지 말고, 아래 'suggested_next_goal 작성 가이드'에 따라 여러 줄/문장으로 충분히 구체적으로 기술할 것."
   }
 }
 
@@ -31,6 +31,19 @@ REFINER_PROMPT_TEMPLATE = """당신은 검색 결과를 분석하고 subtask의 
 4. excluded_doc_ids는 reference_features에 등장한 feature_id 중 무관한 것만 포함하세요. 추측하지 마세요.
 5. confirmed_features에는 이번 시도의 reference_features 중 부분적으로라도 관련성이 확인된 항목을 그대로 포함하세요 (excluded_doc_ids와 중복 금지). partial_match/missing_info의 경우 다음 재시도에서 이 feature를 앵커로 활용하므로 누락 없이 기록할 것.
 
+suggested_next_goal 작성 가이드:
+한 문장으로 압축하지 말고, 다음 정보를 빠짐없이 포함한 구조화된 goal 을 작성하세요. 줄바꿈/번호/불릿 사용 가능합니다.
+  (a) 검색 의도(intent) — 원본 goal 의 의도를 유지하되 missing_info / irrelevant_aspects 를 반영해 재진술.
+  (b) 관련 feature 명시 — 다음 모든 feature_id 와 feature_name 을 본문에 직접 적시:
+      - 이번 시도의 confirmed_features (앵커)
+      - 의존하는(dependent) 이전 subtask 들이 산출한 reference_features (사용자 입력의 "이전 Subtask 결과", "지금까지 누적된 reference_features" 참조)
+      예: "관련 feature: FGR-RR0050(RRC Reconfiguration), FGR-PD0102(PDCP Re-establishment)"
+  (c) 의존 subtask 의 핵심 키워드 — 의존 subtask 의 goal/answer 에서 추출한 도메인 키워드를 같이 명시 (예: 5QI, Xn-AP, mouth-to-ear).
+  (d) 보강해야 할 정보 — missing_info 를 그대로 또는 더 구체화해서 포함, 필요한 정량값(ms, %, 횟수 등)이 있으면 명시.
+  (e) 배제 조건 — irrelevant_aspects / excluded_doc_ids 를 "다음 항목 제외:" 형태로 명시해 다음 시도가 같은 무관 문서로 회귀하지 않도록 함.
+  (f) query_hints 키워드는 본문에 자연스럽게 녹여 넣을 것 (단순 나열보다 구문에 통합).
+빈 단순 한 줄(예: "...에 대한 문서 검색")은 금지. 위 (a)~(e) 중 빠진 항목이 있으면 다시 작성하세요.
+
 예시 (verdict=false, missing_info — 5G inter-gNB 핸드오버):
 {
   "refined_text": "Xn 인터페이스 핸드오버 절차 일반 설명 + RRC Reconfiguration 부분 일치 문서...",
@@ -44,7 +57,7 @@ REFINER_PROMPT_TEMPLATE = """당신은 검색 결과를 분석하고 subtask의 
     "query_hints": ["Xn-AP", "HandoverRequest 지연", "ms latency", "5G NR inter-gNB", "PDCP re-establishment"],
     "excluded_doc_ids": ["FGR-HO0211"],
     "confirmed_features": [{"feature_id": "FGR-RR0050", "feature_name": "RRC Reconfiguration"}],
-    "suggested_next_goal": "5G NR inter-gNB 핸드오버 시 Xn-AP HandoverRequest~Ack 시그널링 지연(ms)을 측정한 문서 검색"
+    "suggested_next_goal": "의도: 5G NR inter-gNB 핸드오버의 Xn-AP 시그널링 지연(ms 단위 정량값)을 측정/기재한 문서를 찾는다.\n관련 feature: FGR-RR0050(RRC Reconfiguration), FGR-PD0102(PDCP Re-establishment, 의존 subtask 산출).\n의존 subtask 핵심 키워드: PDCP re-establishment, SN status transfer, gNB-CU/DU split.\n보강 필요 정보: HandoverRequest~HandoverRequestAck 왕복 지연(ms), 측정 환경(시뮬 또는 실측), 부하 조건.\n배제: EUTRAN(LTE) X2 핸드오버 절차 일반 설명, FGR-HO0211(이미 무관 판정)."
   }
 }
 
@@ -61,7 +74,7 @@ REFINER_PROMPT_TEMPLATE = """당신은 검색 결과를 분석하고 subtask의 
     "query_hints": ["VoNR", "mouth-to-ear", "IMS latency", "QoS Flow 5QI-1", "voice KPI"],
     "excluded_doc_ids": [],
     "confirmed_features": [],
-    "suggested_next_goal": "VoNR 음성 호 mouth-to-ear 지연과 5QI-1 QoS Flow KPI를 다루는 문서 검색"
+    "suggested_next_goal": "의도: VoNR(Voice over NR) 음성 호의 end-to-end 지연(mouth-to-ear latency)과 5QI-1 QoS Flow KPI 정량값을 기재한 문서를 찾는다.\n관련 feature: (이번 시도 confirmed 없음, 의존 subtask 산출 reference_features 도 비어 있음 → 누적 reference_features 에서 IMS/QoS 관련 항목이 있으면 명시).\n의존 subtask 핵심 키워드: IMS, SIP signaling, 5QI-1, QoS Flow, voice bearer.\n보강 필요 정보: mouth-to-ear 지연 ms 값, 측정 시나리오(코덱 EVS-NB/WB 등), KPI 임계치.\n배제: LTE VoLTE 전용 KPI 문서, 데이터 트래픽 5QI 일반 설명."
   }
 }
 """
