@@ -6,16 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models import BaseLanguageModel
 from langgraph_flow.agents.state import AgentState, update_state
-from langgraph_flow.agents._subtask_utils import (
-    format_features,
-    pick_latest_successful,
-    result_payload,
-    truncate,
-)
 from langgraph_flow.prompts.refiner import REFINER_PROMPT_TEMPLATE
-
-GOAL_PREVIEW_MAX = 80
-ANSWER_PREVIEW_MAX = 300
 
 
 class RefinerNode:
@@ -268,28 +259,30 @@ class RefinerNode:
                     f"attempt={current_attempt} verdict={entry_verdict} ==="
                 )
 
-            # Compress retrieved docs into single-line statements + dedupe.
-            # Replaces this subtask's retriever_history rows wholesale → next
-            # refiner attempt sees compressed lines, not full raw docs.
-            excluded_for_compress = (
+            # Mark properly-retrieved (LLM-confirmed relevant) raw documents.
+            # Synthesizer uses these at final answer; raw text preserved (no compression).
+            relevant_ids = [
+                f.get("feature_id")
+                for f in (reference_features_found or [])
+                if f.get("feature_id")
+            ]
+            excluded_for_mark = (
                 current_subtask_state.get("excluded_doc_ids", [])
                 if current_subtask_state else []
             )
-            compressed_lines = self._compress_retriever_outputs(
-                retriever_outputs, excluded_ids=excluded_for_compress
+            marked_docs = self._collect_marked_documents(
+                retriever_outputs,
+                relevant_feature_ids=relevant_ids,
+                excluded_ids=excluded_for_mark,
+                subtask_id=latest_subtask_id,
+                attempt=current_attempt,
             )
-            update_kwargs["retriever_history"] = [{
-                "subtask_id": latest_subtask_id,
-                "query": f"<compressed:attempt={current_attempt}>",
-                "result": {"results": compressed_lines},
-                "compressed": True,
-                "_op": "replace_subtask",
-            }]
-            print(
-                f"=== DEBUG: retriever_history compressed: id={latest_subtask_id} "
-                f"raw_outputs={len(retriever_outputs)} → lines={len(compressed_lines)} "
-                f"excluded={len(excluded_for_compress)} ==="
-            )
+            if marked_docs:
+                update_kwargs["marked_documents"] = marked_docs
+                print(
+                    f"=== DEBUG: marked_documents push: id={latest_subtask_id} "
+                    f"attempt={current_attempt} count={len(marked_docs)} ==="
+                )
 
             updated_state = update_state(state, **update_kwargs)
 
@@ -482,6 +475,76 @@ class RefinerNode:
 
         return features
 
+    def _collect_marked_documents(
+        self,
+        retriever_outputs: List[Dict],
+        relevant_feature_ids: List[str],
+        excluded_ids: Optional[List[str]] = None,
+        subtask_id: Any = None,
+        attempt: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """
+        Refiner 가 relevant 로 판단한 문서를 raw text 그대로 marking.
+
+        - relevant_feature_ids: refiner LLM 의 reference_features 에서 추출한 id set
+        - excluded_ids: refiner LLM 의 excluded_doc_ids (제외)
+        - 압축/요약 없이 원본 text 보존 → synthesizer 가 final answer 작성 시 참조
+
+        Returns:
+            list of {feature_id, feature_name, text, subtask_id, attempt}
+        """
+        import re
+
+        relevant = set(relevant_feature_ids or [])
+        excluded = set(excluded_ids or [])
+        if not relevant:
+            return []
+
+        feature_id_pattern = re.compile(r'FGR-[A-Z]{2}\d{4}')
+        feature_name_pattern = re.compile(r'"feature_name":\s*"([^"]+)"')
+
+        marked: List[Dict[str, Any]] = []
+        seen_in_batch: set = set()
+
+        for output in retriever_outputs:
+            result = output.get("result", {})
+            if isinstance(result, dict):
+                items = result.get("results", [])
+            elif isinstance(result, list):
+                items = result
+            else:
+                continue
+            if not isinstance(items, list):
+                continue
+
+            for item in items:
+                text = item if isinstance(item, str) else (
+                    item.get("text", "") if isinstance(item, dict) else ""
+                )
+                if not text:
+                    continue
+
+                fid_match = feature_id_pattern.search(text)
+                if not fid_match:
+                    continue
+                fid = fid_match.group(0)
+                if fid in excluded or fid not in relevant or fid in seen_in_batch:
+                    continue
+
+                name_match = feature_name_pattern.search(text)
+                fname = name_match.group(1).strip() if name_match else ""
+
+                marked.append({
+                    "feature_id": fid,
+                    "feature_name": fname,
+                    "text": text,
+                    "subtask_id": subtask_id,
+                    "attempt": attempt,
+                })
+                seen_in_batch.add(fid)
+
+        return marked
+
     def _extract_features_from_results(self, results: List[Dict]) -> List[Dict[str, str]]:
         """
         검색 결과에서 feature_id와 feature_name 직접 추출 (fallback)
@@ -559,35 +622,19 @@ class RefinerNode:
         raw_extracted_features = self._extract_features_from_raw_results(retriever_outputs)
         print(f"=== DEBUG: 원본 데이터에서 추출된 features: {raw_extracted_features} ===")
 
-        # 검색 결과 텍스트 포맷팅
+        # 검색 결과 텍스트 포맷팅 (현재 subtask 의 raw 문서만)
         results_text = self._format_results_for_refiner(results)
 
-        # 다른 subtask 컨텍스트 — 격리된 refine 방지 (cross-subtask 정합성)
-        plan_overview_text = self._format_plan_overview(subtasks, latest_subtask_id)
-        other_results_text = self._format_other_subtask_results(state, latest_subtask_id)
-        cumulative_features_text = self._format_cumulative_features(
-            state.get("reference_features", [])
-        )
-
         user_content = f"""사용자 질문: {state.get('user_query', '')}
-
-전체 실행 계획 (Plan Overview):
-{plan_overview_text}
-
-이전 Subtask 결과 (cross-reference 용):
-{other_results_text}
-
-지금까지 누적된 reference_features (중복 제외):
-{cumulative_features_text}
 
 현재 Subtask: {json.dumps(current_subtask, ensure_ascii=False, indent=2) if current_subtask else 'N/A'}
 
 검색 결과:
 {results_text}
 
-위 검색 결과를 분석하고, subtask의 목표를 달성했는지 판단하여 JSON 형식으로 반환해주세요.
-reference_features 필드에 검색 결과에서 사용된 모든 feature의 feature_id와 feature_name을 반드시 포함하세요.
-이전 Subtask 결과와 누적 reference_features를 고려해 중복은 제외하되 누락 없이 모든 신규 feature를 포함하세요.
+위 검색 결과를 분석하고, 현재 subtask 의 목표를 달성했는지 판단하여 JSON 형식으로 반환해주세요.
+reference_features 필드에 검색 결과에서 실제로 사용된 모든 feature 의 feature_id 와 feature_name 을 반드시 포함하세요.
+다른 subtask 의 결과나 누적 reference_features 는 참조하지 마세요 — 이 subtask 의 검색 결과만 평가합니다.
 
 형식: {{"feature_id": "FGR-XXXX", "feature_name": "..."}}"""
 
@@ -663,113 +710,6 @@ reference_features 필드에 검색 결과에서 사용된 모든 feature의 fea
                 "reference_features": features_to_use,
                 "verdict": False
             }
-
-    def _format_plan_overview(self, subtasks: List[Dict], current_id: Any) -> str:
-        if not subtasks:
-            return "(plan 없음)"
-        lines = []
-        for s in subtasks:
-            sid = s.get("id", "?")
-            verdict = s.get("verdict", False)
-            if sid == current_id:
-                status = "current"
-            elif verdict is True:
-                status = "done"
-            elif verdict == "exceeded":
-                status = "exceeded"
-            else:
-                status = "pending"
-            goal = truncate((s.get("goal") or s.get("description") or "").strip(), GOAL_PREVIEW_MAX)
-            lines.append(f"  [{sid}] ({status}) {goal}")
-        return "\n".join(lines)
-
-    def _format_other_subtask_results(self, state: AgentState, current_id: Any) -> str:
-        latest_per_id = pick_latest_successful(
-            state.get("subtask_results", []), exclude_id=current_id
-        )
-        if not latest_per_id:
-            return "(이전 완료 subtask 없음)"
-        lines = []
-        for sid in sorted(latest_per_id.keys()):
-            payload = result_payload(latest_per_id[sid])
-            answer = truncate(
-                (payload["subtask_answer"] or payload["refined_text"]).strip(),
-                ANSWER_PREVIEW_MAX,
-            )
-            ref_compact = format_features(payload["reference_features"], sep=", ")
-            lines.append(f"[Subtask {sid}]")
-            lines.append(f"  answer: {answer or '(빈 답변)'}")
-            lines.append(f"  features: {ref_compact}")
-        return "\n".join(lines)
-
-    def _format_cumulative_features(self, features: List[Dict]) -> str:
-        return format_features(features, line_prefix="  - ", empty="(누적 feature 없음)")
-
-    def _compress_retriever_outputs(
-        self,
-        retriever_outputs: List[Dict],
-        excluded_ids: Optional[List[str]] = None,
-        per_doc_chars: int = 200,
-    ) -> List[str]:
-        """
-        Retriever 결과를 단일 라인 문자열로 압축.
-
-        - feature_id 단위로 dedup (이미 압축된 라인 + 새 raw 라인 혼재 처리)
-        - excluded_ids에 포함된 feature_id 제거
-        - 각 doc은 `[FGR-XXXX] feature_name — {요약 200자}` 형태 한 줄
-        """
-        import re
-
-        excluded = set(excluded_ids or [])
-        seen_ids: set = set()
-        lines: List[str] = []
-
-        compressed_prefix_pattern = re.compile(r'^\[FGR-[A-Z]{2}\d{4}\]')
-        feature_id_pattern = re.compile(r'FGR-[A-Z]{2}\d{4}')
-        feature_name_pattern = re.compile(r'"feature_name":\s*"([^"]+)"')
-
-        def _iter_items() -> List[str]:
-            collected = []
-            for output in retriever_outputs:
-                result = output.get("result", {})
-                if isinstance(result, dict):
-                    items = result.get("results", [])
-                elif isinstance(result, list):
-                    items = result
-                else:
-                    continue
-                if not isinstance(items, list):
-                    continue
-                for item in items:
-                    if isinstance(item, str):
-                        collected.append(item)
-                    elif isinstance(item, dict):
-                        text = item.get("text", "")
-                        if text:
-                            collected.append(text)
-            return collected
-
-        for text in _iter_items():
-            fid_match = feature_id_pattern.search(text)
-            fid = fid_match.group(0) if fid_match else None
-            if fid and (fid in excluded or fid in seen_ids):
-                continue
-            if fid:
-                seen_ids.add(fid)
-
-            # 이미 압축된 라인은 그대로 보존
-            if compressed_prefix_pattern.match(text):
-                lines.append(text)
-                continue
-
-            name_match = feature_name_pattern.search(text)
-            fname = name_match.group(1).strip() if name_match else ""
-
-            summary = re.sub(r'\s+', ' ', text).strip()[:per_doc_chars]
-            prefix = f"[{fid}] {fname} — " if fid else "[unknown] — "
-            lines.append(prefix + summary)
-
-        return lines
 
     def _format_results_for_refiner(self, results: List[Dict]) -> str:
         """

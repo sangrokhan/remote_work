@@ -57,29 +57,33 @@ def merge_reference_features(old: List[Dict], new: List[Dict]) -> List[Dict]:
     return result
 
 
-def merge_retriever_history(old: List[Dict], new: List[Dict]) -> List[Dict]:
+def merge_marked_documents(old: List[Dict], new: List[Dict]) -> List[Dict]:
+    """Refiner 가 relevant 로 marking 한 문서를 feature_id 단위 dedup 하며 누적.
+
+    Synthesizer 가 final answer 생성 시 이 list 의 raw text 를 그대로 인용/요약.
+    """
     if not old:
-        old = []
+        return new or []
     if not new:
         return old
+    seen = {item.get("feature_id") for item in old if item.get("feature_id")}
+    result = list(old)
+    for item in new:
+        fid = item.get("feature_id")
+        if fid and fid not in seen:
+            result.append(item)
+            seen.add(fid)
+    return result
 
-    # Replace ops: drop existing rows for given subtask_id before merging
-    replace_subtask_ids = {
-        item.get("subtask_id")
-        for item in new
-        if item.get("_op") == "replace_subtask" and item.get("subtask_id") is not None
-    }
-    if replace_subtask_ids:
-        old = [h for h in old if h.get("subtask_id") not in replace_subtask_ids]
 
-    cleaned_new = [
-        {k: v for k, v in item.items() if k != "_op"}
-        for item in new
-    ]
-
+def merge_retriever_history(old: List[Dict], new: List[Dict]) -> List[Dict]:
+    if not old:
+        return new or []
+    if not new:
+        return old
     existing_keys = {(item.get("subtask_id"), (item.get("query", ""))[:100]) for item in old}
     result = list(old)
-    for item in cleaned_new:
+    for item in new:
         key = (item.get("subtask_id"), (item.get("query", ""))[:100])
         if key not in existing_keys:
             result.append(item)
@@ -94,6 +98,7 @@ class AgentState(TypedDict):
     retriever_outputs: Annotated[List[Dict[str, Any]], lambda old, new: new if new is not None else (old or [])]
     retriever_history: Annotated[List[Dict[str, Any]], merge_retriever_history]
     reference_features: Annotated[List[Dict[str, str]], merge_reference_features]
+    marked_documents: Annotated[List[Dict[str, Any]], merge_marked_documents]
 
     subtasks: Annotated[List[Dict[str, Any]], merge_subtasks]
     subtask_results: Annotated[List[Dict[str, Any]], merge_subtask_results]
@@ -120,6 +125,7 @@ def create_initial_state(user_query: str) -> AgentState:
         retriever_outputs=[],
         retriever_history=[],
         reference_features=[],
+        marked_documents=[],
         subtasks=[],
         subtask_results=[],
         current_executing_subtask_id=None,

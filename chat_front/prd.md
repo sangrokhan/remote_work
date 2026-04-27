@@ -268,21 +268,28 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | refiner retry_reason 구조화 + goal 재작성 retry | ✅ 완료 (2026-04-26) |
 | refiner confirmed_features를 next_goal에 mix | ✅ 완료 (2026-04-27) |
 | refiner confirmed_features anchor 폐기 → seen_feature_ids id-only 누적 | ✅ 완료 (2026-04-27) |
-| refiner 후 retrieved docs 단일라인 압축 + history dedup | ✅ 완료 (2026-04-27) |
+| refiner 후 retrieved docs 단일라인 압축 + history dedup | ⛔ 폐기 (2026-04-27) |
+| refiner cross-subtask context 제거 + marked_documents 도입 | ✅ 완료 (2026-04-27) |
 
-### 9.11 refiner 후 retrieved docs 단일라인 압축 + history dedup (2026-04-27)
+### 9.12 refiner cross-subtask context 제거 + marked_documents 도입 (2026-04-27)
 
-retry attempt 마다 refiner 가 retriever_history 에서 같은 subtask 의 누적 raw 문서 전체를 다시 LLM input 에 dump → input 토큰이 attempt 당 K docs × full text 만큼 단조 증가. refiner 종료 시 해당 subtask 의 history 행을 한 줄 요약 statement 로 교체하고 feature_id 단위 dedup + excluded_doc_ids 차감을 적용해 attempt-level 토큰 inflation 제거.
+9.11 의 raw 문서 단일라인 압축이 final answer 품질을 떨어뜨림 → 전략 전환. refiner 단계에서는 (a) 다른 subtask 의 history/answer 를 prompt 에 주입하지 않고 현재 subtask 의 검색 결과만 평가, (b) raw 문서를 압축하지 않고 그대로 보존, (c) refiner 가 relevant 로 판단한 문서를 `marked_documents` 에 raw text 그대로 적재해 synthesizer 가 final answer 작성 시 직접 참조.
 
-- **동기**: refiner 가 retry 할 때마다 `_format_results_for_refiner` 가 attempt1+attempt2+... 의 모든 raw 문서를 그대로 넣음. 문서별 char cap 도, attempt 별 슬라이싱도 없음. excluded_doc_ids 는 retriever 의 다음 검색만 필터링하지 retriever_history 자체는 그대로 남음 → input 토큰 quadratic-ish 증가 → latency 증가.
-- **state.py `merge_retriever_history`**:
-  - reducer 에 replacement marker 지원: new entry 가 `_op == "replace_subtask"` 면 같은 subtask_id 의 old rows 전부 drop 후 cleaned_new merge. `_op` 키는 저장 전 strip.
-  - 기존 append-by-key 시맨틱은 marker 없는 entry 에 대해 그대로 유지 → backward-compatible.
+- **state.py**:
+  - 9.11 의 `_op: replace_subtask` reducer 분기 제거 → `merge_retriever_history` 원래 append-with-dedup 로 복귀.
+  - 신규 reducer `merge_marked_documents`: feature_id 단위 dedup 으로 누적 (첫 등장 보존).
+  - `AgentState.marked_documents: List[Dict]` 필드 추가 — 각 entry 는 `{feature_id, feature_name, text (raw), subtask_id, attempt}`.
+  - `create_initial_state` 에 `marked_documents=[]` 초기화.
 - **refiner_node.py**:
-  - `_compress_retriever_outputs(retriever_outputs, excluded_ids, per_doc_chars=200)` 추가: 각 doc 을 `[FGR-XXXX] feature_name — {200자 요약}` 한 줄로 변환. feature_id 단위 dedup, excluded_doc_ids 차감, 이미 압축된 라인 (`[FGR-...]` prefix) 통과.
-  - `refine_results` 에서 update_state 직전, `update_kwargs["retriever_history"]` 에 `_op: replace_subtask` marker 와 함께 압축 라인 1 entry push. excluded_ids 는 `current_subtask_state["excluded_doc_ids"]` (verdict=false 분기에서 union 갱신된 값) 사용.
-- **호환**: 다음 attempt 의 retriever 는 기존대로 raw row append → 다음 refiner 는 (이전 압축 라인 + 새 raw 라인) 혼재 input 처리. `_compress_retriever_outputs` 가 양쪽 dedup → 단조 증가 차단. synthesizer/var_binder/var_constructor 는 retriever_history 를 직접 LLM dump 하지 않으므로 영향 없음.
-- **기대 효과**: refiner LLM input — attempt N 시 (압축된 prior K docs × ≤200자) + (현재 raw) 만 → attempt-level inflation 제거. retry 가 반복되어도 input 사이즈 거의 평탄.
+  - 9.11 압축 로직 (`_compress_retriever_outputs`, `_op: replace_subtask` push) 전부 삭제.
+  - `_llm_refine_with_verdict` user_content 에서 cross-subtask 섹션 (`전체 실행 계획`, `이전 Subtask 결과`, `누적 reference_features`) 제거 → `사용자 질문 / 현재 Subtask / 검색 결과` 3 섹션만 남김. helper `_format_plan_overview`, `_format_other_subtask_results`, `_format_cumulative_features` 제거 + 사용처 사라진 import 정리.
+  - 신규 helper `_collect_marked_documents(retriever_outputs, relevant_feature_ids, excluded_ids, subtask_id, attempt)`: refiner LLM 의 `reference_features` (relevant) ∩ raw 문서, `excluded_doc_ids` 제외, feature_id 단위 dedup. raw text 그대로 보존.
+  - `refine_results` 에서 update_state 직전 marked docs 빌드 후 `update_kwargs["marked_documents"]` push.
+- **prompts/refiner.py**:
+  - "이전 Subtask 결과", "누적 reference_features" 참조 문구 제거.
+  - suggested_next_goal 가이드를 (a) intent (b) 보강 정보 (c) 배제 (d) query_hints inline 로 단순화 — 의존 subtask 섹션 제거.
+- **호환**: synthesizer 는 기존 `subtask_results.refined_text` + `retriever_history` (3 순위 fallback) 외에 신규 `marked_documents` 를 우선 인용 가능 (synthesizer 측 인덱싱은 후속 PR).
+- **기대 효과**: refiner input — attempt-level cross-subtask 컨텍스트 제거로 약 (plan_overview + other_results + cumulative_features) 분량 절감. 동시에 raw 문서는 history 와 marked_documents 양쪽에 남아 final answer 품질/추적성 보존.
 
 ### 9.10 refiner confirmed_features anchor 폐기 → seen_feature_ids id-only 누적 (2026-04-27)
 
