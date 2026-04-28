@@ -100,13 +100,20 @@ class SynthesizerNode:
         logger.info("  user_query     : %s", state.get("user_query", ""))
         logger.info("  subtasks       : %d total", len(subtasks))
         for i, t in enumerate(subtasks):
-            logger.info("    [%d] id=%s action=%s", i, t.get("id"), t.get("action", t.get("tool", "?")))
+            logger.info(
+                "    [%d] id=%s task_type=%s verdict=%s",
+                i, t.get("id"), t.get("task_type", "?"), t.get("verdict", False),
+            )
         logger.info("  subtask_results: %d items", len(subtask_results))
         for i, r in enumerate(subtask_results):
-            status = r.get("status", "?")
+            verdict = r.get("verdict", "?")
             sid = r.get("id", "?")
-            content_full = str(r.get("content", r.get("result", "")))
-            logger.info("    [%d] subtask_id=%s status=%s content=%s", i, sid, status, content_full)
+            attempt = r.get("attempt", "?")
+            content_full = str(r.get("result", r.get("content", "")))
+            logger.info(
+                "    [%d] subtask_id=%s attempt=%s verdict=%s result=%s",
+                i, sid, attempt, verdict, content_full,
+            )
         logger.info("  retriever_outputs: %d items", len(retriever_outputs_raw))
         for i, o in enumerate(retriever_outputs_raw):
             if isinstance(o, dict):

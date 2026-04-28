@@ -309,11 +309,14 @@ class ExecutorNode:
                 # embeds feature_id / feature_name / literals even if goal lacks placeholders
                 merged = {**subtask.get("bindings", {}), **resolved_bindings}
                 concrete = {
-                    k: v for k, v in merged.items()
-                    if isinstance(v, str) and not v.startswith("$") and not v.startswith("unresolved_")
+                    k: v.strip() for k, v in merged.items()
+                    if isinstance(v, str)
+                    and v.strip()
+                    and not v.startswith("$")
+                    and not v.startswith("unresolved_")
                 }
                 if concrete:
-                    extras = " ".join(str(v) for v in concrete.values())
+                    extras = ", ".join(f"{k}: {v}" for k, v in concrete.items())
                     updated_goal = f"[{extras}] {goal}"
                     logger.info("[Executor:RETRIEVE] enriched query with bindings (prefix): %s", concrete)
                 else:
