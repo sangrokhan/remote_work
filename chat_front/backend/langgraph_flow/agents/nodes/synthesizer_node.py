@@ -105,20 +105,20 @@ class SynthesizerNode:
         for i, r in enumerate(subtask_results):
             status = r.get("status", "?")
             sid = r.get("id", "?")
-            content_preview = str(r.get("content", r.get("result", "")))[:120]
-            logger.info("    [%d] subtask_id=%s status=%s content_preview=%s", i, sid, status, content_preview)
+            content_full = str(r.get("content", r.get("result", "")))
+            logger.info("    [%d] subtask_id=%s status=%s content=%s", i, sid, status, content_full)
         logger.info("  retriever_outputs: %d items", len(retriever_outputs_raw))
         for i, o in enumerate(retriever_outputs_raw):
             if isinstance(o, dict):
                 src = o.get("source", "?")
                 sid = o.get("subtask_id", "?")
-                preview = str(o.get("content", o.get("result", "")))[:120]
-                logger.info("    [%d] source=%s subtask_id=%s preview=%s", i, src, sid, preview)
+                full = str(o.get("content", o.get("result", "")))
+                logger.info("    [%d] source=%s subtask_id=%s content=%s", i, src, sid, full)
             else:
-                logger.info("    [%d] %s", i, str(o)[:120])
+                logger.info("    [%d] %s", i, str(o))
         logger.info("  retriever_history: %d queries", len(retriever_history))
         for i, h in enumerate(retriever_history):
-            logger.info("    [%d] subtask_id=%s query=%s", i, h.get("subtask_id"), str(h.get("query", ""))[:80])
+            logger.info("    [%d] subtask_id=%s query=%s", i, h.get("subtask_id"), str(h.get("query", "")))
         logger.info("  resolved_bindings: %s", list(resolved_bindings.keys()))
         verdict_ok = sum(1 for s in subtasks if s.get("verdict") is True)
         verdict_exceeded = sum(1 for s in subtasks if s.get("verdict") == "exceeded")
