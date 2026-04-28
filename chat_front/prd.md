@@ -277,8 +277,18 @@ docker compose ps   # chat-front, workflow-api 모두 Up 확인
 | refiner confirmed_features anchor 폐기 → seen_feature_ids id-only 누적 | ✅ 완료 (2026-04-27) |
 | refiner 후 retrieved docs 단일라인 압축 + history dedup | ⛔ 폐기 (2026-04-27) |
 | refiner cross-subtask context 제거 + marked_documents 도입 | ✅ 완료 (2026-04-27) |
+| simple_flow retriever dict 결과 처리 + reference_features 추출 | ✅ 완료 (2026-04-28) |
 
-### 9.12 refiner cross-subtask context 제거 + marked_documents 도입 (2026-04-27)
+### 9.8 simple_flow retriever dict 결과 처리 + reference_features 추출 (2026-04-28)
+
+9.7 (retriever metadata 노출) 이후 `RetrieverTool.ainvoke`의 `results`가 `list[dict]` (`{text, feature_id, feature_name}`)로 전환됨. agentic flow 측 refiner는 dict 분기를 이미 보유하나, non-agentic `services/simple_flow.py`는 여전히 `list[str]` 가정 → `"\n\n".join(docs)` TypeError 위험 + `reference_features` 항상 빈 리스트.
+
+- **수정**: `backend/services/simple_flow.py`
+  - `raw_docs` 항목별 `isinstance(item, dict)` 분기 추가: `text` 추출 후 컨텍스트 빌드, `feature_id`/`feature_name` 수집해 `reference_features`에 dedup-by-id 누적. `str` 항목은 기존대로 텍스트로 처리.
+  - `workflow_complete` payload `reference_features` 하드코딩된 `[]` → 누적된 리스트 반환.
+- **호환성**: retriever tool이 미사용/비활성 환경 (`status: unavailable`)에서는 `results=[]` → 동작 변화 없음.
+
+### 9.7 retriever metadata 기반 feature 추출 (2026-04-28)
 
 9.11 의 raw 문서 단일라인 압축이 final answer 품질을 떨어뜨림 → 전략 전환. refiner 단계에서는 (a) 다른 subtask 의 history/answer 를 prompt 에 주입하지 않고 현재 subtask 의 검색 결과만 평가, (b) raw 문서를 압축하지 않고 그대로 보존, (c) refiner 가 relevant 로 판단한 문서를 `marked_documents` 에 raw text 그대로 적재해 synthesizer 가 final answer 작성 시 직접 참조.
 

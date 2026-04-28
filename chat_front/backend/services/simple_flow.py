@@ -77,6 +77,8 @@ class SimpleService:
         MAX_LOOPS = 5
         final_payload: dict = {}
         retrieved_docs: list[str] = []
+        reference_features: list[dict] = []
+        seen_feature_ids: set[str] = set()
         loop = 0
 
         while loop < MAX_LOOPS:
@@ -124,9 +126,26 @@ class SimpleService:
                     result = await self._retriever.ainvoke(
                         {"query": query, "top_k": tool_args.get("top_k", 5)}
                     )
-                    docs: list[str] = result.get("results", [])
-                    retrieved_docs.extend(docs)
-                    context_text = "\n\n".join(docs) if docs else "검색 결과가 없습니다."
+                    raw_docs: list = result.get("results", [])
+                    doc_texts: list[str] = []
+                    for item in raw_docs:
+                        if isinstance(item, dict):
+                            text = str(item.get("text", "")).strip()
+                            if not text:
+                                continue
+                            doc_texts.append(text)
+                            fid = str(item.get("feature_id") or "").strip()
+                            if fid and fid not in seen_feature_ids:
+                                seen_feature_ids.add(fid)
+                                reference_features.append({
+                                    "feature_id": fid,
+                                    "feature_name": str(item.get("feature_name") or "").strip(),
+                                })
+                        elif isinstance(item, str):
+                            if item.strip():
+                                doc_texts.append(item)
+                    retrieved_docs.extend(doc_texts)
+                    context_text = "\n\n".join(doc_texts) if doc_texts else "검색 결과가 없습니다."
                 else:
                     context_text = "알 수 없는 툴입니다."
 
@@ -152,5 +171,5 @@ class SimpleService:
             "message": "완료",
             "final_response": final_payload.get("final_output", ""),
             "steps": retrieved_docs,
-            "reference_features": [],
+            "reference_features": reference_features,
         }
