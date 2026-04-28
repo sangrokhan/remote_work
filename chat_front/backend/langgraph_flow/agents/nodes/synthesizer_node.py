@@ -212,14 +212,14 @@ class SynthesizerNode:
         cumulative_features_text = self._format_cumulative_features(
             state.get("reference_features", [])
         )
-        failed_detail_text = self._format_failed_detail(subtasks, subtask_results)
+        # failed_detail_text = self._format_failed_detail(subtasks, subtask_results)
 
         user_query = (
             f"사용자 질문: {state.get('user_query', '')}\n\n"
             f"전체 실행 계획:\n{plan_overview_text}\n\n"
             f"Subtask별 reference_features:\n{per_subtask_features_text}\n\n"
             f"누적 reference_features (반드시 답변에 빠짐없이 노출):\n{cumulative_features_text}\n\n"
-            f"실패한 Subtask:\n{failed_detail_text}\n\n"
+            # f"실패한 Subtask:\n{failed_detail_text}\n\n"
             f"수집된 정보:\n{retriever_outputs_text}{history_text}{execution_summary}\n\n"
             f"위 정보들을 바탕으로 사용자 질문에 대한 최종 답변을 생성해주세요. "
             f"누적 reference_features의 모든 (feature_id, feature_name) 항목을 답변에 인용하고, "
