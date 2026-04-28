@@ -420,58 +420,33 @@ class RefinerNode:
     def _extract_features_from_raw_results(self, retriever_outputs: List[Dict]) -> List[
         Dict[str, str]]:
         """
-        원본 검색 결과(retriever_outputs)에서 직접 feature_id와 feature_name 추출
-        
-        변환되지 않은 원본 데이터를 사용하여 정보 손실 방지
-        
-        Args:
-            retriever_outputs: 원본 retriever 출력 결과
-            
-        Returns:
-            추출된 feature 리스트 [{"feature_id": "...", "feature_name": "..."}]
+        retriever 결과 doc 의 metadata(feature_id, feature_name) 수집.
+        dedup by feature_id, 등장 순서 보존.
         """
-        import re
-
-        features = []
-        seen_ids = set()
+        features: List[Dict[str, str]] = []
+        seen_ids: set = set()
 
         for output in retriever_outputs:
             result = output.get("result", {})
-
-            # result에서 results 리스트 추출
             if isinstance(result, dict):
                 results_list = result.get("results", [])
             elif isinstance(result, list):
                 results_list = result
             else:
                 continue
-
             if not isinstance(results_list, list):
                 continue
 
             for item in results_list:
-                if not isinstance(item, str):
+                if not isinstance(item, dict):
                     continue
-
-                # feature_id 패턴 찾기 (예: FGR-BC0311, FGR-RS0751)
-                feature_id_matches = re.findall(r'FGR-[A-Z]{2}\d{4}', item)
-
-                # feature_name 패턴 찾기 (JSON 형식)
-                # 형식 1: "feature_name": "..."
-                feature_name_matches = re.findall(r'"feature_name":\s*"([^"]+)"', item)
-
-                for i, feature_id in enumerate(feature_id_matches):
-                    if feature_id not in seen_ids:
-                        feature_name = ""
-                        if i < len(feature_name_matches):
-                            feature_name = feature_name_matches[i].strip()
-
-                        features.append({
-                            "feature_id": feature_id,
-                            "feature_name": feature_name
-                        })
-                        seen_ids.add(feature_id)
-                        print(f"=== DEBUG: 원본 데이터에서 feature 추출: {feature_id} - {feature_name} ===")
+                fid = str(item.get("feature_id") or "").strip()
+                if not fid or fid in seen_ids:
+                    continue
+                fname = str(item.get("feature_name") or "").strip()
+                features.append({"feature_id": fid, "feature_name": fname})
+                seen_ids.add(fid)
+                print(f"=== DEBUG: metadata 에서 feature 추출: {fid} - {fname} ===")
 
         return features
 

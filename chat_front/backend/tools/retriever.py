@@ -291,7 +291,7 @@ class BGE3SearchStrategy(SearchStrategy):
                 data=[query],
                 anns_field=vector_field,
                 limit=top_k,
-                output_fields=["text"]
+                output_fields=["text", "feature_id", "feature_name"]
             )
             reqs += (search_res[0])
         # Sparse Vector Meta+Contents search
@@ -303,7 +303,7 @@ class BGE3SearchStrategy(SearchStrategy):
                 anns_field=vector_field,
                 limit=top_k,
                 search_params=search_params[vector_field],
-                output_fields=["text"]
+                output_fields=["text", "feature_id", "feature_name"]
             )
             reqs += (search_res[0])  # Sparse Vector Meta search
         if "sparse_vector_meta" in search_params and formatted_sparse:
@@ -314,7 +314,7 @@ class BGE3SearchStrategy(SearchStrategy):
                 anns_field=vector_field,
                 limit=top_k,
                 search_params=search_params[vector_field],
-                output_fields=["text"]
+                output_fields=["text", "feature_id", "feature_name"]
             )
             reqs += (search_res[0])
         # Sparse Vector Contents search
@@ -326,7 +326,7 @@ class BGE3SearchStrategy(SearchStrategy):
                 anns_field=vector_field,
                 limit=top_k,
                 search_params=search_params[vector_field],
-                output_fields=["text"]
+                output_fields=["text", "feature_id", "feature_name"]
             )
             reqs += (search_res[0])
 
@@ -339,7 +339,7 @@ class BGE3SearchStrategy(SearchStrategy):
                 anns_field=vector_field,
                 limit=top_k * 2,
                 search_params=search_params[vector_field],
-                output_fields=["text"]
+                output_fields=["text", "feature_id", "feature_name"]
             )
             reqs += (search_res[0])
         # Dense Vector 3 search (Contents Dense)
@@ -351,7 +351,7 @@ class BGE3SearchStrategy(SearchStrategy):
                 anns_field=vector_field,
                 limit=top_k,
                 search_params=search_params[vector_field],
-                output_fields=["text"]
+                output_fields=["text", "feature_id", "feature_name"]
             )
             reqs += (search_res[0])
         return [reqs]
@@ -385,7 +385,7 @@ class DenseOnlySearchStrategy(SearchStrategy):
             anns_field=vector_field,
             limit=top_k,
             search_params=search_params[vector_field],
-            output_fields=["text"]
+            output_fields=["text", "feature_id", "feature_name"]
         )
 
     def get_search_type(self) -> str:
@@ -415,25 +415,24 @@ def get_search_strategy(embedding_provider) -> SearchStrategy:
 
 def _apply_reranking(
         query: str,
-        documents: list[str],
+        documents: list[dict],
         top_n: int = 5,
         reranker_provider: str = "bge",
         score_threshold_ratio: float = None
-) -> list[str]:
+) -> list[dict]:
     """
     Apply reranking using the specified reranker service.
-    
+
     Args:
-        query: Search query
-        documents: List of document texts to rerank
-        top_n: Number of top documents to return
-        reranker_provider: "bge" or "qwen3"
-    
+        documents: list[dict] with keys {text, feature_id, feature_name}
     Returns:
-        List of reranked document texts (top_n items)
+        list[dict]: reranked docs preserving metadata
     """
     if not documents:
         return []
+
+    text_to_meta = {d.get('text', ''): d for d in documents if isinstance(d, dict)}
+    doc_texts = [d.get('text', '') for d in documents if isinstance(d, dict)]
 
     # Select reranker endpoint based on provider
     if reranker_provider == "bge":
@@ -446,11 +445,11 @@ def _apply_reranking(
         logger.warning(f"Unknown reranker provider: {reranker_provider}, defaulting to BGE")
         rerank_url = config.RERANKER_BGE_URL
 
-    # Prepare request payload
+    # Prepare request payload (reranker service expects plain text strings)
     payload = {
         "query": query,
-        "documents": documents,
-        "top_n": min(top_n, len(documents))
+        "documents": doc_texts,
+        "top_n": min(top_n, len(doc_texts))
     }
 
     try:
@@ -476,9 +475,17 @@ def _apply_reranking(
             logger.debug(f"[RERANK]   - Calculated threshold: {threshold:.4f}")
             logger.debug(f"[RERANK]   - Total input documents: {len(result['results'])}")
 
-            # threshold 이상의 문서만 필터링
+            # threshold 이상의 문서만 필터링, metadata 재첨부
             filtered_results = [r for r in result['results'] if r['score'] >= threshold]
-            reranked_docs = [r["text"] for r in filtered_results]
+            reranked_docs = []
+            for r in filtered_results:
+                text = r.get('text', '')
+                meta = text_to_meta.get(text, {})
+                reranked_docs.append({
+                    'text': text,
+                    'feature_id': meta.get('feature_id', ''),
+                    'feature_name': meta.get('feature_name', ''),
+                })
 
             # 필터링된 문서들의 score 정보 로그
             if filtered_results:
@@ -524,17 +531,25 @@ def _filter_and_log_results(
         search_res: list,
 ) -> list:
     """
-    검색 결과 필터링
-    
-    Args:
-        search_res: 검색 결과
-    
-    Returns:
-        필터링된 텍스트 결과 리스트, 동일 document 제거
-    """
+    검색 결과 필터링. metadata(feature_id, feature_name) 보존.
 
-    output = [o['entity']['text'] for o in search_res[0]]
-    return list(set(output))  # 동일한 값 제거, 순서 유지 X
+    Returns:
+        list[dict]: [{text, feature_id, feature_name}], 동일 text dedup
+    """
+    seen_texts = set()
+    output = []
+    for o in search_res[0]:
+        entity = o.get('entity', {}) if isinstance(o, dict) else {}
+        text = entity.get('text', '')
+        if text in seen_texts:
+            continue
+        seen_texts.add(text)
+        output.append({
+            'text': text,
+            'feature_id': entity.get('feature_id', ''),
+            'feature_name': entity.get('feature_name', ''),
+        })
+    return output
 
 
 # ==================== Main Retriever Tool ====================
