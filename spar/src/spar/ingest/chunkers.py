@@ -29,22 +29,30 @@ def _empty_meta() -> dict[str, Any]:
     }
 
 
+_FENCED_RE = re.compile(r"```.*?```|~~~.*?~~~", re.DOTALL)
+
+
 def chunk_markdown(text: str, source_doc: str, *, max_words: int = 500) -> list[Chunk]:
     """헤더 경계로 분할. 섹션이 max_words 초과 시 단어 단위 추가 분할."""
     if not text.strip():
         return []
 
-    matches = list(_HEADER_RE.finditer(text))
+    # Strip fenced code blocks before header detection to avoid false positives
+    text_stripped = _FENCED_RE.sub("", text)
+
+    matches = list(_HEADER_RE.finditer(text_stripped))
     if not matches:
         # 헤더 없으면 fixed로 위임 (doc_type=spec 가정)
         return chunk_fixed(text, source_doc=source_doc, doc_type="spec", words=max_words)
 
     sections: list[tuple[str, str]] = []
     for i, m in enumerate(matches):
-        section = m.group(2).strip()
+        raw_section = m.group(2).strip()
+        # Strip ATX closing hashes (e.g. "Architecture ##" → "Architecture")
+        section = re.sub(r'\s+#+\s*$', '', raw_section).strip()
         body_start = m.end()
-        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        body = text[body_start:body_end].strip()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text_stripped)
+        body = text_stripped[body_start:body_end].strip()
         sections.append((section, body))
 
     chunks: list[Chunk] = []

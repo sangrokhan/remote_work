@@ -65,3 +65,29 @@ def test_dispatch_mop_uses_fixed():
 def test_empty_text_returns_empty_list():
     assert chunk_markdown("", source_doc="x.md") == []
     assert chunk_fixed("", source_doc="x.md", doc_type="mop") == []
+
+
+def test_markdown_chunker_skips_headers_inside_code_blocks():
+    fence = "```"
+    text = (
+        "# Real Header\n"
+        "Some text.\n"
+        "\n"
+        + fence + "\n"
+        "# this is NOT a header\n"
+        "# define FOO 1\n"
+        + fence + "\n"
+        "\n"
+        "# Another Real Header\n"
+        "More text.\n"
+    )
+    chunks = chunk_markdown(text, source_doc="x.md")
+    sections = [c["section"] for c in chunks]
+    assert sections == ["Real Header", "Another Real Header"]
+
+
+def test_markdown_chunker_strips_atx_closing_hashes():
+    text = "## Architecture ##\nbody\n## Another ###\nmore body\n"
+    chunks = chunk_markdown(text, source_doc="x.md")
+    sections = [c["section"] for c in chunks]
+    assert sections == ["Architecture", "Another"]
