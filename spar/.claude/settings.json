@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/han/.openclaw/workspace/remote_work/spar/.claude/hooks/check-tests.sh",
+            "statusMessage": "테스트 파일 확인 중..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/han/.openclaw/workspace/remote_work/spar/.claude/hooks/run-tests.sh",
+            "asyncRewake": true,
+            "rewakeSummary": "테스트 실행 결과",
+            "statusMessage": "pytest 실행 중..."
+          }
+        ]
+      }
+    ]
+  }
+}

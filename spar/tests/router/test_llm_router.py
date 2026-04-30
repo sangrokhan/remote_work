@@ -1,24 +1,28 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from spar.llm.client import LLMClient
 from spar.router.llm_router import LLMRouter
 from spar.router.schemas import Route
 
 
+def _make_mock_client(content: str) -> LLMClient:
+    client = MagicMock(spec=LLMClient)
+    client.chat = AsyncMock(return_value=content)
+    return client
+
+
 @pytest.fixture
 def router():
-    return LLMRouter(base_url="http://localhost:8001/v1", model="stub")
+    return LLMRouter()
 
 
 async def test_llm_routes_procedural(router):
-    mock_response = MagicMock()
-    mock_response.choices[0].message.content = (
+    mock_client = _make_mock_client(
         '{"route":"procedural","confidence":0.92,'
         '"entities":{},"product":"NR","release":"v7.1"}'
     )
-    with patch.object(
-        router._client.chat.completions, "create", new=AsyncMock(return_value=mock_response)
-    ):
+    with patch("spar.router.llm_router.get_client", new=AsyncMock(return_value=mock_client)):
         result = await router.route("How to configure RACH in NR v7.1?")
 
     assert result.route == Route.PROCEDURAL
@@ -28,10 +32,18 @@ async def test_llm_routes_procedural(router):
 
 
 async def test_llm_falls_back_on_parse_error(router):
-    mock_response = MagicMock()
-    mock_response.choices[0].message.content = "NOT_JSON"
-    with patch.object(
-        router._client.chat.completions, "create", new=AsyncMock(return_value=mock_response)
+    mock_client = _make_mock_client("NOT_JSON")
+    with patch("spar.router.llm_router.get_client", new=AsyncMock(return_value=mock_client)):
+        result = await router.route("Some query")
+
+    assert result.route == Route.DEFAULT_RAG
+    assert result.layer == "llm_fallback"
+
+
+async def test_llm_falls_back_on_network_error(router):
+    with patch(
+        "spar.router.llm_router.get_client",
+        new=AsyncMock(side_effect=ConnectionError("vLLM unreachable")),
     ):
         result = await router.route("Some query")
 

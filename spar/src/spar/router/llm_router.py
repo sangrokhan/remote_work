@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
+import logging
 
-from openai import AsyncOpenAI
-
+from spar.llm import LLMRole, get_client
 from spar.router.schemas import Route, RouteResult
+
+_log = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """You are a query router for a Samsung RAN (Radio Access Network) documentation system.
 Classify the user query into exactly one of these routes:
@@ -26,28 +27,17 @@ Respond ONLY with valid JSON:
 
 
 class LLMRouter:
-    def __init__(
-        self,
-        base_url: str | None = None,
-        model: str | None = None,
-        api_key: str = "dummy",
-    ) -> None:
-        self._base_url = base_url or os.environ.get("LLM_BASE_URL", "http://localhost:8001/v1")
-        self._model = model or os.environ.get("LLM_ROUTER_MODEL", "qwen2.5-7b-instruct")
-        self._client = AsyncOpenAI(base_url=self._base_url, api_key=api_key)
-
     async def route(self, query: str) -> RouteResult:
         try:
-            resp = await self._client.chat.completions.create(
-                model=self._model,
+            client = await get_client(LLMRole.ROUTER)
+            raw = await client.chat(
                 messages=[
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": query},
                 ],
-                temperature=0.0,
                 max_tokens=128,
             )
-            data = json.loads(resp.choices[0].message.content)
+            data = json.loads(raw)
             return RouteResult(
                 route=Route(data["route"]),
                 confidence=float(data.get("confidence", 0.8)),
@@ -56,5 +46,6 @@ class LLMRouter:
                 product=data.get("product"),
                 release=data.get("release"),
             )
-        except Exception:
+        except Exception as exc:
+            _log.warning("LLMRouter fallback — %s: %s", type(exc).__name__, exc)
             return RouteResult(route=Route.DEFAULT_RAG, confidence=0.0, layer="llm_fallback")

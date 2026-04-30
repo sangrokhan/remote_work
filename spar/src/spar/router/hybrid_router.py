@@ -15,12 +15,10 @@ class HybridRouter:
         self,
         embedding_threshold: float = 0.65,
         use_llm: bool = True,
-        llm_base_url: str | None = None,
-        llm_model: str | None = None,
     ) -> None:
         self._regex = RegexRouter()
         self._embedding = EmbeddingRouter(threshold=embedding_threshold)
-        self._llm_router = LLMRouter(base_url=llm_base_url, model=llm_model)
+        self._llm_router = LLMRouter()
         self._use_llm = use_llm
 
     async def route(self, query: str) -> RouteResult:
