@@ -1,0 +1,11 @@
+-r requirements.txt
+
+# 린트/포맷
+ruff>=0.6.0
+
+# 타입 체크
+mypy>=1.11.0
+
+# 테스트
+pytest>=8.0.0
+pytest-cov>=5.0.0

@@ -1,0 +1,86 @@
+# 가상환경
+.venv/
+venv/
+env/
+ENV/
+
+# Python 캐시 및 바이트코드
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 빌드/배포 산출물
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+*.whl
+
+# 테스트/커버리지
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# 타입 체커
+.mypy_cache/
+.pyright/
+.pyre/
+.dmypy.json
+
+# Linter
+.ruff_cache/
+
+# IDE / 에디터
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# 환경 변수 / 시크릿
+.env
+.env.*
+!.env.example
+configs/secrets/
+*.local.yaml
+*.local.json
+
+# 데이터 (대용량/민감)
+data/raw/
+data/logs/
+data/processed/
+data/extracted/
+data/*.csv
+data/*.jsonl
+data/*.parquet
+!data/.gitkeep
+!data/samples/
+
+# 모델 캐시
+.cache/
+models/
+*.bin
+*.safetensors
+*.gguf
+
+# 로그
+logs/
+*.log
+
+# OS
+Thumbs.db

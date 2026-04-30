@@ -1,0 +1,28 @@
+# 런타임 의존성 (Phase 별로 점진 추가)
+# Phase 0~1 진입 시 아래 후보를 검토하여 추가:
+#
+# 데이터/스키마
+# pydantic>=2.7
+# pyyaml>=6.0
+# pandas>=2.2
+#
+# 문서 파싱 (Task 1.1)
+# pdfplumber>=0.11
+# camelot-py[cv]>=0.11
+# unstructured>=0.15
+#
+# 임베딩/검색 (Task 1.4~1.5)
+# sentence-transformers>=3.0
+# pymilvus>=2.4              # 벡터 DB 1순위 (온프레 운영성 + 대규모 인덱스)
+# elasticsearch>=8.14        # BM25 / hybrid retrieval
+#
+# LLM 클라이언트 (Task 1.5, 2.2~2.4)
+# openai>=1.40         # vLLM OpenAI-compatible endpoint 호출용
+# httpx>=0.27
+#
+# 라우터/오케스트레이션 (Task 2.2, Phase 5)
+# semantic-router>=0.0.50
+# langgraph>=0.2
+#
+# 평가 (Task 0.3)
+# ragas>=0.1
