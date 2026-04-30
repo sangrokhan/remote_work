@@ -45,6 +45,7 @@ DOC_TYPES = [
     "mop",
     "install_guide",
     "release_notes",
+    "spec",  # 3GPP TSpec-LLM 등 외부 표준 문서
 ]
 
 # Dense embedding dimension — BGE-large-en-v1.5 / E5-large-v2 기준
