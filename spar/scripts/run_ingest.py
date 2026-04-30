@@ -22,7 +22,29 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from spar.preprocessing.abbrev_mapper import load_acronyms, map_abbreviations
-from spar.retrieval.milvus_client import DOC_TYPES, EMBED_DIM, SparMilvusClient
+
+# ---------------------------------------------------------------------------
+# 스텁 상수 — retrieval 모듈 구현 전 임시값 (Task 3 완료 후 교체)
+# ---------------------------------------------------------------------------
+DOC_TYPES = ["parameter_ref", "mop", "install_guide", "feature_desc", "release_notes"]
+EMBED_DIM = 1024  # BGE-large-en-v1.5 / E5-large-v2 기준
+
+
+class SparMilvusClient:
+    """Milvus 클라이언트 스텁 — Task 3에서 실제 구현으로 교체."""
+
+    def __enter__(self) -> "SparMilvusClient":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        pass
+
+    def insert(self, doc_type: str, rows: list) -> None:  # noqa: ARG002
+        raise NotImplementedError("SparMilvusClient.insert — Task 3에서 구현 예정")
+
+    def delete_by_source(self, doc_type: str, source_doc: str) -> None:  # noqa: ARG002
+        raise NotImplementedError("SparMilvusClient.delete_by_source — Task 3에서 구현 예정")
+
 
 _ACRONYMS_PATH = Path(__file__).parent.parent / "dictionary" / "acronyms.json"
 _ACRONYMS: dict = load_acronyms(_ACRONYMS_PATH) if _ACRONYMS_PATH.exists() else {}
