@@ -12,7 +12,7 @@
 # unstructured>=0.15
 #
 # 임베딩/검색 (Task 1.4~1.5)
-# sentence-transformers>=3.0
+sentence-transformers>=3.0
 pymilvus>=2.4              # 벡터 DB 1순위 (온프레 운영성 + 대규모 인덱스)
 # elasticsearch>=8.14        # BM25 / hybrid retrieval
 #
