@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -80,3 +81,43 @@ class TestBuildReverseIndex:
     def test_hyphen_stripped_form_maps(self) -> None:
         reverse = build_reverse_index(SAMPLE_ACRONYMS)
         assert reverse["handover"] == "HO"
+
+
+class TestConflictLlmResolution:
+    def _make_llm_client(self, json_response: str) -> MagicMock:
+        client = MagicMock()
+        choice = MagicMock()
+        choice.message.content = json_response
+        client.chat.completions.create.return_value = MagicMock(choices=[choice])
+        return client
+
+    def test_llm_high_confidence_single_expansion(self) -> None:
+        text = "CA is configured between PCell and SCell for throughput."
+        client = self._make_llm_client('{"CA": "Carrier Aggregation"}')
+        result = map_abbreviations(text, SAMPLE_ACRONYMS, llm_client=client)
+        assert "CA(Carrier Aggregation)" in result
+        assert "|" not in result
+
+    def test_llm_uncertain_annotates_all_candidates(self) -> None:
+        text = "The CA procedure was initiated."
+        client = self._make_llm_client('{"CA": "uncertain"}')
+        result = map_abbreviations(text, SAMPLE_ACRONYMS, llm_client=client)
+        assert "CA(Carrier Aggregation|Cell Activation)" in result
+
+    def test_llm_json_parse_failure_falls_back_to_all_candidates(self) -> None:
+        text = "CA enabled for this UE."
+        client = self._make_llm_client("not valid json")
+        result = map_abbreviations(text, SAMPLE_ACRONYMS, llm_client=client)
+        assert "CA(Carrier Aggregation|Cell Activation)" in result
+
+    def test_no_conflict_in_text_skips_llm_call(self) -> None:
+        text = "HO triggered after TTT expires."
+        client = self._make_llm_client("{}")
+        map_abbreviations(text, SAMPLE_ACRONYMS, llm_client=client)
+        client.chat.completions.create.assert_not_called()
+
+    def test_single_llm_call_for_multiple_conflict_occurrences(self) -> None:
+        text = "CA is used here. CA is also used there."
+        client = self._make_llm_client('{"CA": "Carrier Aggregation"}')
+        map_abbreviations(text, SAMPLE_ACRONYMS, llm_client=client)
+        assert client.chat.completions.create.call_count == 1
