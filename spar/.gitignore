@@ -60,16 +60,11 @@ configs/secrets/
 *.local.yaml
 *.local.json
 
-# 데이터 (대용량/민감)
-data/raw/
-data/logs/
-data/processed/
-data/extracted/
-data/*.csv
-data/*.jsonl
-data/*.parquet
+# 데이터 (대용량/민감) — data/* 전체 제외, goldsets만 허용
+data/*
 !data/.gitkeep
-!data/samples/
+!data/goldsets
+!data/goldsets/**
 
 # 모델 캐시
 .cache/
