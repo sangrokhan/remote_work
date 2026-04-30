@@ -8,6 +8,7 @@ import pytest
 
 from spar.preprocessing.abbrev_mapper import (
     build_reverse_index,
+    expand_query,
     load_acronyms,
     map_abbreviations,
 )
@@ -121,3 +122,25 @@ class TestConflictLlmResolution:
         client = self._make_llm_client('{"CA": "Carrier Aggregation"}')
         map_abbreviations(text, SAMPLE_ACRONYMS, llm_client=client)
         assert client.chat.completions.create.call_count == 1
+
+
+class TestExpandQuery:
+    def test_abbreviation_expanded_in_query(self) -> None:
+        reverse = build_reverse_index(SAMPLE_ACRONYMS)
+        result = expand_query("HO threshold setting", SAMPLE_ACRONYMS, reverse)
+        assert "HO(Handover)" in result
+
+    def test_full_form_adds_abbreviation(self) -> None:
+        reverse = build_reverse_index(SAMPLE_ACRONYMS)
+        result = expand_query("Handover failure case", SAMPLE_ACRONYMS, reverse)
+        assert "HO" in result
+
+    def test_variant_in_query_resolved(self) -> None:
+        reverse = build_reverse_index(SAMPLE_ACRONYMS)
+        result = expand_query("Hand-Over ping-pong issue", SAMPLE_ACRONYMS, reverse)
+        assert "Handover" in result
+
+    def test_unknown_token_passes_through(self) -> None:
+        reverse = build_reverse_index(SAMPLE_ACRONYMS)
+        result = expand_query("unknown_token query", SAMPLE_ACRONYMS, reverse)
+        assert "unknown_token" in result

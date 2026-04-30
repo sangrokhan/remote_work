@@ -129,3 +129,28 @@ def _apply_conflict_resolutions(
         for variant in conflicts[abbrev].get("variants", []):
             text = re.sub(rf"\b{re.escape(variant)}\b(?!\()", f"{variant}({expansion})", text)
     return text
+
+
+def expand_query(
+    query: str,
+    acronyms: dict,
+    reverse_index: dict[str, str],
+    llm_client: OpenAI | None = None,
+    model: str = "google/gemma-4-E4B-it",
+) -> str:
+    """쿼리 약어 정방향 확장 + 역방향 전체어→약어 추가."""
+    # 정방향: 약어 → 전체어 병기
+    expanded = map_abbreviations(query, acronyms, llm_client=llm_client, model=model)
+
+    # 역방향: 전체어 토큰 → 약어 주입
+    tokens = query.split()
+    extra: list[str] = []
+    for token in tokens:
+        clean = token.strip(".,;:?!()")
+        abbrev = reverse_index.get(clean) or reverse_index.get(clean.lower())
+        if abbrev and abbrev not in expanded:
+            extra.append(abbrev)
+
+    if extra:
+        expanded = expanded + " " + " ".join(extra)
+    return expanded
