@@ -37,10 +37,13 @@ def chunk_markdown(text: str, source_doc: str, *, max_words: int = 500) -> list[
     if not text.strip():
         return []
 
-    # Strip fenced code blocks before header detection to avoid false positives
-    text_stripped = _FENCED_RE.sub("", text)
+    # Find fenced regions in original text to skip false-positive headers inside them
+    fenced_regions = [(m.start(), m.end()) for m in _FENCED_RE.finditer(text)]
 
-    matches = list(_HEADER_RE.finditer(text_stripped))
+    def _in_fenced(pos: int) -> bool:
+        return any(s <= pos < e for s, e in fenced_regions)
+
+    matches = [m for m in _HEADER_RE.finditer(text) if not _in_fenced(m.start())]
     if not matches:
         # 헤더 없으면 fixed로 위임 (doc_type=spec 가정)
         return chunk_fixed(text, source_doc=source_doc, doc_type="spec", words=max_words)
@@ -51,8 +54,8 @@ def chunk_markdown(text: str, source_doc: str, *, max_words: int = 500) -> list[
         # Strip ATX closing hashes (e.g. "Architecture ##" → "Architecture")
         section = re.sub(r'\s+#+\s*$', '', raw_section).strip()
         body_start = m.end()
-        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text_stripped)
-        body = text_stripped[body_start:body_end].strip()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[body_start:body_end].strip()
         sections.append((section, body))
 
     chunks: list[Chunk] = []

@@ -91,3 +91,24 @@ def test_markdown_chunker_strips_atx_closing_hashes():
     chunks = chunk_markdown(text, source_doc="x.md")
     sections = [c["section"] for c in chunks]
     assert sections == ["Architecture", "Another"]
+
+
+def test_markdown_chunker_preserves_code_block_in_body():
+    fence = "```"
+    text = (
+        "# Section\n"
+        "Header text.\n"
+        "\n"
+        + fence + "\n"
+        "def foo():\n"
+        "    return 42\n"
+        + fence + "\n"
+        "\n"
+        "After code.\n"
+    )
+    chunks = chunk_markdown(text, source_doc="x.md")
+    assert len(chunks) == 1
+    body = chunks[0]["text"]
+    assert "def foo()" in body
+    assert "return 42" in body
+    assert "After code" in body
