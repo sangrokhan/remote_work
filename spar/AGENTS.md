@@ -11,7 +11,7 @@
 - **목적**: Samsung 단일 벤더(LTE+NR) 환경의 내부 문서(파라미터/카운터/알람/MOP/Feature/Release Notes 등)에 대한 자연어 질의응답 시스템
 - **운영 환경**: 온프레미스, 영어 응답, 정확성 최우선 (hallucination 최소화)
 - **상위 로드맵**: `docs/prd.md`의 Phase 0 ~ Phase 5 + INF 작업 참조
-- **현 단계**: Phase 0 진입 직전 (greenfield, 디렉토리 스캐폴드 단계)
+- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱 구현됨
 
 ---
 
@@ -53,17 +53,21 @@ spar/
 ├── src/
 │   └── spar/                # 단일 최상위 패키지
 │       ├── __init__.py
-│       ├── parsers/         # 문서 유형별 PDF/텍스트 파서 (Task 1.1)
-│       ├── chunkers/        # 유형별 청킹 전략 (Task 1.3)
-│       ├── retrieval/       # hybrid search, reranker, decomposer, rewriter (Task 1.4~1.5, 2.4~2.7)
-│       ├── router/          # 3-layer 라우터 (regex / embedding / LLM) (Task 2.1~2.2)
-│       ├── db/              # Parameter/Counter/Alarm 구조화 DB + Text-to-SQL (Task 3.1~3.2)
-│       ├── kg/              # Knowledge Graph + Text-to-Cypher + GraphRAG (Task 3.3~3.5)
-│       ├── generation/      # citation enforcer, self-verifier, confidence, fallback (Task 4.1~4.5)
-│       ├── agent/           # LangGraph 기반 agentic 재구성 (Phase 5)
-│       ├── eval/            # 골드셋 평가 스크립트, 메트릭 (Task 0.2~0.3)
-│       └── dictionary/      # 약어/동의어 사전 (Task 1.6)
+│       ├── api/             # FastAPI 앱 — app.py (엔드포인트, 라우팅)
+│       ├── llm/             # LLM 팩토리/싱글톤/레지스트리 — client, config, factory, registry
+│       ├── preprocessing/   # 질의 전처리 — abbrev_mapper.py (Task 1.6 ✅)
+│       ├── router/          # 3-layer 라우터 — regex/embedding/llm/hybrid + schemas (Task 2.2)
+│       ├── retrieval/       # Milvus 클라이언트, hybrid search, reranker (Task 1.4~1.5, 2.4~2.7)
+│       ├── parsers/         # 문서 유형별 PDF/텍스트 파서 (Task 1.1 — scaffold)
+│       ├── chunkers/        # 유형별 청킹 전략 (Task 1.3 — scaffold)
+│       ├── db/              # Parameter/Counter/Alarm 구조화 DB + Text-to-SQL (Task 3.1~3.2 — scaffold)
+│       ├── kg/              # Knowledge Graph + Text-to-Cypher + GraphRAG (Task 3.3~3.5 — scaffold)
+│       ├── generation/      # citation enforcer, self-verifier, confidence, fallback (Task 4.1~4.5 — scaffold)
+│       ├── agent/           # LangGraph 기반 agentic 재구성 (Phase 5 — scaffold)
+│       ├── eval/            # 골드셋 평가 스크립트, 메트릭 (scaffold)
+│       └── dictionary/      # 약어/동의어 사전 (scaffold)
 ├── configs/                 # YAML/JSON 설정 (모델, 인덱스, 라우트 등)
+│   ├── milvus/              # Milvus 연결/컬렉션 설정
 │   └── secrets/             # *.local.yaml — git 제외
 ├── scripts/                 # 일회성 ETL/배치/유틸리티
 ├── tests/                   # pytest 단위/통합 테스트
@@ -81,7 +85,7 @@ spar/
 
 ## 4. 빌드 / 테스트 / 평가 명령
 
-아직 코드 미작성. `Makefile` 단축 명령 제공.
+`Makefile` 단축 명령 제공.
 
 ```bash
 # 가상환경 생성 + 개발 의존성 설치 (1회)

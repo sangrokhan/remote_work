@@ -50,7 +50,7 @@ make lint
 make test
 ```
 
-> **현 상태**: greenfield. 환경 구성 완료. Phase 0 진입 준비.
+> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터, Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱 구현됨.
 
 ---
 
@@ -66,20 +66,24 @@ spar/
 ├── Makefile          # 단축 명령 (install/lint/test ...)
 ├── .env.example      # 환경 변수 템플릿
 ├── src/spar/
-│   ├── parsers/      # 문서 유형별 파서
-│   ├── chunkers/     # 유형별 청킹 전략
-│   ├── retrieval/    # hybrid search, reranker, decomposer
-│   ├── router/       # 3-layer 쿼리 라우터
-│   ├── db/           # Parameter/Counter/Alarm 구조화 DB
-│   ├── kg/           # Knowledge Graph
-│   ├── generation/   # citation, self-verify, confidence, fallback
-│   ├── agent/        # LangGraph 기반 agentic 파이프라인
-│   ├── eval/         # 골드셋 평가 스크립트
-│   └── dictionary/   # 약어/동의어 사전
-├── configs/          # 모델/인덱스/라우트 설정
-├── scripts/          # ETL/배치/유틸리티
-├── tests/            # pytest
-└── data/             # 골드셋, 샘플, 산출물
+│   ├── api/              # FastAPI 앱 (app.py)
+│   ├── llm/              # LLM 팩토리/싱글톤/레지스트리 (client, config, factory, registry)
+│   ├── preprocessing/    # 질의 전처리 — 약어 매퍼 (Task 1.6 ✅)
+│   ├── router/           # 3-layer 라우터 (regex / embedding / llm / hybrid + schemas)
+│   ├── retrieval/        # Milvus 클라이언트, hybrid search, reranker (Task 1.4~1.5)
+│   ├── parsers/          # 문서 유형별 파서 (Task 1.1 — scaffold)
+│   ├── chunkers/         # 유형별 청킹 전략 (Task 1.3 — scaffold)
+│   ├── db/               # Parameter/Counter/Alarm 구조화 DB (Task 3.1~3.2 — scaffold)
+│   ├── kg/               # Knowledge Graph (Task 3.3~3.5 — scaffold)
+│   ├── generation/       # citation, self-verify, confidence, fallback (Task 4.x — scaffold)
+│   ├── agent/            # LangGraph 기반 agentic 파이프라인 (Phase 5 — scaffold)
+│   ├── eval/             # 골드셋 평가 스크립트 (scaffold)
+│   └── dictionary/       # 약어/동의어 사전 (scaffold)
+├── configs/
+│   └── milvus/           # Milvus 연결/컬렉션 설정
+├── scripts/              # ETL/배치/유틸리티 (init_milvus, serve_vllm, test_api)
+├── tests/                # pytest
+└── data/                 # 골드셋, 샘플, 산출물
 ```
 
 ---
