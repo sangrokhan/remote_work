@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from openai import OpenAI
 
 
-def load_acronyms(path: Path) -> dict:
+def load_acronyms(path: Path) -> dict[str, Any]:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
     except FileNotFoundError:
         raise FileNotFoundError(f"Acronym dictionary not found: {path}") from None
 
@@ -110,11 +111,12 @@ def _llm_batch_classify(
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
     )
-    raw = response.choices[0].message.content.strip()
+    content = response.choices[0].message.content
+    raw = content.strip() if content is not None else ""
     try:
-        return json.loads(raw)
+        return cast("dict[str, str]", json.loads(raw))
     except json.JSONDecodeError:
-        return {abbrev: "uncertain" for abbrev in contexts}
+        return dict.fromkeys(contexts, "uncertain")
 
 
 def _apply_conflict_resolutions(
