@@ -59,6 +59,12 @@ class TestApplyGlobal:
         result = map_abbreviations(text, SAMPLE_ACRONYMS, llm_client=None)
         assert "CA(Carrier Aggregation|Cell Activation)" in result
 
+    def test_no_double_expansion_on_reentry(self) -> None:
+        text = "HO is triggered."
+        once = map_abbreviations(text, SAMPLE_ACRONYMS)
+        twice = map_abbreviations(once, SAMPLE_ACRONYMS)
+        assert twice.count("HO(Handover)") == once.count("HO(Handover)")
+
 
 class TestBuildReverseIndex:
     def test_expansion_maps_to_abbreviation(self) -> None:

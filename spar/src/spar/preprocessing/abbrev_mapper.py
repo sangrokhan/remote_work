@@ -10,7 +10,10 @@ if TYPE_CHECKING:
 
 
 def load_acronyms(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Acronym dictionary not found: {path}") from None
 
 
 def build_reverse_index(acronyms: dict) -> dict[str, str]:
@@ -29,9 +32,9 @@ def build_reverse_index(acronyms: dict) -> dict[str, str]:
 def _apply_global(text: str, global_dict: dict) -> str:
     for abbrev, info in global_dict.items():
         expansion: str = info["expansion"]
-        text = re.sub(rf"\b{re.escape(abbrev)}\b", f"{abbrev}({expansion})", text)
+        text = re.sub(rf"\b{re.escape(abbrev)}\b(?!\()", f"{abbrev}({expansion})", text)
         for variant in info.get("variants", []):
-            text = re.sub(rf"\b{re.escape(variant)}\b", f"{variant}({expansion})", text)
+            text = re.sub(rf"\b{re.escape(variant)}\b(?!\()", f"{variant}({expansion})", text)
     return text
 
 
@@ -39,9 +42,9 @@ def _apply_conflicts_no_llm(text: str, conflicts: dict) -> str:
     for abbrev, info in conflicts.items():
         candidates: list[str] = info["candidates"]
         expansion = "|".join(candidates)
-        text = re.sub(rf"\b{re.escape(abbrev)}\b", f"{abbrev}({expansion})", text)
+        text = re.sub(rf"\b{re.escape(abbrev)}\b(?!\()", f"{abbrev}({expansion})", text)
         for variant in info.get("variants", []):
-            text = re.sub(rf"\b{re.escape(variant)}\b", f"{variant}({expansion})", text)
+            text = re.sub(rf"\b{re.escape(variant)}\b(?!\()", f"{variant}({expansion})", text)
     return text
 
 
@@ -122,7 +125,7 @@ def _apply_conflict_resolutions(
     for abbrev, chosen in resolutions.items():
         candidates: list[str] = conflicts[abbrev]["candidates"]
         expansion = chosen if chosen in candidates else "|".join(candidates)
-        text = re.sub(rf"\b{re.escape(abbrev)}\b", f"{abbrev}({expansion})", text)
+        text = re.sub(rf"\b{re.escape(abbrev)}\b(?!\()", f"{abbrev}({expansion})", text)
         for variant in conflicts[abbrev].get("variants", []):
-            text = re.sub(rf"\b{re.escape(variant)}\b", f"{variant}({expansion})", text)
+            text = re.sub(rf"\b{re.escape(variant)}\b(?!\()", f"{variant}({expansion})", text)
     return text
