@@ -1,0 +1,54 @@
+{
+  "global": {
+    "HO": {
+      "expansion": "Handover",
+      "variants": ["Hand-Over"]
+    },
+    "TTT": {
+      "expansion": "Time-To-Trigger",
+      "variants": []
+    },
+    "RACH": {
+      "expansion": "Random Access Channel",
+      "variants": []
+    },
+    "BWP": {
+      "expansion": "Bandwidth Part",
+      "variants": []
+    },
+    "UE": {
+      "expansion": "User Equipment",
+      "variants": []
+    },
+    "gNB": {
+      "expansion": "Next Generation NodeB",
+      "variants": []
+    },
+    "RRC": {
+      "expansion": "Radio Resource Control",
+      "variants": []
+    },
+    "PDCP": {
+      "expansion": "Packet Data Convergence Protocol",
+      "variants": []
+    },
+    "RLF": {
+      "expansion": "Radio Link Failure",
+      "variants": []
+    },
+    "MRO": {
+      "expansion": "Mobility Robustness Optimization",
+      "variants": []
+    }
+  },
+  "conflicts": {
+    "CA": {
+      "candidates": ["Carrier Aggregation", "Cell Activation"],
+      "variants": []
+    },
+    "CR": {
+      "candidates": ["Change Request", "Cell Range"],
+      "variants": []
+    }
+  }
+}

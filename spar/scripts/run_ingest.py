@@ -21,7 +21,11 @@ from typing import Any
 # src/ 레이아웃 — 설치 없이 직접 실행 시 경로 추가
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from spar.preprocessing.abbrev_mapper import load_acronyms, map_abbreviations
 from spar.retrieval.milvus_client import DOC_TYPES, EMBED_DIM, SparMilvusClient
+
+_ACRONYMS_PATH = Path(__file__).parent.parent / "dictionary" / "acronyms.json"
+_ACRONYMS: dict = load_acronyms(_ACRONYMS_PATH) if _ACRONYMS_PATH.exists() else {}
 
 # ---------------------------------------------------------------------------
 # 스텁: 파서 (Task 1.1 완료 후 교체)
@@ -140,6 +144,10 @@ def ingest_file(
     # 1단계: 파싱
     text = parse_document(file_path, doc_type)
     print(f"  parsed: {len(text)} chars")
+
+    # 1.5단계: 약어 매핑
+    text = map_abbreviations(text, _ACRONYMS)
+    print(f"  abbrev mapped: {len(text)} chars")
 
     # 2단계: 청킹
     chunks = chunk_text(text, doc_type, source_doc)
