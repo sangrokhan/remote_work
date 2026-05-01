@@ -39,14 +39,15 @@ PROMPT_TEMPLATE = """\
 
 ## 질문 관점별 최소 생성 개수
 - terminology: {cnt_terminology}개 — 특정 명칭 관점. 용어·약어·개념의 정의와 의미.
-  예) "S-NSSAI란 무엇인가?", "5G SA에서 SMF가 하는 역할은?"
+  예) "3GPP TS {spec_number}에서 S-NSSAI란 무엇인가?", "TS {spec_number}에서 SMF가 하는 역할은?"
 - technology: {cnt_technology}개 — 기술 관점. 프로토콜·아키텍처·메커니즘의 작동 원리.
-  예) "AMF와 SMF 간 N11 인터페이스는 어떤 방식으로 PDU 세션 컨텍스트를 전달하는가?"
+  예) "TS {spec_number} {release}에서 AMF와 SMF 간 N11 인터페이스는 어떤 방식으로 PDU 세션 컨텍스트를 전달하는가?"
 - behavior: {cnt_behavior}개 — 동작 관점. 특정 조건·이벤트·절차에서 네트워크 요소의 구체적 행동.
-  예) "UE가 handover 중 PDU 세션 재개에 실패하면 AMF는 어떻게 처리하는가?"
+  예) "TS {spec_number}에서 UE가 handover 중 PDU 세션 재개에 실패하면 AMF는 어떻게 처리하는가?"
 
 ## 질문 작성 규칙
-- 질문은 기술 자체에 대한 표현으로 작성 (엔지니어가 실제로 물어보는 방식)
+- 질문 앞에 반드시 문서 식별자 포함: "3GPP TS {spec_number}" 또는 "TS {spec_number} {release}" 형식
+- 절(section) 번호는 질문에 포함하지 말 것 (사용자는 섹션 번호를 모름)
 - 아래 표현은 절대 사용 금지: "문서에서", "본 문서", "이 규격에서", "명시된", "기술된", "정의된 바에 따르면"
 - section 필드: 답변 근거가 되는 챕터 번호를 반드시 기입 (예: "5.2.1", "6.1.3.2"). 빈 문자열 불가
 
