@@ -42,6 +42,7 @@ SPAR는 Samsung RAN 운영 환경에서 다음 문서군에 대한 자연어 질
 make install-dev
 
 # 1.1 vLLM 임베딩/서빙을 사용할 예정이면 별도 설치
+# macOS Apple Silicon은 vllm-metal 경로로 자동 분기
 make install-vllm
 
 # 2. 환경 변수 설정
@@ -59,18 +60,41 @@ make test
 # 1) 임베딩(BAAI/bge-large-en-v1.5) 및 reranker 모델 다운로드
 HF_TOKEN=xxxxx make download-models MODEL_DOWNLOAD_TARGET=all
 
-# 2) 로컬에 받은 임베딩 모델을 vLLM 임베딩 서버로 서빙
-TASK=embed MODEL=models/bge-large-en-v1.5 PORT=8000 bash scripts/serve_vllm.sh
+# 2) 별도 서버에서 OpenAI-compatible /v1/embeddings 제공
+# 예: macOS 다른 프로세스에서 sentence-transformers 서버 실행
+#     http://127.0.0.1:9000/v1/embeddings
 
-# 3) ingest에서 원격 임베딩 서버 사용
+# 3) SPAR가 원격 임베딩 서버를 사용하도록 설정
 cat >> .env <<'EOF'
-EMBEDDING_URL=http://127.0.0.1:8000/v1
+EMBEDDING_URL=http://127.0.0.1:9000/v1
+ENCODER_URL=http://127.0.0.1:9000/v1
+ENCODER_MODEL=BAAI/bge-large-en-v1.5
 EMBEDDING_API_KEY=dummy
 EOF
 
-# 4) 문서 임베딩 + Milvus 적재
+# 4) 연결 검증
+make test-embedding-server
+
+# 5) 문서 임베딩 + Milvus 적재
 make ingest ARGS="--input-file data/skt-md/parameter_ref/foo.md --doc-type parameter_ref"
 ```
+
+외부 macOS 임베딩 서버 예제는 [examples/embedding_server/README.md](/Users/han/Repo/remote_work/spar/examples/embedding_server/README.md)에서 바로 실행할 수 있습니다.
+
+외부 임베딩 서버 요구사항:
+
+- `POST /v1/embeddings`
+- 요청 본문: `{"model":"...","input":["..."]}`
+- 응답 형식: OpenAI style `data[].embedding` 또는 단순 `embeddings`
+
+환경 변수 동작:
+
+- `EMBEDDING_URL`: ingest 경로에서 사용하는 원격 임베딩 base URL
+- `ENCODER_URL`: app/router 경로에서 우선 사용하는 원격 임베딩 base URL
+- `ENCODER_URL`이 비어 있으면 `EMBEDDING_URL`을 재사용
+- `ENCODER_MODEL`: 원격 서버에 전달할 모델 이름
+
+> `make install-vllm`은 Linux에서는 `requirements-vllm.txt`를 사용하고, macOS Apple Silicon에서는 `vllm-metal` 설치 절차로 자동 분기합니다. 외부 임베딩 서버를 사용할 경우 이 단계는 필수가 아닙니다.
 
 > `make download-models`는 기본값으로 `models/` 폴더에 내려받으며, `models/`는 `.gitignore`에 이미 등록되어 커밋되지 않습니다.
 

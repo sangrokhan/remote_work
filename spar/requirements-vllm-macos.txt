@@ -1,0 +1,5 @@
+# macOS Apple Silicon 전용 vLLM 경로
+#
+# 실제 vLLM 엔진/플러그인 설치는 scripts/install_vllm_metal.sh가 담당한다.
+# 여기서는 그 설치 절차에 필요한 uv만 프로젝트 가상환경에 준비한다.
+uv>=0.8.0

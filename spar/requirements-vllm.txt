@@ -1,4 +1,4 @@
+# Linux 전용 vLLM 런타임 의존성
 vllm>=0.7.0
 
-# vLLM is a separate infra dependency for local/remote serving.
-# Install on a Linux host with compatible CUDA/PyTorch toolchain.
+# macOS Apple Silicon은 requirements-vllm-macos.txt + vllm-metal 경로를 사용한다.

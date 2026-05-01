@@ -5,25 +5,28 @@ PYTHON ?= python3.12
 VENV ?= .venv
 PIP := $(VENV)/bin/pip
 PY := $(VENV)/bin/python
+UV := $(VENV)/bin/uv
+UNAME_S := $(shell uname -s)
 
 MILVUS_COMPOSE := configs/milvus/docker-compose.yml
 
 .PHONY: help venv install install-dev install-vllm lint format typecheck test test-cov clean \
         milvus-up milvus-down milvus-ui milvus-init milvus-reset milvus-list milvus-logs \
-        vllm-serve vllm-serve-router download-models
+        vllm-serve vllm-serve-router download-models test-embedding-server
 
 help:
 	@echo "사용 가능한 명령:"
 	@echo "  make venv          - 가상환경 생성 ($(VENV))"
 	@echo "  make install       - 런타임 의존성 설치"
 	@echo "  make install-dev   - 개발 의존성 포함 설치 (권장)"
-	@echo "  make install-vllm  - vLLM 로컬 서빙 전용 의존성 설치"
+	@echo "  make install-vllm  - Linux는 vLLM, macOS는 vllm-metal 설치"
 	@echo "  make lint          - ruff 린트"
 	@echo "  make format        - ruff 포매터 적용"
 	@echo "  make typecheck     - mypy 타입 체크"
 	@echo "  make test          - pytest 실행"
 	@echo "  make test-cov      - 커버리지 포함 테스트"
 	@echo "  make download-models - BGE/리랭커 모델 다운로드 (scripts/download_models.py)"
+	@echo "  make test-embedding-server - 외부 임베딩 서버 OpenAI embeddings 호환성 확인"
 	@echo "  make clean         - 캐시/빌드 산출물 정리"
 	@echo ""
 	@echo "  [Milvus]"
@@ -53,7 +56,12 @@ install-dev: venv
 	$(PIP) install -e ".[dev]"
 
 install-vllm: venv
+ifeq ($(UNAME_S),Darwin)
+	$(PIP) install -r requirements-vllm-macos.txt
+	VENV=$(VENV) UV=$(UV) bash scripts/install_vllm_metal.sh
+else
 	$(PIP) install -r requirements-vllm.txt
+endif
 
 lint:
 	$(VENV)/bin/ruff check .
@@ -117,6 +125,9 @@ download-models:
 	if [ "$(MODEL_VERIFY)" = "1" ]; then VERIFY="--verify"; else VERIFY=""; fi; \
 	$(PY) scripts/download_models.py --models $(MODEL_DOWNLOAD_TARGET) \
 		--cache-dir $(MODEL_DOWNLOAD_CACHE) $$FORCE $$VERIFY
+
+test-embedding-server:
+	$(PY) scripts/test_embedding_server.py --url "$${ENCODER_URL:-$${EMBEDDING_URL:-}}" --model "$${ENCODER_MODEL:-$${EMBED_MODEL:-BAAI/bge-large-en-v1.5}}"
 
 # ---------------------------------------------------------------------------
 # 전처리 (Ingest)
