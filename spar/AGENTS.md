@@ -50,7 +50,10 @@ spar/
 ├── .env.example             # 환경 변수 템플릿 (실제 .env는 git 추적 제외)
 ├── .python-version          # 3.12
 ├── docs/
-│   └── prd.md               # 정답 출처 (Phase 로드맵)
+│   ├── prd.md               # 정답 출처 (Phase 로드맵)
+│   └── superpowers/
+│       ├── specs/           # 기능 설계 문서 (brainstorming 산출물)
+│       └── plans/           # 구현 계획 문서 (writing-plans 산출물)
 ├── src/
 │   └── spar/                # 단일 최상위 패키지
 │       ├── __init__.py
@@ -61,7 +64,7 @@ spar/
 │       ├── prompts/         # LLM 프롬프트 파일 저장소 — load_prompt() 헬퍼 + *.txt 템플릿
 │       ├── router/          # 3-layer 라우터 — regex/embedding/llm/hybrid + schemas (Task 2.2)
 │       ├── ingest/          # md-aware/fixed 청커 + sentence-transformers embedder (Task 1.1/1.3/1.4 — 부분)
-│       ├── pipeline/        # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph() (Phase 5 조기 도입)
+│       ├── pipeline/        # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph(), GraphConfig+PRESET_CONFIGS (Phase 5 조기 도입)
 │       ├── reranker/        # CrossEncoderClient + 싱글톤 레지스트리 — client, config, factory, registry (Task 1.5)
 │       ├── retrieval/       # Milvus 클라이언트, hybrid search, Route→doc_type 매핑, query_rewriter, query_decomposer, hyde, multi_query (milvus_client.py, routing.py, query_rewriter.py, query_decomposer.py, hyde.py, multi_query.py) (Task 1.4~1.5, 2.4~2.7)
 │       ├── parsers/         # 문서 유형별 PDF/텍스트 파서 (Task 1.1 — scaffold)
@@ -70,7 +73,7 @@ spar/
 │       ├── kg/              # Knowledge Graph + Text-to-Cypher + GraphRAG (Task 3.3~3.5 — scaffold)
 │       ├── generation/      # citation enforcer, self-verifier, confidence, fallback (Task 4.1~4.5 — scaffold)
 │       ├── agent/           # LangGraph agentic 확장 예비 (Phase 5 — scaffold)
-│       ├── eval/            # 골드셋 평가 — metrics.py, run_eval.py (Retrieval), ragas_metrics.py, run_ragas_eval.py (답변품질) (Task 1.7.2)
+│       ├── eval/            # 골드셋 평가 — metrics.py, run_eval.py (graph.ainvoke 기반), eval_suite.py (멀티-config 비교), ragas_metrics.py, run_ragas_eval.py (Task 1.7.2)
 │       └── dictionary/      # 약어/동의어 사전 (scaffold)
 ├── configs/                 # YAML/JSON 설정 (모델, 인덱스, 라우트 등)
 │   ├── milvus/              # Milvus 연결/컬렉션 설정
