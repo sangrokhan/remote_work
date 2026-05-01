@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
+from spar.encoder.base import EncoderClient
 from spar.router.schemas import Route, RouteResult
 
 ROUTE_EXAMPLES: dict[Route, list[str]] = {
@@ -48,26 +48,24 @@ ROUTE_EXAMPLES: dict[Route, list[str]] = {
     ],
 }
 
-_MODEL_NAME = "BAAI/bge-small-en-v1.5"
-
 
 class EmbeddingRouter:
     """Layer 2: cosine similarity against route centroid embeddings."""
 
-    def __init__(self, threshold: float = 0.65, model_name: str = _MODEL_NAME) -> None:
+    def __init__(self, encoder: EncoderClient, threshold: float = 0.65) -> None:
         self.threshold = threshold
-        self._model = SentenceTransformer(model_name)
+        self._encoder = encoder
         self._centroids = self._build_centroids()
 
     def _build_centroids(self) -> dict[Route, np.ndarray]:
         centroids: dict[Route, np.ndarray] = {}
         for route, examples in ROUTE_EXAMPLES.items():
-            embs = self._model.encode(examples, normalize_embeddings=True)
+            embs = self._encoder.encode(examples, normalize=True)
             centroids[route] = np.mean(embs, axis=0)
         return centroids
 
     def route(self, query: str) -> RouteResult | None:
-        q_emb = self._model.encode([query], normalize_embeddings=True)[0]
+        q_emb = self._encoder.encode([query], normalize=True)[0]
         best_route, best_score = Route.DEFAULT_RAG, -1.0
         for route, centroid in self._centroids.items():
             score = float(np.dot(q_emb, centroid))
