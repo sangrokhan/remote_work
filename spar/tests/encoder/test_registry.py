@@ -5,7 +5,12 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from spar.encoder.base import EncoderClient
-from spar.encoder.registry import SentenceTransformerEncoder, get_encoder, reset_registry
+from spar.encoder.registry import (
+    RemoteSentenceTransformerEncoder,
+    SentenceTransformerEncoder,
+    get_encoder,
+    reset_registry,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -88,3 +93,13 @@ async def test_get_encoder_uses_env_device(monkeypatch):
         mock_cls.return_value = MagicMock()
         await get_encoder()
     mock_cls.assert_called_once_with("BAAI/bge-small-en-v1.5", device="cuda")
+
+
+async def test_get_encoder_uses_remote_url(monkeypatch):
+    monkeypatch.setenv("ENCODER_URL", "http://embedder-host:8000/v1")
+    with patch("spar.encoder.registry.httpx.Client") as mock_client:
+        mock_instance = MagicMock()
+        mock_client.return_value = mock_instance
+        enc = await get_encoder()
+    assert isinstance(enc, RemoteSentenceTransformerEncoder)
+    assert mock_instance is not None

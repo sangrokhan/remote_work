@@ -30,6 +30,43 @@ def test_embedder_normalizes_unit_norm(monkeypatch):
     assert all(abs(sum(v * v for v in vec) - 1.0) < 1e-5 for vec in vecs)
 
 
+def test_embedder_remote_embedding(monkeypatch):
+    """EMBEDDING_URL이 있으면 원격 임베딩 API를 호출한다."""
+    import types
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "data": [
+                    {"index": 0, "embedding": [3.0, 4.0]},
+                    {"index": 1, "embedding": [6.0, 8.0]},
+                ]
+            }
+
+    called = types.SimpleNamespace(posted=False)
+
+    class _Client:
+        def post(self, *_, **kwargs):
+            called.posted = True
+            assert kwargs["json"]["model"] == "BAAI/bge-large-en-v1.5"
+            assert kwargs["json"]["input"] == ["a", "b"]
+            return _Response()
+
+    monkeypatch.setenv("EMBEDDING_URL", "http://embedder-host:8000/v1")
+    monkeypatch.setattr("spar.ingest.embedder.httpx.Client", _Client)
+
+    e = Embedder()
+    vecs = e.encode(["a", "b"])
+    assert called.posted
+    assert vecs == [
+        [0.6, 0.8],
+        [0.6, 0.8],
+    ]
+
+
 @pytest.mark.skipif(
     os.environ.get("RUN_HEAVY_TESTS") != "1",
     reason="실 모델 다운로드 필요 — RUN_HEAVY_TESTS=1로 활성화",
