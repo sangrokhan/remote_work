@@ -103,3 +103,39 @@ async def test_timing_accumulates_through_retrieval():
     assert "rag_retrieve" in s3["node_timings"]
     assert "rerank" in s3["node_timings"]
     assert "generate" in s3["node_timings"]
+
+
+from spar.llm.client import LLMClient
+
+
+@pytest.mark.asyncio
+async def test_generate_stub_when_no_llm():
+    nodes = _make_nodes()
+    state: SparState = {
+        "query": "What is maxHARQTx?",
+        "raw_chunks": [{"text": "maxHARQTx default is 5.", "score": 0.9, "source_doc": "ref.md", "section_num": "4.1"}],
+        "node_timings": {},
+    }
+    result = await nodes.generate(state)
+    assert result["answer"].startswith("[stub]")
+    assert "generate" in result["node_timings"]
+
+
+@pytest.mark.asyncio
+async def test_generate_calls_llm_when_provided():
+    mock_llm = MagicMock(spec=LLMClient)
+    mock_llm.chat = AsyncMock(return_value="maxHARQTx default value is 5.")
+
+    nodes = Nodes.create(
+        router=MagicMock(), reranker=MagicMock(),
+        encoder=MagicMock(encode=MagicMock(return_value=np.zeros((1, 3)))),
+        milvus=MagicMock(), acronyms_path=None, llm=mock_llm,
+    )
+    state: SparState = {
+        "query": "What is maxHARQTx?",
+        "raw_chunks": [{"text": "maxHARQTx default is 5.", "score": 0.9, "source_doc": "ref.md", "section_num": "4.1"}],
+        "node_timings": {},
+    }
+    result = await nodes.generate(state)
+    assert result["answer"] == "maxHARQTx default value is 5."
+    mock_llm.chat.assert_called_once()

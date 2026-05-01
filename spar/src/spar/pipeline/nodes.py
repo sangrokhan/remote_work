@@ -207,9 +207,20 @@ class Nodes:
     async def generate(self, state: SparState) -> SparState:
         t0 = time.monotonic()
         chunks = state.get("reranked_chunks") or state.get("raw_chunks", [])
-        context = "\n\n".join(c["text"] for c in chunks[:5])
         query = state["query"]
-        answer = f"[stub] context={len(chunks)} chunks\nquery={query}\n{context[:200]}"
+
+        if self.llm is None:
+            answer = f"[stub] context={len(chunks)} chunks\nquery={query}"
+        else:
+            context = "\n\n".join(c["text"] for c in chunks[:5])
+            history_ctx = state.get("history_context", "")
+            user_content = f"{history_ctx}\n\nContext:\n{context}\n\nQuestion: {query}".strip()
+            messages = [
+                {"role": "system", "content": "You are a Samsung RAN expert. Answer using only the provided context."},
+                {"role": "user", "content": user_content},
+            ]
+            answer = await self.llm.chat(messages)
+
         elapsed = (time.monotonic() - t0) * 1000
         return {
             **state,
