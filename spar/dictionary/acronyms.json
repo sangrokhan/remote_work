@@ -1,4 +1,20 @@
 {
+  "conflicts": {
+    "CA": {
+      "candidates": [
+        "Carrier Aggregation",
+        "Cell Activation"
+      ],
+      "variants": []
+    },
+    "CR": {
+      "candidates": [
+        "Change Request",
+        "Cell Range"
+      ],
+      "variants": []
+    }
+  },
   "global": {
     "A-MPR": {
       "expansion": "Additional Maximum Power Reduction",
@@ -350,6 +366,10 @@
       "expansion": "NG-RAN E-UTRA-NR Dual Connectivity",
       "variants": []
     },
+    "NPN": {
+      "expansion": "Non-Public Network",
+      "variants": []
+    },
     "NR": {
       "expansion": "New Radio",
       "variants": []
@@ -420,6 +440,10 @@
     },
     "PLMN": {
       "expansion": "Public Land Mobile Network",
+      "variants": []
+    },
+    "PNI-NPN": {
+      "expansion": "Public Network Integrated Non-Public Network",
       "variants": []
     },
     "PPW": {
@@ -658,6 +682,10 @@
       "expansion": "SSB-based Measurement Timing configuration",
       "variants": []
     },
+    "SNPN": {
+      "expansion": "Stand-alone Non-Public Network",
+      "variants": []
+    },
     "SNR": {
       "expansion": "Signal-to-Noise Ratio",
       "variants": []
@@ -792,22 +820,6 @@
     },
     "sTAG": {
       "expansion": "Secondary Timing Advance Group",
-      "variants": []
-    }
-  },
-  "conflicts": {
-    "CA": {
-      "candidates": [
-        "Carrier Aggregation",
-        "Cell Activation"
-      ],
-      "variants": []
-    },
-    "CR": {
-      "candidates": [
-        "Change Request",
-        "Cell Range"
-      ],
       "variants": []
     }
   }

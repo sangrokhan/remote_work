@@ -98,6 +98,13 @@ def _build_schema(description: str = "") -> CollectionSchema:
             max_length=64,
         ),
         FieldSchema(
+            name="keywords",
+            dtype=DataType.ARRAY,
+            element_type=DataType.VARCHAR,
+            max_capacity=50,
+            max_length=32,
+        ),
+        FieldSchema(
             name="text",
             dtype=DataType.VARCHAR,
             max_length=65_535,

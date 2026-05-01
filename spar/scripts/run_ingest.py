@@ -18,12 +18,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json as _json
+import re as _re
 import sys
 from pathlib import Path
 from typing import Any, ContextManager
 
 # src/ 레이아웃 — 설치 없이 직접 실행 시 경로 추가
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# scripts/ 디렉토리 — extract_acronyms 직접 import
+sys.path.insert(0, str(Path(__file__).parent))
 
 # .env 자동 로드 (python-dotenv 설치 시)
 try:
@@ -32,13 +36,12 @@ try:
 except ImportError:
     pass
 
+from extract_acronyms import find_abbreviations_section, merge_into, parse_entries, to_dict_schema
 from spar.ingest.chunkers import dispatch as chunk_dispatch
 from spar.preprocessing.abbrev_mapper import load_acronyms, map_abbreviations
 from spar.retrieval.milvus_client import DOC_TYPES, EMBED_DIM, SparMilvusClient
 
 ALLOWED_SUFFIXES = {".md", ".txt"}
-
-import re as _re
 
 _SPEC_FNAME_RE = _re.compile(r"^(\d{2})(\d{3})(?!\d)")
 
@@ -54,6 +57,43 @@ def _parse_spec_number(filename: str) -> str:
 
 _ACRONYMS_PATH = Path(__file__).parent.parent / "dictionary" / "acronyms.json"
 _ACRONYMS: dict = load_acronyms(_ACRONYMS_PATH) if _ACRONYMS_PATH.exists() else {}
+
+
+def _update_acronyms(text: str) -> None:
+    """문서 텍스트에서 약어 추출 후 전역 사전에 병합."""
+    global _ACRONYMS
+    section = find_abbreviations_section(text)
+    if section is None:
+        return
+    entries = parse_entries(section)
+    if not entries:
+        return
+    schema = to_dict_schema(entries)
+    before = len(_ACRONYMS.get("global", {}))
+    _ACRONYMS = merge_into(_ACRONYMS, schema)
+    added = len(_ACRONYMS.get("global", {})) - before
+    if added:
+        print(f"  acronyms: +{added} new entries (total {len(_ACRONYMS['global'])})")
+
+
+def _save_acronyms() -> None:
+    """갱신된 약어 사전을 파일에 저장."""
+    _ACRONYMS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _ACRONYMS_PATH.write_text(
+        _json.dumps(_ACRONYMS, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(f"acronyms saved: {len(_ACRONYMS.get('global', {}))} entries → {_ACRONYMS_PATH}")
+
+
+def _find_chunk_keywords(text: str, acronyms: dict) -> list[str]:
+    """청크 텍스트에서 사전에 등록된 약어 목록 추출 (최대 50개)."""
+    global_dict = acronyms.get("global", {})
+    found = [
+        acro for acro in global_dict
+        if _re.search(r"\b" + _re.escape(acro) + r"\b", text)
+    ]
+    return found[:50]
 
 
 def read_text(file_path: Path) -> str:
@@ -90,12 +130,17 @@ def ingest_file(
     force: bool,
     dry_run: bool,
     intro_only: bool = False,
+    update_acronyms: bool = True,
 ) -> int:
     source_doc = file_path.name
     spec_number = _parse_spec_number(source_doc) if intro_only else ""
     print(f"Processing: {file_path}  [doc_type={doc_type}]")
 
     text = read_text(file_path)
+
+    # 약어 사전 갱신 (directory 모드에서는 pre-pass 완료 후라 중복이지만 안전)
+    if update_acronyms:
+        _update_acronyms(text)
 
     # 약어 매핑 — chunking 직전 (병기 확장)
     if _ACRONYMS:
@@ -105,6 +150,7 @@ def ingest_file(
     # doc_type 강제 (chunkers.dispatch가 spec 청크에 'spec' 박지만, 명시 보장)
     for c in chunks:
         c["doc_type"] = doc_type
+        c["keywords"] = _find_chunk_keywords(c["text"], _ACRONYMS)
     if spec_number:
         for c in chunks:
             if "spec_number" not in c:
@@ -121,7 +167,8 @@ def ingest_file(
             print(f"  spec_number={spec_number!r} (dynamic field)")
         for r in rows[:2]:
             preview = r["text"][:80].replace("\n", " ")
-            print(f"    chunk_id={r['chunk_id']}  section={r['section']!r}  text={preview!r}")
+            kw_preview = r.get("keywords", [])[:5]
+            print(f"    chunk_id={r['chunk_id']}  section={r['section']!r}  keywords={kw_preview}  text={preview!r}")
         return len(rows)
 
     if client is None:
@@ -148,10 +195,26 @@ def ingest_directory(
         print(f"No .md files found under {input_dir}")
         return
     print(f"Found {len(md_files)} md files under {input_dir}")
+
+    # Phase 1: 약어 pre-pass — 모든 문서 순회 후 acronyms.json 갱신
+    print("\nPhase 1: collecting acronyms...")
+    for f in md_files:
+        try:
+            _update_acronyms(f.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"  WARN acronym extraction {f.name}: {e}", file=sys.stderr)
+    _save_acronyms()
+
+    # Phase 2: 실제 ingest (약어 사전 이미 갱신됨 — 중복 update 생략)
+    print("\nPhase 2: ingesting...")
     total = 0
     for f in md_files:
         try:
-            total += ingest_file(client, f, doc_type, force=force, dry_run=dry_run, intro_only=intro_only)
+            total += ingest_file(
+                client, f, doc_type,
+                force=force, dry_run=dry_run, intro_only=intro_only,
+                update_acronyms=False,
+            )
         except Exception as e:
             print(f"  ERROR processing {f}: {type(e).__name__}: {e}", file=sys.stderr)
             # continue to next file
@@ -195,6 +258,7 @@ def main() -> None:
         if args.input_file:
             ingest_file(client, args.input_file, args.doc_type,
                         force=args.force, dry_run=args.dry_run, intro_only=args.intro_only)
+            _save_acronyms()
         else:
             ingest_directory(client, args.input_dir, args.doc_type,
                              force=args.force, dry_run=args.dry_run, intro_only=args.intro_only)
