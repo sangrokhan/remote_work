@@ -131,9 +131,9 @@ async def test_run_suite_faithfulness_called_and_stored():
 
 
 @pytest.mark.asyncio
-async def test_run_suite_falls_back_to_raw_chunks_when_reranked_empty():
+async def test_run_suite_falls_back_to_raw_chunks_when_reranked_none():
     configs = [GraphConfig(name="baseline")]
-    state_no_reranked = {**FAKE_STATE, "reranked_chunks": []}
+    state_no_reranked = {**FAKE_STATE, "reranked_chunks": None}
 
     with patch("spar.eval.eval_suite.build_graph") as mock_build:
         mock_graph = MagicMock()
@@ -148,5 +148,27 @@ async def test_run_suite_falls_back_to_raw_chunks_when_reranked_empty():
         )
 
     pq = results[0]["per_query"][0]
-    # empty reranked → falls back to raw_chunks → recall > 0
-    assert pq["recall_at_5"] >= 0.0
+    # reranked_chunks=None means reranker didn't run → fall back to raw_chunks → recall > 0
+    assert pq["recall_at_5"] > 0.0
+
+
+@pytest.mark.asyncio
+async def test_run_suite_empty_reranked_no_fallback():
+    configs = [GraphConfig(name="baseline")]
+    state_empty_reranked = {**FAKE_STATE, "reranked_chunks": []}
+
+    with patch("spar.eval.eval_suite.build_graph") as mock_build:
+        mock_graph = MagicMock()
+        mock_graph.ainvoke = AsyncMock(return_value=state_empty_reranked)
+        mock_build.return_value = mock_graph
+
+        results = await run_suite(
+            configs=configs, goldset=GOLDSET,
+            router=MagicMock(), reranker=MagicMock(),
+            encoder=MagicMock(encode=MagicMock(return_value=np.zeros((1, 3)))),
+            milvus=MagicMock(), top_k=10,
+        )
+
+    pq = results[0]["per_query"][0]
+    # reranked_chunks=[] means reranker ran, found nothing → no fallback → recall = 0
+    assert pq["recall_at_5"] == 0.0
