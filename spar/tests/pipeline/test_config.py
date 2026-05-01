@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from spar.pipeline.config import GraphConfig, PRESET_CONFIGS
+from spar.pipeline.state import SparState
 
 
 def test_graphconfig_defaults():
@@ -38,9 +39,6 @@ def test_preset_e2e_all_true():
     assert cfg.use_prepare_context
     assert cfg.use_reranker
     assert cfg.use_real_generate
-
-
-from spar.pipeline.state import SparState
 
 
 def test_sparstate_has_timing_field():
