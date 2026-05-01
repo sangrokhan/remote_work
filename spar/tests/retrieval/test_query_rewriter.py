@@ -96,7 +96,7 @@ def _make_client(raw_response: str) -> Any:
 @pytest.mark.asyncio
 async def test_rewrite_query_basic():
     payload = {"rewritten": "What is the handover procedure?", "complexity": "simple", "rationale": "single concept"}
-    with patch("spar.retrieval.query_rewriter.get_client", return_value=_make_client(json.dumps(payload))):
+    with patch("spar.retrieval.query_rewriter.get_client", new_callable=AsyncMock, return_value=_make_client(json.dumps(payload))):
         result = await rewrite_query("What is it?", history=[], acronyms={})
     assert isinstance(result, QueryRewriteResult)
     assert result.rewritten == "What is the handover procedure?"
@@ -107,14 +107,14 @@ async def test_rewrite_query_basic():
 @pytest.mark.asyncio
 async def test_rewrite_query_complex_classification():
     payload = {"rewritten": "Compare X2 and Xn handover latency", "complexity": "complex", "rationale": "comparison"}
-    with patch("spar.retrieval.query_rewriter.get_client", return_value=_make_client(json.dumps(payload))):
+    with patch("spar.retrieval.query_rewriter.get_client", new_callable=AsyncMock, return_value=_make_client(json.dumps(payload))):
         result = await rewrite_query("Compare them", history=[], acronyms={})
     assert result.complexity == "complex"
 
 
 @pytest.mark.asyncio
 async def test_rewrite_query_json_parse_failure_fallback():
-    with patch("spar.retrieval.query_rewriter.get_client", return_value=_make_client("not json at all")):
+    with patch("spar.retrieval.query_rewriter.get_client", new_callable=AsyncMock, return_value=_make_client("not json at all")):
         result = await rewrite_query("original query", history=[], acronyms={})
     assert result.rewritten == "original query"
     assert result.complexity == "simple"
@@ -125,7 +125,7 @@ async def test_rewrite_query_json_parse_failure_fallback():
 async def test_rewrite_query_llm_exception_fallback():
     bad_client = AsyncMock()
     bad_client.chat = AsyncMock(side_effect=RuntimeError("LLM down"))
-    with patch("spar.retrieval.query_rewriter.get_client", return_value=bad_client):
+    with patch("spar.retrieval.query_rewriter.get_client", new_callable=AsyncMock, return_value=bad_client):
         result = await rewrite_query("original query", history=[], acronyms={})
     assert result.rewritten == "original query"
     assert result.complexity == "simple"

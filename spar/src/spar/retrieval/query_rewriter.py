@@ -94,10 +94,11 @@ async def rewrite_query(
             max_tokens=256,
         )
         parsed = json.loads(raw)
+        raw_complexity = parsed.get("complexity", "simple")
         return QueryRewriteResult(
             original=query,
             rewritten=parsed.get("rewritten", query),
-            complexity=parsed.get("complexity", "simple"),
+            complexity=raw_complexity if raw_complexity in ("simple", "complex") else "simple",
             rationale=parsed.get("rationale", ""),
         )
     except Exception as exc:
