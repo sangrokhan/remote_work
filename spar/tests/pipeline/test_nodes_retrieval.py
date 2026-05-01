@@ -79,5 +79,5 @@ async def test_rag_retrieve_passes_product_filter():
     nodes, encoder, milvus = _make_nodes()
     state = _state(product="NR")
     await nodes.rag_retrieve(state)
-    call_kwargs = milvus.hybrid_search.call_args[1]
-    assert call_kwargs.get("expr") == 'product == "NR"'
+    for call in milvus.hybrid_search.call_args_list:
+        assert call.kwargs.get("expr") == 'product == "NR"'

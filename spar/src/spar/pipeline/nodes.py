@@ -75,7 +75,7 @@ class Nodes:
         top_k: int,
         expr: str | None,
     ) -> list[dict[str, Any]]:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         async def _search_one(doc_type: str) -> list[dict[str, Any]]:
             return await loop.run_in_executor(
