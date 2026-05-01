@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,12 @@ _ACRONYMS_PATH = Path(__file__).parent.parent.parent.parent.parent / "dictionary
 
 def _append_trace(state: SparState, node: str) -> list[str]:
     return [*state.get("node_trace", []), node]  # type: ignore[arg-type]
+
+
+def _record_timing(state: SparState, node: str, elapsed_ms: float) -> dict[str, float]:
+    timings = dict(state.get("node_timings") or {})
+    timings[node] = elapsed_ms
+    return timings
 
 
 @dataclass
@@ -59,20 +66,41 @@ class Nodes:
         )
 
     async def preprocess(self, state: SparState) -> SparState:
+        t0 = time.monotonic()
         query = state["query"]
         expanded = expand_query(query, self._acronyms, self._reverse_index)
-        return {**state, "expanded_query": expanded, "node_trace": _append_trace(state, "preprocess")}
+        elapsed = (time.monotonic() - t0) * 1000
+        return {
+            **state,
+            "expanded_query": expanded,
+            "node_trace": _append_trace(state, "preprocess"),
+            "node_timings": _record_timing(state, "preprocess", elapsed),
+        }
 
     async def prepare_context(self, state: SparState) -> SparState:
+        t0 = time.monotonic()
         query = state.get("expanded_query") or state["query"]
         history = state.get("history", [])
         ctx = build_context(query, history, self._acronyms)
-        return {**state, "history_context": ctx, "node_trace": _append_trace(state, "prepare_context")}
+        elapsed = (time.monotonic() - t0) * 1000
+        return {
+            **state,
+            "history_context": ctx,
+            "node_trace": _append_trace(state, "prepare_context"),
+            "node_timings": _record_timing(state, "prepare_context", elapsed),
+        }
 
     async def route(self, state: SparState) -> SparState:
+        t0 = time.monotonic()
         query = state.get("expanded_query") or state["query"]
         result = await self.router.route(query)
-        return {**state, "route_result": result, "node_trace": _append_trace(state, "route")}
+        elapsed = (time.monotonic() - t0) * 1000
+        return {
+            **state,
+            "route_result": result,
+            "node_trace": _append_trace(state, "route"),
+            "node_timings": _record_timing(state, "route", elapsed),
+        }
 
     async def _hybrid_search_multi(
         self,
@@ -102,6 +130,7 @@ class Nodes:
         return merged[:top_k]
 
     async def rag_retrieve(self, state: SparState) -> SparState:
+        t0 = time.monotonic()
         query = state.get("expanded_query") or state["query"]
         route_result = state["route_result"]
         top_k = state.get("top_k", 10)
@@ -111,30 +140,68 @@ class Nodes:
         expr = build_expr(route_result)
 
         chunks = await self._hybrid_search_multi(doc_types, query, query_vector, top_k, expr)
-        return {**state, "raw_chunks": chunks, "node_trace": _append_trace(state, "rag_retrieve")}
+        elapsed = (time.monotonic() - t0) * 1000
+        return {
+            **state,
+            "raw_chunks": chunks,
+            "node_trace": _append_trace(state, "rag_retrieve"),
+            "node_timings": _record_timing(state, "rag_retrieve", elapsed),
+        }
 
     async def structured_retrieve(self, state: SparState) -> SparState:
+        t0 = time.monotonic()
         result = await self.rag_retrieve(state)
-        return {**result, "node_trace": _append_trace(result, "structured_retrieve")}
+        elapsed = (time.monotonic() - t0) * 1000
+        return {
+            **result,
+            "node_trace": _append_trace(result, "structured_retrieve"),
+            "node_timings": _record_timing(result, "structured_retrieve", elapsed),
+        }
 
     async def multi_hop_retrieve(self, state: SparState) -> SparState:
+        t0 = time.monotonic()
         # Phase 5: iterative retrieval via LangGraph Send — fallback to RAG
         result = await self.rag_retrieve(state)
-        return {**result, "node_trace": _append_trace(result, "multi_hop_retrieve")}
+        elapsed = (time.monotonic() - t0) * 1000
+        return {
+            **result,
+            "node_trace": _append_trace(result, "multi_hop_retrieve"),
+            "node_timings": _record_timing(result, "multi_hop_retrieve", elapsed),
+        }
 
     async def rerank(self, state: SparState) -> SparState:
+        t0 = time.monotonic()
         chunks = state.get("raw_chunks", [])
         if not chunks:
-            return {**state, "reranked_chunks": [], "node_trace": _append_trace(state, "rerank")}
+            elapsed = (time.monotonic() - t0) * 1000
+            return {
+                **state,
+                "reranked_chunks": [],
+                "node_trace": _append_trace(state, "rerank"),
+                "node_timings": _record_timing(state, "rerank", elapsed),
+            }
         query = state.get("expanded_query") or state["query"]
         scores = await self.reranker.rerank(query, [c["text"] for c in chunks])
         ranked = sorted(zip(chunks, scores), key=lambda x: x[1], reverse=True)
         reranked = [{"score": s, **c} for c, s in ranked]
-        return {**state, "reranked_chunks": reranked, "node_trace": _append_trace(state, "rerank")}
+        elapsed = (time.monotonic() - t0) * 1000
+        return {
+            **state,
+            "reranked_chunks": reranked,
+            "node_trace": _append_trace(state, "rerank"),
+            "node_timings": _record_timing(state, "rerank", elapsed),
+        }
 
     async def generate(self, state: SparState) -> SparState:
+        t0 = time.monotonic()
         chunks = state.get("reranked_chunks") or state.get("raw_chunks", [])
         context = "\n\n".join(c["text"] for c in chunks[:5])
         query = state["query"]
         answer = f"[stub] context={len(chunks)} chunks\nquery={query}\n{context[:200]}"
-        return {**state, "answer": answer, "node_trace": _append_trace(state, "generate")}
+        elapsed = (time.monotonic() - t0) * 1000
+        return {
+            **state,
+            "answer": answer,
+            "node_trace": _append_trace(state, "generate"),
+            "node_timings": _record_timing(state, "generate", elapsed),
+        }
