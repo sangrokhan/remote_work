@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from spar.encoder.base import EncoderClient
+from spar.llm.client import LLMClient
 from spar.pipeline.state import SparState
 from spar.preprocessing.abbrev_mapper import (
     build_reverse_index,
@@ -40,6 +41,7 @@ class Nodes:
     milvus: SparMilvusClient
     _acronyms: dict
     _reverse_index: dict[str, str]
+    llm: LLMClient | None = None
 
     @classmethod
     def create(
@@ -49,6 +51,7 @@ class Nodes:
         encoder: EncoderClient,
         milvus: SparMilvusClient,
         acronyms_path: Path | None = None,
+        llm: LLMClient | None = None,
     ) -> "Nodes":
         path = acronyms_path or _ACRONYMS_PATH
         if path.exists():
@@ -63,6 +66,7 @@ class Nodes:
             milvus=milvus,
             _acronyms=acronyms,
             _reverse_index=reverse_index,
+            llm=llm,
         )
 
     async def preprocess(self, state: SparState) -> SparState:
