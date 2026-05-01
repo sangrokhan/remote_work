@@ -71,8 +71,10 @@ def build_graph(
     # optional pre-route nodes
     if cfg.use_query_expansion:
         g.add_node("preprocess", nodes.preprocess)
+        g.add_node("rewrite_query", nodes.rewrite_query)
+        g.add_edge("preprocess", "rewrite_query")
         next_node = "prepare_context" if cfg.use_prepare_context else "route"
-        g.add_edge("preprocess", next_node)
+        g.add_edge("rewrite_query", next_node)
 
     if cfg.use_prepare_context:
         g.add_node("prepare_context", nodes.prepare_context)

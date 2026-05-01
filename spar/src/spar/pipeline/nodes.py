@@ -19,7 +19,7 @@ from spar.preprocessing.abbrev_mapper import (
 from spar.reranker.client import CrossEncoderClient
 from spar.retrieval.milvus_client import SparMilvusClient
 from spar.retrieval.query_decomposer import QueryDecomposer
-from spar.retrieval.query_rewriter import build_context
+from spar.retrieval.query_rewriter import build_context, rewrite_query as _rewrite_query
 from spar.retrieval.routing import build_expr, doc_types_for_route
 from spar.router.hybrid_router import HybridRouter
 
@@ -95,9 +95,20 @@ class Nodes:
             "node_timings": _record_timing(state, "preprocess", elapsed),
         }
 
+    async def rewrite_query(self, state: SparState) -> SparState:
+        query = state.get("expanded_query") or state["query"]
+        history = state.get("history", [])
+        result = await _rewrite_query(query, history, self._acronyms)
+        return {
+            **state,
+            "rewritten_query": result.rewritten,
+            "query_complexity": result.complexity,
+            "node_trace": _append_trace(state, f"rewrite_query:{result.complexity}"),
+        }
+
     async def prepare_context(self, state: SparState) -> SparState:
         t0 = time.monotonic()
-        query = state.get("expanded_query") or state["query"]
+        query = state.get("rewritten_query") or state.get("expanded_query") or state["query"]
         history = state.get("history", [])
         ctx = build_context(query, history, self._acronyms)
         elapsed = (time.monotonic() - t0) * 1000
@@ -110,7 +121,7 @@ class Nodes:
 
     async def route(self, state: SparState) -> SparState:
         t0 = time.monotonic()
-        query = state.get("expanded_query") or state["query"]
+        query = state.get("rewritten_query") or state.get("expanded_query") or state["query"]
         result = await self.router.route(query)
         elapsed = (time.monotonic() - t0) * 1000
         return {
@@ -121,7 +132,7 @@ class Nodes:
         }
 
     async def decompose(self, state: SparState) -> SparState:
-        query = state.get("expanded_query") or state["query"]
+        query = state.get("rewritten_query") or state.get("expanded_query") or state["query"]
         sub_questions = await self._decomposer.decompose(query)
         return {**state, "sub_questions": sub_questions, "node_trace": _append_trace(state, "decompose")}
 
@@ -180,7 +191,7 @@ class Nodes:
 
     async def rag_retrieve(self, state: SparState) -> SparState:
         t0 = time.monotonic()
-        query = state.get("expanded_query") or state["query"]
+        query = state.get("rewritten_query") or state.get("expanded_query") or state["query"]
         route_result = state["route_result"]
         top_k = state.get("top_k", 10)
 
@@ -238,7 +249,7 @@ class Nodes:
                 "node_trace": _append_trace(state, "rerank"),
                 "node_timings": _record_timing(state, "rerank", elapsed),
             }
-        query = state.get("expanded_query") or state["query"]
+        query = state.get("rewritten_query") or state.get("expanded_query") or state["query"]
         scores = await self.reranker.rerank(query, [c["text"] for c in chunks])
         ranked = sorted(zip(chunks, scores), key=lambda x: x[1], reverse=True)
         reranked = [{"score": s, **c} for c, s in ranked]

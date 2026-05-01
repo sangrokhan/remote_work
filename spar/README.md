@@ -98,7 +98,7 @@ make ingest ARGS="--input-file data/skt-md/parameter_ref/foo.md --doc-type param
 
 > `make download-models`는 기본값으로 `models/` 폴더에 내려받으며, `models/`는 `.gitignore`에 이미 등록되어 커밋되지 않습니다.
 
-> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인** (`pipeline/` — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅ — RegexRouter TS 패턴 + spec intro ingest)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용), **Milvus retrieval wiring ✅** (`retrieval/routing.py` + pipeline stub 제거 — rag_retrieve/structured_retrieve가 실제 `hybrid_search()` 호출), **멀티턴 history + 약어 컨텍스트 준비 (Task 2.5 부분 ✅** — `retrieval/query_rewriter.py`, `pipeline/prepare_context` 노드, API `history` 필드), **Task 1.7.2 평가 자동화 ✅** (Recall@K/MRR + faithfulness/answer_relevancy, `eval/ragas_metrics.py`), **라우터 골드셋 + 평가 스크립트 ✅** (`scripts/gen_router_goldset.py`, `scripts/run_router_eval.py` — Task 2.3), **Query Decomposition ✅ (Task 2.4** — `retrieval/query_decomposer.py`, `decompose`/`decomposed_retrieve` 노드, `RouteResult.needs_decomposition` 플래그) 구현됨, **Excel term dict + keyword expr 필터 ✅** (`ingest/excel_loader.py` + `term_tagger.py` + `scripts/ingest_excel.py` — Excel column → `acronyms.json` keywords 섹션; `extract_terms()` → `matched_terms`; `array_contains` Milvus 필터), **GraphConfig 기반 Eval Pipeline ✅** (`pipeline/config.py` — GraphConfig+PRESET_CONFIGS, `eval/eval_suite.py` — 멀티-config 비교 러너, `run_eval.py` graph.ainvoke 기반, 노드별 타이밍, 실 LLM generate 경로) 구현됨, **골드셋 QA 생성 프롬프트 개선 ✅** (`scripts/gen_goldset_qa.py` — terminology/technology/behavior 3-관점, 질문에 spec 번호 포함, section ground truth 필수화).
+> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인** (`pipeline/` — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅ — RegexRouter TS 패턴 + spec intro ingest)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용), **Milvus retrieval wiring ✅** (`retrieval/routing.py` + pipeline stub 제거 — rag_retrieve/structured_retrieve가 실제 `hybrid_search()` 호출), **멀티턴 history + 약어 컨텍스트 준비 (Task 2.5 부분 ✅** — `retrieval/query_rewriter.py`, `pipeline/prepare_context` 노드, API `history` 필드), **Task 1.7.2 평가 자동화 ✅** (Recall@K/MRR + faithfulness/answer_relevancy, `eval/ragas_metrics.py`), **라우터 골드셋 + 평가 스크립트 ✅** (`scripts/gen_router_goldset.py`, `scripts/run_router_eval.py` — Task 2.3), **Query Decomposition ✅ (Task 2.4** — `retrieval/query_decomposer.py`, `decompose`/`decomposed_retrieve` 노드, `RouteResult.needs_decomposition` 플래그) 구현됨, **LLM Query Rewriting ✅ (Task 2.5** — `retrieval/query_rewriter.py` `rewrite_query()`/`QueryRewriteResult`, `prompts/query_rewrite_system.txt`, `pipeline/rewrite_query` 노드, `tests/unit/retrieval/test_query_rewriter.py`) 구현됨.
 
 ---
 
@@ -120,8 +120,8 @@ spar/
 │   ├── preprocessing/    # 질의 전처리 — 약어 매퍼 (Task 1.6 ✅)
 │   ├── prompts/          # LLM 프롬프트 파일 저장소 — load_prompt() 헬퍼 + *.txt 템플릿
 │   ├── router/           # 3-layer 라우터 (regex / embedding / llm / hybrid + schemas)
-│   ├── ingest/           # md-aware/fixed 청커 + sentence-transformers embedder + excel_loader + term_tagger (Task 1.1/1.3/1.4/1.6 — 부분)
-│   ├── pipeline/         # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph(), GraphConfig+PRESET_CONFIGS (Phase 5 조기 도입)
+│   ├── ingest/           # md-aware/fixed 청커 + sentence-transformers embedder (Task 1.1/1.3/1.4 — 부분)
+│   ├── pipeline/         # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph() (Phase 5 조기 도입)
 │   ├── reranker/         # CrossEncoderClient + 싱글톤 레지스트리 (Task 1.5)
 │   ├── retrieval/        # Milvus 클라이언트, hybrid search, Route→doc_type 매핑, query_rewriter, query_decomposer, hyde, multi_query (Task 1.4~1.5, 2.4~2.6)
 │   ├── parsers/          # 문서 유형별 파서 (Task 1.1 — scaffold)
@@ -130,13 +130,13 @@ spar/
 │   ├── kg/               # Knowledge Graph (Task 3.3~3.5 — scaffold)
 │   ├── generation/       # citation, self-verify, confidence, fallback (Task 4.x — scaffold)
 │   ├── agent/            # LangGraph agentic 확장 예비 (Phase 5 — scaffold)
-│   ├── eval/             # 골드셋 평가 — metrics.py, run_eval.py (graph.ainvoke 기반), eval_suite.py (멀티-config 비교), ragas_metrics.py, run_ragas_eval.py (Task 1.7.2 ✅)
+│   ├── eval/             # 골드셋 평가 — metrics.py, run_eval.py (Retrieval), ragas_metrics.py, run_ragas_eval.py (답변품질) (Task 1.7.2 ✅)
 │   └── dictionary/       # 약어/동의어 사전 (scaffold)
 ├── configs/
 │   └── milvus/           # Milvus 연결/컬렉션 설정
 ├── scripts/              # ETL/배치/유틸리티 (init_milvus, serve_vllm, test_api,
 │                          #   convert_pdf_to_md, fetch_tspec_llm, extract_acronyms,
-│                          #   run_ingest, ingest_excel, slice_3gpp_intros, gen_goldset_qa,
+│                          #   run_ingest, slice_3gpp_intros, gen_goldset_qa,
 │                          #   gen_router_goldset, run_router_eval)
 ├── tests/                # pytest
 └── data/                 # 골드셋, 샘플, 산출물

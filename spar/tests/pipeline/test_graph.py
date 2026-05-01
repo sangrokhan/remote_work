@@ -87,8 +87,9 @@ async def test_remaining_routes_use_rag(route: Route, base_state: SparState) -> 
 async def test_full_trace_default_rag(base_state: SparState) -> None:
     graph = build_graph(router=_make_router(Route.DEFAULT_RAG), reranker=_make_reranker(), encoder=_make_encoder(), milvus=_make_milvus())
     result = await graph.ainvoke(base_state)
-    assert result["node_trace"] == [
-        "preprocess",
+    assert result["node_trace"][0] == "preprocess"
+    assert result["node_trace"][1].startswith("rewrite_query:")
+    assert result["node_trace"][2:] == [
         "prepare_context",
         "route",
         "rag_retrieve",

@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Any
+import json
+import logging
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from spar.llm import LLMRole, get_client
+from spar.prompts import load_prompt
+
+_log = logging.getLogger(__name__)
+_REWRITE_SYSTEM_PROMPT = load_prompt("query_rewrite_system.txt")
 
 MAX_HISTORY_TURNS = 5
+
+
+@dataclass
+class QueryRewriteResult:
+    original: str
+    rewritten: str
+    complexity: Literal["simple", "complex"]
+    rationale: str
 
 
 def format_history(history: list[dict[str, str]], max_turns: int = MAX_HISTORY_TURNS) -> str:
@@ -57,3 +74,33 @@ def build_context(
         parts.append(f"Relevant acronyms:\n{acr_lines}")
 
     return "\n\n".join(parts)
+
+
+async def rewrite_query(
+    query: str,
+    history: list[dict[str, str]],
+    acronyms: dict[str, Any],
+    max_turns: int = MAX_HISTORY_TURNS,
+) -> QueryRewriteResult:
+    history_str = format_history(history, max_turns)
+    user_content = f"Conversation history:\n{history_str}\n\nQuery: {query}" if history_str else f"Query: {query}"
+    try:
+        client = await get_client(LLMRole.ROUTER)
+        raw = await client.chat(
+            messages=[
+                {"role": "system", "content": _REWRITE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            max_tokens=256,
+        )
+        parsed = json.loads(raw)
+        raw_complexity = parsed.get("complexity", "simple")
+        return QueryRewriteResult(
+            original=query,
+            rewritten=parsed.get("rewritten", query),
+            complexity=raw_complexity if raw_complexity in ("simple", "complex") else "simple",
+            rationale=parsed.get("rationale", ""),
+        )
+    except Exception as exc:
+        _log.warning("rewrite_query fallback — %s: %s", type(exc).__name__, exc)
+        return QueryRewriteResult(original=query, rewritten=query, complexity="simple", rationale="fallback")
