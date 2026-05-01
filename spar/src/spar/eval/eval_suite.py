@@ -64,14 +64,15 @@ async def run_suite(
                 per_query.append({"error": str(exc), "query_id": gold.get("query_id")})
                 continue
 
-            retrieved = state.get("reranked_chunks") or state.get("raw_chunks", [])
+            reranked = state.get("reranked_chunks")
+            retrieved = reranked if reranked is not None else state.get("raw_chunks", [])
             pq: dict[str, Any] = {
                 "query_id": gold.get("query_id"),
                 "query": gold["query"],
                 "recall_at_5": float(recall_at_k(retrieved, gold, 5)),
                 "recall_at_10": float(recall_at_k(retrieved, gold, 10)),
                 "mrr": reciprocal_rank(retrieved, gold),
-                "latency_ms": sum((state.get("node_timings") or {}).values()),
+                "latency_ms": sum(state["node_timings"].values()) if state.get("node_timings") else None,
                 "faithfulness": None,
             }
             if (
@@ -144,21 +145,22 @@ def main() -> None:
     goldset = _load_goldset(args.goldset)
     print(f"Goldset: {len(goldset)} queries | configs: {[c.name for c in selected]}")
 
-    results = asyncio.run(
-        run_suite(
-            configs=selected, goldset=goldset, router=router, reranker=reranker,
-            encoder=encoder, milvus=client, top_k=args.top_k,
+    try:
+        results = asyncio.run(
+            run_suite(
+                configs=selected, goldset=goldset, router=router, reranker=reranker,
+                encoder=encoder, milvus=client, top_k=args.top_k,
+            )
         )
-    )
-    summary = compute_suite_metrics(results)
-    print_comparison_table(summary)
+        summary = compute_suite_metrics(results)
+        print_comparison_table(summary)
 
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps({"summary": summary, "details": results}, indent=2))
-        print(f"Saved: {args.output}")
-
-    client.close()
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps({"summary": summary, "details": results}, indent=2))
+            print(f"Saved: {args.output}")
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":

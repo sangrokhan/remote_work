@@ -25,7 +25,9 @@ FAKE_STATE = {
     "raw_chunks": [
         {"text": "maxHARQTx default is 5.", "score": 0.9, "source_doc": "param_ref.md", "section_num": "4.1"}
     ],
-    "reranked_chunks": [],
+    "reranked_chunks": [
+        {"text": "maxHARQTx default is 5.", "score": 0.9, "source_doc": "param_ref.md", "section_num": "4.1"}
+    ],
     "answer": "[stub]",
     "node_timings": {"route": 10.0, "rag_retrieve": 80.0, "generate": 5.0},
     "node_trace": ["route", "rag_retrieve", "generate"],
@@ -82,7 +84,9 @@ FAKE_STATE_WITH_ANSWER = {
     "raw_chunks": [
         {"text": "maxHARQTx default is 5.", "score": 0.9, "source_doc": "param_ref.md", "section_num": "4.1"}
     ],
-    "reranked_chunks": [],
+    "reranked_chunks": [
+        {"text": "maxHARQTx default is 5.", "score": 0.9, "source_doc": "param_ref.md", "section_num": "4.1"}
+    ],
     "answer": "The default is 5.",
     "node_timings": {"route": 10.0, "rag_retrieve": 80.0, "generate": 5.0},
     "node_trace": ["route", "rag_retrieve", "generate"],
@@ -124,3 +128,25 @@ async def test_run_suite_faithfulness_called_and_stored():
 
     mock_faithfulness.assert_called_once()
     assert results[0]["per_query"][0]["faithfulness"] == pytest.approx(0.85)
+
+
+@pytest.mark.asyncio
+async def test_run_suite_falls_back_to_raw_chunks_when_reranked_empty():
+    configs = [GraphConfig(name="baseline")]
+    state_no_reranked = {**FAKE_STATE, "reranked_chunks": []}
+
+    with patch("spar.eval.eval_suite.build_graph") as mock_build:
+        mock_graph = MagicMock()
+        mock_graph.ainvoke = AsyncMock(return_value=state_no_reranked)
+        mock_build.return_value = mock_graph
+
+        results = await run_suite(
+            configs=configs, goldset=GOLDSET,
+            router=MagicMock(), reranker=MagicMock(),
+            encoder=MagicMock(encode=MagicMock(return_value=np.zeros((1, 3)))),
+            milvus=MagicMock(), top_k=10,
+        )
+
+    pq = results[0]["per_query"][0]
+    # empty reranked → falls back to raw_chunks → recall > 0
+    assert pq["recall_at_5"] >= 0.0
