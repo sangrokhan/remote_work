@@ -51,7 +51,7 @@ class Embedder:
 
         if self._remote_url:
             self._remote_url = _remote_embedding_url(self._remote_url)
-            self._http_client = httpx.Client(timeout=30.0)
+            self._http_client = httpx.Client(timeout=60.0)
             return
 
         if SentenceTransformer is None:
@@ -114,7 +114,10 @@ class Embedder:
         if not texts:
             return []
         if self._remote_url:
-            return self._request_remote(texts)
+            results: list[list[float]] = []
+            for i in range(0, len(texts), batch_size):
+                results.extend(self._request_remote(texts[i : i + batch_size]))
+            return results
         vecs = self._model.encode(
             texts,
             batch_size=batch_size,
