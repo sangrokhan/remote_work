@@ -74,7 +74,56 @@ def _is_likely_acronym(token: str) -> bool:
     # 흔한 영어 단어 (For, The, This 등) 차단 — 첫글자만 대문자 + 모두 알파벳
     if token[0].isupper() and token[1:].islower() and token.isalpha():
         return False
+    # 밴드 구성 표기 패턴 (CA_X, CA_X-X-Y, CA_nX-nY 등) — 실제 약어 아님
+    if re.search(r"[_-]n?[XYZ](?:[_-]|$)", token):
+        return False
     return True
+
+
+def _is_stylized_word(word: str) -> bool:
+    """3GPP 대문자 강조 표기 판단 — 하이픈 세그먼트 내부(i>0)에 대문자 존재 시 True.
+
+    ALWays → True (W가 세그먼트 내부 대문자)
+    Audio-Visual → False (A, V 모두 세그먼트 시작)
+    """
+    for seg in word.split("-"):
+        for i, c in enumerate(seg):
+            if i > 0 and c.isupper():
+                return True
+    return False
+
+
+def _clean_expansion(exp: str, acronym: str) -> str | None:
+    """expansion 정제 — 노이즈 3종 제거.
+
+    1. trailing markdown 아티팩트 제거 (>, \\, |, *..*, _.._)
+    2. 세미콜론 이후 설명문 제거 (ATtention; this two-char... → ATtention)
+    3. 3GPP 스타일 대문자 강조 정규화 (ALWays → Always, CONFerence → Conference)
+    """
+    # 1. trailing markdown 아티팩트
+    exp = re.sub(r"\*([^*]+)\*", r"\1", exp)   # *...*
+    exp = re.sub(r"_([^_]+)_", r"\1", exp)      # _.._
+    exp = re.sub(r"[\s>\\|]+$", "", exp).strip()
+    if not exp:
+        return None
+
+    # 2. 세미콜론 뒤 설명문 제거 (첫 세그먼트만 유지)
+    if ";" in exp:
+        exp = exp.split(";")[0].strip()
+    if not exp:
+        return None
+
+    # 3. 스타일화 정규화: 단어 내부에 대문자가 섞인 경우 (ALWays, CONFerence)
+    #    세그먼트(하이픈 기준) 내부 i>0 위치에 대문자 있으면 stylized로 판단
+    first_word = exp.split()[0]
+    if _is_stylized_word(first_word):
+        upper_chars = "".join(c for c in first_word if c.isupper())
+        acro_stripped = acronym.replace("_", "").replace("-", "")
+        if upper_chars == acro_stripped:
+            normalized_first = first_word[0].upper() + first_word[1:].lower()
+            exp = normalized_first + exp[len(first_word):]
+
+    return exp or None
 
 
 def find_abbreviations_section(text: str) -> str | None:
@@ -102,8 +151,10 @@ def parse_entries(section_body: str) -> dict[str, str]:
         nonlocal current_acronym, current_expansion_parts
         if current_acronym and current_expansion_parts:
             full = " ".join(current_expansion_parts).strip()
-            # 첫 등장이 우선 (중복 시 무시)
-            entries.setdefault(current_acronym, full)
+            cleaned = _clean_expansion(full, current_acronym)
+            if cleaned:
+                # 첫 등장이 우선 (중복 시 무시)
+                entries.setdefault(current_acronym, cleaned)
         current_acronym = None
         current_expansion_parts = []
 
