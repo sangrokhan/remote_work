@@ -50,6 +50,27 @@ make lint
 make test
 ```
 
+### 모델 다운로드 / 임베딩 서비스 연동
+
+```bash
+# 1) 임베딩(BAAI/bge-large-en-v1.5) 및 reranker 모델 다운로드
+HF_TOKEN=xxxxx make download-models MODEL_DOWNLOAD_TARGET=all
+
+# 2) 로컬에 받은 임베딩 모델을 vLLM 임베딩 서버로 서빙
+TASK=embed MODEL=models/bge-large-en-v1.5 PORT=8000 bash scripts/serve_vllm.sh
+
+# 3) ingest에서 원격 임베딩 서버 사용
+cat >> .env <<'EOF'
+EMBEDDING_URL=http://127.0.0.1:8000/v1
+EMBEDDING_API_KEY=dummy
+EOF
+
+# 4) 문서 임베딩 + Milvus 적재
+make ingest ARGS="--input-file data/skt-md/parameter_ref/foo.md --doc-type parameter_ref"
+```
+
+> `make download-models`는 기본값으로 `models/` 폴더에 내려받으며, `models/`는 `.gitignore`에 이미 등록되어 커밋되지 않습니다.
+
 > **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅) 구현됨.
 
 ---
