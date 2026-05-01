@@ -135,9 +135,37 @@ spar/
 │   └── milvus/           # Milvus 연결/컬렉션 설정
 ├── scripts/              # ETL/배치/유틸리티 (init_milvus, serve_vllm, test_api,
 │                          #   convert_pdf_to_md, fetch_tspec_llm, extract_acronyms,
-│                          #   run_ingest, slice_3gpp_intros)
+│                          #   run_ingest, slice_3gpp_intros, gen_goldset_qa)
 ├── tests/                # pytest
 └── data/                 # 골드셋, 샘플, 산출물
+```
+
+---
+
+## 골드셋 QA 생성
+
+3GPP `.md` 문서에서 Codex CLI로 질문-답변 세트를 자동 생성한다.  
+상세 가이드: [`docs/goldset-qa-generation-guide.md`](docs/goldset-qa-generation-guide.md)
+
+```bash
+# 사전 조건: Codex 로그인
+codex whoami  # 미로그인 시: codex login
+
+# 파일 지정
+python scripts/gen_goldset_qa.py \
+  --input-file data/tspec-llm/3GPP-clean/Rel-18/29_series/29502-i40.md \
+  --output data/goldsets/retrieval_goldset.jsonl
+
+# 폴더 지정 (재귀 처리)
+python scripts/gen_goldset_qa.py \
+  --input-dir data/tspec-llm/3GPP-clean/Rel-18/29_series \
+  --output data/goldsets/retrieval_goldset.jsonl \
+  --append
+```
+
+출력 형식 (`data/goldsets/retrieval_goldset.jsonl`):
+```jsonl
+{"query_id": "Q0001", "query": "SMF가 PDU 세션 수립 시 호출하는 서비스는?", "answer": "Nsmf_PDUSession_CreateSMContext", "type": "lookup", "section": "5.2.2.1", "source_doc": "29502-i40.md", "spec_number": "29.502", "release": "Rel-18"}
 ```
 
 ---
