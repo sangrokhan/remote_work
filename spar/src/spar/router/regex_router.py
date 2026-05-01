@@ -10,6 +10,9 @@ _MO_NAME_RE = re.compile(r"\b([A-Z][A-Za-z]{4,}(?:DU|FDD|TDD|Cell|Ran|NR|LTE|SA|
 _PARAM_NAME_RE = re.compile(
     r"\b([a-z][a-zA-Z]{3,}(?:Power|Timer|Threshold|Max|Min|Offset|Hysteresis|Period|Level|Limit))\b"
 )
+_SPEC_NUM_RE = re.compile(
+    r"\b(?:3GPP\s+)?TS\s*(\d{2})[\.\s]?(\d{3})\b", re.IGNORECASE
+)
 
 
 class RegexRouter:
@@ -41,6 +44,15 @@ class RegexRouter:
                 confidence=1.0,
                 layer="regex",
                 entities={"mo_name": m.group(1)},
+            )
+
+        m = _SPEC_NUM_RE.search(query)
+        if m:
+            return RouteResult(
+                route=Route.DEFINITION_EXPLAIN,
+                confidence=1.0,
+                layer="regex",
+                entities={"spec_number": f"{m.group(1)}.{m.group(2)}"},
             )
 
         m = _PARAM_NAME_RE.search(query)
