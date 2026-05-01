@@ -63,7 +63,7 @@ spar/
 │       ├── ingest/          # md-aware/fixed 청커 + sentence-transformers embedder (Task 1.1/1.3/1.4 — 부분)
 │       ├── pipeline/        # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph() (Phase 5 조기 도입)
 │       ├── reranker/        # CrossEncoderClient + 싱글톤 레지스트리 — client, config, factory, registry (Task 1.5)
-│       ├── retrieval/       # Milvus 클라이언트, hybrid search, Route→doc_type 매핑, query_rewriter, query_decomposer (milvus_client.py, routing.py, query_rewriter.py, query_decomposer.py) (Task 1.4~1.5, 2.4~2.7)
+│       ├── retrieval/       # Milvus 클라이언트, hybrid search, Route→doc_type 매핑, query_rewriter, query_decomposer, hyde, multi_query (milvus_client.py, routing.py, query_rewriter.py, query_decomposer.py, hyde.py, multi_query.py) (Task 1.4~1.5, 2.4~2.7)
 │       ├── parsers/         # 문서 유형별 PDF/텍스트 파서 (Task 1.1 — scaffold)
 │       ├── chunkers/        # 유형별 청킹 전략 (Task 1.3 — scaffold)
 │       ├── db/              # Parameter/Counter/Alarm 구조화 DB + Text-to-SQL (Task 3.1~3.2 — scaffold)
