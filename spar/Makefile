@@ -10,7 +10,7 @@ MILVUS_COMPOSE := configs/milvus/docker-compose.yml
 
 .PHONY: help venv install install-dev lint format typecheck test test-cov clean \
         milvus-up milvus-down milvus-ui milvus-init milvus-reset milvus-list milvus-logs \
-        vllm-serve vllm-serve-router
+        vllm-serve vllm-serve-router download-models
 
 help:
 	@echo "사용 가능한 명령:"
@@ -22,6 +22,7 @@ help:
 	@echo "  make typecheck     - mypy 타입 체크"
 	@echo "  make test          - pytest 실행"
 	@echo "  make test-cov      - 커버리지 포함 테스트"
+	@echo "  make download-models - BGE/리랭커 모델 다운로드 (scripts/download_models.py)"
 	@echo "  make clean         - 캐시/빌드 산출물 정리"
 	@echo ""
 	@echo "  [Milvus]"
@@ -98,6 +99,20 @@ milvus-reset:
 
 milvus-list:
 	$(PY) scripts/init_milvus.py --list
+
+# ---------------------------------------------------------------------------
+# 모델 다운로드
+# ---------------------------------------------------------------------------
+MODEL_DOWNLOAD_TARGET ?= all
+MODEL_DOWNLOAD_CACHE ?= models
+MODEL_FORCE ?= 0
+MODEL_VERIFY ?= 0
+
+download-models:
+	@if [ "$(MODEL_FORCE)" = "1" ]; then FORCE="--force"; else FORCE=""; fi; \
+	if [ "$(MODEL_VERIFY)" = "1" ]; then VERIFY="--verify"; else VERIFY=""; fi; \
+	$(PY) scripts/download_models.py --models $(MODEL_DOWNLOAD_TARGET) \
+		--cache-dir $(MODEL_DOWNLOAD_CACHE) $$FORCE $$VERIFY
 
 # ---------------------------------------------------------------------------
 # 전처리 (Ingest)
