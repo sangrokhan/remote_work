@@ -11,7 +11,7 @@
 - **목적**: Samsung 단일 벤더(LTE+NR) 환경의 내부 문서(파라미터/카운터/알람/MOP/Feature/Release Notes 등)에 대한 자연어 질의응답 시스템
 - **운영 환경**: 온프레미스, 영어 응답, 정확성 최우선 (hallucination 최소화)
 - **상위 로드맵**: `docs/prd.md`의 Phase 0 ~ Phase 5 + INF 작업 참조
-- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱 구현됨
+- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분), encoder 싱글톤(진행 중), Codex+Gemini fallback 훅(INF-1b ✅) 구현됨
 
 ---
 
@@ -55,8 +55,10 @@ spar/
 │       ├── __init__.py
 │       ├── api/             # FastAPI 앱 — app.py (엔드포인트, 라우팅)
 │       ├── llm/             # LLM 팩토리/싱글톤/레지스트리 — client, config, factory, registry
+│       ├── encoder/         # 임베딩 encoder 싱글톤/팩토리 (Task 1.4 — 진행 중, untracked)
 │       ├── preprocessing/   # 질의 전처리 — abbrev_mapper.py (Task 1.6 ✅)
 │       ├── router/          # 3-layer 라우터 — regex/embedding/llm/hybrid + schemas (Task 2.2)
+│       ├── ingest/          # md-aware/fixed 청커 + sentence-transformers embedder (Task 1.1/1.3/1.4 — 부분)
 │       ├── retrieval/       # Milvus 클라이언트, hybrid search, reranker (Task 1.4~1.5, 2.4~2.7)
 │       ├── parsers/         # 문서 유형별 PDF/텍스트 파서 (Task 1.1 — scaffold)
 │       ├── chunkers/        # 유형별 청킹 전략 (Task 1.3 — scaffold)
@@ -70,6 +72,8 @@ spar/
 │   ├── milvus/              # Milvus 연결/컬렉션 설정
 │   └── secrets/             # *.local.yaml — git 제외
 ├── scripts/                 # 일회성 ETL/배치/유틸리티
+│                            #   (init_milvus, serve_vllm, test_api, run_ingest,
+│                            #    convert_pdf_to_md, fetch_tspec_llm, extract_acronyms)
 ├── tests/                   # pytest 단위/통합 테스트
 └── data/                    # 골드셋, 샘플 입력, 추출 산출물 (큰 원본은 git LFS 또는 외부 저장)
     └── samples/             # 공개 가능한 샘플만 추적
