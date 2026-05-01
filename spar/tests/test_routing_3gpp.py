@@ -67,6 +67,10 @@ def test_no_spec_number_gives_none_expr(router):
 
 # ---------------------------------------------------------------------------
 # hybrid_search expr 파라미터 전달 검증 (Milvus mock)
+#
+# NOTE: 아래 테스트는 RouteResult.entities → Milvus expr 변환 패턴을 검증한다.
+# HybridRouter → retrieval 직접 연결은 이번 스코프 외 (설계 문서 섹션 6 참조).
+# 실제 파이프라인 연결 후 실 구현 코드를 호출하는 통합 테스트로 교체 예정.
 # ---------------------------------------------------------------------------
 
 def test_hybrid_search_receives_expr_when_spec_number_known(router):
