@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/han/.openclaw/workspace/remote_work/spar/.claude/hooks/subagent-codex.sh",
+            "statusMessage": "Codex로 라우팅 중..."
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
