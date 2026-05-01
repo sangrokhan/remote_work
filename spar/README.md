@@ -41,6 +41,9 @@ SPAR는 Samsung RAN 운영 환경에서 다음 문서군에 대한 자연어 질
 # 1. 가상환경 + 개발 의존성 설치
 make install-dev
 
+# 1.1 vLLM 임베딩/서빙을 사용할 예정이면 별도 설치
+make install-vllm
+
 # 2. 환경 변수 설정
 cp .env.example .env
 # .env 편집

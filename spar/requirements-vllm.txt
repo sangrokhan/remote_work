@@ -1,0 +1,4 @@
+vllm>=0.7.0
+
+# vLLM is a separate infra dependency for local/remote serving.
+# Install on a Linux host with compatible CUDA/PyTorch toolchain.

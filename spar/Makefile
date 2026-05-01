@@ -8,7 +8,7 @@ PY := $(VENV)/bin/python
 
 MILVUS_COMPOSE := configs/milvus/docker-compose.yml
 
-.PHONY: help venv install install-dev lint format typecheck test test-cov clean \
+.PHONY: help venv install install-dev install-vllm lint format typecheck test test-cov clean \
         milvus-up milvus-down milvus-ui milvus-init milvus-reset milvus-list milvus-logs \
         vllm-serve vllm-serve-router download-models
 
@@ -17,6 +17,7 @@ help:
 	@echo "  make venv          - 가상환경 생성 ($(VENV))"
 	@echo "  make install       - 런타임 의존성 설치"
 	@echo "  make install-dev   - 개발 의존성 포함 설치 (권장)"
+	@echo "  make install-vllm  - vLLM 로컬 서빙 전용 의존성 설치"
 	@echo "  make lint          - ruff 린트"
 	@echo "  make format        - ruff 포매터 적용"
 	@echo "  make typecheck     - mypy 타입 체크"
@@ -50,6 +51,9 @@ install: venv
 install-dev: venv
 	$(PIP) install -r requirements-dev.txt
 	$(PIP) install -e ".[dev]"
+
+install-vllm: venv
+	$(PIP) install -r requirements-vllm.txt
 
 lint:
 	$(VENV)/bin/ruff check .
