@@ -70,7 +70,7 @@ spar/
 │       ├── kg/              # Knowledge Graph + Text-to-Cypher + GraphRAG (Task 3.3~3.5 — scaffold)
 │       ├── generation/      # citation enforcer, self-verifier, confidence, fallback (Task 4.1~4.5 — scaffold)
 │       ├── agent/           # LangGraph agentic 확장 예비 (Phase 5 — scaffold)
-│       ├── eval/            # 골드셋 평가 스크립트, 메트릭 — metrics.py, run_eval.py (Task 1.7.2 구현 중)
+│       ├── eval/            # 골드셋 평가 — metrics.py, run_eval.py (Retrieval), ragas_metrics.py, run_ragas_eval.py (답변품질) (Task 1.7.2)
 │       └── dictionary/      # 약어/동의어 사전 (scaffold)
 ├── configs/                 # YAML/JSON 설정 (모델, 인덱스, 라우트 등)
 │   ├── milvus/              # Milvus 연결/컬렉션 설정
@@ -111,8 +111,17 @@ make typecheck
 make test
 make test-cov
 
-# 골드셋 평가 (Task 0.3 산출물 — 예정)
-.venv/bin/python -m spar.eval.run_eval --goldset data/goldsets/retrieval_goldset.jsonl
+# Retrieval 골드셋 평가 — Recall@K / MRR
+.venv/bin/python -m spar.eval.run_eval \
+  --goldset data/goldsets/retrieval_goldset.jsonl \
+  --doc-type spec --top-k 50 \
+  --output data/eval_results/phase1_eval.json
+
+# 답변 품질 평가 — faithfulness / answer_relevancy
+.venv/bin/python -m spar.eval.run_ragas_eval \
+  --dataset data/eval_results/ragas_dataset.jsonl \
+  --metrics faithfulness,answer_relevancy \
+  --output data/eval_results/ragas_eval.json
 ```
 
 수동 사용 시:
