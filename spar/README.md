@@ -136,7 +136,8 @@ spar/
 │   └── milvus/           # Milvus 연결/컬렉션 설정
 ├── scripts/              # ETL/배치/유틸리티 (init_milvus, serve_vllm, test_api,
 │                          #   convert_pdf_to_md, fetch_tspec_llm, extract_acronyms,
-│                          #   run_ingest, slice_3gpp_intros, gen_goldset_qa)
+│                          #   run_ingest, slice_3gpp_intros, gen_goldset_qa,
+│                          #   gen_router_goldset, run_router_eval)
 ├── tests/                # pytest
 └── data/                 # 골드셋, 샘플, 산출물
 ```
