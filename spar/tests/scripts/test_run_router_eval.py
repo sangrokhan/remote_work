@@ -98,3 +98,47 @@ def test_load_goldset(tmp_path):
     loaded = load_goldset(p)
     assert len(loaded) == 1
     assert loaded[0]["expected_route"] == "procedural"
+
+
+import numpy as np
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+def _make_mock_encoder(dim: int = 8):
+    """test_embedding_router.py 와 동일한 stub encoder."""
+    from spar.encoder.base import EncoderClient
+    encoder = MagicMock(spec=EncoderClient)
+    rng = np.random.default_rng(42)
+    cache: dict[str, np.ndarray] = {}
+
+    def _encode(texts: list[str], *, normalize: bool = True) -> np.ndarray:
+        vecs = []
+        for t in texts:
+            if t not in cache:
+                v = rng.random(dim).astype(np.float32)
+                if normalize:
+                    v /= np.linalg.norm(v)
+                cache[t] = v
+            vecs.append(cache[t])
+        return np.array(vecs)
+
+    encoder.encode.side_effect = _encode
+    return encoder
+
+
+def test_eval_embedding_layer_returns_routes(small_goldset):
+    from run_router_eval import eval_embedding
+    mock_enc = _make_mock_encoder()
+    with patch("spar.encoder.registry.get_encoder", new=AsyncMock(return_value=mock_enc)):
+        expected, predicted = eval_embedding(small_goldset, threshold=0.0)
+    assert len(expected) == len(predicted) == 3
+    assert all(r in ROUTES for r in predicted)
+
+
+def test_eval_embedding_strict_threshold_all_fallback(small_goldset):
+    from run_router_eval import eval_embedding
+    mock_enc = _make_mock_encoder()
+    with patch("spar.encoder.registry.get_encoder", new=AsyncMock(return_value=mock_enc)):
+        _, predicted = eval_embedding(small_goldset, threshold=2.0)
+    # threshold > max possible cosine similarity → 전부 default_rag
+    assert all(p == "default_rag" for p in predicted)

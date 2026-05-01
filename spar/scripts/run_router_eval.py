@@ -101,7 +101,8 @@ def eval_embedding(goldset: list[dict], threshold: float = 0.65) -> tuple[list[s
     from spar.router.embedding_router import EmbeddingRouter
     from spar.router.schemas import Route
 
-    encoder = get_encoder()
+    import asyncio
+    encoder = asyncio.run(get_encoder())
     router = EmbeddingRouter(encoder=encoder, threshold=threshold)
     expected_list: list[str] = []
     predicted_list: list[str] = []
