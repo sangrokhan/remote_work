@@ -4,10 +4,14 @@ import json
 import re
 from typing import TYPE_CHECKING, Any, cast
 
+from spar.prompts import load_prompt
+
 if TYPE_CHECKING:
     from pathlib import Path
 
     from openai import OpenAI
+
+_ABBREV_CONFLICT_TEMPLATE = load_prompt("abbrev_conflict.txt")
 
 
 def load_acronyms(path: Path) -> dict[str, Any]:
@@ -100,12 +104,7 @@ def _llm_batch_classify(
         items.append(
             f'약어: "{abbrev}"\n후보: {candidates}\n문맥: "...{ctxs[0]}..."'
         )
-    prompt = (
-        "다음 약어들의 의미를 문맥에 맞는 후보 중 하나로만 분류해줘. "
-        "확신이 없으면 \"uncertain\"으로 답해줘.\n"
-        'JSON 형식으로만 답해줘: {"약어": "선택한 후보 또는 uncertain"}\n\n'
-        + "\n\n".join(items)
-    )
+    prompt = _ABBREV_CONFLICT_TEMPLATE.format(items="\n\n".join(items))
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],

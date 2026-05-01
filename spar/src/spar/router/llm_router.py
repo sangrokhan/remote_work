@@ -4,26 +4,12 @@ import json
 import logging
 
 from spar.llm import LLMRole, get_client
+from spar.prompts import load_prompt
 from spar.router.schemas import Route, RouteResult
 
 _log = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """You are a query router for a Samsung RAN (Radio Access Network) documentation system.
-Classify the user query into exactly one of these routes:
-- structured_lookup: exact parameter/counter/alarm lookup
-- definition_explain: explain what something is
-- procedural: how-to, installation, configuration steps
-- diagnostic: troubleshooting, root cause, why something failed
-- comparative: comparing versions, features, configurations
-- default_rag: anything else
-
-Also extract:
-- entities: dict of alarm_code, param_name, mo_name, feature_name if present
-- product: "LTE" | "NR" | "both" | null
-- release: version string like "v6.0" | null
-
-Respond ONLY with valid JSON:
-{"route": "<route>", "confidence": <0.0-1.0>, "entities": {}, "product": null, "release": null}"""
+_SYSTEM_PROMPT = load_prompt("router_system.txt")
 
 
 class LLMRouter:
