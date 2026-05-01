@@ -1,8 +1,6 @@
 """Unit tests for SparMilvusClient schema and hybrid search."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from spar.retrieval.milvus_client import _build_schema, SPARSE_INDEX_PARAMS
@@ -30,6 +28,11 @@ class TestSchema:
         assert bm25_fn.input_field_names == ["text"]
         assert bm25_fn.output_field_names == ["sparse_vec"]
 
-    def test_sparse_index_params_metric_type(self):
+    def test_sparse_index_params_values(self):
         assert SPARSE_INDEX_PARAMS["metric_type"] == "BM25"
         assert SPARSE_INDEX_PARAMS["index_type"] == "SPARSE_INVERTED_INDEX"
+
+    def test_dense_vec_field_exists(self):
+        schema = _build_schema()
+        field_names = [f.name for f in schema.fields]
+        assert "embedding" in field_names  # dense vector field
