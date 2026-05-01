@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""3GPP .md 문서를 읽어 Codex CLI로 QA 세트를 생성하고 JSONL로 저장.
+
+사용법:
+    python scripts/gen_goldset_qa.py --input-file data/tspec-llm/.../29502-i40.md
+    python scripts/gen_goldset_qa.py --input-dir data/tspec-llm/3GPP-clean/Rel-18/29_series
+    python scripts/gen_goldset_qa.py --input-dir data/tspec-llm/3GPP-clean/Rel-18 --output data/goldsets/my_goldset.jsonl
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+SPAR_ROOT = Path(__file__).parent.parent
+DEFAULT_OUT = SPAR_ROOT / "data" / "goldsets" / "retrieval_goldset.jsonl"
+
+_SPEC_FNAME_RE = re.compile(r"^(\d{2})(\d{3})")
+
+QA_COUNTS = {
+    "definition": 3,
+    "procedural": 2,
+    "diagnostic": 2,
+    "comparative": 1,
+    "lookup": 2,
+}
+
+PROMPT_TEMPLATE = """\
+아래 3GPP 기술 규격 문서를 읽고, 해당 문서 내용을 기반으로 질문-답변 세트를 생성하라.
+
+## 문서 메타데이터
+- spec_number: {spec_number}
+- source_doc: {source_doc}
+- release: {release}
+
+## 질의 유형별 최소 생성 개수
+- definition: {cnt_definition}개 — 용어/개념/프로토콜 정의
+- procedural: {cnt_procedural}개 — 절차, 흐름, 시퀀스
+- diagnostic: {cnt_diagnostic}개 — 장애 원인, 조건, 에러 처리
+- comparative: {cnt_comparative}개 — 두 개 이상 개념/방식 비교
+- lookup: {cnt_lookup}개 — 특정 파라미터 값, 타이머, IE 조회
+
+## 출력 규칙
+- 반드시 JSON 배열만 출력 (마크다운 코드블록, 설명 텍스트 없이)
+- answer는 문서에 근거한 내용만 (hallucination 금지)
+- section은 관련 절 번호 또는 제목 (예: "5.2.1", "Clause 4.3")
+
+## 출력 스키마
+[
+  {{
+    "query": "질문 텍스트",
+    "answer": "답변 텍스트",
+    "type": "definition",
+    "section": "4.1"
+  }}
+]
+
+## 문서 내용
+---
+{doc_content}
+---
+"""
+
+
+def parse_spec_number(filename: str) -> str:
+    stem = Path(filename).stem
+    m = _SPEC_FNAME_RE.match(stem)
+    if not m:
+        return ""
+    return f"{m.group(1)}.{m.group(2)}"
+
+
+def extract_release(file_path: Path) -> str:
+    for part in file_path.parts:
+        if part.startswith("Rel-"):
+            return part
+    return "Rel-18"
+
+
+def build_prompt(file_path: Path, doc_content: str) -> str:
+    spec_number = parse_spec_number(file_path.name)
+    release = extract_release(file_path)
+    return PROMPT_TEMPLATE.format(
+        spec_number=spec_number or "(unknown)",
+        source_doc=file_path.name,
+        release=release,
+        cnt_definition=QA_COUNTS["definition"],
+        cnt_procedural=QA_COUNTS["procedural"],
+        cnt_diagnostic=QA_COUNTS["diagnostic"],
+        cnt_comparative=QA_COUNTS["comparative"],
+        cnt_lookup=QA_COUNTS["lookup"],
+        doc_content=doc_content,
+    )
+
+
+def call_codex(prompt: str, max_lines: int) -> str:
+    """Codex exec headless. 프롬프트를 tmpfile로 주입해 ARG_MAX 회피."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", encoding="utf-8", delete=False
+    ) as pf:
+        pf.write(prompt)
+        prompt_path = pf.name
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", encoding="utf-8", delete=False
+    ) as of:
+        output_path = of.name
+
+    try:
+        with open(prompt_path, encoding="utf-8") as stdin_f:
+            result = subprocess.run(
+                [
+                    "codex", "exec", "-",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "--ephemeral",
+                    "--color", "never",
+                    "--output-last-message", output_path,
+                ],
+                stdin=stdin_f,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"codex exec 실패 (exit {result.returncode}):\n{result.stderr[:500]}"
+            )
+        return Path(output_path).read_text(encoding="utf-8")
+    finally:
+        Path(prompt_path).unlink(missing_ok=True)
+        Path(output_path).unlink(missing_ok=True)
+
+
+def parse_qa_output(raw: str, source_doc: str, spec_number: str, release: str, start_id: int) -> list[dict]:
+    raw = raw.strip()
+    # JSON 배열 추출 (코드블록 감쌀 경우 대비)
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not m:
+        raise ValueError(f"JSON 배열 없음. raw output:\n{raw[:300]}")
+    items = json.loads(m.group(0))
+    results = []
+    for i, item in enumerate(items):
+        results.append({
+            "query_id": f"Q{start_id + i:04d}",
+            "query": item["query"],
+            "answer": item["answer"],
+            "type": item["type"],
+            "section": item.get("section", ""),
+            "source_doc": source_doc,
+            "spec_number": spec_number,
+            "release": release,
+        })
+    return results
+
+
+def process_file(
+    file_path: Path,
+    out_file,
+    start_id: int,
+    max_lines: int,
+    dry_run: bool,
+) -> int:
+    print(f"  처리: {file_path.name}", end="", flush=True)
+    try:
+        lines = file_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        doc_content = "".join(lines[:max_lines])
+    except (UnicodeDecodeError, OSError) as e:
+        print(f"  WARN: 읽기 실패 ({e})", file=sys.stderr)
+        return 0
+
+    prompt = build_prompt(file_path, doc_content)
+
+    if dry_run:
+        print(" [DRY RUN - codex 미호출]")
+        return 0
+
+    t0 = time.time()
+    try:
+        raw = call_codex(prompt, max_lines)
+    except (subprocess.TimeoutExpired, RuntimeError) as e:
+        print(f"\n  ERROR: {e}", file=sys.stderr)
+        return 0
+
+    spec_number = parse_spec_number(file_path.name)
+    release = extract_release(file_path)
+
+    try:
+        items = parse_qa_output(raw, file_path.name, spec_number, release, start_id)
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"\n  ERROR 파싱 실패: {e}", file=sys.stderr)
+        return 0
+
+    for item in items:
+        out_file.write(json.dumps(item, ensure_ascii=False) + "\n")
+    out_file.flush()
+
+    elapsed = time.time() - t0
+    print(f" → {len(items)}개 ({elapsed:.1f}s)")
+    return len(items)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="3GPP .md 문서 → Codex QA 생성 → JSONL 저장"
+    )
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--input-file", type=Path, metavar="FILE")
+    src.add_argument("--input-dir", type=Path, metavar="DIR")
+    parser.add_argument(
+        "--output", type=Path, default=DEFAULT_OUT, metavar="FILE",
+        help=f"출력 JSONL 경로 (기본: {DEFAULT_OUT})",
+    )
+    parser.add_argument(
+        "--max-lines", type=int, default=1500, metavar="N",
+        help="파일당 최대 읽을 줄 수 (기본: 1500)",
+    )
+    parser.add_argument(
+        "--append", action="store_true",
+        help="출력 파일에 이어쓰기 (기본: 덮어쓰기)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Codex 미호출, 구조만 확인",
+    )
+    args = parser.parse_args()
+
+    if args.input_file and not args.input_file.exists():
+        print(f"ERROR: 파일 없음: {args.input_file}", file=sys.stderr)
+        sys.exit(1)
+    if args.input_dir and not args.input_dir.is_dir():
+        print(f"ERROR: 디렉토리 없음: {args.input_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.input_file:
+        md_files = [args.input_file]
+    else:
+        md_files = sorted(args.input_dir.rglob("*.md"))
+        if not md_files:
+            print(f"ERROR: .md 없음: {args.input_dir}", file=sys.stderr)
+            sys.exit(1)
+        print(f"{len(md_files)}개 파일 발견: {args.input_dir}")
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    mode = "a" if args.append else "w"
+    if args.dry_run:
+        print("[DRY RUN] codex 미호출\n")
+
+    total = 0
+    start_id = 1
+
+    if args.append and args.output.exists():
+        existing = sum(1 for _ in args.output.open(encoding="utf-8"))
+        start_id = existing + 1
+        print(f"기존 {existing}개 항목에 이어쓰기. query_id Q{start_id:04d}부터 시작\n")
+
+    with open(args.output, mode, encoding="utf-8") as out_f:
+        for md in md_files:
+            count = process_file(md, out_f, start_id, args.max_lines, args.dry_run)
+            total += count
+            start_id += count
+
+    print(f"\n완료: {total}개 QA → {args.output}")
+
+
+if __name__ == "__main__":
+    main()
