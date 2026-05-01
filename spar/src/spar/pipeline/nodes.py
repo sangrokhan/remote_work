@@ -151,22 +151,28 @@ class Nodes:
     async def structured_retrieve(self, state: SparState) -> SparState:
         t0 = time.monotonic()
         result = await self.rag_retrieve(state)
+        # strip inner rag_retrieve timing — this node's key replaces it
+        timings = {k: v for k, v in (result.get("node_timings") or {}).items() if k != "rag_retrieve"}
         elapsed = (time.monotonic() - t0) * 1000
+        timings["structured_retrieve"] = elapsed
         return {
             **result,
             "node_trace": _append_trace(result, "structured_retrieve"),
-            "node_timings": _record_timing(result, "structured_retrieve", elapsed),
+            "node_timings": timings,
         }
 
     async def multi_hop_retrieve(self, state: SparState) -> SparState:
         t0 = time.monotonic()
         # Phase 5: iterative retrieval via LangGraph Send — fallback to RAG
         result = await self.rag_retrieve(state)
+        # strip inner rag_retrieve timing — this node's key replaces it
+        timings = {k: v for k, v in (result.get("node_timings") or {}).items() if k != "rag_retrieve"}
         elapsed = (time.monotonic() - t0) * 1000
+        timings["multi_hop_retrieve"] = elapsed
         return {
             **result,
             "node_trace": _append_trace(result, "multi_hop_retrieve"),
-            "node_timings": _record_timing(result, "multi_hop_retrieve", elapsed),
+            "node_timings": timings,
         }
 
     async def rerank(self, state: SparState) -> SparState:
