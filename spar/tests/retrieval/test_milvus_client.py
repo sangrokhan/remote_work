@@ -30,13 +30,27 @@ class TestSchema:
         assert bm25_fn.output_field_names == ["sparse_vec"]
 
     def test_sparse_index_params_values(self):
-        assert SPARSE_INDEX_PARAMS["metric_type"] == "BM25"
+        assert SPARSE_INDEX_PARAMS["metric_type"] == "IP"
         assert SPARSE_INDEX_PARAMS["index_type"] == "SPARSE_INVERTED_INDEX"
 
     def test_dense_vec_field_exists(self):
         schema = _build_schema()
         field_names = [f.name for f in schema.fields]
         assert "embedding" in field_names  # dense vector field
+
+    def test_section_indexing_fields_exist(self):
+        schema = _build_schema()
+        field_names = [f.name for f in schema.fields]
+        for name in ("section_num", "section_title", "section_depth", "chunk_index", "chunk_index_in_section"):
+            assert name in field_names, f"{name} missing from schema"
+
+    def test_parent_sections_is_array_field(self):
+        schema = _build_schema()
+        f = next(f for f in schema.fields if f.name == "parent_sections")
+        from pymilvus import DataType
+        assert f.dtype == DataType.ARRAY
+        assert f.element_type == DataType.VARCHAR
+        assert f.max_capacity == 10
 
 
 class TestHybridSearch:
