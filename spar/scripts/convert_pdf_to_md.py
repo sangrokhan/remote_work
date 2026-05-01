@@ -62,7 +62,11 @@ def convert_directory(
         print(f"No .pdf files under {input_dir}")
         return
     for p in pdfs:
-        convert_file(p, doc_type, output_dir, dry_run=dry_run)
+        try:
+            convert_file(p, doc_type, output_dir, dry_run=dry_run)
+        except Exception as e:
+            print(f"  ERROR processing {p}: {type(e).__name__}: {e}", file=sys.stderr)
+            # continue to next file
 
 
 def main() -> None:

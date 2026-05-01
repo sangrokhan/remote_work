@@ -42,3 +42,25 @@ def test_dry_run_announces_parser(tmp_path):
     assert proc.returncode == 0
     assert "parameter_ref" in proc.stdout
     assert "[DRY RUN]" in proc.stdout
+
+
+def test_directory_continues_on_failure(tmp_path):
+    """parse_pdf NotImplementedError on one file shouldn't kill batch (non-dry-run)."""
+    # Create 2 fake pdfs
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4")
+    (tmp_path / "b.pdf").write_bytes(b"%PDF-1.4")
+    out = tmp_path / "out"
+
+    repo = Path(__file__).resolve().parents[2]
+    proc = _run(
+        ["--input-dir", str(tmp_path), "--doc-type", "parameter_ref",
+         "--output-dir", str(out)],  # no --dry-run -> hits NotImplementedError
+        cwd=repo,
+    )
+    # NotImplementedError caught per-file, batch continues, exit 0
+    assert proc.returncode == 0, proc.stderr
+    # Both files attempted
+    assert "a.pdf" in proc.stdout
+    assert "b.pdf" in proc.stdout
+    # Both errors logged
+    assert proc.stderr.count("NotImplementedError") == 2
