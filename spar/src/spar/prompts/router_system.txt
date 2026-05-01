@@ -11,6 +11,7 @@ Also extract:
 - entities: dict of alarm_code, param_name, mo_name, feature_name if present
 - product: "LTE" | "NR" | "both" | null
 - release: version string like "v6.0" | null
+- needs_decomposition: true if the query contains multiple independent sub-questions that should be searched separately (e.g. "What is X and how does Y affect Z?"), false otherwise
 
 Respond ONLY with valid JSON:
-{"route": "<route>", "confidence": <0.0-1.0>, "entities": {}, "product": null, "release": null}
+{"route": "<route>", "confidence": <0.0-1.0>, "entities": {}, "product": null, "release": null, "needs_decomposition": false}

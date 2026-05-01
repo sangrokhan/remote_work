@@ -31,6 +31,7 @@ class LLMRouter:
                 entities=data.get("entities", {}),
                 product=data.get("product"),
                 release=data.get("release"),
+                needs_decomposition=bool(data.get("needs_decomposition", False)),
             )
         except Exception as exc:
             _log.warning("LLMRouter fallback — %s: %s", type(exc).__name__, exc)
