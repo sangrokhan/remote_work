@@ -9,16 +9,16 @@ PROJECT_ROOT="/home/han/.openclaw/workspace/remote_work/spar"
 OUTPUT_LOG="$PROJECT_ROOT/.claude/codex-output.log"
 PROMPT_FILE="/tmp/spar-codex-prompt.txt"
 
-echo "$PROMPT" > "$PROMPT_FILE"
+printf '%s' "$PROMPT" > "$PROMPT_FILE"
 
-# Codex headless 실행 (동기)
+# Codex headless 실행 (동기, 프롬프트는 stdin으로 주입)
 {
   echo "=== SubagentStart Task ($(date)) ==="
   cat "$PROMPT_FILE"
   echo ""
   echo "=== Codex Output ==="
   cd "$PROJECT_ROOT"
-  codex exec "$(cat "$PROMPT_FILE")" --approval-mode full-auto 2>&1
+  codex exec --approval-mode full-auto < "$PROMPT_FILE" 2>&1
   echo "=== Exit: $? ==="
 } > "$OUTPUT_LOG" 2>&1
 
