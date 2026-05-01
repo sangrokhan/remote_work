@@ -42,7 +42,12 @@ def main() -> None:
         dst_dir = OUT_DIR / series
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst = dst_dir / src.name
-        slice_file(src, dst)
+        try:
+            slice_file(src, dst)
+        except (UnicodeDecodeError, OSError) as exc:
+            print(f"  WARN: {src.name} skipped — {exc}", file=sys.stderr)
+            skipped += 1
+            continue
         spec_num = parse_spec_number(src.name)
         label = spec_num if spec_num else "(unknown spec_number)"
         print(f"  {src.name} → {dst}  [{label}]")
