@@ -104,7 +104,7 @@ def _llm_batch_classify(
         items.append(
             f'약어: "{abbrev}"\n후보: {candidates}\n문맥: "...{ctxs[0]}..."'
         )
-    prompt = _ABBREV_CONFLICT_TEMPLATE.format(items="\n\n".join(items))
+    prompt = _ABBREV_CONFLICT_TEMPLATE.replace("{items}", "\n\n".join(items))
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],

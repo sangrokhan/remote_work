@@ -110,8 +110,8 @@ class TestHybridSearch:
         client.hybrid_search("parameter_ref", "test query", [0.0] * 1024, top_k=3)
 
         call_kwargs = mock_col.hybrid_search.call_args
-        assert "ranker" in call_kwargs.kwargs, "hybrid_search must be called with ranker= keyword argument"
-        assert isinstance(call_kwargs.kwargs["ranker"], RRFRanker)
+        assert "rerank" in call_kwargs.kwargs, "hybrid_search must be called with rerank= keyword argument"
+        assert isinstance(call_kwargs.kwargs["rerank"], RRFRanker)
 
     @patch("spar.retrieval.milvus_client.Collection")
     @patch("spar.retrieval.milvus_client.connections")
