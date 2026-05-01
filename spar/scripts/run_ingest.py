@@ -87,11 +87,15 @@ def _save_acronyms() -> None:
 
 
 def _find_chunk_keywords(text: str, acronyms: dict) -> list[str]:
-    """청크 텍스트에서 사전에 등록된 약어 목록 추출 (최대 50개)."""
-    global_dict = acronyms.get("global", {})
+    """청크 텍스트에서 사전 등록 약어·도메인 term 추출 (최대 50개).
+
+    global 섹션: 약어 (HO, RACH 등)
+    keywords 섹션: Excel에서 로드된 파라미터명·알람 ID·MO명 등
+    """
+    all_terms = set(acronyms.get("global", {}).keys()) | set(acronyms.get("keywords", {}).keys())
     found = [
-        acro for acro in global_dict
-        if _re.search(r"\b" + _re.escape(acro) + r"\b", text)
+        term for term in all_terms
+        if _re.search(r"\b" + _re.escape(term) + r"\b", text)
     ]
     return found[:50]
 
