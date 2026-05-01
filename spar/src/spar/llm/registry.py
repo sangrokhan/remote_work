@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
-from spar.llm.client import LLMClient
 from spar.llm.config import get_settings
 from spar.llm.factory import LLMFactory, LLMRole
 
-_registry: dict[LLMRole, LLMClient] = {}
+if TYPE_CHECKING:
+    from spar.llm.fallback import LLMBackend
+
+_registry: dict[LLMRole, LLMBackend] = {}
 _lock = asyncio.Lock()
 
 
-async def get_client(role: LLMRole = LLMRole.MAIN) -> LLMClient:
+async def get_client(role: LLMRole = LLMRole.MAIN) -> LLMBackend:
     if role in _registry:
         return _registry[role]
     async with _lock:

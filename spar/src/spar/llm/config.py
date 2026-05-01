@@ -20,6 +20,13 @@ class LLMSettings(BaseSettings):
     llm_router_model: str = "qwen2.5-7b-instruct"
     llm_router_api_key: str = "dummy"
 
+    # Gemini CLI headless fallback (last-resort backend, dev/external use only).
+    # 기본값 False — 온프레미스 환경 외부 API 금지 규약(AGENTS.md) 준수.
+    # 개발/외부 환경에서만 GEMINI_CLI_FALLBACK_ENABLED=true 로 명시 활성화.
+    gemini_cli_fallback_enabled: bool = False
+    gemini_cli_binary: str = "gemini"
+    gemini_cli_timeout_seconds: float = 300.0
+
 
 _settings: LLMSettings | None = None
 

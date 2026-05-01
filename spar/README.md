@@ -67,7 +67,7 @@ spar/
 ├── .env.example      # 환경 변수 템플릿
 ├── src/spar/
 │   ├── api/              # FastAPI 앱 (app.py)
-│   ├── llm/              # LLM 팩토리/싱글톤/레지스트리 (client, config, factory, registry)
+│   ├── llm/              # LLM 팩토리/싱글톤/레지스트리 (client, config, factory, registry, fallback, gemini_cli)
 │   ├── preprocessing/    # 질의 전처리 — 약어 매퍼 (Task 1.6 ✅)
 │   ├── router/           # 3-layer 라우터 (regex / embedding / llm / hybrid + schemas)
 │   ├── retrieval/        # Milvus 클라이언트, hybrid search, reranker (Task 1.4~1.5)

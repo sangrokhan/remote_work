@@ -54,7 +54,7 @@ spar/
 │   └── spar/                # 단일 최상위 패키지
 │       ├── __init__.py
 │       ├── api/             # FastAPI 앱 — app.py (엔드포인트, 라우팅)
-│       ├── llm/             # LLM 팩토리/싱글톤/레지스트리 — client, config, factory, registry
+│       ├── llm/             # LLM 팩토리/싱글톤/레지스트리 — client, config, factory, registry, fallback, gemini_cli (옵트인 외부 fallback)
 │       ├── preprocessing/   # 질의 전처리 — abbrev_mapper.py (Task 1.6 ✅)
 │       ├── router/          # 3-layer 라우터 — regex/embedding/llm/hybrid + schemas (Task 2.2)
 │       ├── retrieval/       # Milvus 클라이언트, hybrid search, reranker (Task 1.4~1.5, 2.4~2.7)
@@ -166,6 +166,7 @@ pip install -e ".[dev]"
 ## 8. 보안 / 운영
 
 - **온프레미스 전제**: 외부 API 호출 금지 (모든 LLM은 사내 vLLM/SGLang 통해 호출)
+  - 예외: `GeminiCliClient` 헤드리스 fallback. 기본 비활성(`GEMINI_CLI_FALLBACK_ENABLED=false`). 개발/외부 환경에서만 명시 활성화. 운영 배포 시 반드시 비활성 유지.
 - **시크릿 관리**:
   - 로컬 개발: `.env` (`.env.example` 복사 후 작성, gitignore 처리됨)
   - 운영: `configs/secrets/*.local.yaml` (gitignore) 또는 사내 시크릿 매니저

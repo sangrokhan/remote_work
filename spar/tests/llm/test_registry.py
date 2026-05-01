@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from spar.llm.client import LLMClient
 from spar.llm.config import LLMSettings
@@ -11,6 +12,7 @@ _TEST_SETTINGS = LLMSettings(
     llm_main_model="main-model",
     llm_router_url="http://router:8001/v1",
     llm_router_model="router-model",
+    gemini_cli_fallback_enabled=False,
 )
 
 
