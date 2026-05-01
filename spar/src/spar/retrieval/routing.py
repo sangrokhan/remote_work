@@ -30,10 +30,6 @@ def doc_types_for_route(result: RouteResult) -> list[str]:
 def build_expr(result: RouteResult) -> str | None:
     clauses: list[str] = []
 
-    entities = result.entities or {}
-    if "alarm_code" in entities:
-        clauses.append(f'mo_name == "{entities["alarm_code"]}"')
-
     if result.product and result.product != "both":
         clauses.append(f'product == "{result.product}"')
     if result.release:

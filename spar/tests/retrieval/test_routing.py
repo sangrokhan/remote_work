@@ -56,8 +56,9 @@ def test_default_rag():
 
 
 def test_build_expr_alarm():
+    # alarm_code 스칼라 필터 없음 — 스키마에 alarm_code 필드 없어서 alarm_ref 컬렉션 라우팅으로 충분
     expr = build_expr(_result(Route.STRUCTURED_LOOKUP, entities={"alarm_code": "ALM-123"}))
-    assert expr == 'mo_name == "ALM-123"'
+    assert expr is None
 
 
 def test_build_expr_param():
