@@ -79,3 +79,8 @@ def test_build_expr_product_and_release():
 def test_build_expr_none_when_no_filters():
     expr = build_expr(_result(Route.DEFAULT_RAG))
     assert expr is None
+
+
+def test_build_expr_product_both_excluded():
+    expr = build_expr(_result(Route.DEFAULT_RAG, product="both"))
+    assert expr is None
