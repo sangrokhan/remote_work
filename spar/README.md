@@ -118,6 +118,7 @@ spar/
 │   ├── llm/              # LLM 팩토리/싱글톤/레지스트리 (client, config, factory, registry)
 │   ├── encoder/          # 임베딩 encoder — base.py (EncoderClient ABC), registry.py (SentenceTransformerEncoder + get_encoder() 싱글톤) (Task 1.4 — 부분 ✅)
 │   ├── preprocessing/    # 질의 전처리 — 약어 매퍼 (Task 1.6 ✅)
+│   ├── prompts/          # LLM 프롬프트 파일 저장소 — load_prompt() 헬퍼 + *.txt 템플릿
 │   ├── router/           # 3-layer 라우터 (regex / embedding / llm / hybrid + schemas)
 │   ├── ingest/           # md-aware/fixed 청커 + sentence-transformers embedder (Task 1.1/1.3/1.4 — 부분)
 │   ├── pipeline/         # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph() (Phase 5 조기 도입)
