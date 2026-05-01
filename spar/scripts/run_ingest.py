@@ -33,7 +33,7 @@ ALLOWED_SUFFIXES = {".md", ".txt"}
 
 import re as _re
 
-_SPEC_FNAME_RE = _re.compile(r"^(\d{2})(\d{3})")
+_SPEC_FNAME_RE = _re.compile(r"^(\d{2})(\d{3})(?!\d)")
 
 
 def _parse_spec_number(filename: str) -> str:
@@ -100,7 +100,8 @@ def ingest_file(
         c["doc_type"] = doc_type
     if spec_number:
         for c in chunks:
-            c["spec_number"] = spec_number
+            if "spec_number" not in c:
+                c["spec_number"] = spec_number
     print(f"  parsed: {len(text)} chars  →  {len(chunks)} chunks")
     if not chunks:
         return 0
