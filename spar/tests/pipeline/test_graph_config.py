@@ -59,6 +59,10 @@ def test_build_graph_baseline_entry_is_route():
     assert "preprocess" not in node_names
     assert "prepare_context" not in node_names
     assert "route" in node_names
+    # verify route is the entry point (has edge from __start__)
+    graph_data = graph.get_graph()
+    start_edges = [e for e in graph_data.edges if e.source == "__start__"]
+    assert start_edges[0].target == "route"
 
 
 def test_build_graph_qexpand_only_no_prepare_context():
@@ -68,3 +72,8 @@ def test_build_graph_qexpand_only_no_prepare_context():
     node_names = set(graph.get_graph().nodes.keys())
     assert "preprocess" in node_names
     assert "prepare_context" not in node_names
+    # verify preprocess is the entry point (has edge from __start__)
+    graph_data = graph.get_graph()
+    start_edges = [e for e in graph_data.edges if e.source == "__start__"]
+    assert len(start_edges) == 1
+    assert start_edges[0].target == "preprocess"

@@ -16,7 +16,13 @@ from spar.router.hybrid_router import HybridRouter
 from spar.router.schemas import Route
 
 _RETRIEVE_NODES = ("rag_retrieve", "structured_retrieve", "multi_hop_retrieve")
-_DEFAULT_CONFIG = next(c for c in PRESET_CONFIGS if c.name == "full_retrieval")
+_DEFAULT_CONFIG = next(
+    (c for c in PRESET_CONFIGS if c.name == "full_retrieval"),
+    None,
+)
+assert _DEFAULT_CONFIG is not None, (
+    "PRESET_CONFIGS must contain a 'full_retrieval' entry (required as build_graph default)"
+)
 
 
 def _route_selector(state: SparState) -> str:
