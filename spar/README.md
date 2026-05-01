@@ -50,7 +50,7 @@ make lint
 make test
 ```
 
-> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅) 구현됨.
+> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅), **3GPP TS spec number 라우터(Task 2.2 부분 ✅ — RegexRouter TS 패턴 + spec intro ingest)** 구현됨.
 
 ---
 
@@ -84,7 +84,8 @@ spar/
 ├── configs/
 │   └── milvus/           # Milvus 연결/컬렉션 설정
 ├── scripts/              # ETL/배치/유틸리티 (init_milvus, serve_vllm, test_api,
-│                          #   convert_pdf_to_md, fetch_tspec_llm, extract_acronyms, run_ingest)
+│                          #   convert_pdf_to_md, fetch_tspec_llm, extract_acronyms,
+│                          #   run_ingest, slice_3gpp_intros)
 ├── tests/                # pytest
 └── data/                 # 골드셋, 샘플, 산출물
 ```
