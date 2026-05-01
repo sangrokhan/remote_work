@@ -112,19 +112,31 @@ class Embedder:
             raise RuntimeError("원격 임베딩 응답 개수와 입력 개수가 다릅니다.")
         return vectors
 
-    def encode(self, texts: list[str], batch_size: int = DEFAULT_BATCH_SIZE) -> list[list[float]]:
+    def encode(
+        self,
+        texts: list[str],
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        *,
+        verbose: bool = False,
+    ) -> list[list[float]]:
         if not texts:
             return []
+        n = len(texts)
         if self._remote_url:
             results: list[list[float]] = []
-            for i in range(0, len(texts), batch_size):
+            for i in range(0, n, batch_size):
+                done = min(i + batch_size, n)
+                if verbose:
+                    print(f"  embedding [{done}/{n}]", end="\r", flush=True)
                 results.extend(self._request_remote(texts[i : i + batch_size]))
+            if verbose:
+                print(f"  embedding {n} chunks done          ")
             return results
         vecs = self._model.encode(
             texts,
             batch_size=batch_size,
             normalize_embeddings=True,
-            show_progress_bar=False,
+            show_progress_bar=verbose,
         )
         # numpy → list (Milvus 호환)
         return [list(map(float, v)) for v in vecs]

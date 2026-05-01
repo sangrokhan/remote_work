@@ -120,7 +120,7 @@ def embed_rows(rows: list[dict[str, Any]], *, dry_run: bool) -> list[dict[str, A
 
     from spar.ingest.embedder import Embedder
     embedder = Embedder()
-    vectors = embedder.encode([r["text"] for r in rows])
+    vectors = embedder.encode([r["text"] for r in rows], verbose=True)
     for r, vec in zip(rows, vectors, strict=True):
         r["embedding"] = vec
     return rows
@@ -210,9 +210,11 @@ def ingest_directory(
     _save_acronyms()
 
     # Phase 2: 실제 ingest (약어 사전 이미 갱신됨 — 중복 update 생략)
-    print("\nPhase 2: ingesting...")
+    n_files = len(md_files)
+    print(f"\nPhase 2: ingesting {n_files} files...")
     total = 0
-    for f in md_files:
+    for idx, f in enumerate(md_files, 1):
+        print(f"[{idx}/{n_files}]", end=" ", flush=True)
         try:
             total += ingest_file(
                 client, f, doc_type,
