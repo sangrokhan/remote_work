@@ -78,7 +78,8 @@ spar/
 ├── scripts/                 # 일회성 ETL/배치/유틸리티
 │                            #   (init_milvus, serve_vllm, test_api, run_ingest,
 │                            #    convert_pdf_to_md, fetch_tspec_llm, extract_acronyms,
-│                            #    slice_3gpp_intros)
+│                            #    slice_3gpp_intros, gen_goldset_qa,
+│                            #    gen_router_goldset, run_router_eval)
 ├── tests/                   # pytest 단위/통합 테스트
 └── data/                    # 골드셋, 샘플 입력, 추출 산출물 (큰 원본은 git LFS 또는 외부 저장)
     └── samples/             # 공개 가능한 샘플만 추적
