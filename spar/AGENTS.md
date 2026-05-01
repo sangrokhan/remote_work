@@ -11,7 +11,7 @@
 - **목적**: Samsung 단일 벤더(LTE+NR) 환경의 내부 문서(파라미터/카운터/알람/MOP/Feature/Release Notes 등)에 대한 자연어 질의응답 시스템
 - **운영 환경**: 온프레미스, 영어 응답, 정확성 최우선 (hallucination 최소화)
 - **상위 로드맵**: `docs/prd.md`의 Phase 0 ~ Phase 5 + INF 작업 참조
-- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분), encoder 싱글톤(Task 1.4 부분 ✅ — base.py + registry.py로 단순화), Codex+Gemini fallback 훅(INF-1b ✅) 구현됨
+- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분), encoder 싱글톤(Task 1.4 부분 ✅ — base.py + registry.py로 단순화), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인**(pipeline/ — Phase 5 조기 도입, reranker 첫 연결) 구현됨
 
 ---
 
@@ -25,6 +25,7 @@
 | 벡터 DB | **Milvus** (1순위), Qdrant/Weaviate (대안) |
 | BM25 | Elasticsearch 또는 OpenSearch |
 | 그래프 DB | Neo4j (Phase 3) |
+| 파이프라인 오케스트레이션 | **LangGraph** (StateGraph, conditional edges) |
 | 평가 | RAGAS, 자체 골드셋 |
 | 테스트 | `pytest` |
 | 린팅/포매팅 | `ruff` (lint + format) |
@@ -59,13 +60,15 @@ spar/
 │       ├── preprocessing/   # 질의 전처리 — abbrev_mapper.py (Task 1.6 ✅)
 │       ├── router/          # 3-layer 라우터 — regex/embedding/llm/hybrid + schemas (Task 2.2)
 │       ├── ingest/          # md-aware/fixed 청커 + sentence-transformers embedder (Task 1.1/1.3/1.4 — 부분)
-│       ├── retrieval/       # Milvus 클라이언트, hybrid search, reranker (Task 1.4~1.5, 2.4~2.7)
+│       ├── pipeline/        # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph() (Phase 5 조기 도입)
+│       ├── reranker/        # CrossEncoderClient + 싱글톤 레지스트리 — client, config, factory, registry (Task 1.5)
+│       ├── retrieval/       # Milvus 클라이언트, hybrid search (Task 1.4~1.5, 2.4~2.7)
 │       ├── parsers/         # 문서 유형별 PDF/텍스트 파서 (Task 1.1 — scaffold)
 │       ├── chunkers/        # 유형별 청킹 전략 (Task 1.3 — scaffold)
 │       ├── db/              # Parameter/Counter/Alarm 구조화 DB + Text-to-SQL (Task 3.1~3.2 — scaffold)
 │       ├── kg/              # Knowledge Graph + Text-to-Cypher + GraphRAG (Task 3.3~3.5 — scaffold)
 │       ├── generation/      # citation enforcer, self-verifier, confidence, fallback (Task 4.1~4.5 — scaffold)
-│       ├── agent/           # LangGraph 기반 agentic 재구성 (Phase 5 — scaffold)
+│       ├── agent/           # LangGraph agentic 확장 예비 (Phase 5 — scaffold)
 │       ├── eval/            # 골드셋 평가 스크립트, 메트릭 (scaffold)
 │       └── dictionary/      # 약어/동의어 사전 (scaffold)
 ├── configs/                 # YAML/JSON 설정 (모델, 인덱스, 라우트 등)
