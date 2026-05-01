@@ -96,8 +96,8 @@ class TestHybridSearch:
         client.hybrid_search("parameter_ref", "test query", [0.0] * 1024, top_k=3)
 
         call_kwargs = mock_col.hybrid_search.call_args
-        ranker = call_kwargs.kwargs.get("ranker") or call_kwargs.args[1]
-        assert isinstance(ranker, RRFRanker)
+        assert "ranker" in call_kwargs.kwargs, "hybrid_search must be called with ranker= keyword argument"
+        assert isinstance(call_kwargs.kwargs["ranker"], RRFRanker)
 
     @patch("spar.retrieval.milvus_client.Collection")
     @patch("spar.retrieval.milvus_client.connections")
@@ -113,7 +113,9 @@ class TestHybridSearch:
         client = SparMilvusClient()
         client.hybrid_search("parameter_ref", "test query", [0.0] * 1024)
 
-        reqs = mock_col.hybrid_search.call_args.kwargs.get("reqs") or mock_col.hybrid_search.call_args.args[0]
+        call_kwargs = mock_col.hybrid_search.call_args
+        assert "reqs" in call_kwargs.kwargs, "hybrid_search must be called with reqs= keyword argument"
+        reqs = call_kwargs.kwargs["reqs"]
         assert len(reqs) == 2
         fields = [r.anns_field for r in reqs]
         assert "embedding" in fields
