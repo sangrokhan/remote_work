@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import AliasChoices, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 _ROOT_DIR = Path(__file__).resolve().parents[2]

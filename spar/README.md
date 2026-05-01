@@ -98,7 +98,7 @@ make ingest ARGS="--input-file data/skt-md/parameter_ref/foo.md --doc-type param
 
 > `make download-models`는 기본값으로 `models/` 폴더에 내려받으며, `models/`는 `.gitignore`에 이미 등록되어 커밋되지 않습니다.
 
-> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅) 구현됨.
+> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인** (`pipeline/` — Phase 5 조기 도입, reranker 첫 연결) 구현됨.
 
 ---
 
@@ -120,13 +120,15 @@ spar/
 │   ├── preprocessing/    # 질의 전처리 — 약어 매퍼 (Task 1.6 ✅)
 │   ├── router/           # 3-layer 라우터 (regex / embedding / llm / hybrid + schemas)
 │   ├── ingest/           # md-aware/fixed 청커 + sentence-transformers embedder (Task 1.1/1.3/1.4 — 부분)
-│   ├── retrieval/        # Milvus 클라이언트, hybrid search, reranker (Task 1.4~1.5)
+│   ├── pipeline/         # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph() (Phase 5 조기 도입)
+│   ├── reranker/         # CrossEncoderClient + 싱글톤 레지스트리 (Task 1.5)
+│   ├── retrieval/        # Milvus 클라이언트, hybrid search (Task 1.4~1.5)
 │   ├── parsers/          # 문서 유형별 파서 (Task 1.1 — scaffold)
 │   ├── chunkers/         # 유형별 청킹 전략 (Task 1.3 — scaffold)
 │   ├── db/               # Parameter/Counter/Alarm 구조화 DB (Task 3.1~3.2 — scaffold)
 │   ├── kg/               # Knowledge Graph (Task 3.3~3.5 — scaffold)
 │   ├── generation/       # citation, self-verify, confidence, fallback (Task 4.x — scaffold)
-│   ├── agent/            # LangGraph 기반 agentic 파이프라인 (Phase 5 — scaffold)
+│   ├── agent/            # LangGraph agentic 확장 예비 (Phase 5 — scaffold)
 │   ├── eval/             # 골드셋 평가 스크립트 (scaffold)
 │   └── dictionary/       # 약어/동의어 사전 (scaffold)
 ├── configs/
