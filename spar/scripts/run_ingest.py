@@ -31,6 +31,20 @@ from spar.retrieval.milvus_client import DOC_TYPES, EMBED_DIM, SparMilvusClient
 
 ALLOWED_SUFFIXES = {".md", ".txt"}
 
+import re as _re
+
+_SPEC_FNAME_RE = _re.compile(r"^(\d{2})(\d{3})")
+
+
+def _parse_spec_number(filename: str) -> str:
+    """'29502-i40.md' → '29.502'. 매칭 실패 시 ''."""
+    stem = Path(filename).stem
+    m = _SPEC_FNAME_RE.match(stem)
+    if not m:
+        return ""
+    return f"{m.group(1)}.{m.group(2)}"
+
+
 _ACRONYMS_PATH = Path(__file__).parent.parent / "dictionary" / "acronyms.json"
 _ACRONYMS: dict = load_acronyms(_ACRONYMS_PATH) if _ACRONYMS_PATH.exists() else {}
 
@@ -68,8 +82,10 @@ def ingest_file(
     *,
     force: bool,
     dry_run: bool,
+    intro_only: bool = False,
 ) -> int:
     source_doc = file_path.name
+    spec_number = _parse_spec_number(source_doc) if intro_only else ""
     print(f"Processing: {file_path}  [doc_type={doc_type}]")
 
     text = read_text(file_path)
@@ -82,6 +98,9 @@ def ingest_file(
     # doc_type 강제 (chunkers.dispatch가 spec 청크에 'spec' 박지만, 명시 보장)
     for c in chunks:
         c["doc_type"] = doc_type
+    if spec_number:
+        for c in chunks:
+            c["spec_number"] = spec_number
     print(f"  parsed: {len(text)} chars  →  {len(chunks)} chunks")
     if not chunks:
         return 0
@@ -90,6 +109,8 @@ def ingest_file(
 
     if dry_run:
         print(f"  [DRY RUN] would insert {len(rows)} chunks — skipping Milvus write")
+        if spec_number:
+            print(f"  spec_number={spec_number!r} (dynamic field)")
         for r in rows[:2]:
             preview = r["text"][:80].replace("\n", " ")
             print(f"    chunk_id={r['chunk_id']}  section={r['section']!r}  text={preview!r}")
@@ -112,6 +133,7 @@ def ingest_directory(
     *,
     force: bool,
     dry_run: bool,
+    intro_only: bool = False,
 ) -> None:
     md_files = sorted(input_dir.rglob("*.md"))
     if not md_files:
@@ -121,7 +143,7 @@ def ingest_directory(
     total = 0
     for f in md_files:
         try:
-            total += ingest_file(client, f, doc_type, force=force, dry_run=dry_run)
+            total += ingest_file(client, f, doc_type, force=force, dry_run=dry_run, intro_only=intro_only)
         except Exception as e:
             print(f"  ERROR processing {f}: {type(e).__name__}: {e}", file=sys.stderr)
             # continue to next file
@@ -140,6 +162,11 @@ def main() -> None:
                         help="동일 source_doc 기존 청크 삭제 후 재삽입")
     parser.add_argument("--dry-run", action="store_true",
                         help="Milvus 미접속 — 청킹/포맷만 검증")
+    parser.add_argument(
+        "--intro-only",
+        action="store_true",
+        help="파일명에서 spec_number 파싱 후 청크 dynamic field로 부착 (spec doc_type 전용)",
+    )
 
     args = parser.parse_args()
     if args.input_file and not args.input_file.exists():
@@ -159,10 +186,10 @@ def main() -> None:
     with client_ctx as client:
         if args.input_file:
             ingest_file(client, args.input_file, args.doc_type,
-                        force=args.force, dry_run=args.dry_run)
+                        force=args.force, dry_run=args.dry_run, intro_only=args.intro_only)
         else:
             ingest_directory(client, args.input_dir, args.doc_type,
-                             force=args.force, dry_run=args.dry_run)
+                             force=args.force, dry_run=args.dry_run, intro_only=args.intro_only)
 
 
 class _NullCtx:
