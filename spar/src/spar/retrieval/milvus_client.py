@@ -7,11 +7,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pymilvus import (
+    AnnSearchRequest,
     Collection,
     CollectionSchema,
     DataType,
     FieldSchema,
+    Function,
+    FunctionType,
     MilvusClient,
+    RRFRanker,
     connections,
     utility,
 )
@@ -59,23 +63,45 @@ HNSW_INDEX_PARAMS = {
 
 SEARCH_PARAMS = {"metric_type": "COSINE", "params": {"ef": 100}}
 
+SPARSE_INDEX_PARAMS = {
+    "index_type": "SPARSE_INVERTED_INDEX",
+    "metric_type": "BM25",
+    "params": {"drop_ratio_build": 0.0},
+}
+
+SPARSE_SEARCH_PARAMS = {"metric_type": "BM25", "params": {"drop_ratio_search": 0.0}}
+
 
 def _build_schema(description: str = "") -> CollectionSchema:
     fields = [
         FieldSchema(name="chunk_id", dtype=DataType.VARCHAR, max_length=128, is_primary=True),
         FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=EMBED_DIM),
-        # PRD Task 1.2 메타데이터
         FieldSchema(name="doc_type", dtype=DataType.VARCHAR, max_length=32),
-        FieldSchema(name="product", dtype=DataType.VARCHAR, max_length=16),   # LTE | NR | both
-        FieldSchema(name="release", dtype=DataType.VARCHAR, max_length=16),   # v6.0, v7.1, …
+        FieldSchema(name="product", dtype=DataType.VARCHAR, max_length=16),
+        FieldSchema(name="release", dtype=DataType.VARCHAR, max_length=16),
         FieldSchema(name="deployment_type", dtype=DataType.VARCHAR, max_length=32),
         FieldSchema(name="mo_name", dtype=DataType.VARCHAR, max_length=64),
         FieldSchema(name="source_doc", dtype=DataType.VARCHAR, max_length=256),
         FieldSchema(name="section", dtype=DataType.VARCHAR, max_length=256),
         FieldSchema(name="page", dtype=DataType.INT32),
-        FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65_535),
+        FieldSchema(
+            name="text",
+            dtype=DataType.VARCHAR,
+            max_length=65_535,
+            enable_analyzer=True,
+        ),
+        FieldSchema(name="sparse_vec", dtype=DataType.SPARSE_FLOAT_VECTOR),
     ]
-    return CollectionSchema(fields=fields, description=description, enable_dynamic_field=True)
+    schema = CollectionSchema(fields=fields, description=description, enable_dynamic_field=True)
+
+    bm25_fn = Function(
+        name="bm25",
+        input_field_names=["text"],
+        output_field_names=["sparse_vec"],
+        function_type=FunctionType.BM25,
+    )
+    schema.add_function(bm25_fn)
+    return schema
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +168,7 @@ class SparMilvusClient:
         schema = _build_schema(description=f"SPAR chunks — {doc_type}")
         col = Collection(name=name, schema=schema)
         col.create_index(field_name="embedding", index_params=HNSW_INDEX_PARAMS)
+        col.create_index(field_name="sparse_vec", index_params=SPARSE_INDEX_PARAMS)
         col.load()
         return col
 
@@ -187,6 +214,49 @@ class SparMilvusClient:
         return [
             [{"chunk_id": hit.id, "score": hit.score, **hit.fields} for hit in batch]
             for batch in results
+        ]
+
+    def hybrid_search(
+        self,
+        doc_type: str,
+        query_text: str,
+        query_vector: list[float],
+        top_k: int = 10,
+        output_fields: list[str] | None = None,
+        expr: str | None = None,
+        rrf_k: int = 60,
+    ) -> list[dict[str, Any]]:
+        col = self.get_collection(doc_type)
+        if output_fields is None:
+            output_fields = [
+                "chunk_id", "doc_type", "product", "release",
+                "source_doc", "section", "page", "text",
+            ]
+
+        dense_req = AnnSearchRequest(
+            data=[query_vector],
+            anns_field="embedding",
+            param=SEARCH_PARAMS,
+            limit=top_k * 2,
+            expr=expr,
+        )
+        sparse_req = AnnSearchRequest(
+            data=[query_text],
+            anns_field="sparse_vec",
+            param=SPARSE_SEARCH_PARAMS,
+            limit=top_k * 2,
+            expr=expr,
+        )
+
+        results = col.hybrid_search(
+            reqs=[dense_req, sparse_req],
+            ranker=RRFRanker(k=rrf_k),
+            limit=top_k,
+            output_fields=output_fields,
+        )
+        return [
+            {"chunk_id": hit.id, "score": hit.score, **hit.fields}
+            for hit in results[0]
         ]
 
     def delete_by_source(self, doc_type: str, source_doc: str) -> None:
