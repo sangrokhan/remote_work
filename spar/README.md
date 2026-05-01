@@ -98,7 +98,7 @@ make ingest ARGS="--input-file data/skt-md/parameter_ref/foo.md --doc-type param
 
 > `make download-models`는 기본값으로 `models/` 폴더에 내려받으며, `models/`는 `.gitignore`에 이미 등록되어 커밋되지 않습니다.
 
-> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인** (`pipeline/` — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅ — RegexRouter TS 패턴 + spec intro ingest)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용) 구현됨.
+> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인** (`pipeline/` — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅ — RegexRouter TS 패턴 + spec intro ingest)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용), **Milvus retrieval wiring ✅** (`retrieval/routing.py` + pipeline stub 제거 — rag_retrieve/structured_retrieve가 실제 `hybrid_search()` 호출) 구현됨.
 
 ---
 
@@ -122,7 +122,7 @@ spar/
 │   ├── ingest/           # md-aware/fixed 청커 + sentence-transformers embedder (Task 1.1/1.3/1.4 — 부분)
 │   ├── pipeline/         # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph() (Phase 5 조기 도입)
 │   ├── reranker/         # CrossEncoderClient + 싱글톤 레지스트리 (Task 1.5)
-│   ├── retrieval/        # Milvus 클라이언트, hybrid search (Task 1.4~1.5)
+│   ├── retrieval/        # Milvus 클라이언트, hybrid search, Route→doc_type 매핑 (Task 1.4~1.5)
 │   ├── parsers/          # 문서 유형별 파서 (Task 1.1 — scaffold)
 │   ├── chunkers/         # 유형별 청킹 전략 (Task 1.3 — scaffold)
 │   ├── db/               # Parameter/Counter/Alarm 구조화 DB (Task 3.1~3.2 — scaffold)

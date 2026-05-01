@@ -4,9 +4,11 @@ from pathlib import Path
 
 from langgraph.graph import END, StateGraph
 
+from spar.encoder.base import EncoderClient
 from spar.pipeline.nodes import Nodes
 from spar.pipeline.state import SparState
 from spar.reranker.client import CrossEncoderClient
+from spar.retrieval.milvus_client import SparMilvusClient
 from spar.router.hybrid_router import HybridRouter
 from spar.router.schemas import Route
 
@@ -23,9 +25,17 @@ def _route_selector(state: SparState) -> str:
 def build_graph(
     router: HybridRouter,
     reranker: CrossEncoderClient,
+    encoder: EncoderClient,
+    milvus: SparMilvusClient,
     acronyms_path: Path | None = None,
 ):
-    nodes = Nodes.create(router=router, reranker=reranker, acronyms_path=acronyms_path)
+    nodes = Nodes.create(
+        router=router,
+        reranker=reranker,
+        encoder=encoder,
+        milvus=milvus,
+        acronyms_path=acronyms_path,
+    )
 
     g: StateGraph = StateGraph(SparState)
     g.add_node("preprocess", nodes.preprocess)

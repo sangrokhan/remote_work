@@ -14,7 +14,21 @@ def _make_nodes(route: Route = Route.DEFAULT_RAG) -> Nodes:
     router.route.return_value = RouteResult(route=route, confidence=0.8, layer="test")
     reranker = AsyncMock()
     reranker.rerank.return_value = [0.9, 0.7]
-    return Nodes(router=router, reranker=reranker, _acronyms={}, _reverse_index={})
+    encoder = MagicMock()
+    import numpy as np
+    encoder.encode.return_value = np.array([[0.1] * 1024])
+    milvus = MagicMock()
+    milvus.hybrid_search.return_value = [
+        {"chunk_id": "stub-001", "score": 0.95, "text": "chunk for query"}
+    ]
+    return Nodes(
+        router=router,
+        reranker=reranker,
+        encoder=encoder,
+        milvus=milvus,
+        _acronyms={},
+        _reverse_index={},
+    )
 
 
 @pytest.fixture
@@ -62,8 +76,13 @@ async def test_route_falls_back_to_query(base_state: SparState) -> None:
 
 @pytest.mark.unit
 async def test_rag_retrieve_returns_chunks(base_state: SparState) -> None:
+    from spar.router.schemas import RouteResult
     nodes = _make_nodes()
-    state = {**base_state, "expanded_query": "What is HO?"}
+    state = {
+        **base_state,
+        "expanded_query": "What is HO?",
+        "route_result": RouteResult(route=Route.DEFAULT_RAG, confidence=0.8, layer="test"),
+    }
     result = await nodes.rag_retrieve(state)
     assert isinstance(result["raw_chunks"], list)
     assert len(result["raw_chunks"]) > 0
@@ -105,7 +124,7 @@ async def test_generate_uses_reranked_chunks(base_state: SparState) -> None:
         "raw_chunks": [{"chunk_id": "c2", "text": "fallback"}],
     }
     result = await nodes.generate(state)
-    assert "1 chunks" in result["answer"]
+    assert "context=1 chunks" in result["answer"]
     assert "generate" in result["node_trace"]
 
 
@@ -114,7 +133,7 @@ async def test_generate_falls_back_to_raw_chunks(base_state: SparState) -> None:
     nodes = _make_nodes()
     state = {**base_state, "raw_chunks": [{"chunk_id": "c1", "text": "t"}, {"chunk_id": "c2", "text": "t"}]}
     result = await nodes.generate(state)
-    assert "2 chunks" in result["answer"]
+    assert "context=2 chunks" in result["answer"]
 
 
 @pytest.mark.unit

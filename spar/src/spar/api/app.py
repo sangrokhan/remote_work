@@ -19,6 +19,7 @@ from spar.encoder.registry import get_encoder
 from spar.pipeline.graph import build_graph
 from spar.pipeline.state import SparState
 from spar.reranker.registry import get_reranker
+from spar.retrieval.milvus_client import MilvusConfig, SparMilvusClient
 from spar.router.hybrid_router import HybridRouter
 
 _graph: CompiledStateGraph | None = None
@@ -30,9 +31,13 @@ async def lifespan(app: FastAPI):
     encoder = await get_encoder()
     reranker = await get_reranker()
     router = HybridRouter(encoder=encoder, use_llm=False)
-    _graph = build_graph(router=router, reranker=reranker)
-    yield
-    _graph = None
+    milvus_client = SparMilvusClient(MilvusConfig())
+    try:
+        _graph = build_graph(router=router, reranker=reranker, encoder=encoder, milvus=milvus_client)
+        yield
+    finally:
+        milvus_client.close()
+        _graph = None
 
 
 app = FastAPI(title="SPAR", version="0.1.0", lifespan=lifespan)
