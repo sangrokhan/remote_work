@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import re
+import statistics
+from typing import TYPE_CHECKING
+
 
 def _is_hit(chunk: dict, gold: dict) -> bool:
     """source_doc 일치 + section_num이 gold section으로 시작하면 hit."""
@@ -71,3 +75,66 @@ def hit_rank(retrieved: list[dict], gold: dict) -> int | None:
         if _is_hit(c, gold):
             return i
     return None
+
+
+# --- faithfulness and suite aggregation ---
+
+if TYPE_CHECKING:
+    from spar.llm.client import LLMClient
+
+
+async def compute_faithfulness(
+    answer: str,
+    context_chunks: list[dict],
+    gold_answer: str,
+    llm_client: "LLMClient",
+) -> float:
+    from spar.prompts import load_prompt
+    prompt = load_prompt("faithfulness_judge.txt")
+    context_text = "\n\n".join(c["text"] for c in context_chunks[:5])
+    messages = [
+        {"role": "system", "content": prompt},
+        {
+            "role": "user",
+            "content": (
+                f"Answer: {answer}\n\n"
+                f"Context:\n{context_text}\n\n"
+                f"Reference answer: {gold_answer}"
+            ),
+        },
+    ]
+    response = await llm_client.chat(messages, max_tokens=16)
+    match = re.search(r"([01]?\.\d+|[01])", response.strip())
+    return float(match.group(1)) if match else 0.0
+
+
+def compute_suite_metrics(results: list[dict]) -> list[dict]:
+    """
+    results: list of {config_name, per_query: [{recall_at_5, recall_at_10, mrr, latency_ms, faithfulness}]}
+    Returns one summary row per config.
+    """
+    rows = []
+    for r in results:
+        pq = r["per_query"]
+        if not pq:
+            continue
+
+        def avg(key: str) -> float:
+            vals = [x[key] for x in pq if x.get(key) is not None]
+            return sum(vals) / len(vals) if vals else 0.0
+
+        latencies = sorted(x["latency_ms"] for x in pq if x.get("latency_ms") is not None)
+        p50 = statistics.median(latencies) if latencies else 0.0
+
+        faith_vals = [x["faithfulness"] for x in pq if x.get("faithfulness") is not None]
+        faith_avg = sum(faith_vals) / len(faith_vals) if faith_vals else None
+
+        rows.append({
+            "config": r["config_name"],
+            "recall_at_5": avg("recall_at_5"),
+            "recall_at_10": avg("recall_at_10"),
+            "mrr": avg("mrr"),
+            "p50_ms": p50,
+            "faithfulness": faith_avg,
+        })
+    return rows

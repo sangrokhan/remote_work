@@ -34,3 +34,9 @@ class SparState(TypedDict, total=False):
     # observability
     error: str | None
     node_trace: list[str]
+    node_timings: dict[str, float]   # node_name -> execution time ms
+
+    # performance eval inputs (populated by eval_suite; ignored in production)
+    gold_chunks: list[str] | None
+    gold_answer: str | None
+    eval_metrics: dict[str, Any]
