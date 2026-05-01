@@ -98,7 +98,7 @@ make ingest ARGS="--input-file data/skt-md/parameter_ref/foo.md --doc-type param
 
 > `make download-models`는 기본값으로 `models/` 폴더에 내려받으며, `models/`는 `.gitignore`에 이미 등록되어 커밋되지 않습니다.
 
-> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인** (`pipeline/` — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅ — RegexRouter TS 패턴 + spec intro ingest)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용), **Milvus retrieval wiring ✅** (`retrieval/routing.py` + pipeline stub 제거 — rag_retrieve/structured_retrieve가 실제 `hybrid_search()` 호출), **멀티턴 history + 약어 컨텍스트 준비 (Task 2.5 부분 ✅** — `retrieval/query_rewriter.py`, `pipeline/prepare_context` 노드, API `history` 필드) 구현됨.
+> **현 상태**: Phase 1 진행 중. LLM 모듈(factory/registry), 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원), encoder 싱글톤(Task 1.4 부분 ✅ — `ENCODER_MODEL`/`ENCODER_DEVICE` env vars), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인** (`pipeline/` — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅ — RegexRouter TS 패턴 + spec intro ingest)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용), **Milvus retrieval wiring ✅** (`retrieval/routing.py` + pipeline stub 제거 — rag_retrieve/structured_retrieve가 실제 `hybrid_search()` 호출), **멀티턴 history + 약어 컨텍스트 준비 (Task 2.5 부분 ✅** — `retrieval/query_rewriter.py`, `pipeline/prepare_context` 노드, API `history` 필드), **Task 1.7.2 평가 자동화 ✅** (Recall@K/MRR + faithfulness/answer_relevancy, `eval/ragas_metrics.py`), **라우터 골드셋 + 평가 스크립트 ✅** (`scripts/gen_router_goldset.py`, `scripts/run_router_eval.py` — Task 2.3) 구현됨.
 
 ---
 
@@ -130,7 +130,7 @@ spar/
 │   ├── kg/               # Knowledge Graph (Task 3.3~3.5 — scaffold)
 │   ├── generation/       # citation, self-verify, confidence, fallback (Task 4.x — scaffold)
 │   ├── agent/            # LangGraph agentic 확장 예비 (Phase 5 — scaffold)
-│   ├── eval/             # 골드셋 평가 스크립트 (scaffold)
+│   ├── eval/             # 골드셋 평가 — metrics.py, run_eval.py (Retrieval), ragas_metrics.py, run_ragas_eval.py (답변품질) (Task 1.7.2 ✅)
 │   └── dictionary/       # 약어/동의어 사전 (scaffold)
 ├── configs/
 │   └── milvus/           # Milvus 연결/컬렉션 설정
