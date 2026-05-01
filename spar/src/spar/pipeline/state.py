@@ -21,6 +21,9 @@ class SparState(TypedDict, total=False):
     # routing
     route_result: RouteResult
 
+    # decomposition
+    sub_questions: list[str]
+
     # retrieval
     raw_chunks: list[dict[str, Any]]
     reranked_chunks: list[dict[str, Any]]

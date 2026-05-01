@@ -14,7 +14,10 @@ from spar.router.schemas import Route
 
 
 def _route_selector(state: SparState) -> str:
-    route = state["route_result"].route
+    route_result = state["route_result"]
+    if route_result.needs_decomposition:
+        return "decompose"
+    route = route_result.route
     if route == Route.STRUCTURED_LOOKUP:
         return "structured_retrieve"
     if route == Route.DIAGNOSTIC:
@@ -44,6 +47,8 @@ def build_graph(
     g.add_node("rag_retrieve", nodes.rag_retrieve)
     g.add_node("structured_retrieve", nodes.structured_retrieve)
     g.add_node("multi_hop_retrieve", nodes.multi_hop_retrieve)
+    g.add_node("decompose", nodes.decompose)
+    g.add_node("decomposed_retrieve", nodes.decomposed_retrieve)
     g.add_node("rerank", nodes.rerank)
     g.add_node("generate", nodes.generate)
 
@@ -57,8 +62,11 @@ def build_graph(
             "rag_retrieve": "rag_retrieve",
             "structured_retrieve": "structured_retrieve",
             "multi_hop_retrieve": "multi_hop_retrieve",
+            "decompose": "decompose",
         },
     )
+    g.add_edge("decompose", "decomposed_retrieve")
+    g.add_edge("decomposed_retrieve", "rerank")
     g.add_edge("rag_retrieve", "rerank")
     g.add_edge("structured_retrieve", "rerank")
     g.add_edge("multi_hop_retrieve", "rerank")

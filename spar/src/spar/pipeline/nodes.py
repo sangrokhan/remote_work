@@ -14,6 +14,7 @@ from spar.preprocessing.abbrev_mapper import (
 )
 from spar.reranker.client import CrossEncoderClient
 from spar.retrieval.milvus_client import SparMilvusClient
+from spar.retrieval.query_decomposer import QueryDecomposer
 from spar.retrieval.query_rewriter import build_context
 from spar.retrieval.routing import build_expr, doc_types_for_route
 from spar.router.hybrid_router import HybridRouter
@@ -33,6 +34,11 @@ class Nodes:
     milvus: SparMilvusClient
     _acronyms: dict
     _reverse_index: dict[str, str]
+    _decomposer: QueryDecomposer = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self._decomposer is None:
+            self._decomposer = QueryDecomposer()
 
     @classmethod
     def create(
@@ -73,6 +79,36 @@ class Nodes:
         query = state.get("expanded_query") or state["query"]
         result = await self.router.route(query)
         return {**state, "route_result": result, "node_trace": _append_trace(state, "route")}
+
+    async def decompose(self, state: SparState) -> SparState:
+        query = state.get("expanded_query") or state["query"]
+        sub_questions = await self._decomposer.decompose(query)
+        return {**state, "sub_questions": sub_questions, "node_trace": _append_trace(state, "decompose")}
+
+    async def decomposed_retrieve(self, state: SparState) -> SparState:
+        sub_questions = state.get("sub_questions") or [state.get("expanded_query") or state["query"]]
+        route_result = state["route_result"]
+        top_k = state.get("top_k", 10)
+        doc_types = doc_types_for_route(route_result)
+        expr = build_expr(route_result)
+
+        seen: set[str] = set()
+        merged: list[dict[str, Any]] = []
+
+        async def _retrieve_one(sq: str) -> list[dict[str, Any]]:
+            vec: list[float] = self.encoder.encode([sq])[0].tolist()
+            return await self._hybrid_search_multi(doc_types, sq, vec, top_k, expr)
+
+        per_question = await asyncio.gather(*[_retrieve_one(sq) for sq in sub_questions])
+        for chunks in per_question:
+            for chunk in chunks:
+                key = chunk.get("id") or chunk.get("text", "")[:120]
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(chunk)
+
+        merged.sort(key=lambda c: c["score"], reverse=True)
+        return {**state, "raw_chunks": merged[:top_k * 2], "node_trace": _append_trace(state, "decomposed_retrieve")}
 
     async def _hybrid_search_multi(
         self,

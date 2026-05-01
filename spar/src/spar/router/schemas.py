@@ -22,3 +22,4 @@ class RouteResult:
     entities: dict[str, Any] = field(default_factory=dict)
     product: str | None = None
     release: str | None = None
+    needs_decomposition: bool = False
