@@ -32,10 +32,12 @@ async def lifespan(app: FastAPI):
     reranker = await get_reranker()
     router = HybridRouter(encoder=encoder, use_llm=False)
     milvus_client = SparMilvusClient(MilvusConfig())
-    _graph = build_graph(router=router, reranker=reranker, encoder=encoder, milvus=milvus_client)
-    yield
-    milvus_client.close()
-    _graph = None
+    try:
+        _graph = build_graph(router=router, reranker=reranker, encoder=encoder, milvus=milvus_client)
+        yield
+    finally:
+        milvus_client.close()
+        _graph = None
 
 
 app = FastAPI(title="SPAR", version="0.1.0", lifespan=lifespan)
