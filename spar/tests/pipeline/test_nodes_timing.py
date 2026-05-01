@@ -119,6 +119,7 @@ async def test_generate_stub_when_no_llm():
     result = await nodes.generate(state)
     assert result["answer"].startswith("[stub]")
     assert "generate" in result["node_timings"]
+    assert "generate" in result["node_trace"]
 
 
 @pytest.mark.asyncio
@@ -138,4 +139,5 @@ async def test_generate_calls_llm_when_provided():
     }
     result = await nodes.generate(state)
     assert result["answer"] == "maxHARQTx default value is 5."
+    assert "generate" in result["node_trace"]
     mock_llm.chat.assert_called_once()
