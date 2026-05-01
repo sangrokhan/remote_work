@@ -46,7 +46,7 @@ services:
 
   milvus:
     container_name: spar-milvus-standalone
-    image: milvusdb/milvus:v2.4.15
+    image: milvusdb/milvus:v2.5.4
     command: ["milvus", "run", "standalone"]
     security_opt:
       - seccomp:unconfined
@@ -77,7 +77,7 @@ services:
   # Milvus Web UI (선택 — 개발용)
   attu:
     container_name: spar-milvus-attu
-    image: zilliz/attu:v2.4
+    image: zilliz/attu:v2.5
     environment:
       MILVUS_URL: milvus:19530
     ports:

@@ -30,7 +30,7 @@ class TestSchema:
         assert bm25_fn.output_field_names == ["sparse_vec"]
 
     def test_sparse_index_params_values(self):
-        assert SPARSE_INDEX_PARAMS["metric_type"] == "IP"
+        assert SPARSE_INDEX_PARAMS["metric_type"] == "BM25"
         assert SPARSE_INDEX_PARAMS["index_type"] == "SPARSE_INVERTED_INDEX"
 
     def test_dense_vec_field_exists(self):
