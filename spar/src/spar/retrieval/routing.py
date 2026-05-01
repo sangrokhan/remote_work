@@ -11,16 +11,17 @@ _ROUTE_DOC_TYPES: dict[Route, list[str]] = {
     Route.DEFAULT_RAG: ["feature_desc", "spec", "mop", "install_guide", "release_notes"],
 }
 
-_ENTITY_TO_DOC_TYPE: dict[str, str] = {
-    "alarm_code": "alarm_ref",
-    "param_name": "parameter_ref",
-    "mo_name": "parameter_ref",
-}
+# Priority order: alarm_code > param_name > mo_name
+_ENTITY_PRIORITY: list[tuple[str, str]] = [
+    ("alarm_code", "alarm_ref"),
+    ("param_name", "parameter_ref"),
+    ("mo_name", "parameter_ref"),
+]
 
 
 def doc_types_for_route(result: RouteResult) -> list[str]:
     if result.route == Route.STRUCTURED_LOOKUP and result.entities:
-        for key, doc_type in _ENTITY_TO_DOC_TYPE.items():
+        for key, doc_type in _ENTITY_PRIORITY:
             if key in result.entities:
                 return [doc_type]
     return _ROUTE_DOC_TYPES.get(result.route, ["feature_desc"])
