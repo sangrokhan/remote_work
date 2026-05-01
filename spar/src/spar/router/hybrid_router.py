@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from spar.encoder.base import EncoderClient
-from spar.encoder.config import EncoderSettings
-from spar.encoder.factory import EncoderFactory
 from spar.router.embedding_router import EmbeddingRouter
 from spar.router.llm_router import LLMRouter
 from spar.router.regex_router import RegexRouter
@@ -16,12 +14,10 @@ class HybridRouter:
 
     def __init__(
         self,
-        encoder: EncoderClient | None = None,
+        encoder: EncoderClient,
         embedding_threshold: float = 0.65,
         use_llm: bool = True,
     ) -> None:
-        if encoder is None:
-            encoder = EncoderFactory.create(EncoderSettings())
         self._regex = RegexRouter()
         self._embedding = EmbeddingRouter(encoder=encoder, threshold=embedding_threshold)
         self._llm_router = LLMRouter()
