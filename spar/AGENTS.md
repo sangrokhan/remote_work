@@ -11,7 +11,7 @@
 - **목적**: Samsung 단일 벤더(LTE+NR) 환경의 내부 문서(파라미터/카운터/알람/MOP/Feature/Release Notes 등)에 대한 자연어 질의응답 시스템
 - **운영 환경**: 온프레미스, 영어 응답, 정확성 최우선 (hallucination 최소화)
 - **상위 로드맵**: `docs/prd.md`의 Phase 0 ~ Phase 5 + INF 작업 참조
-- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분), encoder 싱글톤(Task 1.4 부분 ✅ — base.py + registry.py로 단순화), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인**(pipeline/ — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅)** 구현됨
+- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원), encoder 싱글톤(Task 1.4 부분 ✅ — base.py + registry.py로 단순화), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인**(pipeline/ — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용) 구현됨
 
 ---
 
