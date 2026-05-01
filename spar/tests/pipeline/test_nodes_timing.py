@@ -71,3 +71,35 @@ async def test_structured_retrieve_no_rag_retrieve_timing_leak():
     result = await nodes.structured_retrieve(state)
     assert "structured_retrieve" in result["node_timings"]
     assert "rag_retrieve" not in result["node_timings"]
+    assert "rag_retrieve" not in result.get("node_trace", [])
+
+
+@pytest.mark.asyncio
+async def test_timing_accumulates_through_retrieval():
+    from spar.router.schemas import RouteResult, Route
+    router = MagicMock()
+    router.route = AsyncMock(return_value=MagicMock(route=MagicMock()))
+    reranker = MagicMock()
+    reranker.rerank = AsyncMock(return_value=[0.9])
+    encoder = MagicMock()
+    encoder.encode = MagicMock(return_value=np.zeros((1, 3)))
+    milvus = MagicMock()
+    milvus.hybrid_search = MagicMock(
+        return_value=[{"text": "ctx", "score": 0.9, "source_doc": "doc.md", "section_num": "1.1"}]
+    )
+
+    nodes = Nodes.create(
+        router=router, reranker=reranker, encoder=encoder, milvus=milvus, acronyms_path=None
+    )
+
+    route_result = MagicMock(spec=RouteResult)
+    route_result.route = Route.DEFAULT_RAG
+    state: SparState = {
+        "query": "test", "route_result": route_result, "top_k": 5, "node_timings": {},
+    }
+    s1 = await nodes.rag_retrieve(state)
+    s2 = await nodes.rerank(s1)
+    s3 = await nodes.generate(s2)
+    assert "rag_retrieve" in s3["node_timings"]
+    assert "rerank" in s3["node_timings"]
+    assert "generate" in s3["node_timings"]
