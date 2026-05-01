@@ -277,7 +277,7 @@ class SparMilvusClient:
 
         results = col.hybrid_search(
             reqs=[dense_req, sparse_req],
-            ranker=RRFRanker(k=rrf_k),
+            rerank=RRFRanker(k=rrf_k),
             limit=top_k,
             output_fields=output_fields,
         )
