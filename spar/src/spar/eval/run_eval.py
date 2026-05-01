@@ -41,6 +41,8 @@ async def _collect_results_via_graph(
         router=router, reranker=reranker, encoder=encoder, milvus=milvus,
         config=cfg, acronyms_path=acronyms_path,
     )
+    # doc_type not yet wired into SparState; graph uses HybridRouter for routing
+    _ = doc_type
     results = []
     for gold in goldset:
         try:
@@ -83,8 +85,8 @@ def _save_output(path: Path, metrics: dict, results: list[dict]) -> None:
                 "query_id": r["gold"]["query_id"],
                 "query": r["gold"]["query"],
                 "type": r["gold"].get("type"),
-                "expected_doc": r["gold"]["source_doc"],
-                "expected_section": r["gold"]["section"],
+                "expected_doc": r["gold"].get("source_doc"),
+                "expected_section": r["gold"].get("section"),
                 "retrieved_top3": r["retrieved"][:3],
             }
             for r in results
