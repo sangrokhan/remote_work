@@ -69,7 +69,7 @@ spar/
 │       ├── kg/              # Knowledge Graph + Text-to-Cypher + GraphRAG (Task 3.3~3.5 — scaffold)
 │       ├── generation/      # citation enforcer, self-verifier, confidence, fallback (Task 4.1~4.5 — scaffold)
 │       ├── agent/           # LangGraph agentic 확장 예비 (Phase 5 — scaffold)
-│       ├── eval/            # 골드셋 평가 스크립트, 메트릭 (scaffold)
+│       ├── eval/            # 골드셋 평가 스크립트, 메트릭 — metrics.py, run_eval.py (Task 1.7.2 구현 중)
 │       └── dictionary/      # 약어/동의어 사전 (scaffold)
 ├── configs/                 # YAML/JSON 설정 (모델, 인덱스, 라우트 등)
 │   ├── milvus/              # Milvus 연결/컬렉션 설정
