@@ -88,6 +88,8 @@ async def test_get_encoder_uses_env_model(monkeypatch):
 
 
 async def test_get_encoder_uses_env_device(monkeypatch):
+    monkeypatch.delenv("ENCODER_URL", raising=False)
+    monkeypatch.delenv("EMBEDDING_URL", raising=False)
     monkeypatch.setenv("ENCODER_DEVICE", "cuda")
     with patch("spar.encoder.registry.SentenceTransformer") as mock_cls:
         mock_cls.return_value = MagicMock()

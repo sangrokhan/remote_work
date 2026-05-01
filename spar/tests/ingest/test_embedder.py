@@ -49,6 +49,8 @@ def test_embedder_remote_embedding(monkeypatch):
     called = types.SimpleNamespace(posted=False)
 
     class _Client:
+        def __init__(self, **kwargs): pass
+
         def post(self, *_, **kwargs):
             called.posted = True
             assert kwargs["json"]["model"] == "BAAI/bge-large-en-v1.5"
@@ -61,10 +63,7 @@ def test_embedder_remote_embedding(monkeypatch):
     e = Embedder()
     vecs = e.encode(["a", "b"])
     assert called.posted
-    assert vecs == [
-        [0.6, 0.8],
-        [0.6, 0.8],
-    ]
+    assert [[round(x, 5) for x in row] for row in vecs] == [[0.6, 0.8], [0.6, 0.8]]
 
 
 @pytest.mark.skipif(
