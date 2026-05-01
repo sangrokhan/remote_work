@@ -19,6 +19,10 @@ class SparState(TypedDict, total=False):
     history_context: str
     matched_terms: list[str]
 
+    # query rewriting
+    rewritten_query: str
+    query_complexity: str
+
     # routing
     route_result: RouteResult
 
