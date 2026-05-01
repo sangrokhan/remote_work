@@ -11,6 +11,8 @@ from pymilvus import (
     CollectionSchema,
     DataType,
     FieldSchema,
+    Function,
+    FunctionType,
     MilvusClient,
     connections,
     utility,
@@ -58,23 +60,44 @@ HNSW_INDEX_PARAMS = {
 
 SEARCH_PARAMS = {"metric_type": "COSINE", "params": {"ef": 100}}
 
+SPARSE_INDEX_PARAMS = {
+    "index_type": "SPARSE_INVERTED_INDEX",
+    "metric_type": "BM25",
+}
+
+SPARSE_SEARCH_PARAMS = {"metric_type": "BM25"}
+
 
 def _build_schema(description: str = "") -> CollectionSchema:
     fields = [
         FieldSchema(name="chunk_id", dtype=DataType.VARCHAR, max_length=128, is_primary=True),
         FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=EMBED_DIM),
-        # PRD Task 1.2 메타데이터
         FieldSchema(name="doc_type", dtype=DataType.VARCHAR, max_length=32),
-        FieldSchema(name="product", dtype=DataType.VARCHAR, max_length=16),   # LTE | NR | both
-        FieldSchema(name="release", dtype=DataType.VARCHAR, max_length=16),   # v6.0, v7.1, …
+        FieldSchema(name="product", dtype=DataType.VARCHAR, max_length=16),
+        FieldSchema(name="release", dtype=DataType.VARCHAR, max_length=16),
         FieldSchema(name="deployment_type", dtype=DataType.VARCHAR, max_length=32),
         FieldSchema(name="mo_name", dtype=DataType.VARCHAR, max_length=64),
         FieldSchema(name="source_doc", dtype=DataType.VARCHAR, max_length=256),
         FieldSchema(name="section", dtype=DataType.VARCHAR, max_length=256),
         FieldSchema(name="page", dtype=DataType.INT32),
-        FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65_535),
+        FieldSchema(
+            name="text",
+            dtype=DataType.VARCHAR,
+            max_length=65_535,
+            enable_analyzer=True,
+        ),
+        FieldSchema(name="sparse_vec", dtype=DataType.SPARSE_FLOAT_VECTOR),
     ]
-    return CollectionSchema(fields=fields, description=description, enable_dynamic_field=True)
+    schema = CollectionSchema(fields=fields, description=description, enable_dynamic_field=True)
+
+    bm25_fn = Function(
+        name="bm25",
+        input_field_names=["text"],
+        output_field_names=["sparse_vec"],
+        function_type=FunctionType.BM25,
+    )
+    schema.add_function(bm25_fn)
+    return schema
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +164,7 @@ class SparMilvusClient:
         schema = _build_schema(description=f"SPAR chunks — {doc_type}")
         col = Collection(name=name, schema=schema)
         col.create_index(field_name="embedding", index_params=HNSW_INDEX_PARAMS)
+        col.create_index(field_name="sparse_vec", index_params=SPARSE_INDEX_PARAMS)
         col.load()
         return col
 
