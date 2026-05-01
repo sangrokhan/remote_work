@@ -15,6 +15,7 @@ class EncoderSettings(BaseSettings):
         env_file=_ENV_FILES,
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     encoder_reranker_url: str = Field(
@@ -24,6 +25,14 @@ class EncoderSettings(BaseSettings):
     encoder_reranker_model: str = Field(
         default="BAAI/bge-reranker-v2-m3",
         validation_alias=AliasChoices("ENCODER_RERANKER_MODEL", "RERANKER_MODEL"),
+    )
+    encoder_reranker_backend: str = Field(
+        default="local",
+        validation_alias=AliasChoices("ENCODER_RERANKER_BACKEND", "RERANKER_BACKEND"),
+    )
+    encoder_reranker_device: str = Field(
+        default="cpu",
+        validation_alias=AliasChoices("ENCODER_RERANKER_DEVICE", "RERANKER_DEVICE"),
     )
 
 
