@@ -10,7 +10,9 @@ from spar.pipeline.state import SparState
 from spar.preprocessing.abbrev_mapper import (
     build_reverse_index,
     expand_query,
+    extract_terms,
     load_acronyms,
+    load_keywords,
 )
 from spar.reranker.client import CrossEncoderClient
 from spar.retrieval.milvus_client import SparMilvusClient
@@ -34,6 +36,7 @@ class Nodes:
     milvus: SparMilvusClient
     _acronyms: dict
     _reverse_index: dict[str, str]
+    _keywords: set[str]
     _decomposer: QueryDecomposer = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
@@ -53,8 +56,10 @@ class Nodes:
         if path.exists():
             acronyms = load_acronyms(path)
             reverse_index = build_reverse_index(acronyms)
+            keywords = load_keywords(acronyms)
         else:
             acronyms, reverse_index = {}, {}
+            keywords = set()
         return cls(
             router=router,
             reranker=reranker,
@@ -62,12 +67,14 @@ class Nodes:
             milvus=milvus,
             _acronyms=acronyms,
             _reverse_index=reverse_index,
+            _keywords=keywords,
         )
 
     async def preprocess(self, state: SparState) -> SparState:
         query = state["query"]
         expanded = expand_query(query, self._acronyms, self._reverse_index)
-        return {**state, "expanded_query": expanded, "node_trace": _append_trace(state, "preprocess")}
+        matched = extract_terms(query, self._keywords)
+        return {**state, "expanded_query": expanded, "matched_terms": matched, "node_trace": _append_trace(state, "preprocess")}
 
     async def prepare_context(self, state: SparState) -> SparState:
         query = state.get("expanded_query") or state["query"]
@@ -90,7 +97,8 @@ class Nodes:
         route_result = state["route_result"]
         top_k = state.get("top_k", 10)
         doc_types = doc_types_for_route(route_result)
-        expr = build_expr(route_result)
+        matched_terms = state.get("matched_terms", [])
+        expr = build_expr(route_result, matched_terms=matched_terms)
 
         seen: set[str] = set()
         merged: list[dict[str, Any]] = []
@@ -144,7 +152,8 @@ class Nodes:
 
         query_vector: list[float] = self.encoder.encode([query])[0].tolist()
         doc_types = doc_types_for_route(route_result)
-        expr = build_expr(route_result)
+        matched_terms = state.get("matched_terms", [])
+        expr = build_expr(route_result, matched_terms=matched_terms)
 
         chunks = await self._hybrid_search_multi(doc_types, query, query_vector, top_k, expr)
         return {**state, "raw_chunks": chunks, "node_trace": _append_trace(state, "rag_retrieve")}

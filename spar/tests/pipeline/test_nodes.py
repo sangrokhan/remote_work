@@ -28,6 +28,7 @@ def _make_nodes(route: Route = Route.DEFAULT_RAG) -> Nodes:
         milvus=milvus,
         _acronyms={},
         _reverse_index={},
+        _keywords=set(),
     )
 
 
@@ -143,3 +144,30 @@ async def test_node_trace_accumulates(base_state: SparState) -> None:
     state = {**state, "expanded_query": "x"}
     result = await nodes.route(state)
     assert result["node_trace"] == ["preprocess", "route"]
+
+
+@pytest.mark.unit
+async def test_preprocess_populates_matched_terms(base_state: SparState) -> None:
+    router = AsyncMock()
+    router.route.return_value = RouteResult(route=Route.DEFAULT_RAG, confidence=0.8, layer="test")
+    nodes = Nodes(
+        router=router,
+        reranker=MagicMock(),
+        encoder=MagicMock(),
+        milvus=MagicMock(),
+        _acronyms={},
+        _reverse_index={},
+        _keywords={"NRCellDU", "maxRetransmissions"},
+    )
+    state: SparState = {**base_state, "query": "What is NRCellDU config?"}
+    result = await nodes.preprocess(state)
+    assert "NRCellDU" in result["matched_terms"]
+    assert "maxRetransmissions" not in result["matched_terms"]
+
+
+@pytest.mark.unit
+async def test_preprocess_empty_matched_terms_no_keywords(base_state: SparState) -> None:
+    nodes = _make_nodes()
+    state: SparState = {**base_state, "query": "NRCellDU question"}
+    result = await nodes.preprocess(state)
+    assert result["matched_terms"] == []
