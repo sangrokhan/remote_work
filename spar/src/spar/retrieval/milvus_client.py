@@ -63,9 +63,10 @@ SEARCH_PARAMS = {"metric_type": "COSINE", "params": {"ef": 100}}
 SPARSE_INDEX_PARAMS = {
     "index_type": "SPARSE_INVERTED_INDEX",
     "metric_type": "BM25",
+    "params": {"drop_ratio_build": 0.0},
 }
 
-SPARSE_SEARCH_PARAMS = {"metric_type": "BM25"}
+SPARSE_SEARCH_PARAMS = {"metric_type": "BM25", "params": {"drop_ratio_search": 0.0}}
 
 
 def _build_schema(description: str = "") -> CollectionSchema:
