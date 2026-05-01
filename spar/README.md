@@ -115,7 +115,7 @@ spar/
 ├── .env.example      # 환경 변수 템플릿
 ├── src/spar/
 │   ├── api/              # FastAPI 앱 (app.py)
-│   ├── llm/              # LLM 팩토리/싱글톤/레지스트리 (client, config, factory, registry)
+│   ├── llm/              # LLM 팩토리/싱글톤/레지스트리 (client, config, factory, registry, fallback, gemini_cli)
 │   ├── encoder/          # 임베딩 encoder — base.py (EncoderClient ABC), registry.py (SentenceTransformerEncoder + get_encoder() 싱글톤) (Task 1.4 — 부분 ✅)
 │   ├── preprocessing/    # 질의 전처리 — 약어 매퍼 (Task 1.6 ✅)
 │   ├── prompts/          # LLM 프롬프트 파일 저장소 — load_prompt() 헬퍼 + *.txt 템플릿

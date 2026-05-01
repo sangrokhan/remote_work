@@ -1,4 +1,3 @@
-import pytest
 
 from spar.llm.config import LLMSettings, get_settings, reset_settings
 
