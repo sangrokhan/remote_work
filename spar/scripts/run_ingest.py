@@ -25,6 +25,13 @@ from typing import Any, ContextManager
 # src/ 레이아웃 — 설치 없이 직접 실행 시 경로 추가
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+# .env 자동 로드 (python-dotenv 설치 시)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
 from spar.ingest.chunkers import dispatch as chunk_dispatch
 from spar.preprocessing.abbrev_mapper import load_acronyms, map_abbreviations
 from spar.retrieval.milvus_client import DOC_TYPES, EMBED_DIM, SparMilvusClient
