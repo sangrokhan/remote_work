@@ -19,7 +19,7 @@ from spar.preprocessing.abbrev_mapper import (
 from spar.reranker.client import CrossEncoderClient
 from spar.retrieval.milvus_client import SparMilvusClient
 from spar.retrieval.query_decomposer import QueryDecomposer
-from spar.retrieval.query_rewriter import build_context
+from spar.retrieval.query_rewriter import build_context, rewrite_query as _rewrite_query
 from spar.retrieval.routing import build_expr, doc_types_for_route
 from spar.router.hybrid_router import HybridRouter
 
@@ -93,6 +93,17 @@ class Nodes:
             "matched_terms": matched,
             "node_trace": _append_trace(state, "preprocess"),
             "node_timings": _record_timing(state, "preprocess", elapsed),
+        }
+
+    async def rewrite_query(self, state: SparState) -> SparState:
+        query = state.get("expanded_query") or state["query"]
+        history = state.get("history", [])
+        result = await _rewrite_query(query, history, self._acronyms)
+        return {
+            **state,
+            "rewritten_query": result.rewritten,
+            "query_complexity": result.complexity,
+            "node_trace": _append_trace(state, f"rewrite_query:{result.complexity}"),
         }
 
     async def prepare_context(self, state: SparState) -> SparState:
