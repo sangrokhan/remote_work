@@ -11,18 +11,37 @@ PROMPT_FILE="/tmp/spar-codex-prompt.txt"
 
 printf '%s' "$PROMPT" > "$PROMPT_FILE"
 
-# Codex headless 실행 (동기, 프롬프트는 stdin으로 주입)
+cd "$PROJECT_ROOT"
+
+# 1단계: Codex headless 실행
 {
   echo "=== SubagentStart Task ($(date)) ==="
   cat "$PROMPT_FILE"
   echo ""
-  echo "=== Codex Output ==="
-  cd "$PROJECT_ROOT"
+  echo "=== [Codex] Output ==="
   codex exec --approval-mode full-auto < "$PROMPT_FILE" 2>&1
-  echo "=== Exit: $? ==="
+  echo "=== Codex Exit: $? ==="
 } > "$OUTPUT_LOG" 2>&1
 
 CODEX_EXIT=$?
+
+# 토큰 소진 여부 판단 (exit 비정상 + 관련 메시지)
+TOKEN_EXHAUSTED=0
+if [[ $CODEX_EXIT -ne 0 ]]; then
+  grep -qiE "quota|rate.limit|429|token.*limit|context.*length|insufficient_quota|out of token" "$OUTPUT_LOG" && TOKEN_EXHAUSTED=1
+fi
+
+# 2단계: Codex 토큰 소진 시 Gemini로 fallback
+if [[ $TOKEN_EXHAUSTED -eq 1 ]]; then
+  {
+    echo ""
+    echo "=== [Gemini Fallback] Codex 토큰 소진 → Gemini 실행 ($(date)) ==="
+    cat "$PROMPT_FILE" | gemini --approval-mode yolo -p "다음 태스크를 수행해줘:" 2>&1
+    echo "=== Gemini Exit: $? ==="
+  } >> "$OUTPUT_LOG" 2>&1
+fi
+
+FINAL_EXIT=$?
 rm -f "$PROMPT_FILE"
 
 RESULT=$(cat "$OUTPUT_LOG")
