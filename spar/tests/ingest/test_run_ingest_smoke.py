@@ -35,3 +35,27 @@ def test_pdf_input_rejected(tmp_path):
     )
     assert proc.returncode != 0
     assert "convert_pdf_to_md.py" in proc.stderr
+
+
+def test_directory_continues_on_bad_file(tmp_path):
+    """One malformed file shouldn't kill the whole batch."""
+    good = tmp_path / "good.md"
+    good.write_text("# Section\nGood content.\n")
+    # Create a "bad" file that fails to decode as utf-8
+    bad = tmp_path / "bad.md"
+    bad.write_bytes(b"\xff\xfe invalid utf-8 \x80\x81")
+    good2 = tmp_path / "z_good2.md"
+    good2.write_text("# Other\nMore content.\n")
+
+    repo = Path(__file__).resolve().parents[2]
+    proc = _run(
+        ["--input-dir", str(tmp_path), "--doc-type", "spec", "--dry-run"],
+        cwd=repo,
+    )
+    # Bad file logs error but processing continues — exit code 0
+    assert proc.returncode == 0, proc.stderr
+    # Good files were processed
+    assert "good.md" in proc.stdout
+    assert "z_good2.md" in proc.stdout
+    # Bad file error reached stderr
+    assert "ERROR processing" in proc.stderr or "bad.md" in proc.stderr
