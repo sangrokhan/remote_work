@@ -61,7 +61,9 @@ class EmbeddingRouter:
         centroids: dict[Route, np.ndarray] = {}
         for route, examples in ROUTE_EXAMPLES.items():
             embs = self._encoder.encode(examples, normalize=True)
-            centroids[route] = np.mean(embs, axis=0)
+            centroid = np.mean(embs, axis=0)
+            norm = np.linalg.norm(centroid)
+            centroids[route] = centroid / norm if norm > 0 else centroid
         return centroids
 
     def route(self, query: str) -> RouteResult | None:

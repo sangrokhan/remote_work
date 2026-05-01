@@ -52,3 +52,9 @@ def test_route_result_has_confidence(router):
     if result is not None:
         assert 0.0 <= result.confidence <= 1.0
         assert result.layer == "embedding"
+
+
+def test_centroids_are_normalized(router):
+    for route, centroid in router._centroids.items():
+        norm = float(np.linalg.norm(centroid))
+        assert abs(norm - 1.0) < 1e-5, f"Centroid for {route} not normalized: norm={norm}"
