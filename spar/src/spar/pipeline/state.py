@@ -12,9 +12,11 @@ class SparState(TypedDict, total=False):
     release: str | None
     top_k: int
     request_id: str
+    history: list[dict[str, str]]
 
     # preprocess
     expanded_query: str
+    history_context: str
 
     # routing
     route_result: RouteResult

@@ -89,6 +89,7 @@ async def test_full_trace_default_rag(base_state: SparState) -> None:
     result = await graph.ainvoke(base_state)
     assert result["node_trace"] == [
         "preprocess",
+        "prepare_context",
         "route",
         "rag_retrieve",
         "rerank",

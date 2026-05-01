@@ -14,6 +14,7 @@ from spar.preprocessing.abbrev_mapper import (
 )
 from spar.reranker.client import CrossEncoderClient
 from spar.retrieval.milvus_client import SparMilvusClient
+from spar.retrieval.query_rewriter import build_context
 from spar.retrieval.routing import build_expr, doc_types_for_route
 from spar.router.hybrid_router import HybridRouter
 
@@ -61,6 +62,12 @@ class Nodes:
         query = state["query"]
         expanded = expand_query(query, self._acronyms, self._reverse_index)
         return {**state, "expanded_query": expanded, "node_trace": _append_trace(state, "preprocess")}
+
+    async def prepare_context(self, state: SparState) -> SparState:
+        query = state.get("expanded_query") or state["query"]
+        history = state.get("history", [])
+        ctx = build_context(query, history, self._acronyms)
+        return {**state, "history_context": ctx, "node_trace": _append_trace(state, "prepare_context")}
 
     async def route(self, state: SparState) -> SparState:
         query = state.get("expanded_query") or state["query"]
