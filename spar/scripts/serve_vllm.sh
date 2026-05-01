@@ -8,6 +8,7 @@ set -euo pipefail
 # Defaults (override via env or CLI args)
 # ---------------------------------------------------------------------------
 MODEL="${MODEL:-google/gemma-4-E4B-it}"
+TASK="${TASK:-generate}"
 PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
@@ -27,6 +28,7 @@ Usage: $(basename "$0") [OPTIONS]
 
 Options:
   --model   <id>    HuggingFace model ID or local path (default: $MODEL)
+  --task    <task>  vLLM task (generate|embed|score|classify) (default: $TASK)
   --port    <n>     Listening port (default: $PORT)
   --tp      <n>     Tensor parallel size (default: $TENSOR_PARALLEL_SIZE)
   --quant   <type>  Quantization: awq | gptq | (blank = none)
@@ -37,13 +39,14 @@ Options:
 
 Env overrides (same names in upper case):
   MODEL, PORT, HOST, GPU_MEMORY_UTILIZATION, MAX_MODEL_LEN,
-  TENSOR_PARALLEL_SIZE, DTYPE, QUANTIZATION, MAX_NUM_SEQS
+  TENSOR_PARALLEL_SIZE, DTYPE, QUANTIZATION, MAX_NUM_SEQS, TASK
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model)   MODEL="$2";                    shift 2 ;;
+    --task)    TASK="$2";                    shift 2 ;;
     --port)    PORT="$2";                     shift 2 ;;
     --tp)      TENSOR_PARALLEL_SIZE="$2";     shift 2 ;;
     --quant)   QUANTIZATION="$2";             shift 2 ;;
@@ -60,6 +63,7 @@ done
 # ---------------------------------------------------------------------------
 CMD=(
   vllm serve "$MODEL"
+  --task "$TASK"
   --host "$HOST"
   --port "$PORT"
   --dtype "$DTYPE"
@@ -81,6 +85,7 @@ echo "============================================"
 echo "  vLLM Server"
 echo "============================================"
 echo "  Model     : $MODEL"
+echo "  Task      : $TASK"
 echo "  Endpoint  : http://${HOST}:${PORT}/v1"
 echo "  TP size   : $TENSOR_PARALLEL_SIZE"
 echo "  GPU mem   : $GPU_MEMORY_UTILIZATION"
@@ -91,9 +96,15 @@ echo "============================================"
 echo ""
 echo "  Test:"
 echo "    curl http://localhost:${PORT}/v1/models"
-echo "    curl http://localhost:${PORT}/v1/chat/completions \\"
-echo "      -H 'Content-Type: application/json' \\"
-echo "      -d '{\"model\":\"$(basename "$MODEL")\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}'"
+if [[ "$TASK" == "embed" ]]; then
+  echo "    curl http://localhost:${PORT}/v1/embeddings \\"
+  echo "      -H 'Content-Type: application/json' \\"
+  echo "      -d '{\"model\":\"$(basename "$MODEL")\",\"input\":[\"hello world\"]}'"
+else
+  echo "    curl http://localhost:${PORT}/v1/chat/completions \\"
+  echo "      -H 'Content-Type: application/json' \\"
+  echo "      -d '{\"model\":\"$(basename \"$MODEL\")\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}'"
+fi
 echo "============================================"
 echo ""
 

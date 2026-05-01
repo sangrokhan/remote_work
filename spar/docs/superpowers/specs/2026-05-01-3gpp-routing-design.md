@@ -21,7 +21,7 @@
 [3GPP .md files] data/tspec-llm/3GPP-clean/Rel-18/**/*.md
       ↓ scripts/slice_3gpp_intros.py (각 파일 앞 1000줄)
       → /tmp/3gpp_intros/<series>/<filename>
-      ↓ scripts/run_ingest.py --input-dir /tmp/3gpp_intros --doc-type spec
+      ↓ scripts/run_ingest.py --input-dir /tmp/3gpp_intros --doc-type spec --intro-only
       ↓ 파일명 파싱: 29502-i40.md → spec_number="29.502", series=29
 [Milvus: spar_spec 컬렉션]
       ↓ (query 시)
@@ -49,8 +49,8 @@
 
 ### 3.2 run_ingest.py 확장
 
-- `--intro-only` 플래그 추가 (spec doc_type 전용)
-- spec_number, series 메타데이터 파일명에서 자동 파싱 후 청크에 부착
+- `--intro-only` 플래그 추가 (spec doc_type 전용): 파일명에서 spec_number/series 파싱 활성화 신호. 일반 doc_type에서는 이 파싱을 수행하지 않음.
+- spec_number, series 메타데이터 파일명에서 자동 파싱 후 모든 청크에 부착
 
 ### 3.3 Milvus 스키마 변경
 
@@ -89,7 +89,7 @@ async def hybrid_search(
 ) -> list[dict]: ...
 ```
 
-spec_number entity 존재 시 caller(HybridRouter 또는 API layer)가 `expr="spec_number == '29.502'"` 전달.
+spec_number entity 존재 시 테스트/API layer가 RouteResult.entities에서 spec_number를 읽어 `expr="spec_number == '29.502'"` 생성 후 전달. (HybridRouter → retrieval 직접 연결은 이번 스코프 외, Section 6 참조)
 
 **Fallback**: expr 결과 0건 → expr=None으로 재시도.
 
