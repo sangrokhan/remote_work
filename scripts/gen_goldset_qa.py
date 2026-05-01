@@ -24,44 +24,48 @@ DEFAULT_OUT = SPAR_ROOT / "data" / "goldsets" / "retrieval_goldset.jsonl"
 _SPEC_FNAME_RE = re.compile(r"^(\d{2})(\d{3})")
 
 QA_COUNTS = {
-    "definition": 3,
-    "procedural": 2,
-    "diagnostic": 2,
-    "comparative": 1,
-    "lookup": 2,
+    "terminology": 3,
+    "technology": 3,
+    "behavior": 4,
 }
 
 PROMPT_TEMPLATE = """\
-아래 3GPP 기술 규격 문서를 읽고, 해당 문서 내용을 기반으로 질문-답변 세트를 생성하라.
+아래 3GPP 기술 규격 문서의 일부를 읽고, 실제 통신 엔지니어가 업무 중 물어볼 법한 질문-답변 세트를 생성하라.
 
 ## 문서 메타데이터
 - spec_number: {spec_number}
 - source_doc: {source_doc}
 - release: {release}
 
-## 질의 유형별 최소 생성 개수
-- definition: {cnt_definition}개 — 용어/개념/프로토콜 정의
-- procedural: {cnt_procedural}개 — 절차, 흐름, 시퀀스
-- diagnostic: {cnt_diagnostic}개 — 장애 원인, 조건, 에러 처리
-- comparative: {cnt_comparative}개 — 두 개 이상 개념/방식 비교
-- lookup: {cnt_lookup}개 — 특정 파라미터 값, 타이머, IE 조회
+## 질문 관점별 최소 생성 개수
+- terminology: {cnt_terminology}개 — 특정 명칭 관점. 용어·약어·개념의 정의와 의미.
+  예) "3GPP TS {spec_number}에서 S-NSSAI란 무엇인가?", "TS {spec_number}에서 SMF가 하는 역할은?"
+- technology: {cnt_technology}개 — 기술 관점. 프로토콜·아키텍처·메커니즘의 작동 원리.
+  예) "TS {spec_number} {release}에서 AMF와 SMF 간 N11 인터페이스는 어떤 방식으로 PDU 세션 컨텍스트를 전달하는가?"
+- behavior: {cnt_behavior}개 — 동작 관점. 특정 조건·이벤트·절차에서 네트워크 요소의 구체적 행동.
+  예) "TS {spec_number}에서 UE가 handover 중 PDU 세션 재개에 실패하면 AMF는 어떻게 처리하는가?"
+
+## 질문 작성 규칙
+- 질문 앞에 반드시 문서 식별자 포함: "3GPP TS {spec_number}" 또는 "TS {spec_number} {release}" 형식
+- 절(section) 번호는 질문에 포함하지 말 것 (사용자는 섹션 번호를 모름)
+- 아래 표현은 절대 사용 금지: "문서에서", "본 문서", "이 규격에서", "명시된", "기술된", "정의된 바에 따르면"
+- section 필드: 답변 근거가 되는 챕터 번호를 반드시 기입 (예: "5.2.1", "6.1.3.2"). 빈 문자열 불가
 
 ## 출력 규칙
 - 반드시 JSON 배열만 출력 (마크다운 코드블록, 설명 텍스트 없이)
-- answer는 문서에 근거한 내용만 (hallucination 금지)
-- section은 관련 절 번호 또는 제목 (예: "5.2.1", "Clause 4.3")
+- answer는 문서 내용에만 근거 (hallucination 금지)
 
 ## 출력 스키마
 [
   {{
     "query": "질문 텍스트",
     "answer": "답변 텍스트",
-    "type": "definition",
+    "type": "terminology",
     "section": "4.1"
   }}
 ]
 
-## 문서 내용
+## 문서 내용 ({source_doc}, {spec_number}, {release})
 ---
 {doc_content}
 ---
@@ -90,11 +94,9 @@ def build_prompt(file_path: Path, doc_content: str) -> str:
         spec_number=spec_number or "(unknown)",
         source_doc=file_path.name,
         release=release,
-        cnt_definition=QA_COUNTS["definition"],
-        cnt_procedural=QA_COUNTS["procedural"],
-        cnt_diagnostic=QA_COUNTS["diagnostic"],
-        cnt_comparative=QA_COUNTS["comparative"],
-        cnt_lookup=QA_COUNTS["lookup"],
+        cnt_terminology=QA_COUNTS["terminology"],
+        cnt_technology=QA_COUNTS["technology"],
+        cnt_behavior=QA_COUNTS["behavior"],
         doc_content=doc_content,
     )
 
@@ -146,12 +148,15 @@ def parse_qa_output(raw: str, source_doc: str, spec_number: str, release: str, s
     items = json.loads(m.group(0))
     results = []
     for i, item in enumerate(items):
+        section = item.get("section", "")
+        if not section:
+            print(f"  WARN: section 빈값 (query: {item.get('query', '')[:40]})", file=sys.stderr)
         results.append({
             "query_id": f"Q{start_id + i:04d}",
             "query": item["query"],
             "answer": item["answer"],
             "type": item["type"],
-            "section": item.get("section", ""),
+            "section": section,
             "source_doc": source_doc,
             "spec_number": spec_number,
             "release": release,
