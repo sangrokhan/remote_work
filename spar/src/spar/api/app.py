@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from langgraph.graph.state import CompiledStateGraph
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from spar.encoder.registry import get_encoder
 from spar.pipeline.graph import build_graph
@@ -47,11 +47,22 @@ app = FastAPI(title="SPAR", version="0.1.0", lifespan=lifespan)
 # Schemas
 # ---------------------------------------------------------------------------
 
+class ConversationMessage(BaseModel):
+    role: str = Field(..., pattern="^(user|assistant)$")
+    content: str = Field(..., min_length=1)
+
+
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Natural language query")
     product: str | None = Field(None, description="LTE | NR | both")
     release: str | None = Field(None, description="e.g. v6.0")
     top_k: int = Field(10, ge=1, le=50)
+    history: list[ConversationMessage] = Field(default_factory=list, description="Recent conversation turns (max 5)")
+
+    @field_validator("history")
+    @classmethod
+    def _trim_history(cls, v: list[ConversationMessage]) -> list[ConversationMessage]:
+        return v[-10:]  # max 5 turns × 2 messages
 
 
 class QueryResponse(BaseModel):
@@ -84,6 +95,7 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
         "release": req.release,
         "top_k": req.top_k,
         "request_id": str(uuid.uuid4()),
+        "history": [m.model_dump() for m in req.history],
     }
     final_state: SparState = await _graph.ainvoke(initial_state)
 

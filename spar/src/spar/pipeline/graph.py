@@ -39,6 +39,7 @@ def build_graph(
 
     g: StateGraph = StateGraph(SparState)
     g.add_node("preprocess", nodes.preprocess)
+    g.add_node("prepare_context", nodes.prepare_context)
     g.add_node("route", nodes.route)
     g.add_node("rag_retrieve", nodes.rag_retrieve)
     g.add_node("structured_retrieve", nodes.structured_retrieve)
@@ -47,7 +48,8 @@ def build_graph(
     g.add_node("generate", nodes.generate)
 
     g.set_entry_point("preprocess")
-    g.add_edge("preprocess", "route")
+    g.add_edge("preprocess", "prepare_context")
+    g.add_edge("prepare_context", "route")
     g.add_conditional_edges(
         "route",
         _route_selector,
