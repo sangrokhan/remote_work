@@ -69,8 +69,15 @@ def main() -> None:
         print(f"ERROR: 입력 파일 없음: {args.input}", file=sys.stderr)
         sys.exit(1)
 
-    raw_lines = [l for l in args.input.read_text(encoding="utf-8").splitlines() if l.strip()]
-    items = [json.loads(line) for line in raw_lines]
+    items = []
+    for line in args.input.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError as e:
+            print(f"  WARN: JSON 파싱 실패 — 스킵: {e}", file=sys.stderr)
     print(f"QA goldset {len(items)}개 로드")
 
     start_id = 1
