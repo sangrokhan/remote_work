@@ -1,53 +1,813 @@
 {
   "global": {
-    "HO": {
-      "expansion": "Handover",
-      "variants": ["Hand-Over"]
-    },
-    "TTT": {
-      "expansion": "Time-To-Trigger",
+    "A-MPR": {
+      "expansion": "Additional Maximum Power Reduction",
       "variants": []
     },
-    "RACH": {
-      "expansion": "Random Access Channel",
+    "ACLR": {
+      "expansion": "Adjacent Channel Leakage Ratio",
+      "variants": []
+    },
+    "ACS": {
+      "expansion": "Adjacent Channel Selectivity",
+      "variants": []
+    },
+    "ATG": {
+      "expansion": "Air to Ground",
+      "variants": []
+    },
+    "AoA": {
+      "expansion": "Angle of Arrival",
+      "variants": []
+    },
+    "AoD": {
+      "expansion": "Angle of Departure",
+      "variants": []
+    },
+    "BFD": {
+      "expansion": "Beam Failure Detection",
+      "variants": []
+    },
+    "BFD-RS": {
+      "expansion": "BFD Reference Signal",
+      "variants": []
+    },
+    "BLER": {
+      "expansion": "Block Error Rate",
+      "variants": []
+    },
+    "BM-RS": {
+      "expansion": "Beam Management Reference Signal",
+      "variants": []
+    },
+    "BS": {
+      "expansion": "Base Station",
+      "variants": []
+    },
+    "BW": {
+      "expansion": "Bandwidth",
       "variants": []
     },
     "BWP": {
       "expansion": "Bandwidth Part",
       "variants": []
     },
-    "UE": {
-      "expansion": "User Equipment",
+    "CA": {
+      "expansion": "Carrier Aggregation",
       "variants": []
     },
-    "gNB": {
-      "expansion": "Next Generation NodeB",
+    "CA_nX-nY": {
+      "expansion": "Inter-band CA of component carrier(s) in one sub-block within Band nX and component carrier(s) in one sub-block within Band nY where",
       "variants": []
     },
-    "RRC": {
-      "expansion": "Radio Resource Control",
+    "CBD": {
+      "expansion": "Candidate Beam Detection >",
+      "variants": []
+    },
+    "CBW": {
+      "expansion": "Channel Bandwidth >",
+      "variants": []
+    },
+    "CC": {
+      "expansion": "Component Carriers",
+      "variants": []
+    },
+    "CCA": {
+      "expansion": "Clear Channel Assessment",
+      "variants": []
+    },
+    "CG": {
+      "expansion": "Carrier Group",
+      "variants": []
+    },
+    "CG-SDT": {
+      "expansion": "Configured Grant Small Data Transmisison",
+      "variants": []
+    },
+    "CLI": {
+      "expansion": "Cross Link Interference >",
+      "variants": []
+    },
+    "CMR": {
+      "expansion": "Channel Measurement Resource",
+      "variants": []
+    },
+    "CORESET": {
+      "expansion": "Control Resource Set",
+      "variants": []
+    },
+    "CP": {
+      "expansion": "Cyclic Prefix",
+      "variants": []
+    },
+    "CP-OFDM": {
+      "expansion": "Cyclic Prefix-OFDM",
+      "variants": []
+    },
+    "CSI": {
+      "expansion": "Channel-State Information",
+      "variants": []
+    },
+    "CSI-RS": {
+      "expansion": "CSI Reference Signal",
+      "variants": []
+    },
+    "CSI-RSRP": {
+      "expansion": "CSI Reference Signal based Reference Signal Received Power",
+      "variants": []
+    },
+    "CSI-RSRQ": {
+      "expansion": "CSI Reference Signal based Reference Signal Received Quality",
+      "variants": []
+    },
+    "CSI-SINR": {
+      "expansion": "CSI Reference Signal based Signal to Noise and Interference Ratio",
+      "variants": []
+    },
+    "CSI_RP": {
+      "expansion": "Received (linear) average power of the resource elements that carry NR CSI-RS signals and channels, measured at the UE antenna connector",
+      "variants": []
+    },
+    "CW": {
+      "expansion": "Continuous Wave",
+      "variants": []
+    },
+    "DBT": {
+      "expansion": "Discovery Burst Transmission",
+      "variants": []
+    },
+    "DC": {
+      "expansion": "Dual Connectivity",
+      "variants": []
+    },
+    "DCI": {
+      "expansion": "Downlink Control Information",
+      "variants": []
+    },
+    "DFT-s-OFDM": {
+      "expansion": "Discrete Fourier Transform-spread-OFDM",
+      "variants": []
+    },
+    "DL": {
+      "expansion": "Downlink",
+      "variants": []
+    },
+    "DL-AoD": {
+      "expansion": "Downlink Angle-of-Departure",
+      "variants": []
+    },
+    "DL-TDOA": {
+      "expansion": "Downlink Time Difference Of Arrival",
+      "variants": []
+    },
+    "DM-RS": {
+      "expansion": "Demodulation Reference Signal",
+      "variants": []
+    },
+    "DMRS": {
+      "expansion": "Demodulation Reference Signal",
+      "variants": []
+    },
+    "DRX": {
+      "expansion": "Discontinuous Reception",
+      "variants": []
+    },
+    "DTX": {
+      "expansion": "Discontinuous Transmission",
+      "variants": []
+    },
+    "E-CID": {
+      "expansion": "Enhanced Cell ID",
+      "variants": []
+    },
+    "E-UTRA": {
+      "expansion": "Evolved UTRA",
+      "variants": []
+    },
+    "E-UTRAN": {
+      "expansion": "Evolved UTRAN",
+      "variants": []
+    },
+    "EIRP": {
+      "expansion": "Equivalent Isotropically Radiated Power",
+      "variants": []
+    },
+    "EN-DC": {
+      "expansion": "E-UTRA-NR Dual Connectivity",
+      "variants": []
+    },
+    "EVM": {
+      "expansion": "Error Vector Magnitude",
+      "variants": []
+    },
+    "FDD": {
+      "expansion": "Frequency Division Duplex",
+      "variants": []
+    },
+    "FR": {
+      "expansion": "Frequency Range",
+      "variants": []
+    },
+    "FRC": {
+      "expansion": "Fixed Reference Channel",
+      "variants": []
+    },
+    "FWA": {
+      "expansion": "Fixed Wireless Access",
+      "variants": []
+    },
+    "GAP": {
+      "expansion": "Refers to any of Measurement Gap, activated Pre-MG and NCSG",
+      "variants": []
+    },
+    "GEO": {
+      "expansion": "Geostationary Earth Orbit",
+      "variants": []
+    },
+    "GSCN": {
+      "expansion": "Global Synchronization Channel Number",
+      "variants": []
+    },
+    "HARQ": {
+      "expansion": "Hybrid Automatic Repeat Request",
+      "variants": []
+    },
+    "HO": {
+      "expansion": "Handover",
+      "variants": [
+        "Hand-Over"
+      ]
+    },
+    "IBB": {
+      "expansion": "In-band Blocking",
+      "variants": []
+    },
+    "IDFT": {
+      "expansion": "Inverse Discrete Fourier Transformation",
+      "variants": []
+    },
+    "IMR": {
+      "expansion": "Interference Measurement Resource",
+      "variants": []
+    },
+    "ITS": {
+      "expansion": "Intelligent Transportation System",
+      "variants": []
+    },
+    "L1": {
+      "expansion": "SL-RSRP Layer 1 Sidelink RSRP which corresponds to PSCCH-RSRP and/or PSSCH-RSRP",
+      "variants": []
+    },
+    "L1-RSRP": {
+      "expansion": "Layer 1 RSRP",
+      "variants": []
+    },
+    "LEO": {
+      "expansion": "Low Earth Orbit",
+      "variants": []
+    },
+    "LMF": {
+      "expansion": "Location Management Function",
+      "variants": []
+    },
+    "LPP": {
+      "expansion": "LTE Positioning Protocol",
+      "variants": []
+    },
+    "MAC": {
+      "expansion": "Medium Access Control",
+      "variants": []
+    },
+    "MBW": {
+      "expansion": "Measurement bandwidth defined for the protected band",
+      "variants": []
+    },
+    "MCG": {
+      "expansion": "Master Cell Group",
+      "variants": []
+    },
+    "MDT": {
+      "expansion": "Minimization of Drive Tests",
+      "variants": []
+    },
+    "MG": {
+      "expansion": "Measurement Gap",
+      "variants": []
+    },
+    "MGL": {
+      "expansion": "Measurement Gap Length",
+      "variants": []
+    },
+    "MGRP": {
+      "expansion": "Measurement Gap Repetition Period",
+      "variants": []
+    },
+    "MIB": {
+      "expansion": "Master Information Block",
+      "variants": []
+    },
+    "ML": {
+      "expansion": "Measurement Length",
+      "variants": []
+    },
+    "MN": {
+      "expansion": "Master Node",
+      "variants": []
+    },
+    "MOP": {
+      "expansion": "Maximum Output Power",
+      "variants": []
+    },
+    "MPR": {
+      "expansion": "Allowed maximum power reduction",
+      "variants": []
+    },
+    "MR-DC": {
+      "expansion": "Multi-Radio Dual Connectivity",
+      "variants": []
+    },
+    "MRO": {
+      "expansion": "Mobility Robustness Optimization",
+      "variants": []
+    },
+    "MSD": {
+      "expansion": "Maximum Sensitivity Degradation",
+      "variants": []
+    },
+    "MUSIM": {
+      "expansion": "Multi-Universal Subscriber Identity Module",
+      "variants": []
+    },
+    "NCSG": {
+      "expansion": "Network Controlled Small Gap",
+      "variants": []
+    },
+    "NE-DC": {
+      "expansion": "NR-E-UTRA Dual Connectivity",
+      "variants": []
+    },
+    "NGEN-DC": {
+      "expansion": "NG-RAN E-UTRA-NR Dual Connectivity",
+      "variants": []
+    },
+    "NR": {
+      "expansion": "New Radio",
+      "variants": []
+    },
+    "NR-ARFCN": {
+      "expansion": "NR Absolute Radio Frequency Channel Number",
+      "variants": []
+    },
+    "NR-DC": {
+      "expansion": "NR-NR Dual Connectivity",
+      "variants": []
+    },
+    "NS": {
+      "expansion": "Network Signalling",
+      "variants": []
+    },
+    "NTN": {
+      "expansion": "Non-Terrestrial Network",
+      "variants": []
+    },
+    "OCNG": {
+      "expansion": "OFDMA Channel Noise Generator",
+      "variants": []
+    },
+    "OFDM": {
+      "expansion": "Orthogonal Frequency Division Multiplexing",
+      "variants": []
+    },
+    "OFDMA": {
+      "expansion": "Orthogonal Frequency Division Multiple Access",
+      "variants": []
+    },
+    "OOB": {
+      "expansion": "Out-of-band",
+      "variants": []
+    },
+    "OTDOA": {
+      "expansion": "Observed Time Difference Of Arrival",
+      "variants": []
+    },
+    "P-MPR": {
+      "expansion": "Power Management Maximum Power Reduction",
+      "variants": []
+    },
+    "PBCH": {
+      "expansion": "Physical Broadcast Channel",
+      "variants": []
+    },
+    "PCC": {
+      "expansion": "Primary Component Carrier",
+      "variants": []
+    },
+    "PCell": {
+      "expansion": "Primary Cell",
+      "variants": []
+    },
+    "PDCCH": {
+      "expansion": "Physical Downlink Control Channel",
       "variants": []
     },
     "PDCP": {
       "expansion": "Packet Data Convergence Protocol",
       "variants": []
     },
+    "PDSCH": {
+      "expansion": "Physical Downlink Shared Channel",
+      "variants": []
+    },
+    "PLMN": {
+      "expansion": "Public Land Mobile Network",
+      "variants": []
+    },
+    "PPW": {
+      "expansion": "PRS Processing Window",
+      "variants": []
+    },
+    "PRACH": {
+      "expansion": "Physical RACH",
+      "variants": []
+    },
+    "PRB": {
+      "expansion": "Physical Resource Block",
+      "variants": []
+    },
+    "PRP": {
+      "expansion": "PRS Received Power",
+      "variants": []
+    },
+    "PRS": {
+      "expansion": "Positioning Reference Signal",
+      "variants": []
+    },
+    "PRS-RSRP": {
+      "expansion": "Positioning Reference Signal based Reference Signal Received Power",
+      "variants": []
+    },
+    "PS": {
+      "expansion": "Public Safety",
+      "variants": []
+    },
+    "PSBCH": {
+      "expansion": "Physical Sidelink Broadcast Channel",
+      "variants": []
+    },
+    "PSBCH-RSRP": {
+      "expansion": "Physical Sidelink Broadcast Channel DMRS based Reference Signal Received Power",
+      "variants": []
+    },
+    "PSCCH": {
+      "expansion": "Physical Sidelink Control CHannel",
+      "variants": []
+    },
+    "PSCCH-RSRP": {
+      "expansion": "Physical Sidelink Control Channel DMRS based Reference Signal Received Power",
+      "variants": []
+    },
+    "PSCell": {
+      "expansion": "Primary SCell",
+      "variants": []
+    },
+    "PSS": {
+      "expansion": "Primary Synchronization Signal",
+      "variants": []
+    },
+    "PSSCH": {
+      "expansion": "Physical Sidelink Shared CHannel",
+      "variants": []
+    },
+    "PSSCH-RSRP": {
+      "expansion": "Physical Sidelink Shared Channel DMRS based Reference Signal Received Power",
+      "variants": []
+    },
+    "PUCCH": {
+      "expansion": "Physical Uplink Control Channel",
+      "variants": []
+    },
+    "PUSCH": {
+      "expansion": "Physical Uplink Shared Channel",
+      "variants": []
+    },
+    "Pre-MG": {
+      "expansion": "Pre-configured Measurement Gap",
+      "variants": []
+    },
+    "QAM": {
+      "expansion": "Quadrature Amplitude Modulation",
+      "variants": []
+    },
+    "QCL": {
+      "expansion": "Quasi Co-Location",
+      "variants": []
+    },
+    "RACH": {
+      "expansion": "Random Access Channel",
+      "variants": []
+    },
+    "RAT": {
+      "expansion": "Radio Access Technology",
+      "variants": []
+    },
+    "RE": {
+      "expansion": "Resource Element",
+      "variants": []
+    },
+    "REFSENS": {
+      "expansion": "Reference Sensitivity",
+      "variants": []
+    },
+    "RF": {
+      "expansion": "Radio Frequency",
+      "variants": []
+    },
     "RLF": {
       "expansion": "Radio Link Failure",
       "variants": []
     },
-    "MRO": {
-      "expansion": "Mobility Robustness Optimization",
+    "RLM": {
+      "expansion": "Radio Link Monitoring",
+      "variants": []
+    },
+    "RLM-RS": {
+      "expansion": "Reference Signal for RLM",
+      "variants": []
+    },
+    "RMS": {
+      "expansion": "Root Mean Square (value)",
+      "variants": []
+    },
+    "RMSI": {
+      "expansion": "Remaining Minimum System Information",
+      "variants": []
+    },
+    "RRC": {
+      "expansion": "Radio Resource Control",
+      "variants": []
+    },
+    "RRH": {
+      "expansion": "Remote Radio Head",
+      "variants": []
+    },
+    "RRM": {
+      "expansion": "Radio Resource Management",
+      "variants": []
+    },
+    "RSRP": {
+      "expansion": "Reference Signal Receiving PowerRx Receiver",
+      "variants": []
+    },
+    "RSRQ": {
+      "expansion": "Reference Signal Received Quality",
+      "variants": []
+    },
+    "RSSI": {
+      "expansion": "Received Signal Strength Indicator",
+      "variants": []
+    },
+    "RSTD": {
+      "expansion": "Reference Signal Time Difference",
+      "variants": []
+    },
+    "RTT": {
+      "expansion": "Round Trip Time",
+      "variants": []
+    },
+    "RedCap": {
+      "expansion": "Reduced Capability",
+      "variants": []
+    },
+    "S-SSB": {
+      "expansion": "Sidelink Synchronization Signal Block",
+      "variants": []
+    },
+    "SA": {
+      "expansion": "Standalone operation mode",
+      "variants": []
+    },
+    "SAB": {
+      "expansion": "Satellite access band",
+      "variants": []
+    },
+    "SAN": {
+      "expansion": "Satellite Access Node",
+      "variants": []
+    },
+    "SC": {
+      "expansion": "Single Carrier",
+      "variants": []
+    },
+    "SCC": {
+      "expansion": "Secondary Component Carrier",
+      "variants": []
+    },
+    "SCG": {
+      "expansion": "Secondary Cell Group",
+      "variants": []
+    },
+    "SCS": {
+      "expansion": "Subcarrier spacing",
+      "variants": []
+    },
+    "SCell": {
+      "expansion": "Secondary Cell",
+      "variants": []
+    },
+    "SDL": {
+      "expansion": "Supplementary Downlink",
+      "variants": []
+    },
+    "SDT": {
+      "expansion": "Small Data Transmission",
+      "variants": []
+    },
+    "SEM": {
+      "expansion": "Spectrum Emission Mask",
+      "variants": []
+    },
+    "SFN": {
+      "expansion": "System Frame Number",
+      "variants": []
+    },
+    "SFTD": {
+      "expansion": "SFN and Frame Timing DifferenceSI System Information",
+      "variants": []
+    },
+    "SIB": {
+      "expansion": "System Information Block",
+      "variants": []
+    },
+    "SL": {
+      "expansion": "Sidelink",
+      "variants": []
+    },
+    "SL-MIMO": {
+      "expansion": "Sidelink-Multiple Antenna transmission",
+      "variants": []
+    },
+    "SL-RSSI": {
+      "expansion": "Sidelink Received Signal Strength Indicator",
+      "variants": []
+    },
+    "SLSS": {
+      "expansion": "Sidelink Synchronization Signal",
+      "variants": []
+    },
+    "SMTC": {
+      "expansion": "SSB-based Measurement Timing configuration",
+      "variants": []
+    },
+    "SNR": {
+      "expansion": "Signal-to-Noise Ratio",
+      "variants": []
+    },
+    "SRS": {
+      "expansion": "Sounding Reference Symbol",
+      "variants": []
+    },
+    "SRS-RSRP": {
+      "expansion": "Sounding Reference Signal based Reference Signal Received Power",
+      "variants": []
+    },
+    "SS": {
+      "expansion": "Synchronization Symbol",
+      "variants": []
+    },
+    "SS-RSRP": {
+      "expansion": "Synchronization Signal based Reference Signal Received Power",
+      "variants": []
+    },
+    "SS-RSRQ": {
+      "expansion": "Synchronization Signal based Reference Signal Received Quality",
+      "variants": []
+    },
+    "SS-SINR": {
+      "expansion": "Synchronization Signal based Signal to Noise and Interference Ratio",
+      "variants": []
+    },
+    "SSB": {
+      "expansion": "Synchronization Signal Block",
+      "variants": []
+    },
+    "SSB_RP": {
+      "expansion": "Received (linear) average power of the resource elements that carry NR SSB signals and channels, measured at the UE antenna connector or radiated interface boundary.",
+      "variants": []
+    },
+    "SSS": {
+      "expansion": "Secondary Synchronization Signal",
+      "variants": []
+    },
+    "SUL": {
+      "expansion": "Supplementary uplink",
+      "variants": []
+    },
+    "SpCell": {
+      "expansion": "Special Cell",
+      "variants": []
+    },
+    "TA": {
+      "expansion": "Timing Advance",
+      "variants": []
+    },
+    "TAE": {
+      "expansion": "Time Alignment Error",
+      "variants": []
+    },
+    "TAG": {
+      "expansion": "Timing Advance Group",
+      "variants": []
+    },
+    "TCI": {
+      "expansion": "Transmission Configuration Indicator",
+      "variants": []
+    },
+    "TDD": {
+      "expansion": "Time Division Duplex",
+      "variants": []
+    },
+    "TDOA": {
+      "expansion": "Time Difference Of Arrival",
+      "variants": []
+    },
+    "TN": {
+      "expansion": "Terrestrial Network",
+      "variants": []
+    },
+    "TRP": {
+      "expansion": "Transmission-Reception Point",
+      "variants": []
+    },
+    "TTI": {
+      "expansion": "Transmission Time Interval",
+      "variants": []
+    },
+    "TTT": {
+      "expansion": "Time-To-Trigger",
+      "variants": []
+    },
+    "TxD": {
+      "expansion": "Tx Diversity",
+      "variants": []
+    },
+    "UE": {
+      "expansion": "User Equipment",
+      "variants": []
+    },
+    "UL": {
+      "expansion": "MIMO Uplink Multiple Antenna transmission",
+      "variants": []
+    },
+    "ULFPTx": {
+      "expansion": "Uplink Full Power Transmission",
+      "variants": []
+    },
+    "V2X": {
+      "expansion": "Vehicle to Everything",
+      "variants": []
+    },
+    "VIL": {
+      "expansion": "Visible Interruption Length",
+      "variants": []
+    },
+    "VIRP": {
+      "expansion": "Visible Interruption Repetition Period",
+      "variants": []
+    },
+    "VSAT": {
+      "expansion": "Very Small Aperture Terminal",
+      "variants": []
+    },
+    "gNB": {
+      "expansion": "Next Generation NodeB",
+      "variants": []
+    },
+    "nX": {
+      "expansion": "and nY are the applicable NR *operating bands*",
+      "variants": []
+    },
+    "pTAG": {
+      "expansion": "Primary Timing Advance Group",
+      "variants": []
+    },
+    "sTAG": {
+      "expansion": "Secondary Timing Advance Group",
       "variants": []
     }
   },
   "conflicts": {
     "CA": {
-      "candidates": ["Carrier Aggregation", "Cell Activation"],
+      "candidates": [
+        "Carrier Aggregation",
+        "Cell Activation"
+      ],
       "variants": []
     },
     "CR": {
-      "candidates": ["Change Request", "Cell Range"],
+      "candidates": [
+        "Change Request",
+        "Cell Range"
+      ],
       "variants": []
     }
   }
