@@ -102,7 +102,7 @@ def _build_schema(description: str = "") -> CollectionSchema:
             dtype=DataType.ARRAY,
             element_type=DataType.VARCHAR,
             max_capacity=50,
-            max_length=32,
+            max_length=128,
         ),
         FieldSchema(
             name="text",

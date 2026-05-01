@@ -18,6 +18,11 @@ class TestSchema:
         text_field = next(f for f in schema.fields if f.name == "text")
         assert text_field.params.get("enable_analyzer") is True
 
+    def test_keywords_field_max_length(self):
+        schema = _build_schema()
+        kw_field = next(f for f in schema.fields if f.name == "keywords")
+        assert kw_field.max_length == 128
+
     def test_bm25_function_registered(self):
         schema = _build_schema()
         fn_names = [fn.name for fn in schema.functions]
