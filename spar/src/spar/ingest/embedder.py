@@ -20,6 +20,8 @@ except ImportError:  # pragma: no cover — runtime 미설치 환경
 
 
 DEFAULT_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-large-en-v1.5")
+DEFAULT_TIMEOUT = float(os.environ.get("EMBEDDING_TIMEOUT", "120"))
+DEFAULT_BATCH_SIZE = int(os.environ.get("EMBEDDING_BATCH_SIZE", "8"))
 
 
 def _normalize_vector(vector: Iterable[float]) -> list[float]:
@@ -51,7 +53,7 @@ class Embedder:
 
         if self._remote_url:
             self._remote_url = _remote_embedding_url(self._remote_url)
-            self._http_client = httpx.Client(timeout=60.0)
+            self._http_client = httpx.Client(timeout=DEFAULT_TIMEOUT)
             return
 
         if SentenceTransformer is None:
@@ -110,7 +112,7 @@ class Embedder:
             raise RuntimeError("원격 임베딩 응답 개수와 입력 개수가 다릅니다.")
         return vectors
 
-    def encode(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
+    def encode(self, texts: list[str], batch_size: int = DEFAULT_BATCH_SIZE) -> list[list[float]]:
         if not texts:
             return []
         if self._remote_url:
