@@ -17,6 +17,7 @@ class SparState(TypedDict, total=False):
     # preprocess
     expanded_query: str
     history_context: str
+    matched_terms: list[str]
 
     # routing
     route_result: RouteResult

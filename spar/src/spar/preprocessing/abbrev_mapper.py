@@ -21,6 +21,23 @@ def load_acronyms(path: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"Acronym dictionary not found: {path}") from None
 
 
+def load_keywords(acronyms: dict) -> set[str]:
+    """acronyms.json의 'keywords' 섹션에서 도메인 term 집합 반환."""
+    return set(acronyms.get("keywords", {}).keys())
+
+
+def extract_terms(query: str, keywords: set[str]) -> list[str]:
+    """쿼리에서 keywords와 일치하는 term 추출. 대소문자 무시, 단어 경계 기준."""
+    if not query or not keywords:
+        return []
+    matched: list[str] = []
+    for kw in keywords:
+        pattern = re.compile(rf"\b{re.escape(kw)}\b", re.IGNORECASE)
+        if pattern.search(query):
+            matched.append(kw)
+    return matched
+
+
 def build_reverse_index(acronyms: dict) -> dict[str, str]:
     """전체어·variants → abbreviation 역방향 인덱스 빌드."""
     reverse: dict[str, str] = {}

@@ -85,3 +85,35 @@ def test_build_expr_none_when_no_filters():
 def test_build_expr_product_both_excluded():
     expr = build_expr(_result(Route.DEFAULT_RAG, product="both"))
     assert expr is None
+
+
+def test_build_expr_with_matched_terms():
+    result = _result(Route.DEFAULT_RAG)
+    expr = build_expr(result, matched_terms=["NRCellDU"])
+    assert expr is not None
+    assert 'array_contains(keywords, "NRCellDU")' in expr
+
+
+def test_build_expr_multiple_terms():
+    result = _result(Route.DEFAULT_RAG)
+    expr = build_expr(result, matched_terms=["NRCellDU", "maxRetransmissions"])
+    assert 'array_contains(keywords, "NRCellDU")' in expr
+    assert 'array_contains(keywords, "maxRetransmissions")' in expr
+
+
+def test_build_expr_terms_combined_with_product_filter():
+    result = _result(Route.DEFAULT_RAG, product="samsung_ran")
+    expr = build_expr(result, matched_terms=["NRCellDU"])
+    assert "product" in expr
+    assert 'array_contains(keywords, "NRCellDU")' in expr
+    assert "&&" in expr
+
+
+def test_build_expr_empty_terms_unchanged():
+    result = _result(Route.DEFAULT_RAG)
+    assert build_expr(result) == build_expr(result, matched_terms=[])
+
+
+def test_build_expr_none_terms_unchanged():
+    result = _result(Route.DEFAULT_RAG)
+    assert build_expr(result) == build_expr(result, matched_terms=None)

@@ -27,12 +27,19 @@ def doc_types_for_route(result: RouteResult) -> list[str]:
     return _ROUTE_DOC_TYPES.get(result.route, ["feature_desc"])
 
 
-def build_expr(result: RouteResult) -> str | None:
+def build_expr(
+    result: RouteResult,
+    matched_terms: list[str] | None = None,
+) -> str | None:
     clauses: list[str] = []
 
     if result.product and result.product != "both":
         clauses.append(f'product == "{result.product}"')
     if result.release:
         clauses.append(f'release == "{result.release}"')
+
+    if matched_terms:
+        term_clauses = [f'array_contains(keywords, "{t}")' for t in matched_terms]
+        clauses.append("(" + " || ".join(term_clauses) + ")")
 
     return " && ".join(clauses) if clauses else None

@@ -9,7 +9,9 @@ import pytest
 from spar.preprocessing.abbrev_mapper import (
     build_reverse_index,
     expand_query,
+    extract_terms,
     load_acronyms,
+    load_keywords,
     map_abbreviations,
 )
 
@@ -144,3 +146,49 @@ class TestExpandQuery:
         reverse = build_reverse_index(SAMPLE_ACRONYMS)
         result = expand_query("unknown_token query", SAMPLE_ACRONYMS, reverse)
         assert "unknown_token" in result
+
+
+_ACRONYMS_WITH_KEYWORDS = {
+    "global": {"HO": {"expansion": "Handover", "variants": []}},
+    "conflicts": {},
+    "keywords": {"NRCellDU": {}, "maxRetransmissions": {}, "ALM-001": {}},
+}
+
+
+class TestLoadKeywords:
+    def test_returns_keyword_set(self) -> None:
+        result = load_keywords(_ACRONYMS_WITH_KEYWORDS)
+        assert result == {"NRCellDU", "maxRetransmissions", "ALM-001"}
+
+    def test_empty_when_no_keywords_section(self) -> None:
+        result = load_keywords({"global": {}, "conflicts": {}})
+        assert result == set()
+
+
+class TestExtractTerms:
+    def test_exact_match(self) -> None:
+        kws = {"NRCellDU", "maxRetransmissions"}
+        result = extract_terms("What is NRCellDU configuration?", kws)
+        assert "NRCellDU" in result
+        assert "maxRetransmissions" not in result
+
+    def test_case_insensitive(self) -> None:
+        kws = {"NRCellDU"}
+        result = extract_terms("configure nrcelldu now", kws)
+        assert "NRCellDU" in result
+
+    def test_word_boundary(self) -> None:
+        kws = {"NRCellDU"}
+        result = extract_terms("NRCellDUx parameter", kws)
+        assert result == []
+
+    def test_multiple_matches(self) -> None:
+        kws = {"NRCellDU", "maxRetransmissions", "ALM-001"}
+        result = extract_terms("NRCellDU maxRetransmissions settings", kws)
+        assert set(result) == {"NRCellDU", "maxRetransmissions"}
+
+    def test_empty_query(self) -> None:
+        assert extract_terms("", {"NRCellDU"}) == []
+
+    def test_empty_keywords(self) -> None:
+        assert extract_terms("NRCellDU config", set()) == []

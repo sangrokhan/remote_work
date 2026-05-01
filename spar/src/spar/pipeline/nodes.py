@@ -12,7 +12,9 @@ from spar.pipeline.state import SparState
 from spar.preprocessing.abbrev_mapper import (
     build_reverse_index,
     expand_query,
+    extract_terms,
     load_acronyms,
+    load_keywords,
 )
 from spar.reranker.client import CrossEncoderClient
 from spar.retrieval.milvus_client import SparMilvusClient
@@ -42,6 +44,7 @@ class Nodes:
     milvus: SparMilvusClient
     _acronyms: dict
     _reverse_index: dict[str, str]
+    _keywords: set[str]
     _decomposer: QueryDecomposer = None  # type: ignore[assignment]
     llm: LLMClient | None = None
 
@@ -63,8 +66,10 @@ class Nodes:
         if path.exists():
             acronyms = load_acronyms(path)
             reverse_index = build_reverse_index(acronyms)
+            keywords = load_keywords(acronyms)
         else:
             acronyms, reverse_index = {}, {}
+            keywords = set()
         return cls(
             router=router,
             reranker=reranker,
@@ -72,6 +77,7 @@ class Nodes:
             milvus=milvus,
             _acronyms=acronyms,
             _reverse_index=reverse_index,
+            _keywords=keywords,
             llm=llm,
         )
 
@@ -79,10 +85,12 @@ class Nodes:
         t0 = time.monotonic()
         query = state["query"]
         expanded = expand_query(query, self._acronyms, self._reverse_index)
+        matched = extract_terms(query, self._keywords)
         elapsed = (time.monotonic() - t0) * 1000
         return {
             **state,
             "expanded_query": expanded,
+            "matched_terms": matched,
             "node_trace": _append_trace(state, "preprocess"),
             "node_timings": _record_timing(state, "preprocess", elapsed),
         }
@@ -122,7 +130,8 @@ class Nodes:
         route_result = state["route_result"]
         top_k = state.get("top_k", 10)
         doc_types = doc_types_for_route(route_result)
-        expr = build_expr(route_result)
+        matched_terms = state.get("matched_terms", [])
+        expr = build_expr(route_result, matched_terms=matched_terms)
 
         seen: set[str] = set()
         merged: list[dict[str, Any]] = []
@@ -177,7 +186,8 @@ class Nodes:
 
         query_vector: list[float] = self.encoder.encode([query])[0].tolist()
         doc_types = doc_types_for_route(route_result)
-        expr = build_expr(route_result)
+        matched_terms = state.get("matched_terms", [])
+        expr = build_expr(route_result, matched_terms=matched_terms)
 
         chunks = await self._hybrid_search_multi(doc_types, query, query_vector, top_k, expr)
         elapsed = (time.monotonic() - t0) * 1000
