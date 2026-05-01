@@ -65,11 +65,11 @@ SEARCH_PARAMS = {"metric_type": "COSINE", "params": {"ef": 100}}
 
 SPARSE_INDEX_PARAMS = {
     "index_type": "SPARSE_INVERTED_INDEX",
-    "metric_type": "BM25",
+    "metric_type": "IP",
     "params": {"drop_ratio_build": 0.0},
 }
 
-SPARSE_SEARCH_PARAMS = {"metric_type": "BM25", "params": {"drop_ratio_search": 0.0}}
+SPARSE_SEARCH_PARAMS = {"metric_type": "IP", "params": {"drop_ratio_search": 0.0}}
 
 
 def _build_schema(description: str = "") -> CollectionSchema:
@@ -82,8 +82,21 @@ def _build_schema(description: str = "") -> CollectionSchema:
         FieldSchema(name="deployment_type", dtype=DataType.VARCHAR, max_length=32),
         FieldSchema(name="mo_name", dtype=DataType.VARCHAR, max_length=64),
         FieldSchema(name="source_doc", dtype=DataType.VARCHAR, max_length=256),
-        FieldSchema(name="section", dtype=DataType.VARCHAR, max_length=256),
+        FieldSchema(name="section", dtype=DataType.VARCHAR, max_length=512),
         FieldSchema(name="page", dtype=DataType.INT32),
+        # 3GPP section indexing fields
+        FieldSchema(name="section_num", dtype=DataType.VARCHAR, max_length=64),
+        FieldSchema(name="section_title", dtype=DataType.VARCHAR, max_length=512),
+        FieldSchema(name="section_depth", dtype=DataType.INT32),
+        FieldSchema(name="chunk_index", dtype=DataType.INT32),
+        FieldSchema(name="chunk_index_in_section", dtype=DataType.INT32),
+        FieldSchema(
+            name="parent_sections",
+            dtype=DataType.ARRAY,
+            element_type=DataType.VARCHAR,
+            max_capacity=10,
+            max_length=64,
+        ),
         FieldSchema(
             name="text",
             dtype=DataType.VARCHAR,
@@ -201,7 +214,12 @@ class SparMilvusClient:
     ) -> list[list[dict[str, Any]]]:
         col = self.get_collection(doc_type)
         if output_fields is None:
-            output_fields = ["chunk_id", "doc_type", "product", "release", "source_doc", "section", "page", "text"]
+            output_fields = [
+                "chunk_id", "doc_type", "product", "release", "source_doc",
+                "section", "section_num", "section_title", "section_depth",
+                "parent_sections", "chunk_index", "chunk_index_in_section",
+                "page", "text",
+            ]
 
         results = col.search(
             data=query_vectors,
@@ -229,8 +247,10 @@ class SparMilvusClient:
         col = self.get_collection(doc_type)
         if output_fields is None:
             output_fields = [
-                "chunk_id", "doc_type", "product", "release",
-                "source_doc", "section", "page", "text",
+                "chunk_id", "doc_type", "product", "release", "source_doc",
+                "section", "section_num", "section_title", "section_depth",
+                "parent_sections", "chunk_index", "chunk_index_in_section",
+                "page", "text",
             ]
 
         dense_req = AnnSearchRequest(
