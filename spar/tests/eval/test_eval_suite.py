@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from spar.eval.eval_suite import run_suite, print_comparison_table
+from spar.eval.run_eval import _collect_results_via_graph
 from spar.pipeline.config import GraphConfig
 
 GOLDSET = [
@@ -172,3 +173,26 @@ async def test_run_suite_empty_reranked_no_fallback():
     pq = results[0]["per_query"][0]
     # reranked_chunks=[] means reranker ran, found nothing → no fallback → recall = 0
     assert pq["recall_at_5"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_collect_results_via_graph_returns_gold_and_retrieved():
+    with patch("spar.eval.run_eval.build_graph") as mock_build:
+        mock_graph = MagicMock()
+        mock_graph.ainvoke = AsyncMock(return_value={
+            **FAKE_STATE,
+            "reranked_chunks": FAKE_STATE["raw_chunks"],
+        })
+        mock_build.return_value = mock_graph
+
+        results = await _collect_results_via_graph(
+            goldset=[GOLDSET[0]], doc_type="spec", top_k=10,
+            router=MagicMock(), reranker=MagicMock(),
+            encoder=MagicMock(encode=MagicMock(return_value=np.zeros((1,3)))),
+            milvus=MagicMock(),
+        )
+
+    assert len(results) == 1
+    assert "gold" in results[0]
+    assert "retrieved" in results[0]
+    assert results[0]["retrieved"] == FAKE_STATE["raw_chunks"]
