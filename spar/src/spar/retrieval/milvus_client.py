@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pymilvus import (
+    AnnSearchRequest,
     Collection,
     CollectionSchema,
     DataType,
@@ -14,6 +15,7 @@ from pymilvus import (
     Function,
     FunctionType,
     MilvusClient,
+    RRFRanker,
     connections,
     utility,
 )
@@ -211,6 +213,49 @@ class SparMilvusClient:
         return [
             [{"chunk_id": hit.id, "score": hit.score, **hit.fields} for hit in batch]
             for batch in results
+        ]
+
+    def hybrid_search(
+        self,
+        doc_type: str,
+        query_text: str,
+        query_vector: list[float],
+        top_k: int = 10,
+        output_fields: list[str] | None = None,
+        expr: str | None = None,
+        rrf_k: int = 60,
+    ) -> list[dict[str, Any]]:
+        col = self.get_collection(doc_type)
+        if output_fields is None:
+            output_fields = [
+                "chunk_id", "doc_type", "product", "release",
+                "source_doc", "section", "page", "text",
+            ]
+
+        dense_req = AnnSearchRequest(
+            data=[query_vector],
+            anns_field="embedding",
+            param=SEARCH_PARAMS,
+            limit=top_k * 2,
+            expr=expr,
+        )
+        sparse_req = AnnSearchRequest(
+            data=[query_text],
+            anns_field="sparse_vec",
+            param=SPARSE_SEARCH_PARAMS,
+            limit=top_k * 2,
+            expr=expr,
+        )
+
+        results = col.hybrid_search(
+            reqs=[dense_req, sparse_req],
+            ranker=RRFRanker(k=rrf_k),
+            limit=top_k,
+            output_fields=output_fields,
+        )
+        return [
+            {"chunk_id": hit.id, "score": hit.score, **hit.fields}
+            for hit in results[0]
         ]
 
     def delete_by_source(self, doc_type: str, source_doc: str) -> None:
