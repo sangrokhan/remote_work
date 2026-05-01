@@ -151,11 +151,16 @@ OR semantics (any matched term) avoids over-filtering when query contains multip
 
 ## Milvus Schema
 
-No changes required. `keywords` ARRAY field already defined:
+`keywords` field exists but `max_length=32` is insufficient — parameter names can exceed 32 chars (e.g., `maxRetransmissionsReestablishment` = 34 chars).
+
+**Required schema change:** increase `max_length` to 128.
+
 ```python
 FieldSchema(name="keywords", dtype=DataType.ARRAY,
-            element_type=DataType.VARCHAR, max_capacity=50, max_length=32)
+            element_type=DataType.VARCHAR, max_capacity=50, max_length=128)
 ```
+
+This requires re-creating the Milvus collection (schema is immutable after creation). Re-ingest required after schema change.
 
 ---
 
