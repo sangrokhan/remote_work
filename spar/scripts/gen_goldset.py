@@ -288,8 +288,11 @@ def process_file(
     start_id: int,
     max_lines: int,
     dry_run: bool,
+    doc_idx: int = 0,
+    total_docs: int = 0,
 ) -> int:
-    print(f"  처리: {file_path.name}", end="", flush=True)
+    progress = f"[{doc_idx}/{total_docs}] " if total_docs else ""
+    print(f"  {progress}처리: {file_path.name}", end="", flush=True)
     try:
         lines = file_path.read_text(encoding="utf-8").splitlines(keepends=True)
         doc_content = "".join(lines[:max_lines])
@@ -378,9 +381,10 @@ def main() -> None:
         start_id = existing + 1
         print(f"기존 {existing}개 항목에 이어쓰기. query_id Q{start_id:04d}부터 시작\n")
 
+    total_docs = len(md_files)
     with open(args.output, mode, encoding="utf-8") as out_f:
-        for md in md_files:
-            count = process_file(md, out_f, start_id, args.max_lines, args.dry_run)
+        for doc_idx, md in enumerate(md_files, start=1):
+            count = process_file(md, out_f, start_id, args.max_lines, args.dry_run, doc_idx, total_docs)
             total += count
             start_id += count
 
