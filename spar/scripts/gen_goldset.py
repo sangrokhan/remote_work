@@ -30,22 +30,33 @@ DEFAULT_OUT = SPAR_ROOT / "data" / "goldsets" / "goldset.jsonl"
 _SPEC_FNAME_RE = re.compile(r"^(\d{2})(\d{3})")
 
 QA_COUNTS = {
-    "terminology": 3,
-    "technology": 3,
-    "behavior": 4,
+    "terminology": 2,
+    "technology": 2,
+    "behavior": 2,
+    "diagnostic": 2,
+    "procedural": 2,
+    "comparative": 1,
+    "lookup": 1,
 }
 
 # QA type → router expected_route 매핑
-# 3GPP spec 기반 QA는 모두 default_rag; 추후 diagnostic/structured_lookup 확장 가능
 _TYPE_TO_ROUTE: dict[str, str] = {
-    "terminology": "default_rag",
+    "terminology": "definition_explain",
     "technology": "default_rag",
     "behavior": "default_rag",
+    "diagnostic": "diagnostic",
+    "procedural": "procedural",
+    "comparative": "comparative",
+    "lookup": "structured_lookup",
 }
 _TYPE_TO_DECOMPOSE: dict[str, bool] = {
     "terminology": False,
     "technology": False,
     "behavior": False,
+    "diagnostic": True,
+    "procedural": False,
+    "comparative": False,
+    "lookup": False,
 }
 
 MAX_ATTEMPTS = 10  # gemini 재시도 상한 (무한루프 방지)
@@ -59,12 +70,20 @@ PROMPT_TEMPLATE = """\
 - release: {release}
 
 ## 질문 관점별 최소 생성 개수
-- terminology: {cnt_terminology}개 — 특정 명칭 관점. 용어·약어·개념의 정의와 의미.
+- terminology: {cnt_terminology}개 — 용어/약어/개념 정의 관점. 특정 용어가 무엇인지, 어떤 의미인지.
   예) "3GPP TS {spec_number}에서 S-NSSAI란 무엇인가?", "TS {spec_number}에서 SMF가 하는 역할은?"
-- technology: {cnt_technology}개 — 기술 관점. 프로토콜·아키텍처·메커니즘의 작동 원리.
+- technology: {cnt_technology}개 — 기술 원리 관점. 프로토콜·아키텍처·메커니즘의 작동 방식.
   예) "TS {spec_number} {release}에서 AMF와 SMF 간 N11 인터페이스는 어떤 방식으로 PDU 세션 컨텍스트를 전달하는가?"
-- behavior: {cnt_behavior}개 — 동작 관점. 특정 조건·이벤트·절차에서 네트워크 요소의 구체적 행동.
+- behavior: {cnt_behavior}개 — 동작 관점. 특정 조건·이벤트에서 네트워크 요소의 구체적 행동.
   예) "TS {spec_number}에서 UE가 handover 중 PDU 세션 재개에 실패하면 AMF는 어떻게 처리하는가?"
+- diagnostic: {cnt_diagnostic}개 — 장애/문제 진단 관점. 특정 오류·실패 상황의 원인과 해결.
+  예) "TS {spec_number}에서 PDU Session Establishment가 실패하는 주요 원인과 각 원인별 처리 절차는?"
+- procedural: {cnt_procedural}개 — 절차/단계 관점. 특정 기능을 활성화하거나 수행하는 순서.
+  예) "TS {spec_number} {release}에서 UE가 Network Slice를 선택하는 절차는 어떤 순서로 진행되는가?"
+- comparative: {cnt_comparative}개 — 비교 관점. 두 개 이상의 메커니즘·옵션·파라미터 차이.
+  예) "TS {spec_number}에서 RRC_IDLE과 RRC_INACTIVE 상태의 차이점은 무엇인가?"
+- lookup: {cnt_lookup}개 — 특정 값/파라미터 조회 관점. 타이머 값, 임계값, 식별자 등 구체적 수치.
+  예) "TS {spec_number}에서 T3512 타이머의 기본값과 적용 조건은?"
 
 ## 질문 작성 규칙
 - 질문 앞에 반드시 문서 식별자 포함: "3GPP TS {spec_number}" 또는 "TS {spec_number} {release}" 형식
@@ -118,6 +137,10 @@ def build_prompt(file_path: Path, doc_content: str) -> str:
         cnt_terminology=QA_COUNTS["terminology"],
         cnt_technology=QA_COUNTS["technology"],
         cnt_behavior=QA_COUNTS["behavior"],
+        cnt_diagnostic=QA_COUNTS["diagnostic"],
+        cnt_procedural=QA_COUNTS["procedural"],
+        cnt_comparative=QA_COUNTS["comparative"],
+        cnt_lookup=QA_COUNTS["lookup"],
         doc_content=doc_content,
     )
 
