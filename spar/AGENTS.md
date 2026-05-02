@@ -11,7 +11,7 @@
 - **목적**: Samsung 단일 벤더(LTE+NR) 환경의 내부 문서(파라미터/카운터/알람/MOP/Feature/Release Notes 등)에 대한 자연어 질의응답 시스템
 - **운영 환경**: 온프레미스, 영어 응답, 정확성 최우선 (hallucination 최소화)
 - **상위 로드맵**: `docs/prd.md`의 Phase 0 ~ Phase 5 + INF 작업 참조
-- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원, verbose 배치 진행 추적), encoder 싱글톤(Task 1.4 부분 ✅ — base.py + registry.py로 단순화), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인**(pipeline/ — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용), **Milvus retrieval wiring ✅** (retrieval/routing.py + pipeline stub 제거), **멀티턴 history + 약어 컨텍스트 준비 (Task 2.5 부분 ✅** — retrieval/query_rewriter.py, pipeline/prepare_context 노드, API history 필드) 구현됨, **Query Decomposition ✅ (Task 2.4** — retrieval/query_decomposer.py, decompose/decomposed_retrieve 노드, RouteResult.needs_decomposition) 구현됨, **LLM Query Rewriting ✅ (Task 2.5** — retrieval/query_rewriter.py rewrite_query()/QueryRewriteResult, prompts/query_rewrite_system.txt, pipeline/rewrite_query 노드, tests/unit/retrieval/test_query_rewriter.py) 구현됨, **Hybrid Verify Loop ✅ (Task 2.6** — pipeline/tool_call 노드(결정적 전략 fallback + LLM 쿼리 재작성) + pipeline/verify 노드(LLM self-eval 1–5점), use_verify_loop GraphConfig 플래그, prompts/verify.txt + tool_call_rewrite.txt, 최대 3회 retry) 구현됨, **DocxParser 버그픽스 ✅** (이미지+텍스트 혼합 단락 텍스트 보존, 병합셀 비인접 dedup, 한글 slug re.UNICODE, rel_id 중복 이미지 방지), **Alarm Ref Excel parser + AlarmIndex ✅** (parsers/alarm_ref_parser.py — AlarmRecord/parse_alarm_ref_excel, retrieval/alarm_index.py — AlarmIndex 싱글톤 + get_alarm_index, retrieval/routing.py — resolve_alarm_entity() alarm_code 직접 lookup, data/samples/alarm_excel_ref_sample.xlsx 12행 샘플, scripts/gen_alarm_sample.py)
+- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원, verbose 배치 진행 추적), encoder 싱글톤(Task 1.4 부분 ✅ — base.py + registry.py로 단순화), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인**(pipeline/ — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용), **Milvus retrieval wiring ✅** (retrieval/routing.py + pipeline stub 제거), **멀티턴 history + 약어 컨텍스트 준비 (Task 2.5 부분 ✅** — retrieval/query_rewriter.py, pipeline/prepare_context 노드, API history 필드) 구현됨, **Query Decomposition ✅ (Task 2.4** — retrieval/query_decomposer.py, decompose/decomposed_retrieve 노드, RouteResult.needs_decomposition) 구현됨, **LLM Query Rewriting ✅ (Task 2.5** — retrieval/query_rewriter.py rewrite_query()/QueryRewriteResult, prompts/query_rewrite_system.txt, pipeline/rewrite_query 노드, tests/unit/retrieval/test_query_rewriter.py) 구현됨, **Hybrid Verify Loop ✅ (Task 2.6** — pipeline/tool_call 노드(결정적 전략 fallback + LLM 쿼리 재작성) + pipeline/verify 노드(LLM self-eval 1–5점), use_verify_loop GraphConfig 플래그, prompts/verify.txt + tool_call_rewrite.txt, 최대 3회 retry) 구현됨, **DocxParser 버그픽스 ✅** (이미지+텍스트 혼합 단락 텍스트 보존, 병합셀 비인접 dedup, 한글 slug re.UNICODE, rel_id 중복 이미지 방지), **Alarm Ref Excel parser + AlarmIndex ✅** (parsers/alarm_ref_parser.py — AlarmRecord/parse_alarm_ref_excel, retrieval/alarm_index.py — AlarmIndex 싱글톤 + get_alarm_index, retrieval/routing.py — resolve_alarm_entity() alarm_code 직접 lookup, data/samples/alarm_excel_ref_sample.xlsx 12행 샘플, scripts/gen_alarm_sample.py), **Two-Pass Ingest + Entity Glossary ✅ (Task 1.3/1.6 확장** — scripts/build_entity_glossary.py Pass A pre-scan → dictionary/samsung_entities.json, chunkers/reference_chunker.py 1 record=1 chunk, ingest/chunkers.py dispatch_records(), abbrev_mapper.py load_entity_glossary()+get_all_keywords(), Nodes.create() tag_keywords 실동작)
 
 ---
 
@@ -57,7 +57,7 @@ spar/
 │       ├── api/             # FastAPI 앱 — app.py (엔드포인트, 라우팅)
 │       ├── llm/             # LLM 팩토리/싱글톤/레지스트리 — client, config, factory, registry, fallback, gemini_cli (옵트인 외부 fallback) [→ AGENTS.md]
 │       ├── encoder/         # 임베딩 encoder — base.py (EncoderClient ABC) + registry.py (SentenceTransformerEncoder + get_encoder() 싱글톤)
-│       ├── preprocessing/   # 질의 전처리 — abbrev_mapper.py (Task 1.6 ✅)
+│       ├── preprocessing/   # 질의 전처리 — abbrev_mapper.py (Task 1.6 ✅) — load_entity_glossary(), get_all_keywords() 포함
 │       ├── prompts/         # LLM 프롬프트 파일 저장소 — load_prompt() 헬퍼 + *.txt 템플릿
 │       │                    #   query_rewrite_system.txt — rewrite + classify prompt (Task 2.5)
 │       ├── router/          # 3-layer 라우터 — regex/embedding/llm/hybrid + schemas (Task 2.2) [→ AGENTS.md]
@@ -69,20 +69,21 @@ spar/
 │       │                    #   query_rewriter.py — build_context(), rewrite_query(), QueryRewriteResult (Task 2.5 ✅)
 │       ├── parsers/         # 문서 유형별 파서 — docx_parser.py, parameter_ref_parser.py, counter_ref_parser.py, alarm_ref_parser.py (Task 1.1 ✅ DOCX/Parameter Excel/Counter Excel/Alarm Excel) [→ AGENTS.md]
 │       │   └── extractor/   # PDF 구조 추출 패키지 — pipeline/text/tables/images/font_profile/notes/raw (Task 1.1 ✅ PDF)
-│       ├── chunkers/        # 유형별 청킹 전략 (Task 1.3 — scaffold)
+│       ├── chunkers/        # 유형별 청킹 전략 — reference_chunker.py (Parameter/Counter/Alarm, 1 record=1 chunk) (Task 1.3 부분 ✅)
 │       ├── db/              # Parameter/Counter/Alarm 구조화 DB + Text-to-SQL (Task 3.1~3.2 — scaffold)
 │       ├── kg/              # Knowledge Graph + Text-to-Cypher + GraphRAG (Task 3.3~3.5 — scaffold)
 │       ├── generation/      # citation enforcer, self-verifier, confidence, fallback (Task 4.1~4.5 — scaffold)
 │       ├── agent/           # LangGraph agentic 확장 예비 (Phase 5 — scaffold)
 │       └── eval/            # 골드셋 평가 — metrics.py, run_eval.py (Retrieval), ragas_metrics.py, run_ragas_eval.py (답변품질), run_e2e_eval.py (E2E pipeline→RAGAS 자동화) (Task 1.7.2)
-├── dictionary/                # 약어/동의어 사전 — acronyms.json (Rel-18 2503 entries, Task 1.6 ✅)
+├── dictionary/                # 약어/동의어 사전 — acronyms.json (Rel-18 2503 entries, Task 1.6 ✅) + samsung_entities.json (build_entity_glossary.py 생성, Pass A)
 ├── configs/                 # YAML/JSON 설정 (모델, 인덱스, 라우트 등)
 │   ├── milvus/              # Milvus 연결/컬렉션 설정
 │   └── secrets/             # *.local.yaml — git 제외
 ├── scripts/                 # 일회성 ETL/배치/유틸리티
 │                            #   (init_milvus, serve_vllm, test_api, run_ingest,
 │                            #    convert_pdf_to_md, fetch_tspec_llm, extract_acronyms,
-│                            #    slice_3gpp_intros, gen_goldset, run_router_eval)
+│                            #    slice_3gpp_intros, gen_goldset, run_router_eval,
+│                            #    build_entity_glossary — Pass A pre-scan → samsung_entities.json)
 ├── tests/                   # pytest 단위/통합 테스트
 └── data/                    # 골드셋, 샘플 입력, 추출 산출물 (큰 원본은 git LFS 또는 외부 저장)
     └── samples/             # 공개 가능한 샘플만 추적 — parameter_ref_sample.xlsx, counter_ref_sample.xlsx (RRC/MAC/PHY 13개, 병합 셀)
