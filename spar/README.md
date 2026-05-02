@@ -130,7 +130,7 @@ spar/
 │   ├── kg/               # Knowledge Graph (Task 3.3~3.5 — scaffold)
 │   ├── generation/       # citation, self-verify, confidence, fallback (Task 4.x — scaffold)
 │   ├── agent/            # LangGraph agentic 확장 예비 (Phase 5 — scaffold)
-│   └── eval/             # 골드셋 평가 — metrics.py, run_eval.py (Retrieval), ragas_metrics.py, run_ragas_eval.py (답변품질) (Task 1.7.2 ✅)
+│   └── eval/             # 골드셋 평가 — metrics.py, run_eval.py (Retrieval), ragas_metrics.py, run_ragas_eval.py (답변품질), run_e2e_eval.py (E2E pipeline→RAGAS 자동화) (Task 1.7.2 ✅)
 ├── dictionary/           # 약어/동의어 사전 — acronyms.json (Rel-18 2503 entries, Task 1.6 ✅)
 ├── configs/
 │   └── milvus/           # Milvus 연결/컬렉션 설정

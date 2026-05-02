@@ -74,7 +74,7 @@ spar/
 │       ├── kg/              # Knowledge Graph + Text-to-Cypher + GraphRAG (Task 3.3~3.5 — scaffold)
 │       ├── generation/      # citation enforcer, self-verifier, confidence, fallback (Task 4.1~4.5 — scaffold)
 │       ├── agent/           # LangGraph agentic 확장 예비 (Phase 5 — scaffold)
-│       └── eval/            # 골드셋 평가 — metrics.py, run_eval.py (Retrieval), ragas_metrics.py, run_ragas_eval.py (답변품질) (Task 1.7.2)
+│       └── eval/            # 골드셋 평가 — metrics.py, run_eval.py (Retrieval), ragas_metrics.py, run_ragas_eval.py (답변품질), run_e2e_eval.py (E2E pipeline→RAGAS 자동화) (Task 1.7.2)
 ├── dictionary/                # 약어/동의어 사전 — acronyms.json (Rel-18 2503 entries, Task 1.6 ✅)
 ├── configs/                 # YAML/JSON 설정 (모델, 인덱스, 라우트 등)
 │   ├── milvus/              # Milvus 연결/컬렉션 설정
@@ -126,6 +126,13 @@ make test-cov
   --dataset data/eval_results/ragas_dataset.jsonl \
   --metrics faithfulness,answer_relevancy \
   --output data/eval_results/ragas_eval.json
+
+# E2E 평가 — goldset → pipeline(LLM generate) → RAGAS 지표 한 번에
+.venv/bin/python -m spar.eval.run_e2e_eval \
+  --goldset data/goldsets/retrieval_goldset.jsonl \
+  --config e2e --metrics faithfulness,answer_relevancy \
+  --save-dataset data/eval_results/ragas_dataset.jsonl \
+  --output data/eval_results/e2e_eval.json
 ```
 
 수동 사용 시:
