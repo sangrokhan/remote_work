@@ -10,6 +10,10 @@ _MO_NAME_RE = re.compile(r"\b([A-Z][A-Za-z]{4,}(?:DU|FDD|TDD|Cell|Ran|NR|LTE|SA|
 _PARAM_NAME_RE = re.compile(
     r"\b([a-z][a-zA-Z]{3,}(?:Power|Timer|Threshold|Max|Min|Offset|Hysteresis|Period|Level|Limit))\b"
 )
+# Counter group ID: G-0042, C-123
+_COUNTER_GROUP_ID_RE = re.compile(r"\b([A-Z]-\d{3,5})\b")
+# Counter name: dot-separated uppercase hierarchy (e.g. CELL.UE.MaxConnectedNbr)
+_COUNTER_NAME_RE = re.compile(r"\b([A-Z]{2,8}(?:\.[A-Z][A-Za-z0-9]{1,}){2,})\b")
 _SPEC_NUM_RE = re.compile(
     r"\b(?:3GPP\s+)?TS\s*(\d{2})[\.\s]?(\d{3})\b", re.IGNORECASE
 )
@@ -53,6 +57,24 @@ class RegexRouter:
                 confidence=1.0,
                 layer="regex",
                 entities={"spec_number": f"{m.group(1)}.{m.group(2)}"},
+            )
+
+        m = _COUNTER_GROUP_ID_RE.search(query)
+        if m:
+            return RouteResult(
+                route=Route.STRUCTURED_LOOKUP,
+                confidence=1.0,
+                layer="regex",
+                entities={"mid_group_id": m.group(1)},
+            )
+
+        m = _COUNTER_NAME_RE.search(query)
+        if m:
+            return RouteResult(
+                route=Route.STRUCTURED_LOOKUP,
+                confidence=0.95,
+                layer="regex",
+                entities={"counter_name": m.group(1)},
             )
 
         m = _PARAM_NAME_RE.search(query)
