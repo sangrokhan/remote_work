@@ -168,7 +168,20 @@ def chunk_fixed(
 
 
 def dispatch(text: str, source_doc: str, *, doc_type: str) -> list[Chunk]:
-    """doc_type → 청크 전략 라우팅."""
+    """doc_type → 청크 전략 라우팅 (텍스트 기반 문서)."""
     if doc_type == "spec":
         return chunk_3gpp_sections(text, source_doc=source_doc)
     return chunk_fixed(text, source_doc=source_doc, doc_type=doc_type)
+
+
+def dispatch_records(records: list, source_doc: str, *, doc_type: str) -> list[Chunk]:
+    """doc_type → 청크 전략 라우팅 (Excel record 기반 문서: parameter_ref/counter_ref/alarm_ref)."""
+    from spar.chunkers.reference_chunker import chunk_alarm_ref, chunk_counter_ref, chunk_parameter_ref
+
+    if doc_type == "parameter_ref":
+        return chunk_parameter_ref(records, source_doc=source_doc)
+    if doc_type == "counter_ref":
+        return chunk_counter_ref(records, source_doc=source_doc)
+    if doc_type == "alarm_ref":
+        return chunk_alarm_ref(records, source_doc=source_doc)
+    raise ValueError(f"dispatch_records: unsupported doc_type '{doc_type}'")
