@@ -17,6 +17,7 @@ def _slugify(text: str, max_len: int) -> str:
         return "unnamed"
     slug = re.sub(r"[^\w\s.\-]", "", text)
     slug = re.sub(r"[\s_]+", "-", slug).strip("-")
+    slug = re.sub(r"\.{2,}", "", slug)  # strip .. sequences (path traversal)
     return slug[:max_len] if slug else "unnamed"
 
 
@@ -161,7 +162,11 @@ class DocxParser:
             f.write(f"# source: {source_path.name}\n")
             writer = _csv.writer(f)
             for row in table.rows:
-                writer.writerow([cell.text.strip() for cell in row.cells])
+                writer.writerow([
+                    row.cells[i].text.strip()
+                    for i in range(len(row.cells))
+                    if i == 0 or row.cells[i] is not row.cells[i - 1]
+                ])
 
         placeholder = f"<!-- TABLE: {filename[:-4]} -->"
         lines.append(placeholder)
