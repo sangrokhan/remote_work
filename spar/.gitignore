@@ -60,11 +60,13 @@ configs/secrets/
 *.local.yaml
 *.local.json
 
-# 데이터 (대용량/민감) — data/* 전체 제외, goldsets만 허용
+# 데이터 (대용량/민감) — data/* 전체 제외, goldsets/samples만 허용
 data/*
 !data/.gitkeep
 !data/goldsets
 !data/goldsets/**
+!data/samples
+!data/samples/**
 
 # 모델 캐시
 .cache/
