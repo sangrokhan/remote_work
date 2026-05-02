@@ -62,3 +62,64 @@ def test_default_graph_unchanged_no_verify_nodes():
     node_names = set(graph.get_graph().nodes.keys())
     assert "tool_call" not in node_names
     assert "verify" not in node_names
+
+
+# ============================================================================
+# Tests for _verify_selector routing logic and boundary conditions
+# ============================================================================
+
+
+def test_verify_selector_routes_to_tool_call_when_retry_available():
+    """When score < 3, retry < 3, and strategies remain — route to tool_call."""
+    from langgraph.graph import END
+    from spar.pipeline.graph import _verify_selector
+
+    state = {
+        "verify_score": 1.0,
+        "retry_count": 0,
+        "tried_strategies": ["rag"],
+    }
+    result = _verify_selector(state)
+    assert result == "tool_call"
+
+
+def test_verify_selector_routes_to_end_when_retry_limit_reached():
+    """When retry_count >= 3 — route to END regardless of score."""
+    from langgraph.graph import END
+    from spar.pipeline.graph import _verify_selector
+
+    state = {
+        "verify_score": 1.0,
+        "retry_count": 3,
+        "tried_strategies": ["rag"],
+    }
+    result = _verify_selector(state)
+    assert result == END
+
+
+def test_verify_selector_routes_to_end_when_strategies_exhausted():
+    """When all strategies tried — route to END regardless of score."""
+    from langgraph.graph import END
+    from spar.pipeline.graph import _verify_selector
+
+    state = {
+        "verify_score": 1.0,
+        "retry_count": 0,
+        "tried_strategies": ["rag", "decomposed", "multi_hop", "structured"],
+    }
+    result = _verify_selector(state)
+    assert result == END
+
+
+def test_verify_selector_routes_to_end_when_score_sufficient():
+    """When score >= 3 — route to END regardless of retry count or strategies."""
+    from langgraph.graph import END
+    from spar.pipeline.graph import _verify_selector
+
+    state = {
+        "verify_score": 4.0,
+        "retry_count": 0,
+        "tried_strategies": [],
+    }
+    result = _verify_selector(state)
+    assert result == END
