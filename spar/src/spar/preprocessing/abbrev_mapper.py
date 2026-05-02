@@ -27,6 +27,25 @@ def load_keywords(acronyms: dict) -> set[str]:
     return set(acronyms.get("keywords", {}).keys())
 
 
+_NOISE_PATTERN = re.compile(r"^\d+$|^.{1,2}$")
+
+
+def load_entity_glossary(path: Path) -> dict[str, list[str]]:
+    try:
+        return cast("dict[str, list[str]]", json.loads(path.read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        return {}
+
+
+def get_all_keywords(acronyms: dict, entities: dict[str, list[str]]) -> set[str]:
+    terms: set[str] = set(acronyms.get("global", {}).keys())
+    for values in entities.values():
+        for term in values:
+            if term and not _NOISE_PATTERN.match(term):
+                terms.add(term)
+    return terms
+
+
 def extract_terms(query: str, keywords: set[str]) -> list[str]:
     """쿼리에서 keywords와 일치하는 term 추출. 대소문자 무시, 단어 경계 기준."""
     if not query or not keywords:
