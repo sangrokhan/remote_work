@@ -24,8 +24,8 @@ SAMPLE_PATH = (
 def _make_excel(tmp_path: Path, rows: list[list], headers: list[str] | None = None) -> Path:
     """테스트용 임시 Excel 파일 생성."""
     if headers is None:
-        headers = ["Feature Name", "YANG Path", "Parameter Name",
-                   "Type", "Default", "Min", "Max", "Description"]
+        headers = ["Parameter Name", "YANG Path", "Type",
+                   "Default", "Min", "Max", "Description", "Feature Name"]
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.append(headers)
@@ -43,15 +43,15 @@ def _make_excel(tmp_path: Path, rows: list[list], headers: list[str] | None = No
 class TestBasicParsing:
     def test_sample_file_loads(self):
         result = parse_parameter_ref_excel(SAMPLE_PATH)
-        assert len(result.records) == 10
+        assert len(result.records) == 11
         assert result.skipped_rows == 0
 
     def test_record_fields_populated(self):
         result = parse_parameter_ref_excel(SAMPLE_PATH)
         rec = result.records[0]
-        assert rec.param_name == "hoPrepTimerHO"
+        assert rec.param_name == "handover-preparation-timer"
         assert rec.yang_path == "ManagedElement/GNBCUCPFunction/NRCellCU/HandoverConfig"
-        assert rec.feature_name == "HO"
+        assert rec.feature_name == "FGR-HO0101"
         assert rec.type == "INTEGER"
         assert rec.default == "100"
         assert rec.min == "0"
@@ -60,7 +60,7 @@ class TestBasicParsing:
 
     def test_enumeration_no_min_max(self):
         result = parse_parameter_ref_excel(SAMPLE_PATH)
-        rach_enum = next(r for r in result.records if r.param_name == "powerRampingStep")
+        rach_enum = next(r for r in result.records if r.param_name == "rach-power-ramping-step")
         assert rach_enum.type == "ENUMERATION"
         assert rach_enum.min == ""
         assert rach_enum.max == ""
@@ -68,7 +68,7 @@ class TestBasicParsing:
     def test_all_features_present(self):
         result = parse_parameter_ref_excel(SAMPLE_PATH)
         features = {r.feature_name for r in result.records}
-        assert features == {"HO", "CA", "RACH", "BWP", "TTT"}
+        assert features == {"FGR-HO0101", "FGR-HO0102", "FGR-CA0201", "FGR-RS0101", "FGR-BW0301"}
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +103,9 @@ class TestYangPathHelpers:
 class TestToChunkText:
     def test_chunk_text_contains_key_fields(self):
         rec = ParameterRecord(
-            param_name="hoPrepTimerHO",
+            param_name="handover-preparation-timer",
             yang_path="ManagedElement/GNBCUCPFunction/NRCellCU/HandoverConfig",
-            feature_name="HO",
+            feature_name="FGR-HO0101",
             type="INTEGER",
             default="100",
             min="0",
@@ -113,9 +113,9 @@ class TestToChunkText:
             description="Handover prep timer in ms.",
         )
         text = rec.to_chunk_text()
-        assert "hoPrepTimerHO" in text
+        assert "handover-preparation-timer" in text
         assert "ManagedElement/GNBCUCPFunction" in text
-        assert "HO" in text
+        assert "FGR-HO0101" in text
         assert "default=100" in text
         assert "min=0" in text
         assert "max=1023" in text
@@ -134,29 +134,29 @@ class TestToChunkText:
 class TestHeaderFlexibility:
     def test_alternate_column_names(self, tmp_path):
         p = _make_excel(tmp_path, [
-            ["HO", "ManagedElement/GNBDUFunction/NRCellDU", "testParam",
-             "INTEGER", "10", "0", "100", "Test desc"],
-        ], headers=["Feature", "YANG", "Param Name", "Type", "Default Value", "Minimum", "Maximum", "Desc"])
+            ["test-param", "ManagedElement/GNBDUFunction/NRCellDU", "INTEGER",
+             "10", "0", "100", "Test desc", "FGR-TS0101"],
+        ], headers=["Param Name", "YANG", "Type", "Default Value", "Minimum", "Maximum", "Desc", "Feature"])
         result = parse_parameter_ref_excel(p)
         assert len(result.records) == 1
         rec = result.records[0]
-        assert rec.param_name == "testParam"
-        assert rec.feature_name == "HO"
+        assert rec.param_name == "test-param"
+        assert rec.feature_name == "FGR-TS0101"
         assert rec.min == "0"
 
     def test_header_not_on_first_row(self, tmp_path):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.append(["Some metadata line"])
-        ws.append(["Feature Name", "YANG Path", "Parameter Name",
-                   "Type", "Default", "Min", "Max", "Description"])
-        ws.append(["BWP", "ManagedElement/GNBDUFunction/NRCellDU/BWPConfig",
-                   "bwpTimer", "INTEGER", "100", "0", "2560", "BWP timer"])
+        ws.append(["Parameter Name", "YANG Path", "Type",
+                   "Default", "Min", "Max", "Description", "Feature Name"])
+        ws.append(["bwp-inactivity-timer", "ManagedElement/GNBDUFunction/NRCellDU/BWPConfig",
+                   "INTEGER", "100", "0", "2560", "BWP timer", "FGR-BW0301"])
         p = tmp_path / "offset.xlsx"
         wb.save(p)
         result = parse_parameter_ref_excel(p)
         assert len(result.records) == 1
-        assert result.records[0].param_name == "bwpTimer"
+        assert result.records[0].param_name == "bwp-inactivity-timer"
 
 
 # ---------------------------------------------------------------------------
@@ -166,8 +166,8 @@ class TestHeaderFlexibility:
 class TestEdgeCases:
     def test_skips_row_missing_param_name(self, tmp_path):
         p = _make_excel(tmp_path, [
-            ["HO", "ManagedElement/A/B", "", "INTEGER", "0", "0", "10", "desc"],
-            ["HO", "ManagedElement/A/B", "validParam", "INTEGER", "0", "0", "10", "desc"],
+            ["", "ManagedElement/A/B", "INTEGER", "0", "0", "10", "desc", "FGR-TS0101"],
+            ["valid-param", "ManagedElement/A/B", "INTEGER", "0", "0", "10", "desc", "FGR-TS0101"],
         ])
         result = parse_parameter_ref_excel(p)
         assert len(result.records) == 1
@@ -176,7 +176,7 @@ class TestEdgeCases:
 
     def test_skips_row_missing_yang_path(self, tmp_path):
         p = _make_excel(tmp_path, [
-            ["HO", "", "paramX", "INTEGER", "0", "0", "10", "desc"],
+            ["param-x", "", "INTEGER", "0", "0", "10", "desc", "FGR-TS0101"],
         ])
         result = parse_parameter_ref_excel(p)
         assert len(result.records) == 0
@@ -184,9 +184,9 @@ class TestEdgeCases:
 
     def test_skips_entirely_empty_rows(self, tmp_path):
         p = _make_excel(tmp_path, [
-            ["HO", "ManagedElement/A/B", "p1", "INTEGER", "0", "0", "10", "d"],
+            ["param-one", "ManagedElement/A/B", "INTEGER", "0", "0", "10", "d", "FGR-TS0101"],
             [None, None, None, None, None, None, None, None],
-            ["CA", "ManagedElement/A/C", "p2", "INTEGER", "1", "0", "10", "d"],
+            ["param-two", "ManagedElement/A/C", "INTEGER", "1", "0", "10", "d", "FGR-TS0102"],
         ])
         result = parse_parameter_ref_excel(p)
         assert len(result.records) == 2
