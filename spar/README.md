@@ -144,30 +144,28 @@ spar/
 
 ---
 
-## 골드셋 QA 생성
+## 골드셋 생성
 
-3GPP `.md` 문서에서 Codex CLI로 질문-답변 세트를 자동 생성한다.  
-상세 가이드: [`docs/goldset-qa-generation-guide.md`](docs/goldset-qa-generation-guide.md)
+3GPP `.md` 문서에서 Codex CLI(→ Gemini fallback)로 QA+router 통합 골드셋을 자동 생성한다.  
+7개 QA 타입 → 6개 라우트 전체 커버 (`definition_explain`, `default_rag`, `diagnostic`, `procedural`, `comparative`, `structured_lookup`)
 
 ```bash
 # 사전 조건: Codex 로그인
 codex whoami  # 미로그인 시: codex login
 
 # 파일 지정
-python scripts/gen_goldset_qa.py \
-  --input-file data/tspec-llm/3GPP-clean/Rel-18/29_series/29502-i40.md \
-  --output data/goldsets/retrieval_goldset.jsonl
+python scripts/gen_goldset.py \
+  --input-file data/tspec-llm/3GPP-clean/Rel-18/29_series/29502-i40.md
 
-# 폴더 지정 (재귀 처리)
-python scripts/gen_goldset_qa.py \
+# 폴더 지정 (재귀 처리, 이어쓰기)
+python scripts/gen_goldset.py \
   --input-dir data/tspec-llm/3GPP-clean/Rel-18/29_series \
-  --output data/goldsets/retrieval_goldset.jsonl \
   --append
 ```
 
-출력 형식 (`data/goldsets/retrieval_goldset.jsonl`):
+출력 형식 (`data/goldsets/goldset.jsonl`):
 ```jsonl
-{"query_id": "Q0001", "query": "SMF가 PDU 세션 수립 시 호출하는 서비스는?", "answer": "Nsmf_PDUSession_CreateSMContext", "type": "lookup", "section": "5.2.2.1", "source_doc": "29502-i40.md", "spec_number": "29.502", "release": "Rel-18"}
+{"query_id": "Q0001", "query": "3GPP TS 29.554에서 BDT란?", "answer": "...", "type": "terminology", "section": "3.1", "source_doc": "29554-i10.md", "spec_number": "29.554", "release": "Rel-18", "expected_route": "definition_explain", "needs_decomposition": false}
 ```
 
 ---
