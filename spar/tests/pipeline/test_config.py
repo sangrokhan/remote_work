@@ -58,3 +58,19 @@ def test_sparstate_has_performance_fields():
     assert s["gold_chunks"] == ["section_4.1"]
     assert s["gold_answer"] == "The answer is 5."
     assert s["eval_metrics"]["recall_at_5"] == 1.0
+
+
+def test_sparstate_has_verify_loop_fields():
+    s: SparState = {
+        "query": "test",
+        "retry_count": 0,
+        "tried_strategies": ["rag"],
+        "verify_score": 2.5,
+        "verify_reason": "missing parameter details",
+        "improved_query": "what is the default value of maxUE parameter",
+    }
+    assert s["retry_count"] == 0
+    assert s["tried_strategies"] == ["rag"]
+    assert s["verify_score"] == 2.5
+    assert s["verify_reason"] == "missing parameter details"
+    assert s["improved_query"] == "what is the default value of maxUE parameter"
