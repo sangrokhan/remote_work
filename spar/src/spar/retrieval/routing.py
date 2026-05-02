@@ -43,3 +43,28 @@ def build_expr(
         clauses.append("(" + " || ".join(term_clauses) + ")")
 
     return " && ".join(clauses) if clauses else None
+
+
+def resolve_alarm_entity(entities: dict) -> dict | None:
+    """Resolve an extracted ``alarm_code`` entity against AlarmIndex.
+
+    Returns a dict with keys ``alarm_id``, ``alarm_name``, ``severity``,
+    ``category``, ``module``, ``pdf_ref``, ``keywords`` if a match is
+    found; otherwise ``None``.
+
+    Structured-lookup shortcut used before vector search when the regex
+    router has identified an exact alarm code.
+    """
+    code = entities.get("alarm_code") if entities else None
+    if not code:
+        return None
+
+    from spar.retrieval.alarm_index import get_alarm_index
+
+    rec = get_alarm_index().lookup(code)
+    if rec is None:
+        return None
+
+    payload = rec.to_dict()
+    payload["keywords"] = rec.to_keywords()
+    return payload
