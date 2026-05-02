@@ -74,3 +74,18 @@ def test_sparstate_has_verify_loop_fields():
     assert s["verify_score"] == 2.5
     assert s["verify_reason"] == "missing parameter details"
     assert s["improved_query"] == "what is the default value of maxUE parameter"
+
+
+def test_graphconfig_has_verify_loop_flag():
+    cfg = GraphConfig(name="x")
+    assert cfg.use_verify_loop is False
+
+
+def test_preset_verify_loop_exists():
+    cfg = next((c for c in PRESET_CONFIGS if c.name == "verify_loop"), None)
+    assert cfg is not None
+    assert cfg.use_query_expansion is True
+    assert cfg.use_prepare_context is True
+    assert cfg.use_reranker is True
+    assert cfg.use_real_generate is True
+    assert cfg.use_verify_loop is True

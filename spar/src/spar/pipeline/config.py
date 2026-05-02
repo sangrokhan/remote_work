@@ -10,6 +10,7 @@ class GraphConfig:
     use_prepare_context: bool = False
     use_reranker: bool = False
     use_real_generate: bool = False
+    use_verify_loop: bool = False
 
 
 PRESET_CONFIGS: list[GraphConfig] = [
@@ -29,5 +30,13 @@ PRESET_CONFIGS: list[GraphConfig] = [
         use_prepare_context=True,
         use_reranker=True,
         use_real_generate=True,
+    ),
+    GraphConfig(
+        name="verify_loop",
+        use_query_expansion=True,
+        use_prepare_context=True,
+        use_reranker=True,
+        use_real_generate=True,
+        use_verify_loop=True,
     ),
 ]
