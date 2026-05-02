@@ -26,6 +26,7 @@ from spar.retrieval.routing import build_expr, doc_types_for_route
 from spar.router.hybrid_router import HybridRouter
 
 _ACRONYMS_PATH = Path(__file__).parent.parent.parent.parent.parent / "dictionary" / "acronyms.json"
+_FALLBACK_ORDER = ["decomposed", "multi_hop", "structured", "rag"]
 
 
 def _append_trace(state: SparState, node: str) -> list[str]:
@@ -327,4 +328,77 @@ class Nodes:
             "verify_reason": reason,
             "node_trace": _append_trace(state, "verify"),
             "node_timings": _record_timing(state, "verify", elapsed),
+        }
+
+    async def tool_call(self, state: SparState) -> SparState:
+        t0 = time.monotonic()
+        tried = list(state.get("tried_strategies") or [])
+        retry_count = state.get("retry_count", 0)
+
+        next_strategy = next(
+            (s for s in _FALLBACK_ORDER if s not in tried),
+            None,
+        )
+
+        if next_strategy is None:
+            elapsed = (time.monotonic() - t0) * 1000
+            return {
+                **state,
+                "node_trace": _append_trace(state, "tool_call"),
+                "node_timings": _record_timing(state, "tool_call", elapsed),
+            }
+
+        # rewrite query using verify_reason
+        original_query = state.get("rewritten_query") or state.get("expanded_query") or state["query"]
+        verify_reason = state.get("verify_reason") or ""
+
+        if self.llm is not None and verify_reason:
+            rewrite_prompt = load_prompt("tool_call_rewrite.txt").format(
+                query=original_query,
+                reason=verify_reason,
+            )
+            improved_query = await self.llm.chat(
+                [{"role": "user", "content": rewrite_prompt}],
+                max_tokens=128,
+            )
+            improved_query = improved_query.strip()
+        else:
+            improved_query = original_query
+
+        # execute chosen strategy with improved query (router bypass)
+        sub_state: SparState = {
+            **state,
+            "query": improved_query,
+            "improved_query": improved_query,
+        }
+
+        strategy_map = {
+            "decomposed": self.decomposed_retrieve,
+            "multi_hop": self.multi_hop_retrieve,
+            "structured": self.structured_retrieve,
+            "rag": self.rag_retrieve,
+        }
+        retrieve_fn = strategy_map[next_strategy]
+        retrieved = await retrieve_fn(sub_state)
+
+        # merge chunks (dedup by id or text prefix)
+        existing = state.get("raw_chunks") or []
+        new_chunks = retrieved.get("raw_chunks") or []
+        seen: set[str] = {c.get("id") or c.get("text", "")[:120] for c in existing}
+        merged = list(existing)
+        for chunk in new_chunks:
+            key = chunk.get("id") or chunk.get("text", "")[:120]
+            if key not in seen:
+                seen.add(key)
+                merged.append(chunk)
+
+        elapsed = (time.monotonic() - t0) * 1000
+        return {
+            **state,
+            "raw_chunks": merged,
+            "improved_query": improved_query,
+            "tried_strategies": [*tried, next_strategy],
+            "retry_count": retry_count + 1,
+            "node_trace": _append_trace(state, "tool_call"),
+            "node_timings": _record_timing(state, "tool_call", elapsed),
         }
