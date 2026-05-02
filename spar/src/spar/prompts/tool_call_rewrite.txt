@@ -1,0 +1,10 @@
+You are improving a search query based on feedback about why a previous answer was insufficient.
+
+Original query: {query}
+
+Reason the previous answer was insufficient: {reason}
+
+Write an improved search query that addresses the gap identified in the reason.
+The improved query should be specific, focused, and likely to retrieve the missing information.
+
+Respond with ONLY the improved query text (no explanation, no quotes).

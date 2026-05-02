@@ -1,0 +1,18 @@
+You are evaluating whether an answer sufficiently addresses a question.
+
+Question: {query}
+
+Answer: {answer}
+
+Contexts used (summarized):
+{contexts_summary}
+
+Rate the answer on a scale of 1-5:
+1 = completely insufficient (missing key information, wrong, or irrelevant)
+2 = mostly insufficient (touches on topic but lacks critical details)
+3 = adequate (answers the question but could be more complete)
+4 = good (answers clearly with relevant detail)
+5 = excellent (complete, accurate, well-supported by context)
+
+Respond ONLY with valid JSON (no markdown, no explanation):
+{{"score": <integer 1-5>, "reason": "<one sentence explaining the score>"}}
