@@ -16,8 +16,9 @@ from spar.preprocessing.abbrev_mapper import (
     build_reverse_index,
     expand_query,
     extract_terms,
+    get_all_keywords,
     load_acronyms,
-    load_keywords,
+    load_entity_glossary,
 )
 from spar.reranker.client import CrossEncoderClient
 from spar.retrieval.milvus_client import SparMilvusClient
@@ -27,6 +28,7 @@ from spar.retrieval.routing import build_expr, doc_types_for_route
 from spar.router.hybrid_router import HybridRouter
 
 _ACRONYMS_PATH = Path(__file__).parent.parent.parent.parent.parent / "dictionary" / "acronyms.json"
+_ENTITIES_PATH = Path(__file__).parent.parent.parent.parent.parent / "dictionary" / "samsung_entities.json"
 _FALLBACK_ORDER = ["decomposed", "multi_hop", "structured", "rag"]
 
 
@@ -70,10 +72,10 @@ class Nodes:
         if path.exists():
             acronyms = load_acronyms(path)
             reverse_index = build_reverse_index(acronyms)
-            keywords = load_keywords(acronyms)
         else:
             acronyms, reverse_index = {}, {}
-            keywords = set()
+        entities = load_entity_glossary(_ENTITIES_PATH)
+        keywords = get_all_keywords(acronyms, entities)
         return cls(
             router=router,
             reranker=reranker,
