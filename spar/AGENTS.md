@@ -66,7 +66,7 @@ spar/
 │       ├── reranker/        # CrossEncoderClient + 싱글톤 레지스트리 — client, config, factory, registry (Task 1.5)
 │       ├── retrieval/       # Milvus 클라이언트, hybrid search, Route→doc_type 매핑, query_rewriter, query_decomposer, hyde, multi_query (milvus_client.py, routing.py, query_rewriter.py, query_decomposer.py, hyde.py, multi_query.py) (Task 1.4~1.5, 2.4~2.7)
 │       │                    #   query_rewriter.py — build_context(), rewrite_query(), QueryRewriteResult (Task 2.5 ✅)
-│       ├── parsers/         # 문서 유형별 PDF/텍스트 파서 (Task 1.1 — scaffold)
+│       ├── parsers/         # 문서 유형별 파서 — docx_parser.py (DocxParser: heading/table/image 추출), docx_config.py (DocxParseConfig) (Task 1.1 ✅ DOCX)
 │       ├── chunkers/        # 유형별 청킹 전략 (Task 1.3 — scaffold)
 │       ├── db/              # Parameter/Counter/Alarm 구조화 DB + Text-to-SQL (Task 3.1~3.2 — scaffold)
 │       ├── kg/              # Knowledge Graph + Text-to-Cypher + GraphRAG (Task 3.3~3.5 — scaffold)

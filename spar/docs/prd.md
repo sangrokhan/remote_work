@@ -29,13 +29,14 @@
 Samsung RAN 문서는 형태가 매우 다양하므로, 유형별 분리 처리가 필수.
 
 - [ ] 문서 유형 정의 (Parameter Reference / Counter Reference / Alarm Reference / Feature Description / MOP / Installation Guide / Release Notes / **spec**(3GPP))
-- [ ] 각 유형별 PDF/문서 파서 개발
+- [x] 각 유형별 PDF/문서 파서 개발 (Word .docx — DocxParser)
   - 표 추출: `pdfplumber`, `camelot`, 또는 `unstructured` 라이브러리
   - 섹션 헤더 추출: 목차 기반 또는 폰트 크기 기반
 - [x] PDF→Markdown 변환 CLI 스켈레톤 (`scripts/convert_pdf_to_md.py`, per-file 에러 격리)
 - [x] 3GPP TSpec-LLM fetcher (`scripts/fetch_tspec_llm.py`, smoke test 포함)
 - [ ] OCR이 필요한 스캔 문서는 별도 처리 (Tesseract, PaddleOCR)
-- [ ] **산출물**: `parsers/` 디렉토리, 유형별 파서 모듈
+- [x] **산출물**: `parsers/` 디렉토리, 유형별 파서 모듈
+- [x] **산출물**: `parsers/` 디렉토리 — `docx_parser.py` (DocxParser), `docx_config.py` (DocxParseConfig)
 - 추가 산출물: `scripts/convert_pdf_to_md.py`, `scripts/fetch_tspec_llm.py`
 
 ### Task 1.2 — 메타데이터 스키마 정의 및 부착
