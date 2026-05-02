@@ -15,8 +15,8 @@ from spar.parsers.docx_config import DocxParseConfig
 def _slugify(text: str, max_len: int) -> str:
     if not text.strip():
         return "unnamed"
-    slug = re.sub(r"[^\w\s.\-]", "", text)
-    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
+    slug = re.sub(r"[^\w\s.\-]", "", text, flags=re.UNICODE)
+    slug = re.sub(r"[\s_]+", "-", slug, flags=re.UNICODE).strip("-")
     slug = re.sub(r"\.{2,}", "", slug)  # strip .. sequences (path traversal)
     return slug[:max_len] if slug else "unnamed"
 
@@ -66,6 +66,7 @@ class DocxParser:
         section_path: list[str] = []
         table_seq: dict[str, int] = {}
         image_seq: dict[str, int] = {}
+        saved_rel_ids: dict[str, str] = {}  # rel_id -> filename (dedup same image)
         lines: list[str] = []
         extracted_tables: list[ExtractedTable] = []
         extracted_images: list[ExtractedImage] = []
@@ -76,7 +77,7 @@ class DocxParser:
             if tag == "p":
                 para = docx.text.paragraph.Paragraph(child, doc)
                 self._handle_paragraph(
-                    para, section_path, table_seq, image_seq,
+                    para, section_path, table_seq, image_seq, saved_rel_ids,
                     lines, extracted_images, images_dir, doc, docx_path,
                 )
             elif tag == "tbl":
@@ -101,6 +102,7 @@ class DocxParser:
         section_path: list[str],
         table_seq: dict[str, int],
         image_seq: dict[str, int],
+        saved_rel_ids: dict[str, str],
         lines: list[str],
         extracted_images: list[ExtractedImage],
         images_dir: Path,
@@ -131,10 +133,9 @@ class DocxParser:
         if blips:
             for rel_id in blips:
                 self._save_image(
-                    rel_id, doc, section_path, image_seq,
+                    rel_id, doc, section_path, image_seq, saved_rel_ids,
                     extracted_images, images_dir, lines, docx_path,
                 )
-            return
 
         text = para.text.strip()
         if text:
@@ -162,11 +163,14 @@ class DocxParser:
             f.write(f"# source: {source_path.name}\n")
             writer = _csv.writer(f)
             for row in table.rows:
-                writer.writerow([
-                    row.cells[i].text.strip()
-                    for i in range(len(row.cells))
-                    if i == 0 or row.cells[i] is not row.cells[i - 1]
-                ])
+                seen_tcs: set[int] = set()
+                row_cells: list[str] = []
+                for cell in row.cells:
+                    tc_id = id(cell._tc)
+                    if tc_id not in seen_tcs:
+                        seen_tcs.add(tc_id)
+                        row_cells.append(cell.text.strip())
+                writer.writerow(row_cells)
 
         placeholder = f"<!-- TABLE: {filename[:-4]} -->"
         lines.append(placeholder)
@@ -180,11 +184,16 @@ class DocxParser:
         doc,
         section_path: list[str],
         image_seq: dict[str, int],
+        saved_rel_ids: dict[str, str],
         extracted_images: list[ExtractedImage],
         images_dir: Path,
         lines: list[str],
         docx_path: Path,
     ) -> None:
+        if rel_id in saved_rel_ids:
+            lines.append(f"<!-- IMAGE: {saved_rel_ids[rel_id]} -->")
+            return
+
         try:
             image_part = doc.part.related_parts[rel_id]
         except KeyError:
@@ -203,6 +212,7 @@ class DocxParser:
             f"section: {self._section_key(section_path)}\nseq: {seq}\n",
             encoding="utf-8",
         )
+        saved_rel_ids[rel_id] = filename
         lines.append(f"<!-- IMAGE: {filename} -->")
         extracted_images.append(
             ExtractedImage(
