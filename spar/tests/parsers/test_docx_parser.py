@@ -65,7 +65,6 @@ class TestParseResult:
 
 
 import io
-from spar.parsers.docx_config import DocxParseConfig
 from spar.parsers.docx_parser import DocxParser
 
 
