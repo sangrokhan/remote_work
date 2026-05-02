@@ -1,3 +1,4 @@
+"""LangGraph node implementations: preprocess → rewrite → route → retrieve → rerank → generate → verify → tool_call."""
 from __future__ import annotations
 
 import asyncio

@@ -1,3 +1,4 @@
+"""3-layer query router: Regex (fast-path) → Embedding (centroid cosine) → LLM (fallback)."""
 from __future__ import annotations
 
 from spar.encoder.base import EncoderClient

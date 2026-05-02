@@ -1,3 +1,4 @@
+"""Image/figure extraction: clusters drawing objects by proximity to identify diagram bounding boxes in PDFs."""
 from __future__ import annotations
 
 from functools import lru_cache

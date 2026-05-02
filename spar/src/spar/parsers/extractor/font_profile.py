@@ -1,3 +1,4 @@
+"""Font profile builder: collects per-document font size/style statistics used for heading-level classification."""
 from __future__ import annotations
 
 import csv

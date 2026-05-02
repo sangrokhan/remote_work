@@ -1,3 +1,4 @@
+"""Top-level PDF extraction orchestrator: coordinates text, table, image, and notes extraction into structured output."""
 from __future__ import annotations
 
 from collections import Counter

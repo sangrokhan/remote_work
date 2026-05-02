@@ -1,3 +1,4 @@
+"""Text block extraction: font-metric heading detection and watermark/boilerplate filtering via pdfplumber."""
 from __future__ import annotations
 
 from collections import Counter

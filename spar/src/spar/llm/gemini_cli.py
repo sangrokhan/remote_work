@@ -1,3 +1,4 @@
+"""Headless Gemini CLI adapter — last-resort fallback for dev/external environments (disabled by default)."""
 from __future__ import annotations
 
 import asyncio

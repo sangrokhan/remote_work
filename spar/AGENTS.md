@@ -55,19 +55,19 @@ spar/
 │   └── spar/                # 단일 최상위 패키지
 │       ├── __init__.py
 │       ├── api/             # FastAPI 앱 — app.py (엔드포인트, 라우팅)
-│       ├── llm/             # LLM 팩토리/싱글톤/레지스트리 — client, config, factory, registry, fallback, gemini_cli (옵트인 외부 fallback)
+│       ├── llm/             # LLM 팩토리/싱글톤/레지스트리 — client, config, factory, registry, fallback, gemini_cli (옵트인 외부 fallback) [→ AGENTS.md]
 │       ├── encoder/         # 임베딩 encoder — base.py (EncoderClient ABC) + registry.py (SentenceTransformerEncoder + get_encoder() 싱글톤)
 │       ├── preprocessing/   # 질의 전처리 — abbrev_mapper.py (Task 1.6 ✅)
 │       ├── prompts/         # LLM 프롬프트 파일 저장소 — load_prompt() 헬퍼 + *.txt 템플릿
 │       │                    #   query_rewrite_system.txt — rewrite + classify prompt (Task 2.5)
-│       ├── router/          # 3-layer 라우터 — regex/embedding/llm/hybrid + schemas (Task 2.2)
+│       ├── router/          # 3-layer 라우터 — regex/embedding/llm/hybrid + schemas (Task 2.2) [→ AGENTS.md]
 │       ├── ingest/          # md-aware/fixed 청커 + sentence-transformers embedder (Task 1.1/1.3/1.4 — 부분)
-│       ├── pipeline/        # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph() (Phase 5 조기 도입)
+│       ├── pipeline/        # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph() (Phase 5 조기 도입) [→ AGENTS.md]
 │       ├── reranker/        # CrossEncoderClient + 싱글톤 레지스트리 — client, config, factory, registry (Task 1.5)
-│       ├── retrieval/       # Milvus 클라이언트, hybrid search, Route→doc_type 매핑, query_rewriter, query_decomposer, hyde, multi_query, alarm_index (milvus_client.py, routing.py, query_rewriter.py, query_decomposer.py, hyde.py, multi_query.py, alarm_index.py) (Task 1.4~1.5, 2.4~2.7)
+│       ├── retrieval/       # Milvus 클라이언트, hybrid search, Route→doc_type 매핑, query_rewriter, query_decomposer, hyde, multi_query, alarm_index (milvus_client.py, routing.py, query_rewriter.py, query_decomposer.py, hyde.py, multi_query.py, alarm_index.py) (Task 1.4~1.5, 2.4~2.7) [→ AGENTS.md]
 │       │                    #   alarm_index.py — AlarmIndex 싱글톤 (alarm_id 직접 lookup, search_by_name)
 │       │                    #   query_rewriter.py — build_context(), rewrite_query(), QueryRewriteResult (Task 2.5 ✅)
-│       ├── parsers/         # 문서 유형별 파서 — docx_parser.py, parameter_ref_parser.py, counter_ref_parser.py, alarm_ref_parser.py (Task 1.1 ✅ DOCX/Parameter Excel/Counter Excel/Alarm Excel)
+│       ├── parsers/         # 문서 유형별 파서 — docx_parser.py, parameter_ref_parser.py, counter_ref_parser.py, alarm_ref_parser.py (Task 1.1 ✅ DOCX/Parameter Excel/Counter Excel/Alarm Excel) [→ AGENTS.md]
 │       │   └── extractor/   # PDF 구조 추출 패키지 — pipeline/text/tables/images/font_profile/notes/raw (Task 1.1 ✅ PDF)
 │       ├── chunkers/        # 유형별 청킹 전략 (Task 1.3 — scaffold)
 │       ├── db/              # Parameter/Counter/Alarm 구조화 DB + Text-to-SQL (Task 3.1~3.2 — scaffold)

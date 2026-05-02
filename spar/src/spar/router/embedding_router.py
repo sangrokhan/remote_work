@@ -1,3 +1,4 @@
+"""Layer-2 router: maps queries to routes via cosine similarity against per-route centroid embeddings."""
 from __future__ import annotations
 
 import numpy as np

@@ -1,3 +1,4 @@
+"""Custom retrieval/generation metrics: hit-rate, MRR, BLEU, ROUGE, exact-match computed without external deps."""
 from __future__ import annotations
 
 import re

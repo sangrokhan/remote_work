@@ -1,3 +1,4 @@
+"""LLM-based query decomposer: splits complex queries into up to 4 sub-questions for multi-hop retrieval."""
 from __future__ import annotations
 
 import json

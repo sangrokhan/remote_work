@@ -1,3 +1,4 @@
+"""Debug utilities: renders extraction results as annotated HTML/JSON for visual inspection during development."""
 from __future__ import annotations
 
 from collections import Counter

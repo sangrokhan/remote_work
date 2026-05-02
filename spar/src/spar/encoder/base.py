@@ -1,3 +1,4 @@
+"""EncoderClient ABC: common interface for dense embedding models (encode list[str] → ndarray)."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

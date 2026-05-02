@@ -1,3 +1,4 @@
+"""Acronym/abbreviation mapper: loads acronym dictionary and expands queries with full-form equivalents."""
 from __future__ import annotations
 
 import json

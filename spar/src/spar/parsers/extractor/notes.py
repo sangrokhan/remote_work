@@ -1,3 +1,4 @@
+"""Note/callout extraction: identifies NOTE/WARNING/CAUTION blocks and attaches them to the nearest text section."""
 from __future__ import annotations
 
 import re

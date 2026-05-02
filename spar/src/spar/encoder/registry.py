@@ -1,3 +1,4 @@
+"""Process-level encoder client registry; lazy-initialises and caches the configured EncoderClient."""
 from __future__ import annotations
 
 import asyncio

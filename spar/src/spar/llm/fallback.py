@@ -1,3 +1,4 @@
+"""LLMBackend protocol and FallbackLLMClient: tries primaries once then retries last client with exponential backoff."""
 from __future__ import annotations
 
 import asyncio

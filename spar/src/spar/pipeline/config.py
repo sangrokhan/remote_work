@@ -1,3 +1,4 @@
+"""GraphConfig dataclass and PRESET_CONFIGS defining named pipeline capability tiers (baseline → verify_loop)."""
 from __future__ import annotations
 
 from dataclasses import dataclass

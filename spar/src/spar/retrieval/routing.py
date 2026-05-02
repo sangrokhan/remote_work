@@ -1,3 +1,4 @@
+"""Maps RouteResult to target doc_types and builds Milvus filter expressions (product/release/keyword clauses)."""
 from __future__ import annotations
 
 from spar.router.schemas import Route, RouteResult

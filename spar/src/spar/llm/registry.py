@@ -1,3 +1,4 @@
+"""Process-level LLM client registry; returns cached LLMBackend per role, initialised on first access."""
 from __future__ import annotations
 
 import asyncio

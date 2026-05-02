@@ -1,3 +1,4 @@
+"""Reranker settings loaded from environment variables (endpoint URL, model, score threshold)."""
 from __future__ import annotations
 
 from pathlib import Path

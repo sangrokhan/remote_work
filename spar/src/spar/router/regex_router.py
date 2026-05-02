@@ -1,3 +1,4 @@
+"""Layer-1 regex router: extracts MO names, alarm codes, counter IDs, param names, spec numbers for fast routing."""
 from __future__ import annotations
 
 import re

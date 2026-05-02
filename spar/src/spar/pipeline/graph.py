@@ -1,4 +1,4 @@
-# src/spar/pipeline/graph.py
+"""LangGraph StateGraph builder; wires Nodes into the RAG pipeline based on GraphConfig feature flags."""
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,3 +1,4 @@
+"""Async cross-encoder reranker client: calls the reranker HTTP endpoint to score query-chunk pairs."""
 from __future__ import annotations
 
 import httpx

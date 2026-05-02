@@ -1,3 +1,4 @@
+"""Term tagger: annotates ingested chunks with matched acronym/keyword tags for Milvus keyword filtering."""
 from __future__ import annotations
 
 import re

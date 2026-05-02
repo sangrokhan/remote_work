@@ -1,3 +1,4 @@
+"""Shared geometry helpers (bbox overlap, merge, clamp) and text-cleaning utilities for all extractor sub-modules."""
 from __future__ import annotations
 
 import math

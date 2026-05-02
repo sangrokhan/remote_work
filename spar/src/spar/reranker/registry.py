@@ -1,3 +1,4 @@
+"""Process-level reranker client registry; returns cached CrossEncoderClient, initialised on first access."""
 from __future__ import annotations
 
 import asyncio

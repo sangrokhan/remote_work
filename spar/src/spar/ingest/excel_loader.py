@@ -1,3 +1,4 @@
+"""Excel document loader: reads structured Samsung reference spreadsheets and emits chunk-ready JSON records."""
 from __future__ import annotations
 
 import json

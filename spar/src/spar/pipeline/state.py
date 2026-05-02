@@ -1,3 +1,4 @@
+"""SparState TypedDict: shared mutable state flowing through all LangGraph pipeline nodes."""
 from __future__ import annotations
 
 from typing import Any, TypedDict

@@ -1,3 +1,4 @@
+"""RAGAS-based evaluation runner: computes faithfulness, answer relevance, and context precision via LLM judges."""
 from __future__ import annotations
 
 import asyncio

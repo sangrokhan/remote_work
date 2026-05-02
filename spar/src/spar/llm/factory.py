@@ -1,3 +1,4 @@
+"""Factory that builds LLMBackend instances for MAIN/ROUTER roles, optionally wrapping with Gemini fallback."""
 from __future__ import annotations
 
 from enum import Enum

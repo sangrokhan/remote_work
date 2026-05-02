@@ -1,3 +1,4 @@
+"""DOCX parser: extracts structured text sections and tables from Samsung RAN Word documents via python-docx."""
 from __future__ import annotations
 
 import csv as _csv

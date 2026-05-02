@@ -1,3 +1,4 @@
+"""Table extraction with cross-page merging: detects continuation rows and stitches split tables from pdfplumber."""
 from __future__ import annotations
 
 import re

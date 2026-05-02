@@ -1,3 +1,4 @@
+"""DOCX parser configuration: heading styles, table column mappings, and output path settings."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

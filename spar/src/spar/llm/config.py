@@ -1,3 +1,4 @@
+"""LLM settings loaded from environment variables / .env (main + router endpoints, Gemini fallback toggle)."""
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict

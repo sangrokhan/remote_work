@@ -1,3 +1,4 @@
+"""Layer-3 LLM router: asks the router-model to classify the query when regex and embedding layers miss."""
 from __future__ import annotations
 
 import json

@@ -1,3 +1,4 @@
+"""Raw page extraction: dumps pdfplumber page data (words, chars, rects) for debugging and font profiling."""
 from __future__ import annotations
 
 import base64

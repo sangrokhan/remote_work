@@ -1,3 +1,4 @@
+"""Route enum (6 routes) and RouteResult dataclass shared across all router layers."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
