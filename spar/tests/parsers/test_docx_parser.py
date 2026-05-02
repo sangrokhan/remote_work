@@ -182,3 +182,53 @@ class TestDocxParserTables:
         assert result.tables[1].seq == 1
         assert "Sec-A" in result.tables[0].path.name
         assert "Sec-B" in result.tables[1].path.name
+
+
+class TestDocxParserImages:
+    # Minimal valid 1x1 PNG bytes (no Pillow needed)
+    _MINIMAL_PNG = bytes([
+        0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
+        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x01,0x08,0x02,0x00,0x00,0x00,0x90,0x77,0x53,
+        0xDE,0x00,0x00,0x00,0x0C,0x49,0x44,0x41,0x54,0x08,0xD7,0x63,0xF8,0xCF,0xC0,0x00,
+        0x00,0x00,0x02,0x00,0x01,0xE2,0x21,0xBC,0x33,0x00,0x00,0x00,0x00,0x49,0x45,0x4E,
+        0x44,0xAE,0x42,0x60,0x82,
+    ])
+
+    def test_image_file_created(self, tmp_path) -> None:
+        def setup(doc):
+            doc.add_heading("Diagrams", level=1)
+            doc.add_picture(io.BytesIO(self._MINIMAL_PNG))
+
+        path = _make_docx(tmp_path, setup)
+        cfg = DocxParseConfig(output_dir=tmp_path)
+        result = DocxParser(cfg).parse(path)
+
+        assert len(result.images) == 1
+        img_path = result.images[0].path
+        assert img_path.exists()
+        assert "Fig_Diagrams_1" in img_path.name
+
+    def test_image_meta_file_created(self, tmp_path) -> None:
+        def setup(doc):
+            doc.add_heading("Diagrams", level=1)
+            doc.add_picture(io.BytesIO(self._MINIMAL_PNG))
+
+        path = _make_docx(tmp_path, setup)
+        cfg = DocxParseConfig(output_dir=tmp_path)
+        result = DocxParser(cfg).parse(path)
+
+        meta_path = Path(str(result.images[0].path) + ".meta")
+        assert meta_path.exists()
+        content = meta_path.read_text(encoding="utf-8")
+        assert "section: Diagrams" in content
+        assert "seq: 1" in content
+
+    def test_image_placeholder_in_markdown(self, tmp_path) -> None:
+        def setup(doc):
+            doc.add_heading("Diagrams", level=1)
+            doc.add_picture(io.BytesIO(self._MINIMAL_PNG))
+
+        path = _make_docx(tmp_path, setup)
+        cfg = DocxParseConfig(output_dir=tmp_path)
+        result = DocxParser(cfg).parse(path)
+        assert "<!-- IMAGE: Fig_Diagrams_1" in result.markdown
