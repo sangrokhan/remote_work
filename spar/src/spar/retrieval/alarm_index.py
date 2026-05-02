@@ -7,7 +7,7 @@ from pathlib import Path
 from spar.parsers.alarm_ref_parser import AlarmRecord, parse_alarm_ref_excel
 
 _DEFAULT_SAMPLE = Path("data/samples/alarm_excel_ref_sample.xlsx")
-_SINGLETON: "AlarmIndex | None" = None
+_SINGLETON: AlarmIndex | None = None
 
 
 class AlarmIndex:
