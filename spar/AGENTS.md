@@ -11,7 +11,7 @@
 - **목적**: Samsung 단일 벤더(LTE+NR) 환경의 내부 문서(파라미터/카운터/알람/MOP/Feature/Release Notes 등)에 대한 자연어 질의응답 시스템
 - **운영 환경**: 온프레미스, 영어 응답, 정확성 최우선 (hallucination 최소화)
 - **상위 로드맵**: `docs/prd.md`의 Phase 0 ~ Phase 5 + INF 작업 참조
-- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원, verbose 배치 진행 추적), encoder 싱글톤(Task 1.4 부분 ✅ — base.py + registry.py로 단순화), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인**(pipeline/ — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용), **Milvus retrieval wiring ✅** (retrieval/routing.py + pipeline stub 제거), **멀티턴 history + 약어 컨텍스트 준비 (Task 2.5 부분 ✅** — retrieval/query_rewriter.py, pipeline/prepare_context 노드, API history 필드) 구현됨, **Query Decomposition ✅ (Task 2.4** — retrieval/query_decomposer.py, decompose/decomposed_retrieve 노드, RouteResult.needs_decomposition) 구현됨, **LLM Query Rewriting ✅ (Task 2.5** — retrieval/query_rewriter.py rewrite_query()/QueryRewriteResult, prompts/query_rewrite_system.txt, pipeline/rewrite_query 노드, tests/unit/retrieval/test_query_rewriter.py) 구현됨, **Hybrid Verify Loop ✅ (Task 2.6** — pipeline/tool_call 노드(결정적 전략 fallback + LLM 쿼리 재작성) + pipeline/verify 노드(LLM self-eval 1–5점), use_verify_loop GraphConfig 플래그, prompts/verify.txt + tool_call_rewrite.txt, 최대 3회 retry) 구현됨, **DocxParser 버그픽스 ✅** (이미지+텍스트 혼합 단락 텍스트 보존, 병합셀 비인접 dedup, 한글 slug re.UNICODE, rel_id 중복 이미지 방지)
+- **현 단계**: Phase 1 진행 중 — LLM 모듈, 3-layer 라우터(Task 2.2), Milvus 클라이언트, 약어 사전(Task 1.6 ✅), FastAPI 앱, md ingest 파이프라인(Task 1.1/1.3 부분), embedder wrapper(Task 1.4 부분 — `EMBEDDING_TIMEOUT`/`EMBEDDING_BATCH_SIZE` env 지원, verbose 배치 진행 추적), encoder 싱글톤(Task 1.4 부분 ✅ — base.py + registry.py로 단순화), Codex+Gemini fallback 훅(INF-1b ✅), **LangGraph StateGraph 파이프라인**(pipeline/ — Phase 5 조기 도입, reranker 첫 연결), **3GPP TS spec number 라우터(Task 2.2 부분 ✅)**, **ingest acronym pre-pass + Milvus `keywords` ARRAY 필드 ✅** (Rel-18 2503 entries, noise filter 적용), **Milvus retrieval wiring ✅** (retrieval/routing.py + pipeline stub 제거), **멀티턴 history + 약어 컨텍스트 준비 (Task 2.5 부분 ✅** — retrieval/query_rewriter.py, pipeline/prepare_context 노드, API history 필드) 구현됨, **Query Decomposition ✅ (Task 2.4** — retrieval/query_decomposer.py, decompose/decomposed_retrieve 노드, RouteResult.needs_decomposition) 구현됨, **LLM Query Rewriting ✅ (Task 2.5** — retrieval/query_rewriter.py rewrite_query()/QueryRewriteResult, prompts/query_rewrite_system.txt, pipeline/rewrite_query 노드, tests/unit/retrieval/test_query_rewriter.py) 구현됨, **Hybrid Verify Loop ✅ (Task 2.6** — pipeline/tool_call 노드(결정적 전략 fallback + LLM 쿼리 재작성) + pipeline/verify 노드(LLM self-eval 1–5점), use_verify_loop GraphConfig 플래그, prompts/verify.txt + tool_call_rewrite.txt, 최대 3회 retry) 구현됨, **DocxParser 버그픽스 ✅** (이미지+텍스트 혼합 단락 텍스트 보존, 병합셀 비인접 dedup, 한글 slug re.UNICODE, rel_id 중복 이미지 방지), **Alarm Ref Excel parser + AlarmIndex ✅** (parsers/alarm_ref_parser.py — AlarmRecord/parse_alarm_ref_excel, retrieval/alarm_index.py — AlarmIndex 싱글톤 + get_alarm_index, retrieval/routing.py — resolve_alarm_entity() alarm_code 직접 lookup, data/samples/alarm_excel_ref_sample.xlsx 12행 샘플, scripts/gen_alarm_sample.py)
 
 ---
 
@@ -64,9 +64,10 @@ spar/
 │       ├── ingest/          # md-aware/fixed 청커 + sentence-transformers embedder (Task 1.1/1.3/1.4 — 부분)
 │       ├── pipeline/        # LangGraph StateGraph 오케스트레이션 — SparState, Nodes, build_graph() (Phase 5 조기 도입)
 │       ├── reranker/        # CrossEncoderClient + 싱글톤 레지스트리 — client, config, factory, registry (Task 1.5)
-│       ├── retrieval/       # Milvus 클라이언트, hybrid search, Route→doc_type 매핑, query_rewriter, query_decomposer, hyde, multi_query (milvus_client.py, routing.py, query_rewriter.py, query_decomposer.py, hyde.py, multi_query.py) (Task 1.4~1.5, 2.4~2.7)
+│       ├── retrieval/       # Milvus 클라이언트, hybrid search, Route→doc_type 매핑, query_rewriter, query_decomposer, hyde, multi_query, alarm_index (milvus_client.py, routing.py, query_rewriter.py, query_decomposer.py, hyde.py, multi_query.py, alarm_index.py) (Task 1.4~1.5, 2.4~2.7)
+│       │                    #   alarm_index.py — AlarmIndex 싱글톤 (alarm_id 직접 lookup, search_by_name)
 │       │                    #   query_rewriter.py — build_context(), rewrite_query(), QueryRewriteResult (Task 2.5 ✅)
-│       ├── parsers/         # 문서 유형별 파서 — docx_parser.py, parameter_ref_parser.py, counter_ref_parser.py (Task 1.1 ✅ DOCX/Excel)
+│       ├── parsers/         # 문서 유형별 파서 — docx_parser.py, parameter_ref_parser.py, counter_ref_parser.py, alarm_ref_parser.py (Task 1.1 ✅ DOCX/Parameter Excel/Counter Excel/Alarm Excel)
 │       │   └── extractor/   # PDF 구조 추출 패키지 — pipeline/text/tables/images/font_profile/notes/raw (Task 1.1 ✅ PDF)
 │       ├── chunkers/        # 유형별 청킹 전략 (Task 1.3 — scaffold)
 │       ├── db/              # Parameter/Counter/Alarm 구조화 DB + Text-to-SQL (Task 3.1~3.2 — scaffold)
@@ -84,7 +85,7 @@ spar/
 │                            #    slice_3gpp_intros, gen_goldset, run_router_eval)
 ├── tests/                   # pytest 단위/통합 테스트
 └── data/                    # 골드셋, 샘플 입력, 추출 산출물 (큰 원본은 git LFS 또는 외부 저장)
-    └── samples/             # 공개 가능한 샘플만 추적
+    └── samples/             # 공개 가능한 샘플만 추적 — parameter_ref_sample.xlsx, counter_ref_sample.xlsx (RRC/MAC/PHY 13개, 병합 셀)
 ```
 
 - **import 규칙**: `from spar.retrieval import ...` 형태. 모듈 직접 import 금지.

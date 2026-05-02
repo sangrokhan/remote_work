@@ -140,8 +140,13 @@ cython_debug/
 *.swp
 *.swo
 
-# Data files
-data/
+# Data files — data/* 전체 제외, goldsets/samples만 허용
+data/*
+!data/.gitkeep
+!data/goldsets
+!data/goldsets/**
+!data/samples
+!data/samples/**
 *.pt
 *.pth
 *.gz
