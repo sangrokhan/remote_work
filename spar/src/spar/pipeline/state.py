@@ -45,3 +45,10 @@ class SparState(TypedDict, total=False):
     gold_chunks: list[str] | None
     gold_answer: str | None
     eval_metrics: dict[str, Any]
+
+    # verify loop
+    retry_count: int
+    tried_strategies: list[str]
+    verify_score: float | None
+    verify_reason: str | None
+    improved_query: str | None
