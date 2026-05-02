@@ -98,7 +98,7 @@ addopts = [
     "--strict-markers",
     "--strict-config",
 ]
-pythonpath = ["src"]
+pythonpath = ["src", "scripts"]
 asyncio_mode = "auto"
 markers = [
     "slow: 느린 테스트 (LLM 호출, 인덱싱 등)",
