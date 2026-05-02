@@ -25,6 +25,17 @@ assert _DEFAULT_CONFIG is not None, (
 )
 
 
+def _verify_selector(state: SparState) -> str:
+    score = state.get("verify_score", 5.0)
+    retry_count = state.get("retry_count", 0)
+    tried = set(state.get("tried_strategies") or [])
+    all_strategies = {"rag", "decomposed", "multi_hop", "structured"}
+    remaining = all_strategies - tried
+    if score < 3 and retry_count < 3 and remaining:
+        return "tool_call"
+    return END
+
+
 def _route_selector(state: SparState) -> str:
     route_result = state["route_result"]
     if route_result.needs_decomposition:
@@ -98,17 +109,38 @@ def build_graph(
         {**{n: n for n in _RETRIEVE_NODES}, "decompose": "decompose"},
     )
 
-    # reranker
-    if cfg.use_reranker:
-        g.add_node("rerank", nodes.rerank)
-        for name in _all_retrieve:
-            g.add_edge(name, "rerank")
-        g.add_edge("rerank", "generate")
-    else:
-        for name in _all_retrieve:
-            g.add_edge(name, "generate")
-
     g.add_node("generate", nodes.generate)
-    g.add_edge("generate", END)
+
+    if cfg.use_verify_loop:
+        g.add_node("tool_call", nodes.tool_call)
+        g.add_node("verify", nodes.verify)
+
+        for name in _all_retrieve:
+            g.add_edge(name, "tool_call")
+
+        if cfg.use_reranker:
+            g.add_node("rerank", nodes.rerank)
+            g.add_edge("tool_call", "rerank")
+            g.add_edge("rerank", "generate")
+        else:
+            g.add_edge("tool_call", "generate")
+
+        g.add_edge("generate", "verify")
+        g.add_conditional_edges(
+            "verify",
+            _verify_selector,
+            {"tool_call": "tool_call", END: END},
+        )
+    else:
+        if cfg.use_reranker:
+            g.add_node("rerank", nodes.rerank)
+            for name in _all_retrieve:
+                g.add_edge(name, "rerank")
+            g.add_edge("rerank", "generate")
+        else:
+            for name in _all_retrieve:
+                g.add_edge(name, "generate")
+
+        g.add_edge("generate", END)
 
     return g.compile()
