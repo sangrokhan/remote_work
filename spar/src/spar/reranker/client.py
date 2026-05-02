@@ -1,7 +1,14 @@
 """Async cross-encoder reranker client: calls the reranker HTTP endpoint to score query-chunk pairs."""
 from __future__ import annotations
 
+import asyncio
+
 import httpx
+
+try:
+    from sentence_transformers import CrossEncoder as _CrossEncoder
+except ImportError:  # pragma: no cover
+    _CrossEncoder = None  # type: ignore
 
 
 class CrossEncoderClient:
@@ -26,3 +33,25 @@ class CrossEncoderClient:
 
     async def aclose(self) -> None:
         await self._http.aclose()
+
+
+class LocalCrossEncoderClient:
+    def __init__(self, model: str, device: str = "cpu") -> None:
+        if _CrossEncoder is None:
+            raise RuntimeError("sentence-transformers 미설치. pip install sentence-transformers")
+        self._model_name = model
+        self._encoder = _CrossEncoder(model, device=device)
+
+    async def rerank(self, query: str, documents: list[str]) -> list[float]:
+        if not documents:
+            return []
+        pairs = [(query, doc) for doc in documents]
+        scores = await asyncio.to_thread(self._encoder.predict, pairs)
+        return [float(s) for s in scores]
+
+    @property
+    def model(self) -> str:
+        return self._model_name
+
+    async def aclose(self) -> None:
+        pass
