@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 from spar.encoder.base import EncoderClient
 from spar.llm.client import LLMClient
 from spar.pipeline.state import SparState
+from spar.prompts import load_prompt
 from spar.preprocessing.abbrev_mapper import (
     build_reverse_index,
     expand_query,
@@ -284,4 +286,45 @@ class Nodes:
             "answer": answer,
             "node_trace": _append_trace(state, "generate"),
             "node_timings": _record_timing(state, "generate", elapsed),
+        }
+
+    async def verify(self, state: SparState) -> SparState:
+        t0 = time.monotonic()
+        if self.llm is None:
+            elapsed = (time.monotonic() - t0) * 1000
+            return {
+                **state,
+                "verify_score": 5.0,
+                "verify_reason": "no llm — skipping verify",
+                "node_trace": _append_trace(state, "verify"),
+                "node_timings": _record_timing(state, "verify", elapsed),
+            }
+
+        query = state.get("improved_query") or state.get("rewritten_query") or state.get("expanded_query") or state["query"]
+        answer = state.get("answer", "")
+        chunks = state.get("reranked_chunks") or state.get("raw_chunks", [])
+        contexts_summary = "\n---\n".join(c["text"][:300] for c in chunks[:5])
+
+        prompt = load_prompt("verify.txt").format(
+            query=query,
+            answer=answer,
+            contexts_summary=contexts_summary or "(no context)",
+        )
+        raw = await self.llm.chat([{"role": "user", "content": prompt}], max_tokens=128)
+
+        try:
+            parsed = json.loads(raw.strip())
+            score = float(parsed["score"])
+            reason = str(parsed.get("reason", ""))
+        except Exception:
+            score = 5.0
+            reason = "parse error — treating as sufficient"
+
+        elapsed = (time.monotonic() - t0) * 1000
+        return {
+            **state,
+            "verify_score": score,
+            "verify_reason": reason,
+            "node_trace": _append_trace(state, "verify"),
+            "node_timings": _record_timing(state, "verify", elapsed),
         }
