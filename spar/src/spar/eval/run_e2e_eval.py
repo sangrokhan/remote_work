@@ -26,6 +26,7 @@ from pathlib import Path
 
 from spar.eval.ragas_metrics import RagasSample, compute_ragas_metrics
 from spar.pipeline.config import PRESET_CONFIGS
+from spar.pipeline.graph import build_graph
 
 
 def _load_goldset(path: Path) -> list[dict]:
@@ -42,8 +43,6 @@ async def _run_pipeline(
     encoder,
     milvus,
 ) -> list[tuple[dict, dict]]:
-    from spar.pipeline.graph import build_graph
-
     preset_map = {c.name: c for c in PRESET_CONFIGS}
     if config_name not in preset_map:
         valid = list(preset_map)

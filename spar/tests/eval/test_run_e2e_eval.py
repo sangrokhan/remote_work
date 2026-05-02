@@ -162,11 +162,11 @@ async def test_run_saves_output_and_dataset(tmp_path: Path):
     mock_graph.ainvoke = AsyncMock(return_value=FAKE_STATE_WITH_RERANK)
 
     with (
-        patch("spar.eval.run_e2e_eval.get_client", new=AsyncMock(return_value=mock_llm)),
-        patch("spar.eval.run_e2e_eval.get_encoder", new=AsyncMock(return_value=mock_encoder)),
-        patch("spar.eval.run_e2e_eval.get_reranker", new=AsyncMock(return_value=MagicMock())),
-        patch("spar.eval.run_e2e_eval.HybridRouter", return_value=MagicMock()),
-        patch("spar.eval.run_e2e_eval.SparMilvusClient", return_value=MagicMock()),
+        patch("spar.llm.registry.get_client", new=AsyncMock(return_value=mock_llm)),
+        patch("spar.encoder.registry.get_encoder", new=AsyncMock(return_value=mock_encoder)),
+        patch("spar.reranker.registry.get_reranker", new=AsyncMock(return_value=MagicMock())),
+        patch("spar.router.hybrid_router.HybridRouter", return_value=MagicMock()),
+        patch("spar.retrieval.milvus_client.SparMilvusClient", return_value=MagicMock()),
         patch("spar.eval.run_e2e_eval.build_graph", return_value=mock_graph),
         patch("spar.eval.run_e2e_eval.compute_ragas_metrics", new=AsyncMock(return_value=ragas_result)),
     ):
