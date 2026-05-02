@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""3GPP .md 문서를 읽어 Codex CLI로 QA 세트를 생성하고 JSONL로 저장.
+"""3GPP .md 문서를 읽어 Codex CLI(→ Gemini CLI fallback)로 QA 세트를 생성하고 JSONL로 저장.
 
 사용법:
     python scripts/gen_goldset_qa.py --input-file data/tspec-llm/.../29502-i40.md
     python scripts/gen_goldset_qa.py --input-dir data/tspec-llm/3GPP-clean/Rel-18/29_series
     python scripts/gen_goldset_qa.py --input-dir data/tspec-llm/3GPP-clean/Rel-18 --output data/goldsets/my_goldset.jsonl
+
+실행 순서: codex exec → (실패 시) gemini → (gemini 실패 시) 2s·4s·8s… 지수 백오프 재시도
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -139,6 +142,63 @@ def call_codex(prompt: str, max_lines: int) -> str:
         Path(output_path).unlink(missing_ok=True)
 
 
+def call_gemini(prompt: str) -> str:
+    """Gemini CLI headless. --yolo --output-format json으로 응답 추출."""
+    if shutil.which("gemini") is None:
+        raise RuntimeError("gemini CLI PATH에 없음")
+
+    result = subprocess.run(
+        ["gemini", "--yolo", "--output-format", "json", "-p", prompt],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"gemini 실패 (exit {result.returncode}):\n{result.stderr[:500]}"
+        )
+    raw = result.stdout.strip()
+    if not raw:
+        raise RuntimeError("gemini 빈 출력")
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+    for key in ("response", "text", "output"):
+        value = payload.get(key) if isinstance(payload, dict) else None
+        if isinstance(value, str) and value:
+            return value
+
+    raise RuntimeError(f"gemini 응답 필드 없음: {str(payload)[:200]}")
+
+
+def call_with_fallback(prompt: str, max_lines: int) -> str:
+    """codex → gemini → gemini 지수 백오프 무한 재시도."""
+    try:
+        return call_codex(prompt, max_lines)
+    except (subprocess.TimeoutExpired, RuntimeError) as exc:
+        print(f"\n  WARN: codex 실패, gemini로 전환 — {exc}", file=sys.stderr)
+
+    delay = 2.0
+    attempt = 0
+    while True:
+        try:
+            result = call_gemini(prompt)
+            if attempt > 0:
+                print(f"\n  gemini {attempt}회 재시도 후 성공", file=sys.stderr)
+            return result
+        except (subprocess.TimeoutExpired, RuntimeError) as exc:
+            attempt += 1
+            print(
+                f"\n  WARN: gemini 실패 (시도 {attempt}), {delay:.0f}s 대기 — {exc}",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+            delay *= 2
+
+
 def parse_qa_output(raw: str, source_doc: str, spec_number: str, release: str, start_id: int) -> list[dict]:
     raw = raw.strip()
     # JSON 배열 추출 (코드블록 감쌀 경우 대비)
@@ -182,15 +242,11 @@ def process_file(
     prompt = build_prompt(file_path, doc_content)
 
     if dry_run:
-        print(" [DRY RUN - codex 미호출]")
+        print(" [DRY RUN - codex/gemini 미호출]")
         return 0
 
     t0 = time.time()
-    try:
-        raw = call_codex(prompt, max_lines)
-    except (subprocess.TimeoutExpired, RuntimeError) as e:
-        print(f"\n  ERROR: {e}", file=sys.stderr)
-        return 0
+    raw = call_with_fallback(prompt, max_lines)
 
     spec_number = parse_spec_number(file_path.name)
     release = extract_release(file_path)
