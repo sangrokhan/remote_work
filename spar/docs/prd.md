@@ -24,20 +24,31 @@
 
 ### Task 1.1 — 문서 유형 분류 및 파서 개발
 
-> 🔧 **구현 중** (2026-05-01) — PDF→MD 변환 CLI + 3GPP TSpec fetcher 완료. 유형별 파서 미착수.
+> 🔧 **구현 중** (2026-05-02) — PDF→MD 변환 CLI + 3GPP TSpec fetcher 완료. PDF 구조 추출기(extractor) 구현 완료. 유형별 파서 일부 완료(DOCX ✅, PDF ✅).
 
 Samsung RAN 문서는 형태가 매우 다양하므로, 유형별 분리 처리가 필수.
 
 - [ ] 문서 유형 정의 (Parameter Reference / Counter Reference / Alarm Reference / Feature Description / MOP / Installation Guide / Release Notes / **spec**(3GPP))
-- [x] 각 유형별 PDF/문서 파서 개발 (Word .docx — DocxParser)
-  - 표 추출: `pdfplumber`, `camelot`, 또는 `unstructured` 라이브러리
-  - 섹션 헤더 추출: 목차 기반 또는 폰트 크기 기반
+- [x] 각 유형별 PDF/문서 파서 개발
+  - [x] Word .docx — `DocxParser` (heading 스타일 기반 섹션, 표→CSV, 이미지 추출)
+  - [x] PDF — `parsers/extractor/` 패키지 (pdfplumber 기반, 폰트 프로파일 헤딩 검출, 크로스페이지 테이블, 임베디드 이미지/드로잉, 워터마크 필터)
 - [x] PDF→Markdown 변환 CLI 스켈레톤 (`scripts/convert_pdf_to_md.py`, per-file 에러 격리)
 - [x] 3GPP TSpec-LLM fetcher (`scripts/fetch_tspec_llm.py`, smoke test 포함)
 - [ ] OCR이 필요한 스캔 문서는 별도 처리 (Tesseract, PaddleOCR)
-- [x] **산출물**: `parsers/` 디렉토리, 유형별 파서 모듈
-- [x] **산출물**: `parsers/` 디렉토리 — `docx_parser.py` (DocxParser), `docx_config.py` (DocxParseConfig)
+- [x] **산출물**: `parsers/docx_parser.py` (DocxParser), `parsers/docx_config.py` (DocxParseConfig)
+- [x] **산출물**: `parsers/extractor/` — PDF 구조 추출 패키지
+  - `pipeline.py` — 메인 오케스트레이터 `extract_pdf_to_outputs()`: 페이지별 추출, 크로스페이지 테이블 병합, MD+CSV+이미지 출력
+  - `text.py` — 폰트 메트릭 기반 헤딩/본문/불릿 추출; 워터마크(회전 53-57°, gray 0.88-0.96) 필터
+  - `tables.py` — 격자 분석 기반 테이블 검출, 멀티라인 셀 보존, 빈 열 제거, 크로스페이지 축 정렬 병합
+  - `images.py` — 임베디드 이미지 스트림 + 드로잉 오브젝트 클러스터링 → PNG/JPEG 저장 + MD 참조 마커
+  - `font_profile.py` — `--profile-fonts`로 폰트 통계 JSON/CSV 생성 (헤딩 룰 튜닝용)
+  - `notes.py` — 각주/주석 영역 검출 (청색 구분선, 색상 패턴), 테이블 추출 충돌 방지
+  - `raw.py` — PDF 페이지 subset → base64 JSON 직렬화/역직렬화 (재현 가능한 추출 워크플로)
+  - `shared.py` — bbox 연산, `--pages` 파싱(예: "1,3-5"), 텍스트 정규화 유틸
+  - `__main__.py` — CLI: `python -m spar.parsers.extractor <pdf> [--pages 1-3,5] [--profile-fonts] [--from-raw]`
 - 추가 산출물: `scripts/convert_pdf_to_md.py`, `scripts/fetch_tspec_llm.py`
+
+**의존 라이브러리**: `pdfplumber` (주 파싱), `pypdf` (PDF subset), `Pillow` (이미지 처리)
 
 ### Task 1.2 — 메타데이터 스키마 정의 및 부착
 
