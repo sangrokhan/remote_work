@@ -135,6 +135,8 @@ def ingest_file(
     dry_run: bool,
     intro_only: bool = False,
     update_acronyms: bool = True,
+    llm_client: Any = None,
+    llm_model: str = "google/gemma-4-E4B-it",
 ) -> int:
     source_doc = file_path.name
     spec_number = _parse_spec_number(source_doc) if intro_only else ""
@@ -148,7 +150,7 @@ def ingest_file(
 
     # 약어 매핑 — chunking 직전 (병기 확장)
     if _ACRONYMS:
-        text = map_abbreviations(text, _ACRONYMS)
+        text = map_abbreviations(text, _ACRONYMS, llm_client=llm_client, model=llm_model)
 
     chunks = chunk_dispatch(text, source_doc=source_doc, doc_type=doc_type)
     # doc_type 강제 (chunkers.dispatch가 spec 청크에 'spec' 박지만, 명시 보장)
@@ -193,6 +195,8 @@ def ingest_directory(
     force: bool,
     dry_run: bool,
     intro_only: bool = False,
+    llm_client: Any = None,
+    llm_model: str = "google/gemma-4-E4B-it",
 ) -> None:
     md_files = sorted(input_dir.rglob("*.md"))
     if not md_files:
@@ -219,7 +223,7 @@ def ingest_directory(
             total += ingest_file(
                 client, f, doc_type,
                 force=force, dry_run=dry_run, intro_only=intro_only,
-                update_acronyms=False,
+                update_acronyms=False, llm_client=llm_client, llm_model=llm_model,
             )
         except Exception as e:
             print(f"  ERROR processing {f}: {type(e).__name__}: {e}", file=sys.stderr)
@@ -244,6 +248,18 @@ def main() -> None:
         action="store_true",
         help="파일명에서 spec_number 파싱 후 청크 dynamic field로 부착 (spec doc_type 전용)",
     )
+    parser.add_argument(
+        "--llm-url",
+        default=None,
+        metavar="URL",
+        help="vLLM 서버 URL (예: http://localhost:8000/v1). 지정 시 약어 충돌을 LLM으로 분류.",
+    )
+    parser.add_argument(
+        "--llm-model",
+        default="google/gemma-4-E4B-it",
+        metavar="MODEL",
+        help="약어 충돌 분류에 사용할 모델명 (기본: google/gemma-4-E4B-it)",
+    )
 
     args = parser.parse_args()
     if args.input_file and not args.input_file.exists():
@@ -252,6 +268,15 @@ def main() -> None:
     if args.input_dir and not args.input_dir.is_dir():
         print(f"ERROR: not a directory: {args.input_dir}", file=sys.stderr)
         sys.exit(1)
+
+    llm_client = None
+    if args.llm_url:
+        try:
+            from openai import OpenAI
+            llm_client = OpenAI(base_url=args.llm_url, api_key="EMPTY")
+            print(f"LLM conflict resolver: {args.llm_url}  model={args.llm_model}")
+        except ImportError:
+            print("WARN: openai 패키지 없음 — LLM 충돌 분류 비활성", file=sys.stderr)
 
     client_ctx: ContextManager[SparMilvusClient | None]
     if args.dry_run:
@@ -263,11 +288,13 @@ def main() -> None:
     with client_ctx as client:
         if args.input_file:
             ingest_file(client, args.input_file, args.doc_type,
-                        force=args.force, dry_run=args.dry_run, intro_only=args.intro_only)
+                        force=args.force, dry_run=args.dry_run, intro_only=args.intro_only,
+                        llm_client=llm_client, llm_model=args.llm_model)
             _save_acronyms()
         else:
             ingest_directory(client, args.input_dir, args.doc_type,
-                             force=args.force, dry_run=args.dry_run, intro_only=args.intro_only)
+                             force=args.force, dry_run=args.dry_run, intro_only=args.intro_only,
+                             llm_client=llm_client, llm_model=args.llm_model)
 
 
 class _NullCtx:
