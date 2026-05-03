@@ -86,6 +86,7 @@ spar/
 │                            #    build_entity_glossary — Pass A pre-scan → samsung_entities.json)
 ├── tests/                   # pytest 단위/통합 테스트
 └── data/                    # 골드셋, 샘플 입력, 추출 산출물 (큰 원본은 git LFS 또는 외부 저장)
+    ├── goldsets/            # 평가용 JSONL — goldset.jsonl (통합), goldset_en.jsonl (영문 8,540문항)
     └── samples/             # 공개 가능한 샘플만 추적 — parameter_ref_sample.xlsx, counter_ref_sample.xlsx (RRC/MAC/PHY 13개, 병합 셀)
 ```
 
