@@ -23,11 +23,11 @@ def test_build_entity_glossary_produces_valid_json(tmp_path: Path) -> None:
     )
     assert output.exists()
     data = json.loads(output.read_text())
-    assert "parameter_names" in data
-    assert "counter_names" in data
-    assert "alarm_ids" in data
-    assert isinstance(data["parameter_names"], list)
-    assert len(data["parameter_names"]) > 0
+    assert "parameters" in data
+    assert "counters" in data
+    assert "alarms" in data
+    assert isinstance(data["parameters"], list)
+    assert len(data["parameters"]) > 0
 
 
 @pytest.mark.skipif(not PARAM_SAMPLE.exists(), reason="parameter_ref_sample.xlsx not found")
@@ -42,7 +42,8 @@ def test_build_entity_glossary_no_noise_tokens(tmp_path: Path) -> None:
         output_path=output,
     )
     data = json.loads(output.read_text())
-    for name in data.get("parameter_names", []):
+    for item in data.get("parameters", []):
+        name = item["name"] if isinstance(item, dict) else item
         assert not name.isdigit(), f"noise: digits-only token: {name}"
         assert len(name) > 2, f"noise: too-short token: {name}"
 
@@ -59,8 +60,10 @@ def test_scan_counter_refs_extracts_groups(tmp_path: Path) -> None:
         output_path=output,
     )
     data = json.loads(output.read_text())
-    assert "counter_names" in data
-    assert "counter_groups" in data
+    assert "counters" in data
+    counters = data["counters"]
+    assert len(counters) > 0
+    assert all("name" in c and "group_name" in c and "large_group" in c for c in counters)
 
 
 def test_build_entity_glossary_empty_inputs(tmp_path: Path) -> None:
