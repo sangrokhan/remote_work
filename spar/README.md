@@ -139,6 +139,8 @@ spar/
 │                          #   run_ingest [md/xlsx], slice_3gpp_intros, gen_goldset_qa,
 │                          #   gen_router_goldset, run_router_eval, build_entity_glossary)
 ├── tests/                # pytest
+├── output/               # 실행 산출물 (gitignore)
+│   └── router_eval/      # 라우터 평가 리포트 — <ts>/router_eval_<layer>.md + .json (Task 2.3 ✅)
 └── data/                 # 골드셋, 샘플, 산출물
     └── samples/          # parameter_ref_sample.xlsx, counter_ref_sample.xlsx (RRC/MAC/PHY 13개, 병합 셀)
 ```
