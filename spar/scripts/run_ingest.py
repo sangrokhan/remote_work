@@ -188,6 +188,68 @@ def ingest_file(
     return len(rows)
 
 
+_EXCEL_DOC_TYPES = {"parameter_ref", "counter_ref", "alarm_ref"}
+
+
+def ingest_excel_file(
+    client: "SparMilvusClient | None",
+    file_path: Path,
+    doc_type: str,
+    *,
+    force: bool,
+    dry_run: bool,
+) -> int:
+    from spar.ingest.chunkers import dispatch_records
+    from spar.parsers.alarm_ref_parser import parse_alarm_ref_excel
+    from spar.parsers.counter_ref_parser import parse_counter_ref_excel
+    from spar.parsers.parameter_ref_parser import parse_parameter_ref_excel
+
+    _PARSER_MAP = {
+        "parameter_ref": parse_parameter_ref_excel,
+        "counter_ref": parse_counter_ref_excel,
+        "alarm_ref": parse_alarm_ref_excel,
+    }
+    if doc_type not in _PARSER_MAP:
+        raise SystemExit(
+            f"ERROR: doc_type '{doc_type}' not supported for Excel ingest. "
+            f"Use one of: {sorted(_PARSER_MAP)}"
+        )
+
+    source_doc = file_path.name
+    print(f"Processing: {file_path}  [doc_type={doc_type}]")
+
+    result = _PARSER_MAP[doc_type](file_path)
+    records = result.records
+    print(f"  parsed: {len(records)} records")
+
+    chunks = dispatch_records(records, source_doc=source_doc, doc_type=doc_type)
+    for c in chunks:
+        c["keywords"] = _find_chunk_keywords(c["text"], _KEYWORDS)
+    print(f"  chunked: {len(chunks)} chunks")
+
+    if not chunks:
+        return 0
+
+    rows = embed_rows(chunks, dry_run=dry_run)
+
+    if dry_run:
+        print(f"  [DRY RUN] would insert {len(rows)} chunks — skipping Milvus write")
+        for r in rows[:2]:
+            preview = r["text"][:80].replace("\n", " ")
+            kw_preview = r.get("keywords", [])[:5]
+            print(f"    chunk_id={r['chunk_id']}  section={r['section']!r}  keywords={kw_preview}  text={preview!r}")
+        return len(rows)
+
+    if client is None:
+        raise RuntimeError("BUG: client is None after dry-run check")
+    if force:
+        client.delete_by_source(doc_type, source_doc)
+        print(f"  deleted existing chunks for source_doc={source_doc!r}")
+    client.insert(doc_type, rows)
+    print(f"  inserted: {len(rows)} chunks → spar_{doc_type}")
+    return len(rows)
+
+
 def ingest_directory(
     client: SparMilvusClient | None,
     input_dir: Path,
@@ -288,10 +350,16 @@ def main() -> None:
 
     with client_ctx as client:
         if args.input_file:
-            ingest_file(client, args.input_file, args.doc_type,
-                        force=args.force, dry_run=args.dry_run, intro_only=args.intro_only,
-                        llm_client=llm_client, llm_model=args.llm_model)
-            _save_acronyms()
+            if args.input_file.suffix.lower() == ".xlsx":
+                ingest_excel_file(
+                    client, args.input_file, args.doc_type,
+                    force=args.force, dry_run=args.dry_run,
+                )
+            else:
+                ingest_file(client, args.input_file, args.doc_type,
+                            force=args.force, dry_run=args.dry_run, intro_only=args.intro_only,
+                            llm_client=llm_client, llm_model=args.llm_model)
+                _save_acronyms()
         else:
             ingest_directory(client, args.input_dir, args.doc_type,
                              force=args.force, dry_run=args.dry_run, intro_only=args.intro_only,
