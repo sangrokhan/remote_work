@@ -61,17 +61,17 @@ def scan_counter_refs(paths: list[Path]) -> dict[str, list[str]]:
     }
 
 
-def scan_alarm_refs(paths: list[Path]) -> dict[str, list[str]]:
-    alarm_ids, alarm_names = [], []
+def scan_alarm_refs(paths: list[Path]) -> dict:
+    seen: dict[str, str] = {}
     for p in paths:
         result = parse_alarm_ref_excel(p)
         for r in result.records:
-            alarm_ids.append(r.alarm_id)
-            alarm_names.append(r.alarm_name)
-    return {
-        "alarm_ids": _clean(alarm_ids),
-        "alarm_names": _clean(alarm_names),
-    }
+            aid = r.alarm_id.strip()
+            aname = r.alarm_name.strip()
+            if aid and not _NOISE.match(aid):
+                seen[aid] = aname
+    alarms = [{"id": aid, "name": name} for aid, name in sorted(seen.items())]
+    return {"alarms": alarms}
 
 
 def build_and_write(
@@ -80,7 +80,7 @@ def build_and_write(
     alarm_paths: list[Path],
     output_path: Path,
 ) -> dict:
-    _DEPRECATED_KEYS = {"yang_paths", "feature_names"}
+    _DEPRECATED_KEYS = {"yang_paths", "feature_names", "alarm_ids", "alarm_names"}
 
     existing: dict = {}
     if output_path.exists():
@@ -95,7 +95,12 @@ def build_and_write(
     merged: dict = {}
     all_keys = existing.keys() | new_entities.keys()
     for key in all_keys:
-        merged[key] = sorted(set(existing.get(key, [])) | set(new_entities.get(key, [])))
+        if key == "alarms":
+            by_id = {e["id"]: e["name"] for e in existing.get("alarms", [])}
+            by_id.update({e["id"]: e["name"] for e in new_entities.get("alarms", [])})
+            merged["alarms"] = [{"id": k, "name": v} for k, v in sorted(by_id.items())]
+        else:
+            merged[key] = sorted(set(existing.get(key, [])) | set(new_entities.get(key, [])))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2))
