@@ -66,6 +66,8 @@ _ACRONYMS: dict = load_acronyms(_ACRONYMS_PATH) if _ACRONYMS_PATH.exists() else 
 _ENTITIES_PATH = Path(__file__).parent.parent / "dictionary" / "samsung_entities.json"
 _ENTITIES: dict = load_entity_glossary(_ENTITIES_PATH)
 _KEYWORDS: set[str] = get_all_keywords(_ACRONYMS, _ENTITIES)
+# NOTE: _KEYWORDS is computed once at import. If _update_acronyms() later extends
+# _ACRONYMS, _KEYWORDS will not reflect the new entries for that run.
 
 
 def _update_acronyms(text: str) -> None:
