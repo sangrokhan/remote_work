@@ -221,6 +221,7 @@ def ingest_excel_file(
 
     chunks = dispatch_records(records, source_doc=source_doc, doc_type=doc_type)
     for c in chunks:
+        c["doc_type"] = doc_type
         c["keywords"] = _find_chunk_keywords(c["text"], _KEYWORDS)
     print(f"  chunked: {len(chunks)} chunks")
 
@@ -349,6 +350,7 @@ def main() -> None:
     with client_ctx as client:
         if args.input_file:
             if args.input_file.suffix.lower() == ".xlsx":
+                # Excel ingest: no acronym extraction, so _save_acronyms() is intentionally omitted
                 ingest_excel_file(
                     client, args.input_file, args.doc_type,
                     force=args.force, dry_run=args.dry_run,
