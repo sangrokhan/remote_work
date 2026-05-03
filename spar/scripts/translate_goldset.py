@@ -28,29 +28,33 @@ DEFAULT_OUTPUT = SPAR_ROOT / "data" / "goldsets" / "goldset_en.jsonl"
 MAX_ATTEMPTS = 5
 DEFAULT_BATCH = 10
 
-TRANSLATE_PROMPT_TEMPLATE = """\
-Translate the following 3GPP Q&A items from Korean to English.
-
-Translation rules:
+_TERM_RULES = """\
+Rules:
 - Keep ALL 3GPP spec numbers unchanged (e.g., TS 21.900, TS 22.011, Rel-18, Rel-17)
 - Keep ALL technical acronyms and abbreviations unchanged (e.g., UE, AMF, SMF, SUPI, MCPTT, NR, LTE, QoS, PDU, PLMN, NSSAI, MPS, CR, TSG)
 - Keep ALL MO names, counter IDs, alarm codes, parameter names unchanged
-- Keep "3GPP TS (unknown)" as-is when it appears
-- Translate ONLY the Korean natural language parts to natural English
-- Preserve the question structure and intent exactly
-- For "procedural" questions: keep procedural phrasing (e.g., "In what order...", "What is the procedure for...")
-- For "diagnostic" questions: keep diagnostic phrasing (e.g., "What causes...", "Why does... fail", "What should be checked when...")
-- For "comparative" questions: keep comparative phrasing (e.g., "What is the difference between...", "How does X differ from Y...")
-- For "structured_lookup" questions: keep value-query phrasing (e.g., "What is the value of...", "How many...", "What is the default...")
+- Keep "3GPP TS (unknown)" as-is
+- Translate ONLY the Korean natural language parts to natural English"""
 
-Return ONLY a JSON array with exactly {n} objects. Each object must have:
-  "query_id": (same as input),
-  "query": (translated English query),
-  "answer": (translated English answer)
+QUERY_PROMPT_TEMPLATE = """\
+Translate each Korean 3GPP question to English.
+{rules}
+- Preserve question structure and intent (procedural→"In what order/procedure", \
+diagnostic→"What causes/Why does", comparative→"What is the difference", \
+lookup→"What is the value/How many")
 
-Input items:
-{items_json}
-"""
+Output EXACTLY {n} lines — one translation per line, same order, no numbering, no extra text.
+
+{numbered_items}"""
+
+ANSWER_PROMPT_TEMPLATE = """\
+Translate each Korean 3GPP answer to English.
+{rules}
+- Keep technical explanations accurate and complete
+
+Output EXACTLY {n} lines — one translation per line, same order, no numbering, no extra text.
+
+{numbered_items}"""
 
 
 def call_codex(prompt: str) -> str:
@@ -150,38 +154,51 @@ def call_with_fallback(prompt: str) -> str:
     raise RuntimeError("BUG: unreachable")
 
 
-def build_prompt(batch: list[dict]) -> str:
-    items_input = [
-        {"query_id": item["query_id"], "query": item["query"], "answer": item["answer"]}
-        for item in batch
-    ]
-    return TRANSLATE_PROMPT_TEMPLATE.format(
+def _numbered(texts: list[str]) -> str:
+    return "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+
+
+def _parse_lines(raw: str, expected: int, field: str) -> list[str]:
+    """Strip optional 'N. ' prefix from each line, return exactly expected lines."""
+    lines = [l.strip() for l in raw.strip().splitlines() if l.strip()]
+    # strip leading "N." or "N)" numbering if LLM added it anyway
+    cleaned = [re.sub(r"^\d+[.)]\s*", "", l) for l in lines]
+    if len(cleaned) != expected:
+        raise ValueError(
+            f"{field} 줄 수 불일치: 요청 {expected}개, 반환 {len(cleaned)}개\n"
+            f"raw:\n{raw[:300]}"
+        )
+    return cleaned
+
+
+def build_query_prompt(batch: list[dict]) -> str:
+    return QUERY_PROMPT_TEMPLATE.format(
+        rules=_TERM_RULES,
         n=len(batch),
-        items_json=json.dumps(items_input, ensure_ascii=False, indent=2),
+        numbered_items=_numbered([item["query"] for item in batch]),
     )
 
 
-def parse_translation(raw: str, batch: list[dict]) -> list[dict]:
-    raw = raw.strip()
-    m = re.search(r"\[.*\]", raw, re.DOTALL)
-    if not m:
-        raise ValueError(f"JSON 배열 없음. raw:\n{raw[:400]}")
-    translated = json.loads(m.group(0))
-    if len(translated) != len(batch):
-        raise ValueError(
-            f"번역 결과 수 불일치: 요청 {len(batch)}개, 반환 {len(translated)}개"
-        )
+def build_answer_prompt(batch: list[dict]) -> str:
+    return ANSWER_PROMPT_TEMPLATE.format(
+        rules=_TERM_RULES,
+        n=len(batch),
+        numbered_items=_numbered([item["answer"] for item in batch]),
+    )
+
+
+def translate_batch(batch: list[dict]) -> list[dict]:
+    query_raw = call_with_fallback(build_query_prompt(batch))
+    answer_raw = call_with_fallback(build_answer_prompt(batch))
+
+    queries_en = _parse_lines(query_raw, len(batch), "query")
+    answers_en = _parse_lines(answer_raw, len(batch), "answer")
 
     results = []
-    id_to_original = {item["query_id"]: item for item in batch}
-    for t in translated:
-        qid = t.get("query_id")
-        original = id_to_original.get(qid)
-        if original is None:
-            raise ValueError(f"query_id 불일치: {qid}")
-        merged = dict(original)
-        merged["query"] = t["query"]
-        merged["answer"] = t["answer"]
+    for item, q_en, a_en in zip(batch, queries_en, answers_en):
+        merged = dict(item)
+        merged["query"] = q_en
+        merged["answer"] = a_en
         results.append(merged)
     return results
 
@@ -266,12 +283,10 @@ def main() -> None:
                 continue
 
             t0 = time.time()
-            prompt = build_prompt(batch)
 
             try:
-                raw = call_with_fallback(prompt)
-                translated = parse_translation(raw, batch)
-            except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                translated = translate_batch(batch)
+            except (RuntimeError, ValueError) as exc:
                 print(f"\n  ERROR 배치 {batch_idx} 실패, 스킵: {exc}", file=sys.stderr)
                 continue
 
