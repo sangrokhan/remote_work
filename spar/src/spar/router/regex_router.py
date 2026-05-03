@@ -35,7 +35,16 @@ _NUMERIC_LOOKUP_RE = re.compile(
 )
 # Definition/explanation intent — fires before spec_num to prevent spec_num false positives
 _DEFINITION_RE = re.compile(
-    r"[는은]\s+무엇인가|이란\s+무엇|란\s+무엇|무엇을\s+의미|[을를]\s+뜻하는가|[을를]\s+가리키는가|어떤\s+의미인가|어떤\s+개념인가|정의는\s+무엇",
+    r"[는은]\s+무엇인가"
+    r"|[는은]\s+무엇이며"
+    r"|이란\s+무엇|란\s+무엇"
+    r"|무엇을\s+의미|무엇을\s+나타내"
+    r"|[을를]\s+뜻하는가|[을를]\s+가리키는가"
+    r"|어떤\s+의미인가|어떤\s+의미로"
+    r"|어떤\s+개념인가|어떤\s+개념으로"
+    r"|어떤\s+역할[을를이]"
+    r"|정의는\s+무엇"
+    r"|약자[이인가는]",
 )
 
 
