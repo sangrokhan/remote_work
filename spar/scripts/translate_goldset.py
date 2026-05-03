@@ -26,6 +26,7 @@ DEFAULT_INPUT = SPAR_ROOT / "data" / "goldsets" / "goldset.jsonl"
 DEFAULT_OUTPUT = SPAR_ROOT / "data" / "goldsets" / "goldset_en.jsonl"
 
 MAX_ATTEMPTS = 5
+MAX_BATCH_RETRIES = 3
 DEFAULT_BATCH = 10
 
 _TERM_RULES = """\
@@ -283,11 +284,41 @@ def main() -> None:
                 continue
 
             t0 = time.time()
+            translated: list[dict] = []
 
-            try:
-                translated = translate_batch(batch)
-            except (RuntimeError, ValueError) as exc:
-                print(f"\n  ERROR 배치 {batch_idx} 실패, 스킵: {exc}", file=sys.stderr)
+            # batch-level retry with exponential backoff
+            delay = 4.0
+            for attempt in range(1, MAX_BATCH_RETRIES + 1):
+                try:
+                    translated = translate_batch(batch)
+                    break
+                except (RuntimeError, ValueError) as exc:
+                    if attempt == MAX_BATCH_RETRIES:
+                        print(
+                            f"\n  WARN: 배치 {batch_idx} {MAX_BATCH_RETRIES}회 실패 — 개별 재시도",
+                            file=sys.stderr,
+                        )
+                    else:
+                        print(
+                            f"\n  WARN: 배치 {batch_idx} 시도 {attempt}/{MAX_BATCH_RETRIES} 실패 "
+                            f"({delay:.0f}s 대기): {exc}",
+                            file=sys.stderr,
+                        )
+                        time.sleep(delay)
+                        delay *= 2
+
+            # item-by-item fallback when batch retries all fail
+            if not translated:
+                for item in batch:
+                    try:
+                        translated.extend(translate_batch([item]))
+                    except (RuntimeError, ValueError) as exc:
+                        print(
+                            f"\n  ERROR {item['query_id']} 개별 번역 실패, 스킵: {exc}",
+                            file=sys.stderr,
+                        )
+
+            if not translated:
                 continue
 
             for item in translated:
