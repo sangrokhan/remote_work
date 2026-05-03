@@ -37,13 +37,16 @@ def _clean(values: list[str]) -> list[str]:
     return sorted({v.strip() for v in values if v and not _NOISE.match(v.strip())})
 
 
-def scan_parameter_refs(paths: list[Path]) -> dict[str, list[str]]:
-    param_names = []
+def scan_parameter_refs(paths: list[Path]) -> dict:
+    seen: dict[str, str] = {}
     for p in paths:
         result = parse_parameter_ref_excel(p)
         for r in result.records:
-            param_names.append(r.param_name)
-    return {"parameter_names": _clean(param_names)}
+            name = r.param_name.strip()
+            if name and not _NOISE.match(name):
+                seen[name] = r.feature_name.strip() if r.feature_name else ""
+    parameters = [{"name": k, "feature_id": v} for k, v in sorted(seen.items())]
+    return {"parameters": parameters}
 
 
 def scan_counter_refs(paths: list[Path]) -> dict[str, list[str]]:
@@ -105,7 +108,7 @@ def build_and_write(
     output_path: Path,
     feature_paths: list[Path] | None = None,
 ) -> dict:
-    _DEPRECATED_KEYS = {"yang_paths", "feature_names", "alarm_ids", "alarm_names", "feature_ids"}
+    _DEPRECATED_KEYS = {"yang_paths", "feature_names", "alarm_ids", "alarm_names", "feature_ids", "parameter_names"}
     _ID_NAME_KEYS = {"alarms", "features"}
 
     existing: dict = {}
@@ -125,6 +128,10 @@ def build_and_write(
     for key in all_keys:
         if key in _ID_NAME_KEYS:
             merged[key] = _merge_id_name_list(existing.get(key, []), new_entities.get(key, []))
+        elif key == "parameters":
+            by_name = {e["name"]: e["feature_id"] for e in existing.get("parameters", [])}
+            by_name.update({e["name"]: e["feature_id"] for e in new_entities.get("parameters", [])})
+            merged["parameters"] = [{"name": k, "feature_id": v} for k, v in sorted(by_name.items())]
         else:
             merged[key] = sorted(set(existing.get(key, [])) | set(new_entities.get(key, [])))
 

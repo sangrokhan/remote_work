@@ -1,0 +1,145 @@
+{
+  "features": [
+    {
+      "id": "FGR-BW0301",
+      "name": "Bandwidth Part Management"
+    },
+    {
+      "id": "FGR-CA0201",
+      "name": "Carrier Aggregation"
+    },
+    {
+      "id": "FGR-HO0101",
+      "name": "Handover Management"
+    },
+    {
+      "id": "FGR-HO0102",
+      "name": "Event-Triggered Measurement"
+    },
+    {
+      "id": "FGR-RS0101",
+      "name": "Random Access Channel Configuration"
+    }
+  ],
+  "parameters": [
+    {
+      "name": "bwp-inactivity-timer",
+      "feature_id": "FGR-BW0301"
+    },
+    {
+      "name": "bwp-initial-dl-bandwidth",
+      "feature_id": "FGR-BW0301"
+    },
+    {
+      "name": "carrier-aggregation-enable",
+      "feature_id": "FGR-CA0201"
+    },
+    {
+      "name": "carrier-aggregation-max-scell",
+      "feature_id": "FGR-CA0201"
+    },
+    {
+      "name": "handover-a3-offset",
+      "feature_id": "FGR-HO0101"
+    },
+    {
+      "name": "handover-hysteresis",
+      "feature_id": "FGR-HO0101"
+    },
+    {
+      "name": "handover-preparation-timer",
+      "feature_id": "FGR-HO0101"
+    },
+    {
+      "name": "meas-time-to-trigger",
+      "feature_id": "FGR-HO0102"
+    },
+    {
+      "name": "rach-power-ramping-step",
+      "feature_id": "FGR-RS0101"
+    },
+    {
+      "name": "rach-preamble-target-power",
+      "feature_id": "FGR-RS0101"
+    },
+    {
+      "name": "scell-activation-timer",
+      "feature_id": "FGR-CA0201"
+    }
+  ],
+  "counter_groups": [
+    "MAC",
+    "PDSCH",
+    "PHY",
+    "PHY Measurement",
+    "PUSCH",
+    "RRC",
+    "RRC Setup",
+    "UE Statistics"
+  ],
+  "alarms": [
+    {
+      "id": "ALM-1001",
+      "name": "Cell Out of Service"
+    },
+    {
+      "id": "ALM-1002",
+      "name": "Link Down"
+    },
+    {
+      "id": "ALM-1003",
+      "name": "Cell Down"
+    },
+    {
+      "id": "ALM-1004",
+      "name": "High Temperature"
+    },
+    {
+      "id": "ALM-1005",
+      "name": "Fan Failure"
+    },
+    {
+      "id": "ALM-1006",
+      "name": "Clock Sync Loss"
+    },
+    {
+      "id": "ALM-1007",
+      "name": "License Expiring"
+    },
+    {
+      "id": "ALM-1008",
+      "name": "High CPU Usage"
+    },
+    {
+      "id": "ALM-1009",
+      "name": "PRACH Anomaly"
+    },
+    {
+      "id": "ALM-1010",
+      "name": "Backup Failed"
+    },
+    {
+      "id": "ALM-1011",
+      "name": "Config Mismatch"
+    },
+    {
+      "id": "ALM-1012",
+      "name": "Power Redundancy Lost"
+    }
+  ],
+  "counter_names": [
+    "CELL.MAC.DlPrbUsed",
+    "CELL.MAC.DlRetxRatio",
+    "CELL.MAC.DlThroughput",
+    "CELL.MAC.UlPrbUsed",
+    "CELL.MAC.UlThroughput",
+    "CELL.PHY.AvgRSRP",
+    "CELL.PHY.AvgSINR",
+    "CELL.RRC.SetupFail",
+    "CELL.RRC.SetupReq",
+    "CELL.RRC.SetupSucc",
+    "CELL.UE.ActiveNbr",
+    "CELL.UE.IdleNbr",
+    "CELL.UE.MaxConnectedNbr"
+  ]
+}
