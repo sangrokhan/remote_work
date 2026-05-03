@@ -32,19 +32,16 @@ def _clean(values: list[str]) -> list[str]:
 
 
 def scan_parameter_refs(paths: list[Path]) -> dict[str, list[str]]:
-    param_names, yang_paths, feature_names = [], [], []
+    param_names, feature_ids = [], []
     for p in paths:
         result = parse_parameter_ref_excel(p)
         for r in result.records:
             param_names.append(r.param_name)
-            if r.yang_path:
-                yang_paths.append(r.yang_path)
             if r.feature_name:
-                feature_names.append(r.feature_name)
+                feature_ids.append(r.feature_name)
     return {
         "parameter_names": _clean(param_names),
-        "yang_paths": _clean(yang_paths),
-        "feature_names": _clean(feature_names),
+        "feature_ids": _clean(feature_ids),
     }
 
 
@@ -83,9 +80,12 @@ def build_and_write(
     alarm_paths: list[Path],
     output_path: Path,
 ) -> dict:
+    _DEPRECATED_KEYS = {"yang_paths", "feature_names"}
+
     existing: dict = {}
     if output_path.exists():
-        existing = json.loads(output_path.read_text())
+        raw = json.loads(output_path.read_text())
+        existing = {k: v for k, v in raw.items() if k not in _DEPRECATED_KEYS}
 
     new_entities: dict = {}
     new_entities.update(scan_parameter_refs(param_paths))
