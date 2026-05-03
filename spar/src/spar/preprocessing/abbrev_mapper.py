@@ -37,10 +37,11 @@ def load_entity_glossary(path: Path) -> dict[str, list[str]]:
         return {}
 
 
-def get_all_keywords(acronyms: dict, entities: dict[str, list[str]]) -> set[str]:
+def get_all_keywords(acronyms: dict, entities: dict[str, list]) -> set[str]:
     terms: set[str] = set(acronyms.get("global", {}).keys())
     for values in entities.values():
-        for term in values:
+        for item in values:
+            term = item["name"] if isinstance(item, dict) else item
             if term and not _NOISE_PATTERN.match(term):
                 terms.add(term)
     return terms

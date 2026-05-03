@@ -100,6 +100,67 @@ def test_load_goldset(tmp_path):
     assert loaded[0]["expected_route"] == "procedural"
 
 
+def test_extract_failures_finds_mismatches(small_goldset):
+    from run_router_eval import extract_failures
+    expected = ["structured_lookup", "definition_explain", "procedural"]
+    predicted = ["structured_lookup", "structured_lookup", "procedural"]
+    failures = extract_failures(small_goldset, expected, predicted)
+    assert len(failures) == 1
+    assert failures[0]["expected_route"] == "definition_explain"
+    assert failures[0]["predicted_route"] == "structured_lookup"
+    assert failures[0]["query_id"] == "RQ0002"
+
+
+def test_extract_failures_empty_on_perfect(small_goldset):
+    from run_router_eval import extract_failures
+    expected = ["structured_lookup", "definition_explain", "procedural"]
+    failures = extract_failures(small_goldset, expected, expected)
+    assert failures == []
+
+
+def test_format_failures_md_distribution():
+    from run_router_eval import format_failures_md
+    failures = [
+        {"query_id": "Q1", "query": "foo", "expected_route": "definition_explain",
+         "predicted_route": "structured_lookup", "source_doc": "", "type": ""},
+        {"query_id": "Q2", "query": "bar", "expected_route": "definition_explain",
+         "predicted_route": "structured_lookup", "source_doc": "", "type": ""},
+    ]
+    md = format_failures_md(failures)
+    assert "definition_explain" in md
+    assert "structured_lookup" in md
+    assert "2" in md
+
+
+def test_format_failures_md_empty():
+    from run_router_eval import format_failures_md
+    md = format_failures_md([])
+    assert "None" in md
+
+
+def test_json_output_contains_failures(tmp_path, small_goldset):
+    from run_router_eval import (
+        build_confusion_matrix, compute_metrics, extract_failures,
+    )
+    expected = ["structured_lookup", "structured_lookup", "procedural"]
+    predicted = ["structured_lookup", "structured_lookup", "procedural"]
+    failures = extract_failures(small_goldset, expected, predicted)
+    metrics = compute_metrics(expected, predicted, ROUTES)
+    confusion = build_confusion_matrix(expected, predicted, ROUTES)
+    import json as _json
+    data = {
+        "layer": "regex",
+        "accuracy": metrics["accuracy"],
+        "failures": failures,
+        "confusion_matrix": confusion,
+    }
+    out = tmp_path / "router_eval_regex.json"
+    out.write_text(_json.dumps(data, ensure_ascii=False, indent=2))
+    loaded = _json.loads(out.read_text())
+    assert "failures" in loaded
+    assert isinstance(loaded["failures"], list)
+
+
 import numpy as np
 from unittest.mock import AsyncMock, MagicMock, patch
 
