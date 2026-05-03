@@ -188,9 +188,6 @@ def ingest_file(
     return len(rows)
 
 
-_EXCEL_DOC_TYPES = {"parameter_ref", "counter_ref", "alarm_ref"}
-
-
 def ingest_excel_file(
     client: "SparMilvusClient | None",
     file_path: Path,
@@ -261,6 +258,7 @@ def ingest_directory(
     llm_client: Any = None,
     llm_model: str = "google/gemma-4-E4B-it",
 ) -> None:
+    # TODO(Pass B): xlsx files in input_dir are not routed to ingest_excel_file — add when needed
     md_files = sorted(input_dir.rglob("*.md"))
     if not md_files:
         print(f"No .md files found under {input_dir}")
