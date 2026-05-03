@@ -68,6 +68,11 @@ _COLUMN_ALIASES: dict[str, str] = {
     "value range": "value_range",
     "range": "value_range",
     "값 범위": "value_range",
+    # 피처 ID
+    "feature id": "feature_id",
+    "feature": "feature_id",
+    "피처 id": "feature_id",
+    "feature_id": "feature_id",
 }
 
 REQUIRED_FIELDS = {"counter_name"}
@@ -93,6 +98,7 @@ class CounterRecord:
     unit: str = ""
     min_val: str = ""
     max_val: str = ""
+    feature_id: str = ""
 
     def to_chunk_text(self) -> str:
         """RAG ingest용 텍스트. 그룹 계층 포함."""
@@ -228,6 +234,7 @@ def parse_counter_ref_excel(
             unit=_get(expanded, row_idx, col_map.get("unit")),
             min_val=min_val,
             max_val=max_val,
+            feature_id=_get(expanded, row_idx, col_map.get("feature_id")),
         ))
 
     wb.close()
