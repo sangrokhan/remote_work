@@ -38,7 +38,13 @@ except ImportError:
 
 from extract_acronyms import find_abbreviations_section, merge_into, parse_entries, to_dict_schema
 from spar.ingest.chunkers import dispatch as chunk_dispatch
-from spar.preprocessing.abbrev_mapper import load_acronyms, map_abbreviations
+from spar.preprocessing.abbrev_mapper import (
+    extract_terms,
+    get_all_keywords,
+    load_acronyms,
+    load_entity_glossary,
+    map_abbreviations,
+)
 from spar.retrieval.milvus_client import DOC_TYPES, EMBED_DIM, SparMilvusClient
 
 ALLOWED_SUFFIXES = {".md", ".txt"}
@@ -57,6 +63,11 @@ def _parse_spec_number(filename: str) -> str:
 
 _ACRONYMS_PATH = Path(__file__).parent.parent / "dictionary" / "acronyms.json"
 _ACRONYMS: dict = load_acronyms(_ACRONYMS_PATH) if _ACRONYMS_PATH.exists() else {}
+_ENTITIES_PATH = Path(__file__).parent.parent / "dictionary" / "samsung_entities.json"
+_ENTITIES: dict = load_entity_glossary(_ENTITIES_PATH)
+_KEYWORDS: set[str] = get_all_keywords(_ACRONYMS, _ENTITIES)
+# NOTE: _KEYWORDS is computed once at import. If _update_acronyms() later extends
+# _ACRONYMS, _KEYWORDS will not reflect the new entries for that run.
 
 
 def _update_acronyms(text: str) -> None:
@@ -86,18 +97,8 @@ def _save_acronyms() -> None:
     print(f"acronyms saved: {len(_ACRONYMS.get('global', {}))} entries → {_ACRONYMS_PATH}")
 
 
-def _find_chunk_keywords(text: str, acronyms: dict) -> list[str]:
-    """청크 텍스트에서 사전 등록 약어·도메인 term 추출 (최대 50개).
-
-    global 섹션: 약어 (HO, RACH 등)
-    keywords 섹션: Excel에서 로드된 파라미터명·알람 ID·MO명 등
-    """
-    all_terms = set(acronyms.get("global", {}).keys()) | set(acronyms.get("keywords", {}).keys())
-    found = [
-        term for term in all_terms
-        if _re.search(r"\b" + _re.escape(term) + r"\b", text)
-    ]
-    return found[:50]
+def _find_chunk_keywords(text: str, keywords: set[str]) -> list[str]:
+    return extract_terms(text, keywords)[:50]
 
 
 def read_text(file_path: Path) -> str:
@@ -156,7 +157,7 @@ def ingest_file(
     # doc_type 강제 (chunkers.dispatch가 spec 청크에 'spec' 박지만, 명시 보장)
     for c in chunks:
         c["doc_type"] = doc_type
-        c["keywords"] = _find_chunk_keywords(c["text"], _ACRONYMS)
+        c["keywords"] = _find_chunk_keywords(c["text"], _KEYWORDS)
     if spec_number:
         for c in chunks:
             if "spec_number" not in c:
@@ -187,6 +188,66 @@ def ingest_file(
     return len(rows)
 
 
+def ingest_excel_file(
+    client: "SparMilvusClient | None",
+    file_path: Path,
+    doc_type: str,
+    *,
+    force: bool,
+    dry_run: bool,
+) -> int:
+    from spar.ingest.chunkers import dispatch_records
+    from spar.parsers.alarm_ref_parser import parse_alarm_ref_excel
+    from spar.parsers.counter_ref_parser import parse_counter_ref_excel
+    from spar.parsers.parameter_ref_parser import parse_parameter_ref_excel
+
+    _PARSER_MAP = {
+        "parameter_ref": parse_parameter_ref_excel,
+        "counter_ref": parse_counter_ref_excel,
+        "alarm_ref": parse_alarm_ref_excel,
+    }
+    if doc_type not in _PARSER_MAP:
+        raise SystemExit(
+            f"ERROR: doc_type '{doc_type}' not supported for Excel ingest. "
+            f"Use one of: {sorted(_PARSER_MAP)}"
+        )
+
+    source_doc = file_path.name
+    print(f"Processing: {file_path}  [doc_type={doc_type}]")
+
+    result = _PARSER_MAP[doc_type](file_path)
+    records = result.records
+    print(f"  parsed: {len(records)} records")
+
+    chunks = dispatch_records(records, source_doc=source_doc, doc_type=doc_type)
+    for c in chunks:
+        c["doc_type"] = doc_type
+        c["keywords"] = _find_chunk_keywords(c["text"], _KEYWORDS)
+    print(f"  chunked: {len(chunks)} chunks")
+
+    if not chunks:
+        return 0
+
+    rows = embed_rows(chunks, dry_run=dry_run)
+
+    if dry_run:
+        print(f"  [DRY RUN] would insert {len(rows)} chunks — skipping Milvus write")
+        for r in rows[:2]:
+            preview = r["text"][:80].replace("\n", " ")
+            kw_preview = r.get("keywords", [])[:5]
+            print(f"    chunk_id={r['chunk_id']}  section={r['section']!r}  keywords={kw_preview}  text={preview!r}")
+        return len(rows)
+
+    if client is None:
+        raise RuntimeError("BUG: client is None after dry-run check")
+    if force:
+        client.delete_by_source(doc_type, source_doc)
+        print(f"  deleted existing chunks for source_doc={source_doc!r}")
+    client.insert(doc_type, rows)
+    print(f"  inserted: {len(rows)} chunks → spar_{doc_type}")
+    return len(rows)
+
+
 def ingest_directory(
     client: SparMilvusClient | None,
     input_dir: Path,
@@ -198,6 +259,7 @@ def ingest_directory(
     llm_client: Any = None,
     llm_model: str = "google/gemma-4-E4B-it",
 ) -> None:
+    # TODO(Pass B): xlsx files in input_dir are not routed to ingest_excel_file — add when needed
     md_files = sorted(input_dir.rglob("*.md"))
     if not md_files:
         print(f"No .md files found under {input_dir}")
@@ -287,10 +349,17 @@ def main() -> None:
 
     with client_ctx as client:
         if args.input_file:
-            ingest_file(client, args.input_file, args.doc_type,
-                        force=args.force, dry_run=args.dry_run, intro_only=args.intro_only,
-                        llm_client=llm_client, llm_model=args.llm_model)
-            _save_acronyms()
+            if args.input_file.suffix.lower() == ".xlsx":
+                # Excel ingest: no acronym extraction, so _save_acronyms() is intentionally omitted
+                ingest_excel_file(
+                    client, args.input_file, args.doc_type,
+                    force=args.force, dry_run=args.dry_run,
+                )
+            else:
+                ingest_file(client, args.input_file, args.doc_type,
+                            force=args.force, dry_run=args.dry_run, intro_only=args.intro_only,
+                            llm_client=llm_client, llm_model=args.llm_model)
+                _save_acronyms()
         else:
             ingest_directory(client, args.input_dir, args.doc_type,
                              force=args.force, dry_run=args.dry_run, intro_only=args.intro_only,
