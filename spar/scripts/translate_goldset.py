@@ -44,7 +44,8 @@ Translate each Korean 3GPP question to English.
 diagnostic→"What causes/Why does", comparative→"What is the difference", \
 lookup→"What is the value/How many")
 
-Output EXACTLY {n} lines — one translation per line, same order, no numbering, no extra text.
+Output EXACTLY {n} lines — numbered "N. translation", same order, nothing else.
+Example: 1. What is X in TS 21.900?
 
 {numbered_items}"""
 
@@ -53,7 +54,8 @@ Translate each Korean 3GPP answer to English.
 {rules}
 - Keep technical explanations accurate and complete
 
-Output EXACTLY {n} lines — one translation per line, same order, no numbering, no extra text.
+Output EXACTLY {n} lines — numbered "N. translation", same order, nothing else.
+Example: 1. X is defined as ...
 
 {numbered_items}"""
 
