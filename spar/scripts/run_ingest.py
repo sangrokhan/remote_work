@@ -38,7 +38,13 @@ except ImportError:
 
 from extract_acronyms import find_abbreviations_section, merge_into, parse_entries, to_dict_schema
 from spar.ingest.chunkers import dispatch as chunk_dispatch
-from spar.preprocessing.abbrev_mapper import load_acronyms, map_abbreviations
+from spar.preprocessing.abbrev_mapper import (
+    extract_terms,
+    get_all_keywords,
+    load_acronyms,
+    load_entity_glossary,
+    map_abbreviations,
+)
 from spar.retrieval.milvus_client import DOC_TYPES, EMBED_DIM, SparMilvusClient
 
 ALLOWED_SUFFIXES = {".md", ".txt"}
@@ -57,6 +63,9 @@ def _parse_spec_number(filename: str) -> str:
 
 _ACRONYMS_PATH = Path(__file__).parent.parent / "dictionary" / "acronyms.json"
 _ACRONYMS: dict = load_acronyms(_ACRONYMS_PATH) if _ACRONYMS_PATH.exists() else {}
+_ENTITIES_PATH = Path(__file__).parent.parent / "dictionary" / "samsung_entities.json"
+_ENTITIES: dict = load_entity_glossary(_ENTITIES_PATH)
+_KEYWORDS: set[str] = get_all_keywords(_ACRONYMS, _ENTITIES)
 
 
 def _update_acronyms(text: str) -> None:
@@ -86,18 +95,8 @@ def _save_acronyms() -> None:
     print(f"acronyms saved: {len(_ACRONYMS.get('global', {}))} entries → {_ACRONYMS_PATH}")
 
 
-def _find_chunk_keywords(text: str, acronyms: dict) -> list[str]:
-    """청크 텍스트에서 사전 등록 약어·도메인 term 추출 (최대 50개).
-
-    global 섹션: 약어 (HO, RACH 등)
-    keywords 섹션: Excel에서 로드된 파라미터명·알람 ID·MO명 등
-    """
-    all_terms = set(acronyms.get("global", {}).keys()) | set(acronyms.get("keywords", {}).keys())
-    found = [
-        term for term in all_terms
-        if _re.search(r"\b" + _re.escape(term) + r"\b", text)
-    ]
-    return found[:50]
+def _find_chunk_keywords(text: str, keywords: set[str]) -> list[str]:
+    return extract_terms(text, keywords)[:50]
 
 
 def read_text(file_path: Path) -> str:
@@ -156,7 +155,7 @@ def ingest_file(
     # doc_type 강제 (chunkers.dispatch가 spec 청크에 'spec' 박지만, 명시 보장)
     for c in chunks:
         c["doc_type"] = doc_type
-        c["keywords"] = _find_chunk_keywords(c["text"], _ACRONYMS)
+        c["keywords"] = _find_chunk_keywords(c["text"], _KEYWORDS)
     if spec_number:
         for c in chunks:
             if "spec_number" not in c:
