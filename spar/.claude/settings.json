@@ -1,4 +1,28 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git rebase *)",
+      "Bash(python scripts/gen_goldset.py --input-file data/tspec-llm/3GPP-clean/Rel-18/29_series/29502-i40.md)",
+      "Read(//usr/bin/**)",
+      "Bash(.venv/bin/python3 scripts/gen_goldset.py --input-file data/tspec-llm/3GPP-clean/Rel-18/29_series/29554-i10.md)",
+      "Bash(.venv/bin/python3 -c \"import sys,json; [print\\(json.dumps\\(json.loads\\(l\\), ensure_ascii=False, indent=2\\)\\) for l in sys.stdin]\")",
+      "Read(//home/han/.openclaw/workspace/remote_work/.worktrees/**)",
+      "Read(//home/han/.openclaw/workspace/remote_work/**)",
+      "Bash(.venv/bin/pytest spar/tests/ -q --tb=no)",
+      "Bash(/home/han/.openclaw/workspace/remote_work/spar/.venv/bin/python3 scripts/gen_goldset.py --input-file data/tspec-llm/3GPP-clean/Rel-18/29_series/29554-i10.md --dry-run)",
+      "Bash(/home/han/.openclaw/workspace/remote_work/spar/.venv/bin/python3 /home/han/.openclaw/workspace/remote_work/.worktrees/feat/goldset-prompt-expand/spar/scripts/gen_goldset.py --input-file /home/han/.openclaw/workspace/remote_work/spar/data/tspec-llm/3GPP-clean/Rel-18/29_series/29554-i10.md --dry-run)",
+      "Bash(/home/han/.openclaw/workspace/remote_work/spar/.venv/bin/python3 /home/han/.openclaw/workspace/remote_work/.worktrees/feat/goldset-prompt-expand/spar/scripts/gen_goldset.py --input-file /home/han/.openclaw/workspace/remote_work/spar/data/tspec-llm/3GPP-clean/Rel-18/29_series/29554-i10.md --output /tmp/goldset_test.jsonl)",
+      "Bash(/home/han/.openclaw/workspace/remote_work/spar/.venv/bin/python3 -c ' *)",
+      "Bash(/home/han/.openclaw/workspace/remote_work/spar/.venv/bin/python3 scripts/gen_goldset.py --input-file data/tspec-llm/3GPP-clean/Rel-18/29_series/29554-i10.md)",
+      "Bash(python3)",
+      "Bash(xargs -I{} python3 -c \"import ast,sys; f=open\\('{}'\\); src=f.read\\(\\); f.close\\(\\); tree=ast.parse\\(src\\); doc=ast.get_docstring\\(tree\\); print\\('OK' if doc else 'NO', '{}'\\)\")",
+      "Bash(xargs -I{} python3 -c \"import ast,sys; f=open\\('{}'\\); src=f.read\\(\\); f.close\\(\\); tree=ast.parse\\(src\\); doc=ast.get_docstring\\(tree\\); print\\('NO', '{}'\\)\")",
+      "Bash(.venv/bin/pytest tests/eval/test_run_e2e_eval.py -v)"
+    ],
+    "additionalDirectories": [
+      "/home/han/.openclaw/workspace/remote_work"
+    ]
+  },
   "hooks": {
     "SubagentStart": [
       {
@@ -29,9 +53,9 @@
           {
             "type": "command",
             "command": "bash /home/han/.openclaw/workspace/remote_work/spar/.claude/hooks/run-tests.sh",
+            "statusMessage": "pytest 실행 중...",
             "asyncRewake": true,
-            "rewakeSummary": "테스트 실행 결과",
-            "statusMessage": "pytest 실행 중..."
+            "rewakeSummary": "테스트 실행 결과"
           }
         ]
       }
