@@ -83,15 +83,25 @@ def build_and_write(
     alarm_paths: list[Path],
     output_path: Path,
 ) -> dict:
-    entities: dict = {}
-    entities.update(scan_parameter_refs(param_paths))
-    entities.update(scan_counter_refs(counter_paths))
-    entities.update(scan_alarm_refs(alarm_paths))
+    existing: dict = {}
+    if output_path.exists():
+        existing = json.loads(output_path.read_text())
+
+    new_entities: dict = {}
+    new_entities.update(scan_parameter_refs(param_paths))
+    new_entities.update(scan_counter_refs(counter_paths))
+    new_entities.update(scan_alarm_refs(alarm_paths))
+
+    merged: dict = {}
+    all_keys = existing.keys() | new_entities.keys()
+    for key in all_keys:
+        merged[key] = sorted(set(existing.get(key, [])) | set(new_entities.get(key, [])))
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(entities, ensure_ascii=False, indent=2))
-    total = sum(len(v) for v in entities.values())
+    output_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2))
+    total = sum(len(v) for v in merged.values())
     print(f"Wrote {total} entities to {output_path}")
-    return entities
+    return merged
 
 
 def _collect_excel(directory: Path) -> list[Path]:
