@@ -17,7 +17,10 @@
       "Bash(python3)",
       "Bash(xargs -I{} python3 -c \"import ast,sys; f=open\\('{}'\\); src=f.read\\(\\); f.close\\(\\); tree=ast.parse\\(src\\); doc=ast.get_docstring\\(tree\\); print\\('OK' if doc else 'NO', '{}'\\)\")",
       "Bash(xargs -I{} python3 -c \"import ast,sys; f=open\\('{}'\\); src=f.read\\(\\); f.close\\(\\); tree=ast.parse\\(src\\); doc=ast.get_docstring\\(tree\\); print\\('NO', '{}'\\)\")",
-      "Bash(.venv/bin/pytest tests/eval/test_run_e2e_eval.py -v)"
+      "Bash(.venv/bin/pytest tests/eval/test_run_e2e_eval.py -v)",
+      "Bash(.venv/bin/python scripts/build_entity_glossary.py --param-file data/samples/parameter_ref_sample.xlsx --counter-file data/samples/counter_ref_sample.xlsx --alarm-file data/samples/alarm_excel_ref_sample.xlsx --output dictionary/samsung_entities.json)",
+      "Bash(cp /home/han/.openclaw/workspace/remote_work/spar/dictionary/samsung_entities.json dictionary/samsung_entities.json)",
+      "Bash(PYTHONPATH=src python scripts/build_entity_glossary.py --param-file data/samples/parameter_ref_sample.xlsx --counter-file data/samples/counter_ref_sample.xlsx --alarm-file data/samples/alarm_excel_ref_sample.xlsx --output dictionary/samsung_entities.json)"
     ],
     "additionalDirectories": [
       "/home/han/.openclaw/workspace/remote_work"

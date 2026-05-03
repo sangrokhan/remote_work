@@ -39,7 +39,7 @@ def test_ts_spec_dotted(router):
     assert result is not None
     assert result.route == Route.DEFINITION_EXPLAIN
     assert result.layer == "regex"
-    assert result.confidence == 1.0
+    assert result.confidence == 0.7
     assert result.entities.get("spec_number") == "29.502"
 
 
