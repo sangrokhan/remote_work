@@ -21,62 +21,6 @@
       "name": "Random Access Channel Configuration"
     }
   ],
-  "parameters": [
-    {
-      "name": "bwp-inactivity-timer",
-      "feature_id": "FGR-BW0301"
-    },
-    {
-      "name": "bwp-initial-dl-bandwidth",
-      "feature_id": "FGR-BW0301"
-    },
-    {
-      "name": "carrier-aggregation-enable",
-      "feature_id": "FGR-CA0201"
-    },
-    {
-      "name": "carrier-aggregation-max-scell",
-      "feature_id": "FGR-CA0201"
-    },
-    {
-      "name": "handover-a3-offset",
-      "feature_id": "FGR-HO0101"
-    },
-    {
-      "name": "handover-hysteresis",
-      "feature_id": "FGR-HO0101"
-    },
-    {
-      "name": "handover-preparation-timer",
-      "feature_id": "FGR-HO0101"
-    },
-    {
-      "name": "meas-time-to-trigger",
-      "feature_id": "FGR-HO0102"
-    },
-    {
-      "name": "rach-power-ramping-step",
-      "feature_id": "FGR-RS0101"
-    },
-    {
-      "name": "rach-preamble-target-power",
-      "feature_id": "FGR-RS0101"
-    },
-    {
-      "name": "scell-activation-timer",
-      "feature_id": "FGR-CA0201"
-    }
-  ],
-  "counter_groups": [
-    "MAC",
-    "PDSCH",
-    "PHY",
-    "PHY Measurement",
-    "PUSCH",
-    "RRC",
-    "RRC Setup",
-    "UE Statistics"
-  ],
   "alarms": [
     {
       "id": "ALM-1001",
@@ -127,19 +71,143 @@
       "name": "Power Redundancy Lost"
     }
   ],
-  "counter_names": [
-    "CELL.MAC.DlPrbUsed",
-    "CELL.MAC.DlRetxRatio",
-    "CELL.MAC.DlThroughput",
-    "CELL.MAC.UlPrbUsed",
-    "CELL.MAC.UlThroughput",
-    "CELL.PHY.AvgRSRP",
-    "CELL.PHY.AvgSINR",
-    "CELL.RRC.SetupFail",
-    "CELL.RRC.SetupReq",
-    "CELL.RRC.SetupSucc",
-    "CELL.UE.ActiveNbr",
-    "CELL.UE.IdleNbr",
-    "CELL.UE.MaxConnectedNbr"
+  "parameters": [
+    {
+      "name": "bwp-inactivity-timer",
+      "feature_id": "FGR-BW0301"
+    },
+    {
+      "name": "bwp-initial-dl-bandwidth",
+      "feature_id": "FGR-BW0301"
+    },
+    {
+      "name": "carrier-aggregation-enable",
+      "feature_id": "FGR-CA0201"
+    },
+    {
+      "name": "carrier-aggregation-max-scell",
+      "feature_id": "FGR-CA0201"
+    },
+    {
+      "name": "handover-a3-offset",
+      "feature_id": "FGR-HO0101"
+    },
+    {
+      "name": "handover-hysteresis",
+      "feature_id": "FGR-HO0101"
+    },
+    {
+      "name": "handover-preparation-timer",
+      "feature_id": "FGR-HO0101"
+    },
+    {
+      "name": "meas-time-to-trigger",
+      "feature_id": "FGR-HO0102"
+    },
+    {
+      "name": "rach-power-ramping-step",
+      "feature_id": "FGR-RS0101"
+    },
+    {
+      "name": "rach-preamble-target-power",
+      "feature_id": "FGR-RS0101"
+    },
+    {
+      "name": "scell-activation-timer",
+      "feature_id": "FGR-CA0201"
+    }
+  ],
+  "counters": [
+    {
+      "name": "CELL.MAC.DlPrbUsed",
+      "group_id": "G-0101",
+      "group_name": "PDSCH",
+      "large_group": "MAC",
+      "feature_id": "FGR-BW0301"
+    },
+    {
+      "name": "CELL.MAC.DlRetxRatio",
+      "group_id": "G-0101",
+      "group_name": "PDSCH",
+      "large_group": "MAC",
+      "feature_id": "FGR-BW0301"
+    },
+    {
+      "name": "CELL.MAC.DlThroughput",
+      "group_id": "G-0101",
+      "group_name": "PDSCH",
+      "large_group": "MAC",
+      "feature_id": "FGR-BW0301"
+    },
+    {
+      "name": "CELL.MAC.UlPrbUsed",
+      "group_id": "G-0102",
+      "group_name": "PUSCH",
+      "large_group": "MAC",
+      "feature_id": "FGR-BW0301"
+    },
+    {
+      "name": "CELL.MAC.UlThroughput",
+      "group_id": "G-0102",
+      "group_name": "PUSCH",
+      "large_group": "MAC",
+      "feature_id": "FGR-BW0301"
+    },
+    {
+      "name": "CELL.PHY.AvgRSRP",
+      "group_id": "G-0201",
+      "group_name": "PHY Measurement",
+      "large_group": "PHY",
+      "feature_id": "FGR-HO0102"
+    },
+    {
+      "name": "CELL.PHY.AvgSINR",
+      "group_id": "G-0201",
+      "group_name": "PHY Measurement",
+      "large_group": "PHY",
+      "feature_id": "FGR-HO0102"
+    },
+    {
+      "name": "CELL.RRC.SetupFail",
+      "group_id": "G-0043",
+      "group_name": "RRC Setup",
+      "large_group": "RRC",
+      "feature_id": "FGR-RS0101"
+    },
+    {
+      "name": "CELL.RRC.SetupReq",
+      "group_id": "G-0043",
+      "group_name": "RRC Setup",
+      "large_group": "RRC",
+      "feature_id": "FGR-RS0101"
+    },
+    {
+      "name": "CELL.RRC.SetupSucc",
+      "group_id": "G-0043",
+      "group_name": "RRC Setup",
+      "large_group": "RRC",
+      "feature_id": "FGR-RS0101"
+    },
+    {
+      "name": "CELL.UE.ActiveNbr",
+      "group_id": "G-0042",
+      "group_name": "UE Statistics",
+      "large_group": "RRC",
+      "feature_id": "FGR-HO0101"
+    },
+    {
+      "name": "CELL.UE.IdleNbr",
+      "group_id": "G-0042",
+      "group_name": "UE Statistics",
+      "large_group": "RRC",
+      "feature_id": "FGR-HO0101"
+    },
+    {
+      "name": "CELL.UE.MaxConnectedNbr",
+      "group_id": "G-0042",
+      "group_name": "UE Statistics",
+      "large_group": "RRC",
+      "feature_id": "FGR-HO0101"
+    }
   ]
 }

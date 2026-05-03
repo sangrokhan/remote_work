@@ -49,20 +49,22 @@ def scan_parameter_refs(paths: list[Path]) -> dict:
     return {"parameters": parameters}
 
 
-def scan_counter_refs(paths: list[Path]) -> dict[str, list[str]]:
-    counter_names, counter_groups = [], []
+def scan_counter_refs(paths: list[Path]) -> dict:
+    seen: dict[str, dict] = {}
     for p in paths:
         result = parse_counter_ref_excel(p)
         for r in result.records:
-            counter_names.append(r.counter_name)
-            if r.mid_group:
-                counter_groups.append(r.mid_group)
-            if r.large_group:
-                counter_groups.append(r.large_group)
-    return {
-        "counter_names": _clean(counter_names),
-        "counter_groups": _clean(counter_groups),
-    }
+            name = r.counter_name.strip()
+            if name and not _NOISE.match(name):
+                seen[name] = {
+                    "name": name,
+                    "group_id": r.mid_group_id.strip(),
+                    "group_name": r.mid_group.strip(),
+                    "large_group": r.large_group.strip(),
+                    "feature_id": r.feature_id.strip(),
+                }
+    counters = [v for _, v in sorted(seen.items())]
+    return {"counters": counters}
 
 
 def scan_feature_docs(paths: list[Path]) -> dict:
@@ -108,7 +110,7 @@ def build_and_write(
     output_path: Path,
     feature_paths: list[Path] | None = None,
 ) -> dict:
-    _DEPRECATED_KEYS = {"yang_paths", "feature_names", "alarm_ids", "alarm_names", "feature_ids", "parameter_names"}
+    _DEPRECATED_KEYS = {"yang_paths", "feature_names", "alarm_ids", "alarm_names", "feature_ids", "parameter_names", "counter_names", "counter_groups"}
     _ID_NAME_KEYS = {"alarms", "features"}
 
     existing: dict = {}
@@ -132,6 +134,10 @@ def build_and_write(
             by_name = {e["name"]: e["feature_id"] for e in existing.get("parameters", [])}
             by_name.update({e["name"]: e["feature_id"] for e in new_entities.get("parameters", [])})
             merged["parameters"] = [{"name": k, "feature_id": v} for k, v in sorted(by_name.items())]
+        elif key == "counters":
+            by_name: dict[str, dict] = {e["name"]: e for e in existing.get("counters", [])}
+            by_name.update({e["name"]: e for e in new_entities.get("counters", [])})
+            merged["counters"] = [v for _, v in sorted(by_name.items())]
         else:
             merged[key] = sorted(set(existing.get(key, [])) | set(new_entities.get(key, [])))
 
