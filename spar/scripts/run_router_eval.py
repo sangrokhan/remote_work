@@ -10,12 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date
+from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 SPAR_ROOT = Path(__file__).parent.parent
-DEFAULT_GOLDSET = SPAR_ROOT / "data" / "goldsets" / "router_goldset.jsonl"
-DEFAULT_OUTPUT_DIR = SPAR_ROOT / "data" / "eval_results"
+DEFAULT_GOLDSET = SPAR_ROOT / "data" / "goldsets" / "goldset.jsonl"
+DEFAULT_OUTPUT_DIR = SPAR_ROOT / "output" / "router_eval"
 
 ROUTES = [
     "structured_lookup",
@@ -77,6 +78,50 @@ def build_confusion_matrix(
     return matrix
 
 
+def extract_failures(
+    goldset: list[dict],
+    expected: list[str],
+    predicted: list[str],
+) -> list[dict]:
+    """expected_route ≠ predicted_route 인 케이스 추출."""
+    failures = []
+    for item, exp, pred in zip(goldset, expected, predicted):
+        if exp != pred:
+            failures.append({
+                "query_id": item.get("query_id", ""),
+                "query": item["query"],
+                "expected_route": exp,
+                "predicted_route": pred,
+                "source_doc": item.get("source_doc", ""),
+                "type": item.get("type", ""),
+            })
+    return failures
+
+
+def format_failures_md(failures: list[dict], max_samples: int = 5) -> str:
+    if not failures:
+        return "## Failures\n\nNone.\n"
+
+    by_pair: dict[tuple, list] = defaultdict(list)
+    for f in failures:
+        by_pair[(f["expected_route"], f["predicted_route"])].append(f)
+
+    lines = [f"## Failures ({len(failures)} total)", ""]
+
+    lines += ["### Distribution", "", "| expected | predicted | count |", "|---|---|---|"]
+    for (exp, pred), items in sorted(by_pair.items(), key=lambda x: -len(x[1])):
+        lines.append(f"| {exp} | {pred} | {len(items)} |")
+
+    lines += ["", "### Samples"]
+    for (exp, pred), items in sorted(by_pair.items(), key=lambda x: -len(x[1])):
+        lines.append(f"\n#### {exp} → {pred} ({len(items)}개)")
+        for item in items[:max_samples]:
+            qid = item["query_id"] or "-"
+            lines.append(f"- [{qid}] {item['query']}")
+
+    return "\n".join(lines) + "\n"
+
+
 def eval_regex(goldset: list[dict]) -> tuple[list[str], list[str]]:
     """RegexRouter로 평가. 외부 서비스 불필요."""
     sys.path.insert(0, str(SPAR_ROOT / "src"))
@@ -120,6 +165,7 @@ def format_report(
     layer: str,
     date_str: str,
     coverage: dict | None = None,
+    failures: list[dict] | None = None,
 ) -> str:
     total_support = sum(v["support"] for v in metrics["per_route"].values())
     correct = sum(v["tp"] for v in metrics["per_route"].values())
@@ -161,15 +207,17 @@ def format_report(
             row = f"| {actual} | " + " | ".join(str(row_vals.get(c, 0)) for c in route_cols) + " |"
             lines.append(row)
 
+    lines += ["", format_failures_md(failures or [])]
+
     return "\n".join(lines) + "\n"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="라우터 골드셋 평가")
     parser.add_argument("--goldset", type=Path, default=DEFAULT_GOLDSET)
-    parser.add_argument("--layer", choices=["regex", "embedding", "llm", "hybrid"], default="hybrid")
+    parser.add_argument("--layer", choices=["regex", "embedding"], default="regex")
     parser.add_argument("--threshold", type=float, default=0.65)
-    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=None)
     args = parser.parse_args()
 
     if not args.goldset.exists():
@@ -179,13 +227,17 @@ def main() -> None:
     goldset = load_goldset(args.goldset)
     print(f"goldset {len(goldset)}개 로드")
 
-    today = date.today().isoformat()
-    if args.output is None:
-        args.output = DEFAULT_OUTPUT_DIR / f"router_eval_{today}.md"
+    now = datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    ts_str = now.strftime("%Y%m%d_%H%M%S")
 
+    if args.output_dir is None:
+        args.output_dir = DEFAULT_OUTPUT_DIR / ts_str
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    coverage = None
     if args.layer == "regex":
         expected, predicted = eval_regex(goldset)
-        coverage = None
     elif args.layer == "embedding":
         expected, predicted = eval_embedding(goldset, args.threshold)
         fallback_count = sum(1 for p in predicted if p == "default_rag")
@@ -195,23 +247,39 @@ def main() -> None:
             "fallback": fallback_count,
             "total": len(predicted),
         }
-    else:
-        print(f"ERROR: --layer {args.layer} 는 아직 미구현. regex 또는 embedding 사용.", file=sys.stderr)
-        sys.exit(1)
 
     metrics = compute_metrics(expected, predicted, ROUTES)
     confusion = build_confusion_matrix(expected, predicted, ROUTES)
-    report = format_report(metrics, confusion, layer=args.layer, date_str=today, coverage=coverage)
+    failures = extract_failures(goldset, expected, predicted)
 
     print(f"\nOverall accuracy: {metrics['accuracy']:.1%}")
     print("Per-route F1:")
     for route, m in metrics["per_route"].items():
         if m["support"] > 0:
             print(f"  {route:22s}: {m['f1']:.2f}  (support={m['support']})")
+    print(f"\nFailures: {len(failures)}/{len(goldset)}")
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(report, encoding="utf-8")
-    print(f"\n리포트 저장: {args.output}")
+    md_path = args.output_dir / f"router_eval_{args.layer}.md"
+    json_path = args.output_dir / f"router_eval_{args.layer}.json"
+
+    report = format_report(metrics, confusion, layer=args.layer, date_str=date_str, coverage=coverage, failures=failures)
+    md_path.write_text(report, encoding="utf-8")
+
+    json_data = {
+        "layer": args.layer,
+        "date": date_str,
+        "goldset": str(args.goldset),
+        "total": len(goldset),
+        "accuracy": metrics["accuracy"],
+        "per_route": metrics["per_route"],
+        "confusion_matrix": confusion,
+        "coverage": coverage,
+        "failures": failures,
+    }
+    json_path.write_text(json.dumps(json_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"MD  저장: {md_path}")
+    print(f"JSON 저장: {json_path}")
 
 
 if __name__ == "__main__":
