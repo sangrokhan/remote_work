@@ -35,10 +35,10 @@ def _make_counter() -> CounterRecord:
 
 def _make_alarm() -> AlarmRecord:
     return AlarmRecord(
-        alarm_id="4050",
+        alarm_id="A0010001R",
         alarm_name="Cell Unavailable",
         severity="Critical",
-        category="Hardware",
+        group="Hardware",
     )
 
 

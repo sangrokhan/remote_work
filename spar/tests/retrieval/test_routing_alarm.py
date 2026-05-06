@@ -8,11 +8,11 @@ def setup_function(_):
 
 
 def test_alarm_code_lookup_populates_structured_record():
-    result = routing.resolve_alarm_entity({"alarm_code": "ALM-1003"})
+    result = routing.resolve_alarm_entity({"alarm_code": "A0010003R"})
     assert result is not None
-    assert result["alarm_id"] == "ALM-1003"
+    assert result["alarm_id"] == "A0010003R"
     assert result["alarm_name"] == "Cell Down"
-    assert "ALM-1003" in result["keywords"]
+    assert "A0010003R" in result["keywords"]
     assert "Cell Down" in result["keywords"]
 
 

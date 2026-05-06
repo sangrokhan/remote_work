@@ -50,8 +50,8 @@ def test_search_by_name_partial():
 
 def test_singleton_loads_default_sample():
     idx = get_alarm_index()
-    assert len(idx) == 12
-    assert idx.lookup("ALM-1003").alarm_name == "Cell Down"
+    assert len(idx) == 16
+    assert idx.lookup("A0010003R").alarm_name == "Cell Down"
 
 
 def test_singleton_caches():
@@ -63,4 +63,4 @@ def test_singleton_caches():
 def test_env_override(monkeypatch):
     monkeypatch.setenv("SPAR_ALARM_REF_PATH", str(SAMPLE))
     idx = get_alarm_index()
-    assert len(idx) == 12
+    assert len(idx) == 16
