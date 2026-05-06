@@ -51,23 +51,21 @@ class TestBasicParsing:
         rec = result.records[0]
         assert rec.param_name == "handover-preparation-timer"
         assert rec.yang_path == "ManagedElement/GNBCUCPFunction/NRCellCU/HandoverConfig"
-        assert rec.feature_name == "FGR-HO0101"
+        assert rec.related_feature_id == "FGR-HO0101"
         assert rec.type == "INTEGER"
         assert rec.default == "100"
-        assert rec.min == "0"
-        assert rec.max == "1023"
+        assert rec.range == "0..1023"
         assert "Handover preparation" in rec.description
 
-    def test_enumeration_no_min_max(self):
+    def test_enumeration_no_range(self):
         result = parse_parameter_ref_excel(SAMPLE_PATH)
         rach_enum = next(r for r in result.records if r.param_name == "rach-power-ramping-step")
         assert rach_enum.type == "ENUMERATION"
-        assert rach_enum.min == ""
-        assert rach_enum.max == ""
+        assert rach_enum.range == ""
 
     def test_all_features_present(self):
         result = parse_parameter_ref_excel(SAMPLE_PATH)
-        features = {r.feature_name for r in result.records}
+        features = {r.related_feature_id for r in result.records}
         assert features == {"FGR-HO0101", "FGR-HO0102", "FGR-CA0201", "FGR-RS0101", "FGR-BW0301"}
 
 
@@ -204,6 +202,10 @@ class TestEdgeCases:
         rec = ParameterRecord(param_name="p", yang_path="A/B")
         d = rec.to_dict()
         assert set(d.keys()) == {
-            "param_name", "yang_path", "feature_name",
-            "type", "default", "min", "max", "description"
+            "param_name", "yang_path", "description",
+            "leaf_status", "units", "type", "pattern", "range", "default",
+            "bandwidth_dependency", "config_value", "level", "restriction",
+            "service_impact", "realtime_change", "reference", "mandatory",
+            "param_family", "related_feature_id", "user_level",
+            "feature_name", "min", "max",
         }
