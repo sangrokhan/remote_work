@@ -1,7 +1,7 @@
 """Samsung RAN 파라미터 레퍼런스 Excel 파서.
 
-지원 컬럼 (순서 무관, 헤더명으로 자동 탐색):
-    Hierarchy, Parameter Description, Attribute Key, Leaf Status,
+22-column format (순서 무관, 헤더명으로 자동 탐색):
+    Hierarchy, Parameter, Description, Attribute, Key Leaf, Status,
     Units, Type, Pattern, Range, Default Value, Bandwidth-Dependancy,
     Config value, Level, Restriction, Service Impact, Real time change,
     Reference, Mandatory, Parameter-Family, Related Feature ID, User Level
@@ -20,60 +20,61 @@ _COLUMN_ALIASES: dict[str, str] = {
     "hierarchy": "yang_path",
     "yang path": "yang_path",
     "yang": "yang_path",
-    # Parameter Description (col 1)
-    "parameter description": "description",
-    "description": "description",
-    "desc": "description",
-    # Attribute Key (col 2)
-    "attribute key": "param_name",
-    "attributekey": "param_name",
+    # Parameter (col 1)
+    "parameter": "param_name",
     "parameter name": "param_name",
     "param name": "param_name",
-    "parameter": "param_name",
     "name": "param_name",
-    # Leaf Status (col 3)
-    "leaf status": "leaf_status",
-    "leafstatus": "leaf_status",
-    # Units (col 4)
+    # Description (col 2)
+    "description": "description",
+    "desc": "description",
+    # Attribute (col 3) — leaf / leaf-list
+    "attribute": "attribute",
+    # Key Leaf (col 4) — X / O
+    "key leaf": "key_leaf",
+    "keyleaf": "key_leaf",
+    # Status (col 5) — current / deprecated
+    "status": "status",
+    # Units (col 6)
     "units": "units",
     "unit": "units",
-    # Type (col 5)
+    # Type (col 7)
     "type": "type",
-    # Pattern (col 6)
+    # Pattern (col 8)
     "pattern": "pattern",
-    # Range (col 7)
+    # Range (col 9)
     "range": "range",
-    # Default Value (col 8)
+    # Default Value (col 10)
     "default value": "default",
     "default": "default",
-    # Bandwidth-Dependancy (col 9)
+    # Bandwidth-Dependancy (col 11)
     "bandwidth-dependancy": "bandwidth_dependency",
     "bandwidth dependancy": "bandwidth_dependency",
     "bandwidth dependency": "bandwidth_dependency",
-    # Config value (col 10)
+    # Config value (col 12)
     "config value": "config_value",
     "config_value": "config_value",
-    # Level (col 11)
+    # Level (col 13)
     "level": "level",
-    # Restriction (col 12)
+    # Restriction (col 14)
     "restriction": "restriction",
-    # Service Impact (col 13)
+    # Service Impact (col 15)
     "service impact": "service_impact",
     "service_impact": "service_impact",
-    # Real time change (col 14)
+    # Real time change (col 16)
     "real time change": "realtime_change",
     "real-time change": "realtime_change",
-    # Reference (col 15)
+    # Reference (col 17)
     "reference": "reference",
-    # Mandatory (col 16)
+    # Mandatory (col 18)
     "mandatory": "mandatory",
-    # Parameter-Family (col 17)
+    # Parameter-Family (col 19)
     "parameter-family": "param_family",
     "parameter family": "param_family",
-    # Related Feature ID (col 18)
+    # Related Feature ID (col 20)
     "related feature id": "related_feature_id",
     "related feature": "related_feature_id",
-    # User Level (col 19)
+    # User Level (col 21)
     "user level": "user_level",
     "userlevel": "user_level",
     # legacy aliases
@@ -93,7 +94,9 @@ class ParameterRecord:
     param_name: str
     yang_path: str
     description: str = ""
-    leaf_status: str = ""
+    attribute: str = ""       # leaf / leaf-list
+    key_leaf: str = ""        # X / O
+    status: str = ""          # current / deprecated
     units: str = ""
     type: str = ""
     pattern: str = ""
@@ -134,6 +137,10 @@ class ParameterRecord:
         ]
         if self.description:
             lines.append(f"Description: {self.description}")
+        if self.attribute:
+            lines.append(f"Attribute: {self.attribute}")
+        if self.status:
+            lines.append(f"Status: {self.status}")
         if self.type:
             lines.append(f"Type: {self.type}")
         if self.pattern:
@@ -151,8 +158,6 @@ class ParameterRecord:
             lines.append("Value: " + ", ".join(value_parts))
         if self.units:
             lines.append(f"Units: {self.units}")
-        if self.leaf_status:
-            lines.append(f"Leaf Status: {self.leaf_status}")
         if self.mandatory:
             lines.append(f"Mandatory: {self.mandatory}")
         if self.param_family:
@@ -168,7 +173,9 @@ class ParameterRecord:
             "param_name": self.param_name,
             "yang_path": self.yang_path,
             "description": self.description,
-            "leaf_status": self.leaf_status,
+            "attribute": self.attribute,
+            "key_leaf": self.key_leaf,
+            "status": self.status,
             "units": self.units,
             "type": self.type,
             "pattern": self.pattern,
@@ -213,7 +220,7 @@ def _resolve_header_row(ws: openpyxl.worksheet.worksheet.Worksheet) -> tuple[int
             return row_idx, col_map
     raise ValueError(
         f"헤더 행 탐색 실패 — 필수 컬럼 없음: {REQUIRED_FIELDS}. "
-        "컬럼명 확인 필요 (Parameter Name, YANG Path)"
+        "컬럼명 확인 필요 (Parameter, Hierarchy)"
     )
 
 
@@ -257,7 +264,9 @@ def parse_parameter_ref_excel(
             param_name=param_name,
             yang_path=yang_path,
             description=_cell_str(row, col_map.get("description")),
-            leaf_status=_cell_str(row, col_map.get("leaf_status")),
+            attribute=_cell_str(row, col_map.get("attribute")),
+            key_leaf=_cell_str(row, col_map.get("key_leaf")),
+            status=_cell_str(row, col_map.get("status")),
             units=_cell_str(row, col_map.get("units")),
             type=_cell_str(row, col_map.get("type")),
             pattern=_cell_str(row, col_map.get("pattern")),

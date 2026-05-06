@@ -203,7 +203,8 @@ class TestEdgeCases:
         d = rec.to_dict()
         assert set(d.keys()) == {
             "param_name", "yang_path", "description",
-            "leaf_status", "units", "type", "pattern", "range", "default",
+            "attribute", "key_leaf", "status",
+            "units", "type", "pattern", "range", "default",
             "bandwidth_dependency", "config_value", "level", "restriction",
             "service_impact", "realtime_change", "reference", "mandatory",
             "param_family", "related_feature_id", "user_level",
