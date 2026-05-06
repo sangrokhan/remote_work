@@ -227,4 +227,92 @@ pip install -e ".[dev]"
 
 ---
 
+## 11. Git Worktree 운영 가이드
+
+### ⚠️ 핵심 주의: Git 저장소 루트 위치
+
+```
+git rev-parse --show-toplevel
+# → /home/han/.openclaw/workspace/remote_work   ← 저장소 루트 (spar/ 의 상위!)
+```
+
+**저장소 루트는 `spar/`가 아니라 그 상위 디렉토리(`remote_work/`)** 임.  
+`spar/`에서 git 명령을 실행해도 동작하지만, **파일 경로는 `spar/` 기준이 아니라 `remote_work/` 기준**으로 추적됨.
+
+---
+
+### Worktree 생성
+
+```bash
+# spar/ 디렉토리 안에서 실행
+cd /path/to/remote_work/spar
+git worktree add .worktrees/<branch-slug> -b feat/<branch-name>
+```
+
+`.worktrees/`는 `.gitignore`에 등록되어 있음.
+
+---
+
+### Worktree 안에서 파일 커밋 시 경로 주의
+
+Worktree 내부 (`spar/.worktrees/feat-xxx/`) 에서 `git add src/foo.py` 하면,  
+저장소 루트 기준으로 `src/foo.py` (즉 `remote_work/src/foo.py`) 로 추적됨.  
+**올바른 경로는 `spar/src/foo.py` (저장소 루트 기준).**
+
+```bash
+# worktree 디렉토리 안에서:
+git add spar/src/spar/parsers/new_parser.py   # ✅ 올바름
+git add src/spar/parsers/new_parser.py        # ❌ 잘못된 경로 — remote_work/src/ 에 생성됨
+```
+
+실수로 잘못된 경로에 커밋했다면:
+
+```bash
+cd /path/to/remote_work   # 저장소 루트
+cp src/wrong_file.py spar/src/correct/path/file.py
+git rm src/wrong_file.py
+git add spar/src/correct/path/file.py
+git commit -m "fix: 잘못된 경로 수정"
+```
+
+---
+
+### Worktree 테스트 실행
+
+pytest 는 `pyproject.toml` 의 `pythonpath = ["src"]` 설정으로 `remote_work/src` 를 추가함.  
+Worktree 의 수정 코드를 테스트하려면 PYTHONPATH 를 명시적으로 지정:
+
+```bash
+PYTHONPATH=/path/to/spar/.worktrees/<branch>/src \
+  /path/to/spar/.venv/bin/python3 -m pytest \
+  .worktrees/<branch>/tests/parsers/test_foo.py \
+  --override-ini="pythonpath="
+```
+
+---
+
+### Worktree → main 머지 절차
+
+```bash
+# 1. 저장소 루트로 이동 (중요!)
+cd /path/to/remote_work
+
+# 2. main 브랜치 확인
+git branch --show-current   # → main
+
+# 3. 머지
+git merge feat/<branch-name> --no-ff -m "feat: ..."
+
+# 4. 파일 경로 검증 — spar/ 하위에 있는지 확인
+git show HEAD --name-only | grep -v "^spar/" | grep -v "^$\|^commit\|^Merge\|^Author\|^Date"
+# 위 명령 출력이 비어있으면 ✅, spar/ 외 경로가 나오면 ❌ 경로 수정 필요
+
+# 5. 정상 확인 후 worktree 제거
+cd /path/to/spar
+git worktree remove .worktrees/<branch-slug>
+git branch -d feat/<branch-name>
+```
+
+---
+
 *본 문서는 디렉토리/스택/규약 변경 시 즉시 갱신합니다.*
