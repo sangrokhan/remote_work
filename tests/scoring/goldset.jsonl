@@ -1,0 +1,3 @@
+{"question": "What parameters improve downlink throughput?", "expected_param_ids": ["param:maxCaBands", "param:mimoLayers"], "gen_filter": null}
+{"question": "How to improve 5G downlink throughput?", "expected_param_ids": ["param:maxCaBands", "param:mimoLayers"], "gen_filter": "5G"}
+{"question": "What controls Carrier Aggregation?", "expected_param_ids": ["param:maxCaBands", "param:caBandwidth"], "gen_filter": null}
