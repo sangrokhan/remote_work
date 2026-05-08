@@ -1,0 +1,4 @@
+id,name,data_type,range_min,range_max,default_value,unit,description,linked_feature_id
+param:maxCaBands,maxCaBands,int,1,4,1,,Maximum number of component carriers to aggregate,feature:CA
+param:caBandwidth,caBandwidth,int,5,100,20,MHz,Bandwidth per component carrier,feature:CA
+param:mimoLayers,mimoLayers,int,1,8,2,,Number of MIMO spatial layers,feature:MIMO
