@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass, field
 
 from causality_graph.extraction.md_parser import ParsedFeature
-from causality_graph.llm import call_llm
+from causality_graph.utils.llm import call_llm
 
 EXTRACTION_PROMPT = """You are a cellular network domain expert. Given a parsed vendor feature document, extract all causal relationships as structured triples.
 

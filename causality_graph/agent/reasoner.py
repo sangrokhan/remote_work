@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, field
 
-from causality_graph.llm import call_llm
+from causality_graph.utils.llm import call_llm
 
 REASONING_PROMPT = """You are a cellular network optimization expert. Given a subgraph of causal relationships, answer the user's question.
 
