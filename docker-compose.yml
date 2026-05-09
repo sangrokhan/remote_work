@@ -1,0 +1,20 @@
+services:
+  review-ui:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    command: uvicorn causality_graph.review_ui.app:app --host 0.0.0.0 --port 8000
+
+  query-api:
+    build: .
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_API_KEY=${LLM_API_KEY:-local}
+      - LLM_MODEL=${LLM_MODEL:-llama3}
+    command: uvicorn causality_graph.agent.api:app --host 0.0.0.0 --port 8001

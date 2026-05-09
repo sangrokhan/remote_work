@@ -1,6 +1,7 @@
+import os
 from pathlib import Path
 from typing import Optional
-import anthropic
+import openai
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -30,7 +31,11 @@ def _get_retriever() -> Retriever:
 def _get_reasoner() -> Reasoner:
     global _reasoner
     if _reasoner is None:
-        _reasoner = Reasoner(client=anthropic.Anthropic())
+        client = openai.OpenAI(
+            base_url=os.environ["LLM_BASE_URL"],
+            api_key=os.environ.get("LLM_API_KEY", "local"),
+        )
+        _reasoner = Reasoner(client=client, model=os.environ.get("LLM_MODEL", "llama3"))
     return _reasoner
 
 

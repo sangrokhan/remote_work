@@ -44,12 +44,12 @@ class Reasoner:
             nodes=json.dumps(subgraph["nodes"], indent=2),
             edges=json.dumps(subgraph["edges"], indent=2),
         )
-        response = self._client.messages.create(
+        response = self._client.chat.completions.create(
             model=self._model,
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = response.content[0].text
+        raw = response.choices[0].message.content
         try:
             data = json.loads(raw)
             return ReasoningResult(

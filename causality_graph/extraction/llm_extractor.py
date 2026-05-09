@@ -60,12 +60,12 @@ class LLMExtractor:
 
     def extract(self, feature: ParsedFeature) -> ExtractionResult:
         prompt = self._build_prompt(feature)
-        response = self._client.messages.create(
+        response = self._client.chat.completions.create(
             model=self._model,
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = response.content[0].text
+        raw = response.choices[0].message.content
         try:
             data = json.loads(raw)
             triples = data.get("triples", [])
