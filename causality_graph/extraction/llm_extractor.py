@@ -2,6 +2,7 @@ import json
 from dataclasses import dataclass, field
 
 from causality_graph.extraction.md_parser import ParsedFeature
+from causality_graph.llm import call_llm
 
 EXTRACTION_PROMPT = """You are a cellular network domain expert. Given a parsed vendor feature document, extract all causal relationships as structured triples.
 
@@ -60,12 +61,7 @@ class LLMExtractor:
 
     def extract(self, feature: ParsedFeature) -> ExtractionResult:
         prompt = self._build_prompt(feature)
-        response = self._client.chat.completions.create(
-            model=self._model,
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.choices[0].message.content
+        raw = call_llm(self._client, self._model, prompt, max_tokens=2048)
         try:
             data = json.loads(raw)
             triples = data.get("triples", [])

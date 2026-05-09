@@ -1,6 +1,8 @@
 import json
 from dataclasses import dataclass, field
 
+from causality_graph.llm import call_llm
+
 REASONING_PROMPT = """You are a cellular network optimization expert. Given a subgraph of causal relationships, answer the user's question.
 
 Question: {question}
@@ -44,12 +46,7 @@ class Reasoner:
             nodes=json.dumps(subgraph["nodes"], indent=2),
             edges=json.dumps(subgraph["edges"], indent=2),
         )
-        response = self._client.chat.completions.create(
-            model=self._model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.choices[0].message.content
+        raw = call_llm(self._client, self._model, prompt, max_tokens=1024)
         try:
             data = json.loads(raw)
             return ReasoningResult(
