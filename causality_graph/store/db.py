@@ -3,9 +3,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
-from causality_graph.schema import (
-    KPINode, FeatureNode, ParameterNode, Edge, NodeType, Generation
-)
+from causality_graph.schema import Edge, NodeType
 
 
 class MetadataDB:
@@ -20,7 +18,7 @@ class MetadataDB:
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 node_type TEXT NOT NULL,
-                gen TEXT,
+                layer TEXT,
                 category TEXT,
                 unit TEXT,
                 good_direction TEXT,
@@ -28,6 +26,7 @@ class MetadataDB:
                 range_min REAL,
                 range_max REAL,
                 default_value TEXT,
+                spec_ref TEXT,
                 description TEXT
             );
             CREATE TABLE IF NOT EXISTS edges (
@@ -36,7 +35,6 @@ class MetadataDB:
                 relation TEXT NOT NULL,
                 direction TEXT,
                 magnitude TEXT,
-                condition TEXT,
                 confidence REAL DEFAULT 1.0,
                 validated INTEGER DEFAULT 0,
                 notes TEXT,
@@ -47,17 +45,20 @@ class MetadataDB:
 
     def upsert_node(self, node, node_type: NodeType) -> None:
         d = asdict(node)
+        layer = d.get("layer")
+        if hasattr(layer, "value"):
+            layer = layer.value
         self._conn.execute("""
             INSERT OR REPLACE INTO nodes
-            (id, name, node_type, gen, category, unit, good_direction,
-             data_type, range_min, range_max, default_value, description)
-            VALUES (:id, :name, :node_type, :gen, :category, :unit, :good_direction,
-                    :data_type, :range_min, :range_max, :default_value, :description)
+            (id, name, node_type, layer, category, unit, good_direction,
+             data_type, range_min, range_max, default_value, spec_ref, description)
+            VALUES (:id, :name, :node_type, :layer, :category, :unit, :good_direction,
+                    :data_type, :range_min, :range_max, :default_value, :spec_ref, :description)
         """, {
             "id": d["id"],
             "name": d["name"],
             "node_type": node_type.value,
-            "gen": d.get("gen"),
+            "layer": layer,
             "category": d.get("category"),
             "unit": d.get("unit"),
             "good_direction": d.get("good_direction"),
@@ -65,6 +66,7 @@ class MetadataDB:
             "range_min": d.get("range_min"),
             "range_max": d.get("range_max"),
             "default_value": d.get("default_value"),
+            "spec_ref": d.get("spec_ref"),
             "description": d.get("description", ""),
         })
         self._conn.commit()
@@ -73,8 +75,8 @@ class MetadataDB:
         d = asdict(edge)
         self._conn.execute("""
             INSERT OR REPLACE INTO edges
-            (from_id, to_id, relation, direction, magnitude, condition, confidence, validated, notes)
-            VALUES (:from_id, :to_id, :relation, :direction, :magnitude, :condition,
+            (from_id, to_id, relation, direction, magnitude, confidence, validated, notes)
+            VALUES (:from_id, :to_id, :relation, :direction, :magnitude,
                     :confidence, :validated, :notes)
         """, {
             "from_id": d["from_id"],
@@ -82,7 +84,6 @@ class MetadataDB:
             "relation": d["relation"].value if hasattr(d["relation"], "value") else d["relation"],
             "direction": d["direction"].value if d["direction"] else None,
             "magnitude": d["magnitude"].value if d["magnitude"] else None,
-            "condition": d.get("condition", ""),
             "confidence": d.get("confidence", 1.0),
             "validated": int(d.get("validated", False)),
             "notes": d.get("notes", ""),
@@ -95,16 +96,12 @@ class MetadataDB:
         ).fetchone()
         return dict(row) if row else None
 
-    def filter_nodes(self, node_type: Optional[NodeType] = None,
-                     gen: Optional[Generation] = None) -> list[dict]:
+    def filter_nodes(self, node_type: Optional[NodeType] = None) -> list[dict]:
         query = "SELECT * FROM nodes WHERE 1=1"
         params: list = []
         if node_type:
             query += " AND node_type = ?"
             params.append(node_type.value)
-        if gen:
-            query += " AND gen = ?"
-            params.append(gen.value)
         rows = self._conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
 

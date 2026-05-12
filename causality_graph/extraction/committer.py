@@ -17,7 +17,6 @@ def _triple_to_edge(triple: dict) -> Edge:
         relation=EdgeType(triple["relation"]),
         direction=direction,
         magnitude=magnitude,
-        condition=triple.get("condition", ""),
         confidence=triple.get("confidence", 1.0),
         validated=True,
         notes=triple.get("notes", ""),
