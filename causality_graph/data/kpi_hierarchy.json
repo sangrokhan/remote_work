@@ -1,0 +1,913 @@
+{
+  "version": "1.0",
+  "description": "NR control hierarchy: ControlGroup → Function → Feature → KPI",
+  "spec_sources": ["3GPP TS 28.552", "3GPP TS 28.554", "3GPP TS 38.300"],
+  "generated": "2026-05-12",
+  "layers": ["PHY", "MAC", "RLC", "PDCP", "SDAP", "RRC", "NAS"],
+  "control_groups": [
+
+    {
+      "id": "cg:mobility",
+      "name": "Mobility",
+      "description": "Controls UE movement between cells and radio link failure recovery",
+      "functions": [
+        {
+          "id": "fn:handover",
+          "name": "Handover",
+          "kpis": [
+            "kpi:ho_intra_freq_success_rate",
+            "kpi:ho_inter_freq_success_rate",
+            "kpi:ho_inter_rat_success_rate",
+            "kpi:ho_prep_success_rate",
+            "kpi:ho_exec_success_rate",
+            "kpi:ho_failure_rate",
+            "kpi:ho_ping_pong_rate",
+            "kpi:ho_interruption_time",
+            "kpi:xn_ho_success_rate",
+            "kpi:e2e_ho_success_rate"
+          ],
+          "features": [
+            {
+              "id": "feat:intra_freq_ho",
+              "name": "Intra-frequency HO",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:ho_intra_freq_success_rate",
+                "kpi:ho_intra_freq_att",
+                "kpi:ho_prep_success_rate",
+                "kpi:ho_exec_success_rate",
+                "kpi:ho_failure_rate"
+              ]
+            },
+            {
+              "id": "feat:inter_freq_ho",
+              "name": "Inter-frequency HO",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:ho_inter_freq_success_rate",
+                "kpi:ho_inter_freq_att",
+                "kpi:ho_failure_rate"
+              ]
+            },
+            {
+              "id": "feat:inter_rat_ho",
+              "name": "Inter-RAT HO (NR→LTE)",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:ho_inter_rat_success_rate",
+                "kpi:ho_failure_rate"
+              ]
+            },
+            {
+              "id": "feat:cho",
+              "name": "Conditional HO (CHO)",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:cho_success_rate",
+                "kpi:ho_interruption_time"
+              ]
+            },
+            {
+              "id": "feat:daps_ho",
+              "name": "DAPS HO",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:daps_ho_success_rate",
+                "kpi:ho_interruption_time",
+                "kpi:dl_packet_delay_mean"
+              ]
+            },
+            {
+              "id": "feat:xn_ho",
+              "name": "Xn-based HO",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:xn_ho_success_rate",
+                "kpi:xn_setup_success_rate",
+                "kpi:ho_interruption_time"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:mobility_measurement",
+          "name": "Mobility Measurement",
+          "kpis": [
+            "kpi:ho_ping_pong_rate",
+            "kpi:dl_avg_rsrp",
+            "kpi:dl_avg_rsrq",
+            "kpi:dl_avg_sinr"
+          ],
+          "features": [
+            {
+              "id": "feat:a3_event",
+              "name": "A3 Event Evaluation",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:ho_intra_freq_success_rate",
+                "kpi:ho_ping_pong_rate",
+                "kpi:ho_failure_rate"
+              ]
+            },
+            {
+              "id": "feat:b1_event",
+              "name": "B1 Event Evaluation",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:ho_inter_freq_success_rate",
+                "kpi:ho_inter_rat_success_rate"
+              ]
+            },
+            {
+              "id": "feat:l3_filtering",
+              "name": "L3 Measurement Filtering",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:ho_ping_pong_rate",
+                "kpi:ho_failure_rate",
+                "kpi:dl_avg_rsrp"
+              ]
+            },
+            {
+              "id": "feat:meas_gap",
+              "name": "Measurement Gap Configuration",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:ho_inter_freq_success_rate",
+                "kpi:dl_prb_utilization",
+                "kpi:dl_user_throughput_mean"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:rlf_recovery",
+          "name": "Radio Link Failure Recovery",
+          "kpis": [
+            "kpi:rrc_conn_reestab_success_rate",
+            "kpi:rrc_conn_reestab_att",
+            "kpi:ue_ctx_release_rlf",
+            "kpi:rrc_conn_drop_rate"
+          ],
+          "features": [
+            {
+              "id": "feat:rlf_detection",
+              "name": "RLF Detection",
+              "layer": "RLC",
+              "kpis": [
+                "kpi:ue_ctx_release_rlf",
+                "kpi:rrc_conn_drop_rate",
+                "kpi:ul_bler"
+              ]
+            },
+            {
+              "id": "feat:rrc_reestablishment",
+              "name": "RRC Reestablishment",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:rrc_conn_reestab_success_rate",
+                "kpi:rrc_conn_reestab_att",
+                "kpi:ue_ctx_release_rlf"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:ue_inactive",
+          "name": "UE RRC Inactive",
+          "kpis": [
+            "kpi:ue_inactive_ratio",
+            "kpi:ue_inactive_resume_success_rate"
+          ],
+          "features": [
+            {
+              "id": "feat:rrc_inactive",
+              "name": "RRC Inactive State Management",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:ue_inactive_ratio",
+                "kpi:ue_inactive_resume_success_rate",
+                "kpi:energy_efficiency_dl"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "id": "cg:call",
+      "name": "Call",
+      "description": "Controls RRC connection lifecycle and UE context management",
+      "functions": [
+        {
+          "id": "fn:rrc_conn_mgmt",
+          "name": "RRC Connection Management",
+          "kpis": [
+            "kpi:rrc_conn_estab_success_rate",
+            "kpi:rrc_conn_estab_att",
+            "kpi:rrc_conn_estab_fail",
+            "kpi:rrc_conn_drop_rate",
+            "kpi:avg_connected_ue",
+            "kpi:max_connected_ue"
+          ],
+          "features": [
+            {
+              "id": "feat:rrc_setup",
+              "name": "RRC Setup",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:rrc_conn_estab_success_rate",
+                "kpi:rrc_conn_estab_att",
+                "kpi:rrc_conn_estab_fail"
+              ]
+            },
+            {
+              "id": "feat:rrc_resume",
+              "name": "RRC Resume",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:ue_inactive_resume_success_rate",
+                "kpi:rrc_conn_estab_success_rate"
+              ]
+            },
+            {
+              "id": "feat:paging",
+              "name": "Paging",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:paging_success_rate",
+                "kpi:paging_discarded_rate"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:ue_ctx_mgmt",
+          "name": "UE Context Management",
+          "kpis": [
+            "kpi:ue_ctx_release_rlf",
+            "kpi:ue_ctx_release_ho_fail",
+            "kpi:avg_connected_ue"
+          ],
+          "features": [
+            {
+              "id": "feat:ue_ctx_setup",
+              "name": "UE Context Setup",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:rrc_conn_estab_success_rate",
+                "kpi:avg_connected_ue"
+              ]
+            },
+            {
+              "id": "feat:ue_ctx_release",
+              "name": "UE Context Release",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:ue_ctx_release_rlf",
+                "kpi:ue_ctx_release_ho_fail",
+                "kpi:rrc_conn_drop_rate"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "id": "cg:bearer",
+      "name": "Bearer",
+      "description": "Controls data radio bearers, QoS, and PDU session lifecycle",
+      "functions": [
+        {
+          "id": "fn:drb_mgmt",
+          "name": "DRB Management",
+          "kpis": [
+            "kpi:drb_setup_success_rate",
+            "kpi:drb_setup_att",
+            "kpi:drb_drop_rate"
+          ],
+          "features": [
+            {
+              "id": "feat:drb_setup",
+              "name": "DRB Setup",
+              "layer": "PDCP",
+              "kpis": [
+                "kpi:drb_setup_success_rate",
+                "kpi:drb_setup_att"
+              ]
+            },
+            {
+              "id": "feat:drb_release",
+              "name": "DRB Release",
+              "layer": "PDCP",
+              "kpis": [
+                "kpi:drb_drop_rate"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:pdu_session_mgmt",
+          "name": "PDU Session Management",
+          "kpis": [
+            "kpi:pdu_session_estab_success_rate",
+            "kpi:pdu_session_estab_att",
+            "kpi:pdu_session_mod_success_rate",
+            "kpi:pdu_session_drop_rate",
+            "kpi:e2e_session_setup_success_rate",
+            "kpi:e2e_session_abnormal_release_rate"
+          ],
+          "features": [
+            {
+              "id": "feat:pdu_session_estab",
+              "name": "PDU Session Establishment",
+              "layer": "NAS",
+              "kpis": [
+                "kpi:pdu_session_estab_success_rate",
+                "kpi:pdu_session_estab_att",
+                "kpi:e2e_session_setup_success_rate"
+              ]
+            },
+            {
+              "id": "feat:pdu_session_mod",
+              "name": "PDU Session Modification",
+              "layer": "NAS",
+              "kpis": [
+                "kpi:pdu_session_mod_success_rate"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:qos_control",
+          "name": "QoS Control",
+          "kpis": [
+            "kpi:dl_packet_delay_mean",
+            "kpi:ul_packet_delay_mean",
+            "kpi:dl_packet_delay_p99",
+            "kpi:ul_packet_delay_p99",
+            "kpi:dl_packet_loss_rate",
+            "kpi:ul_packet_loss_rate",
+            "kpi:dl_jitter",
+            "kpi:ul_jitter",
+            "kpi:urllc_reliability",
+            "kpi:urllc_dl_latency",
+            "kpi:urllc_ul_latency",
+            "kpi:urllc_packet_loss_rate"
+          ],
+          "features": [
+            {
+              "id": "feat:gbr_admission",
+              "name": "GBR Admission Control",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:drb_setup_success_rate",
+                "kpi:dl_packet_delay_mean",
+                "kpi:urllc_reliability"
+              ]
+            },
+            {
+              "id": "feat:qos_flow_mapping",
+              "name": "QoS Flow to DRB Mapping",
+              "layer": "SDAP",
+              "kpis": [
+                "kpi:dl_packet_delay_mean",
+                "kpi:dl_packet_loss_rate",
+                "kpi:e2e_dl_throughput"
+              ]
+            },
+            {
+              "id": "feat:pdcp_rohc",
+              "name": "PDCP Header Compression (RoHC)",
+              "layer": "PDCP",
+              "kpis": [
+                "kpi:dl_cell_throughput",
+                "kpi:ul_cell_throughput",
+                "kpi:dl_prb_utilization"
+              ]
+            },
+            {
+              "id": "feat:pdcp_duplication",
+              "name": "PDCP Packet Duplication",
+              "layer": "PDCP",
+              "kpis": [
+                "kpi:dl_packet_loss_rate",
+                "kpi:urllc_reliability",
+                "kpi:dl_prb_utilization"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "id": "cg:load",
+      "name": "Load",
+      "description": "Controls radio resource load balancing and congestion management",
+      "functions": [
+        {
+          "id": "fn:admission_control",
+          "name": "Admission Control",
+          "kpis": [
+            "kpi:rrc_conn_estab_fail",
+            "kpi:drb_setup_success_rate",
+            "kpi:avg_connected_ue",
+            "kpi:dl_prb_utilization",
+            "kpi:ul_prb_utilization"
+          ],
+          "features": [
+            {
+              "id": "feat:rrc_admission",
+              "name": "RRC Admission Control",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:rrc_conn_estab_fail",
+                "kpi:avg_connected_ue",
+                "kpi:max_connected_ue"
+              ]
+            },
+            {
+              "id": "feat:drb_admission",
+              "name": "DRB Admission Control",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:drb_setup_success_rate",
+                "kpi:drb_drop_rate",
+                "kpi:dl_prb_utilization"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:load_balancing",
+          "name": "Load Balancing",
+          "kpis": [
+            "kpi:dl_prb_utilization",
+            "kpi:ul_prb_utilization",
+            "kpi:ho_intra_freq_success_rate",
+            "kpi:avg_connected_ue"
+          ],
+          "features": [
+            {
+              "id": "feat:mlb",
+              "name": "Mobility Load Balancing (MLB)",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:dl_prb_utilization",
+                "kpi:ul_prb_utilization",
+                "kpi:avg_connected_ue",
+                "kpi:ho_intra_freq_success_rate"
+              ]
+            },
+            {
+              "id": "feat:prb_load_control",
+              "name": "PRB Load Control",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:dl_prb_utilization",
+                "kpi:ul_prb_utilization",
+                "kpi:dl_cell_throughput",
+                "kpi:pdcch_blocking_rate"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:congestion_control",
+          "name": "Congestion Control",
+          "kpis": [
+            "kpi:pdcch_blocking_rate",
+            "kpi:paging_discarded_rate",
+            "kpi:ul_interference_noise_rise",
+            "kpi:rrc_conn_estab_fail"
+          ],
+          "features": [
+            {
+              "id": "feat:ul_interference_mgmt",
+              "name": "UL Interference Management",
+              "layer": "PHY",
+              "kpis": [
+                "kpi:ul_interference_noise_rise",
+                "kpi:ul_avg_sinr",
+                "kpi:ul_avg_rssi",
+                "kpi:ul_bler"
+              ]
+            },
+            {
+              "id": "feat:overload_control",
+              "name": "Overload Control",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:rrc_conn_estab_fail",
+                "kpi:paging_discarded_rate",
+                "kpi:pdcch_blocking_rate"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "id": "cg:media_access",
+      "name": "MediaAccess",
+      "description": "Controls MAC/PHY layer radio access: RACH, scheduling, HARQ, beam, MIMO, CA",
+      "functions": [
+        {
+          "id": "fn:rach",
+          "name": "RACH",
+          "kpis": [
+            "kpi:rach_cbra_success_rate",
+            "kpi:rach_cfra_success_rate",
+            "kpi:rach_preamble_tx_count",
+            "kpi:rach_avg_access_delay",
+            "kpi:rach_contention_resolution_success_rate",
+            "kpi:rach_msg3_retx_rate"
+          ],
+          "features": [
+            {
+              "id": "feat:cbra",
+              "name": "Contention-Based RA (CBRA)",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:rach_cbra_success_rate",
+                "kpi:rach_preamble_tx_count",
+                "kpi:rach_avg_access_delay",
+                "kpi:rach_contention_resolution_success_rate",
+                "kpi:rach_msg3_retx_rate"
+              ]
+            },
+            {
+              "id": "feat:cfra",
+              "name": "Contention-Free RA (CFRA)",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:rach_cfra_success_rate",
+                "kpi:rach_avg_access_delay"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:scheduling",
+          "name": "Scheduling",
+          "kpis": [
+            "kpi:dl_prb_utilization",
+            "kpi:ul_prb_utilization",
+            "kpi:dl_avg_mcs",
+            "kpi:ul_avg_mcs",
+            "kpi:dl_avg_cqi",
+            "kpi:dl_cce_utilization",
+            "kpi:ul_cce_utilization",
+            "kpi:dl_avg_rb_per_ue",
+            "kpi:ul_avg_rb_per_ue",
+            "kpi:active_dl_ue",
+            "kpi:active_ul_ue",
+            "kpi:pdcch_blocking_rate",
+            "kpi:dl_pdsch_volume",
+            "kpi:ul_pusch_volume"
+          ],
+          "features": [
+            {
+              "id": "feat:dl_scheduler",
+              "name": "DL Scheduler",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:dl_prb_utilization",
+                "kpi:dl_avg_mcs",
+                "kpi:dl_avg_rb_per_ue",
+                "kpi:active_dl_ue",
+                "kpi:dl_cell_throughput",
+                "kpi:pdcch_blocking_rate"
+              ]
+            },
+            {
+              "id": "feat:ul_scheduler",
+              "name": "UL Scheduler",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:ul_prb_utilization",
+                "kpi:ul_avg_mcs",
+                "kpi:ul_avg_rb_per_ue",
+                "kpi:active_ul_ue",
+                "kpi:ul_cell_throughput"
+              ]
+            },
+            {
+              "id": "feat:link_adaptation",
+              "name": "Link Adaptation (CQI/MCS)",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:dl_avg_mcs",
+                "kpi:ul_avg_mcs",
+                "kpi:dl_avg_cqi",
+                "kpi:dl_bler",
+                "kpi:ul_bler"
+              ]
+            },
+            {
+              "id": "feat:sps",
+              "name": "Semi-Persistent Scheduling (SPS)",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:dl_packet_delay_mean",
+                "kpi:ul_packet_delay_mean",
+                "kpi:dl_cce_utilization"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:harq",
+          "name": "HARQ",
+          "kpis": [
+            "kpi:dl_harq_initial_success_rate",
+            "kpi:dl_harq_retx_rate",
+            "kpi:ul_harq_initial_success_rate",
+            "kpi:ul_harq_retx_rate",
+            "kpi:dl_bler",
+            "kpi:ul_bler"
+          ],
+          "features": [
+            {
+              "id": "feat:dl_harq",
+              "name": "DL HARQ",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:dl_harq_initial_success_rate",
+                "kpi:dl_harq_retx_rate",
+                "kpi:dl_bler",
+                "kpi:dl_packet_delay_mean"
+              ]
+            },
+            {
+              "id": "feat:ul_harq",
+              "name": "UL HARQ",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:ul_harq_initial_success_rate",
+                "kpi:ul_harq_retx_rate",
+                "kpi:ul_bler",
+                "kpi:ul_packet_delay_mean"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:beam_management",
+          "name": "Beam Management",
+          "kpis": [
+            "kpi:beam_failure_rate",
+            "kpi:beam_failure_recovery_success_rate",
+            "kpi:dl_mimo_avg_layers",
+            "kpi:ul_mimo_avg_layers",
+            "kpi:csi_rs_resource_utilization",
+            "kpi:active_tci_state_count",
+            "kpi:dl_avg_sinr",
+            "kpi:dl_avg_rsrp"
+          ],
+          "features": [
+            {
+              "id": "feat:bfd",
+              "name": "Beam Failure Detection (BFD)",
+              "layer": "PHY",
+              "kpis": [
+                "kpi:beam_failure_rate",
+                "kpi:dl_avg_sinr",
+                "kpi:dl_avg_rsrp"
+              ]
+            },
+            {
+              "id": "feat:bfr",
+              "name": "Beam Failure Recovery (BFR)",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:beam_failure_recovery_success_rate",
+                "kpi:rrc_conn_drop_rate"
+              ]
+            },
+            {
+              "id": "feat:csi_rs_mgmt",
+              "name": "CSI-RS Resource Management",
+              "layer": "PHY",
+              "kpis": [
+                "kpi:csi_rs_resource_utilization",
+                "kpi:dl_avg_cqi",
+                "kpi:dl_avg_sinr"
+              ]
+            },
+            {
+              "id": "feat:tci_state_config",
+              "name": "TCI State Configuration",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:active_tci_state_count",
+                "kpi:dl_avg_sinr",
+                "kpi:dl_mimo_avg_layers"
+              ]
+            },
+            {
+              "id": "feat:beam_sweeping",
+              "name": "Beam Sweeping (SSB)",
+              "layer": "PHY",
+              "kpis": [
+                "kpi:dl_avg_rsrp",
+                "kpi:rach_cfra_success_rate",
+                "kpi:beam_failure_rate"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:mimo",
+          "name": "MIMO",
+          "kpis": [
+            "kpi:dl_mimo_avg_layers",
+            "kpi:ul_mimo_avg_layers",
+            "kpi:dl_mimo_rank1_ratio",
+            "kpi:dl_mimo_rank4_ratio",
+            "kpi:dl_cell_throughput",
+            "kpi:dl_spectrum_efficiency"
+          ],
+          "features": [
+            {
+              "id": "feat:su_mimo",
+              "name": "SU-MIMO",
+              "layer": "PHY",
+              "kpis": [
+                "kpi:dl_mimo_avg_layers",
+                "kpi:dl_mimo_rank4_ratio",
+                "kpi:dl_cell_throughput",
+                "kpi:dl_spectrum_efficiency"
+              ]
+            },
+            {
+              "id": "feat:mu_mimo",
+              "name": "MU-MIMO",
+              "layer": "PHY",
+              "kpis": [
+                "kpi:dl_prb_utilization",
+                "kpi:dl_cell_throughput",
+                "kpi:active_dl_ue"
+              ]
+            },
+            {
+              "id": "feat:rank_adaptation",
+              "name": "Rank Adaptation",
+              "layer": "PHY",
+              "kpis": [
+                "kpi:dl_mimo_avg_layers",
+                "kpi:dl_mimo_rank1_ratio",
+                "kpi:dl_avg_cqi",
+                "kpi:dl_bler"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:carrier_aggregation",
+          "name": "Carrier Aggregation",
+          "kpis": [
+            "kpi:scell_add_success_rate",
+            "kpi:scell_activation_success_rate",
+            "kpi:avg_active_scell_count",
+            "kpi:ca_utilization_ratio",
+            "kpi:dc_setup_success_rate",
+            "kpi:dl_cell_throughput",
+            "kpi:ul_cell_throughput"
+          ],
+          "features": [
+            {
+              "id": "feat:scell_mgmt",
+              "name": "SCell Management",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:scell_add_success_rate",
+                "kpi:scell_activation_success_rate",
+                "kpi:avg_active_scell_count",
+                "kpi:ca_utilization_ratio"
+              ]
+            },
+            {
+              "id": "feat:dual_connectivity",
+              "name": "Dual Connectivity (EN-DC / NR-DC)",
+              "layer": "RRC",
+              "kpis": [
+                "kpi:dc_setup_success_rate",
+                "kpi:dl_cell_throughput",
+                "kpi:ul_cell_throughput",
+                "kpi:avg_active_scell_count"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:power_energy",
+          "name": "Power & Energy Management",
+          "kpis": [
+            "kpi:cell_energy_consumption",
+            "kpi:energy_efficiency_dl",
+            "kpi:energy_efficiency_ul",
+            "kpi:sleep_ratio",
+            "kpi:drx_ratio",
+            "kpi:tx_power_utilization",
+            "kpi:ul_pusch_power_headroom_avg",
+            "kpi:e2e_energy_efficiency"
+          ],
+          "features": [
+            {
+              "id": "feat:cell_sleep",
+              "name": "Cell Sleep Mode",
+              "layer": "PHY",
+              "kpis": [
+                "kpi:sleep_ratio",
+                "kpi:cell_energy_consumption",
+                "kpi:energy_efficiency_dl"
+              ]
+            },
+            {
+              "id": "feat:drx",
+              "name": "DRX (Discontinuous Reception)",
+              "layer": "MAC",
+              "kpis": [
+                "kpi:drx_ratio",
+                "kpi:energy_efficiency_dl",
+                "kpi:dl_packet_delay_mean"
+              ]
+            },
+            {
+              "id": "feat:uplink_tpc",
+              "name": "UL Transmit Power Control (TPC)",
+              "layer": "PHY",
+              "kpis": [
+                "kpi:tx_power_utilization",
+                "kpi:ul_pusch_power_headroom_avg",
+                "kpi:ul_interference_noise_rise",
+                "kpi:ul_avg_sinr"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:rlc_flow_ctrl",
+          "name": "RLC Flow Control",
+          "kpis": [
+            "kpi:dl_rlc_retx_rate",
+            "kpi:ul_rlc_retx_rate",
+            "kpi:dl_rlc_sdu_discard_rate",
+            "kpi:dl_rlc_sdu_volume",
+            "kpi:ul_rlc_sdu_volume"
+          ],
+          "features": [
+            {
+              "id": "feat:rlc_am",
+              "name": "RLC AM (Acknowledged Mode)",
+              "layer": "RLC",
+              "kpis": [
+                "kpi:dl_rlc_retx_rate",
+                "kpi:ul_rlc_retx_rate",
+                "kpi:dl_packet_loss_rate"
+              ]
+            },
+            {
+              "id": "feat:rlc_um",
+              "name": "RLC UM (Unacknowledged Mode)",
+              "layer": "RLC",
+              "kpis": [
+                "kpi:dl_rlc_sdu_discard_rate",
+                "kpi:dl_jitter",
+                "kpi:ul_jitter"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fn:srs_management",
+          "name": "SRS Management",
+          "kpis": [
+            "kpi:srs_resource_utilization",
+            "kpi:ul_avg_sinr",
+            "kpi:ul_mimo_avg_layers"
+          ],
+          "features": [
+            {
+              "id": "feat:srs_config",
+              "name": "SRS Configuration",
+              "layer": "PHY",
+              "kpis": [
+                "kpi:srs_resource_utilization",
+                "kpi:ul_avg_sinr",
+                "kpi:ul_mimo_avg_layers",
+                "kpi:ul_prb_utilization"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+  ]
+}
