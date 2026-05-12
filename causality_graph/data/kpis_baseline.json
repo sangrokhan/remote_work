@@ -5,7 +5,6 @@
   "node_type": "KPI",
   "kpis": [
 
-    // ── ACCESSIBILITY / RRC (TS 28.552 §5.1) ───────────────────────────────
     {
       "id": "kpi:rrc_conn_estab_success_rate",
       "name": "RRC Connection Establishment Success Rate",
@@ -107,7 +106,6 @@
       "description": "Ratio of successful PDU session modifications to total attempts"
     },
 
-    // ── RETAINABILITY / DROP (TS 28.552 §5.2) ──────────────────────────────
     {
       "id": "kpi:rrc_conn_drop_rate",
       "name": "RRC Connection Drop Rate",
@@ -179,7 +177,6 @@
       "description": "Ratio of lost UL PDCP SDUs to total received UL PDCP SDUs"
     },
 
-    // ── MOBILITY / HANDOVER (TS 28.552 §5.3) ───────────────────────────────
     {
       "id": "kpi:ho_intra_freq_success_rate",
       "name": "Intra-frequency Handover Success Rate",
@@ -301,7 +298,6 @@
       "description": "Ratio of failed handovers to total handover attempts"
     },
 
-    // ── RACH (TS 28.552 §5.4) ───────────────────────────────────────────────
     {
       "id": "kpi:rach_cbra_success_rate",
       "name": "CBRA Success Rate",
@@ -363,7 +359,6 @@
       "description": "Ratio of Msg3 retransmissions to total Msg3 transmissions"
     },
 
-    // ── THROUGHPUT / TRAFFIC (TS 28.552 §5.5) ───────────────────────────────
     {
       "id": "kpi:dl_cell_throughput",
       "name": "DL Cell Throughput",
@@ -505,7 +500,6 @@
       "description": "Total UL data volume at RLC SDU level"
     },
 
-    // ── RADIO RESOURCE UTILIZATION / PRB (TS 28.552 §5.6) ──────────────────
     {
       "id": "kpi:dl_prb_utilization",
       "name": "DL PRB Utilization",
@@ -607,7 +601,6 @@
       "description": "Peak number of UEs in RRC_CONNECTED state within measurement period"
     },
 
-    // ── SCHEDULING / MCS / HARQ (TS 28.552 §5.7) ────────────────────────────
     {
       "id": "kpi:dl_avg_mcs",
       "name": "DL Average MCS",
@@ -739,7 +732,6 @@
       "description": "UL cell throughput normalized by bandwidth"
     },
 
-    // ── INTERFERENCE / SINR (TS 28.552 §5.8) ────────────────────────────────
     {
       "id": "kpi:dl_avg_sinr",
       "name": "DL Average SINR",
@@ -811,7 +803,6 @@
       "description": "Average total DL received signal strength indicator"
     },
 
-    // ── BEAM MANAGEMENT (TS 28.552 §5.9) ────────────────────────────────────
     {
       "id": "kpi:beam_failure_rate",
       "name": "Beam Failure Rate",
@@ -893,7 +884,6 @@
       "description": "Average number of active TCI states per UE"
     },
 
-    // ── CARRIER AGGREGATION (TS 28.552 §5.10) ───────────────────────────────
     {
       "id": "kpi:scell_add_success_rate",
       "name": "SCell Addition Success Rate",
@@ -945,7 +935,6 @@
       "description": "Ratio of successful EN-DC or NR-DC setup attempts"
     },
 
-    // ── POWER / ENERGY (TS 28.552 §5.11) ────────────────────────────────────
     {
       "id": "kpi:cell_energy_consumption",
       "name": "Cell Energy Consumption",
@@ -1007,7 +996,6 @@
       "description": "Ratio of average TX power to maximum configured TX power"
     },
 
-    // ── QoS / LATENCY (TS 28.552 §5.12) ─────────────────────────────────────
     {
       "id": "kpi:dl_packet_delay_mean",
       "name": "DL Packet Delay (Mean)",
@@ -1069,7 +1057,6 @@
       "description": "Average variation in UL packet inter-arrival time"
     },
 
-    // ── AVAILABILITY (TS 28.552 §5.13) ──────────────────────────────────────
     {
       "id": "kpi:cell_availability",
       "name": "Cell Availability Rate",
@@ -1101,7 +1088,6 @@
       "description": "Total duration cell is unavailable within measurement period"
     },
 
-    // ── RLC PERFORMANCE (TS 28.552 §5.14) ───────────────────────────────────
     {
       "id": "kpi:dl_rlc_retx_rate",
       "name": "DL RLC Retransmission Rate",
@@ -1133,7 +1119,6 @@
       "description": "Ratio of discarded DL RLC SDUs to total received DL RLC SDUs"
     },
 
-    // ── X2/XN INTERFACE (TS 28.552 §5.15) ───────────────────────────────────
     {
       "id": "kpi:xn_setup_success_rate",
       "name": "Xn Setup Success Rate",
@@ -1155,7 +1140,6 @@
       "description": "Ratio of successful Xn-based handovers to total Xn HO attempts"
     },
 
-    // ── E2E KPIs (TS 28.554) ─────────────────────────────────────────────────
     {
       "id": "kpi:e2e_session_setup_success_rate",
       "name": "E2E Session Setup Success Rate",
@@ -1277,7 +1261,6 @@
       "description": "Total E2E data volume delivered per unit total network energy consumed"
     },
 
-    // ── SLICE KPIs (TS 28.554 §7) ────────────────────────────────────────────
     {
       "id": "kpi:embb_dl_throughput",
       "name": "eMBB Slice DL Throughput",
@@ -1369,7 +1352,6 @@
       "description": "Ratio of time slice resource demand exceeds allocated quota"
     },
 
-    // ── ADDITIONAL NR MEASUREMENTS (TS 28.552 miscellaneous) ─────────────────
     {
       "id": "kpi:srs_resource_utilization",
       "name": "SRS Resource Utilization",
