@@ -1,28 +1,6 @@
-import json
-import tempfile
 from pathlib import Path
-from causality_graph.schema import (
-    KPINode, FeatureNode, ParameterNode, Edge,
-    Direction, Generation, EdgeType, Magnitude
-)
+from causality_graph.fixtures import make_sample_graph
 from causality_graph.store.graph import CausalityGraph
-
-
-def make_sample_graph():
-    g = CausalityGraph()
-    g.add_kpi(KPINode(id="kpi:dl_throughput", name="DL Throughput",
-                       unit="Mbps", good_direction=Direction.POSITIVE))
-    g.add_feature(FeatureNode(id="feature:CA", name="Carrier Aggregation",
-                               gen=Generation.BOTH, category="rrm"))
-    g.add_parameter(ParameterNode(id="param:maxCaBands", name="maxCaBands",
-                                   data_type="int", range_min=1, range_max=4,
-                                   default_value="1"))
-    g.add_edge(Edge(from_id="feature:CA", to_id="kpi:dl_throughput",
-                    relation=EdgeType.AFFECTS, direction=Direction.POSITIVE,
-                    magnitude=Magnitude.HIGH, confidence=0.92))
-    g.add_edge(Edge(from_id="feature:CA", to_id="param:maxCaBands",
-                    relation=EdgeType.CONTROLLED_BY))
-    return g
 
 
 def test_add_and_get_node():
@@ -65,9 +43,9 @@ def test_serialize_deserialize(tmp_path):
 
 def test_node_count():
     g = make_sample_graph()
-    assert g.node_count() == 3
+    assert g.node_count() == 12  # 3 KPIs + 4 features + 5 params
 
 
 def test_edge_count():
     g = make_sample_graph()
-    assert g.edge_count() == 2
+    assert g.edge_count() == 10

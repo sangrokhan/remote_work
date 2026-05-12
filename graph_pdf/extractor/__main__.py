@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from pathlib import Path
 
 from .font_profile import profile_pdf_fonts
@@ -11,10 +12,11 @@ from .shared import _parse_pages_spec
 
 def main() -> None:
     # Keep the CLI intentionally thin so the real behavior lives in pipeline.py.
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     parser = argparse.ArgumentParser()
     parser.add_argument("pdf_path", nargs="?")
-    parser.add_argument("--out-md-dir", default="graph_pdf/artifacts/md")
-    parser.add_argument("--out-image-dir", default="graph_pdf/artifacts/images")
+    parser.add_argument("--out-md-dir", default=f"graph_pdf/artifacts/{run_ts}/md")
+    parser.add_argument("--out-image-dir", default=f"graph_pdf/artifacts/{run_ts}/images")
     parser.add_argument("--pages", help="1-based pages like 1,3,5-8")
     parser.add_argument("--force-table", action="store_true")
     parser.add_argument("--debug", action="store_true")
