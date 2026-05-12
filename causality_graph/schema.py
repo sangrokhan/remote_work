@@ -1,30 +1,31 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
 
 class NodeType(str, Enum):
-    KPI = "kpi"
+    CONTROL_GROUP = "control_group"
+    FUNCTION = "function"
     FEATURE = "feature"
+    LAYER = "layer"
+    KPI = "kpi"
     PARAMETER = "parameter"
 
 
 class EdgeType(str, Enum):
-    AFFECTS = "AFFECTS"
-    CONTROLLED_BY = "CONTROLLED_BY"
-    DEPENDS_ON = "DEPENDS_ON"
-    CORRELATES = "CORRELATES"
+    INCLUDES = "INCLUDES"                  # ControlGroup → Function
+    REALIZED_BY = "REALIZED_BY"            # Function → Feature
+    MEASURED_BY = "MEASURED_BY"            # Function/Feature → KPI
+    IMPLEMENTED_IN = "IMPLEMENTED_IN"      # Feature → Layer
+    TUNED_BY = "TUNED_BY"                  # Feature → Parameter
+    DEPENDS_ON = "DEPENDS_ON"              # Feature → Feature
+    AFFECTS = "AFFECTS"                    # Parameter → KPI
+    CONFLICTS_WITH = "CONFLICTS_WITH"      # Parameter → Parameter
 
 
 class Direction(str, Enum):
     POSITIVE = "+"
     NEGATIVE = "-"
-
-
-class Generation(str, Enum):
-    G4 = "4G"
-    G5 = "5G"
-    BOTH = "both"
 
 
 class Magnitude(str, Enum):
@@ -33,12 +34,27 @@ class Magnitude(str, Enum):
     HIGH = "high"
 
 
+class Layer(str, Enum):
+    PHY = "PHY"
+    MAC = "MAC"
+    RLC = "RLC"
+    PDCP = "PDCP"
+    SDAP = "SDAP"
+    RRC = "RRC"
+    NAS = "NAS"
+
+
 @dataclass
-class KPINode:
+class ControlGroupNode:
     id: str
     name: str
-    unit: str
-    good_direction: Direction
+    description: str = ""
+
+
+@dataclass
+class FunctionNode:
+    id: str
+    name: str
     description: str = ""
 
 
@@ -46,8 +62,25 @@ class KPINode:
 class FeatureNode:
     id: str
     name: str
-    gen: Generation
-    category: str
+    layer: Layer
+    description: str = ""
+
+
+@dataclass
+class LayerNode:
+    id: str
+    name: Layer
+
+
+@dataclass
+class KPINode:
+    id: str
+    name: str
+    unit: str
+    good_direction: Direction
+    category: str = ""
+    layer: str = ""
+    spec_ref: str = ""
     description: str = ""
 
 
@@ -60,6 +93,7 @@ class ParameterNode:
     range_max: Optional[float]
     default_value: str
     unit: str = ""
+    spec_ref: str = ""
     description: str = ""
 
 
@@ -70,7 +104,6 @@ class Edge:
     relation: EdgeType
     direction: Optional[Direction] = None
     magnitude: Optional[Magnitude] = None
-    condition: str = ""
     confidence: float = 1.0
     validated: bool = False
     notes: str = ""
