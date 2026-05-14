@@ -10,7 +10,8 @@ RUN grep -rl "http://deb.debian.org" /etc/apt/ | xargs -r sed -i \
 
 WORKDIR /app
 COPY . .
-RUN pip install --no-cache-dir -e .
+ARG PIP_MIRROR=https://pypi.org/simple
+RUN pip install --no-cache-dir --index-url ${PIP_MIRROR} -e .
 
 ENV YANG_DIR=/app/data/yang
 ENV YANG_DB=/app/data/schema.db
