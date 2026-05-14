@@ -2,8 +2,7 @@ import io
 import pytest
 from docx import Document
 from docx.shared import Pt
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
+from docx.enum.text import WD_BREAK
 
 
 def make_docx() -> Document:
@@ -27,7 +26,7 @@ def add_paragraph_with_font_size(doc: Document, text: str, size_pt: float) -> No
 def add_page_break(doc: Document) -> None:
     para = doc.add_paragraph()
     run = para.add_run()
-    run.add_break(break_type=2)  # WD_BREAK.PAGE = 2
+    run.add_break(break_type=WD_BREAK.PAGE)
 
 
 def add_table(doc: Document, rows: list[list[str]]) -> None:
