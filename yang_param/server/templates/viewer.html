@@ -95,14 +95,23 @@ body {
 }
 
 #tree-panel {
-  width: 320px;
-  min-width: 200px;
+  width: 336px;
+  min-width: 160px;
+  max-width: 60vw;
   background: #252526;
-  border-right: 1px solid #3c3c3c;
   overflow-y: auto;
   flex-shrink: 0;
   padding: 6px 0;
 }
+
+#resizer {
+  width: 4px;
+  background: #3c3c3c;
+  cursor: col-resize;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+#resizer:hover, #resizer.dragging { background: #007acc; }
 
 #detail-panel {
   flex: 1;
@@ -271,6 +280,7 @@ body {
 
 <div id="main">
   <div id="tree-panel"></div>
+  <div id="resizer"></div>
   <div id="detail-panel">
     <div class="detail-hint">Select a node in the tree to view details.</div>
   </div>
@@ -573,6 +583,39 @@ body {
   }
 
   // ── Bootstrap ──────────────────────────────────────────────
+
+  // ── Resizable tree panel ───────────────────────────────────
+
+  (function () {
+    const resizer = document.getElementById('resizer');
+    const treePanel = document.getElementById('tree-panel');
+    let startX, startWidth;
+
+    resizer.addEventListener('mousedown', function (e) {
+      startX = e.clientX;
+      startWidth = treePanel.getBoundingClientRect().width;
+      resizer.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+
+      function onMouseMove(e) {
+        const delta = e.clientX - startX;
+        const newWidth = Math.max(160, Math.min(window.innerWidth * 0.6, startWidth + delta));
+        treePanel.style.width = newWidth + 'px';
+      }
+
+      function onMouseUp() {
+        resizer.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      }
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+  })();
 
   document.getElementById('search-btn').addEventListener('click', doSearch);
   document.getElementById('search-input').addEventListener('keydown', function (e) {
