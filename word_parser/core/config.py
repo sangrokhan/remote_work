@@ -13,11 +13,8 @@ class Config:
 
 
 def load_config(path: str) -> Config:
-    try:
-        with open(path) as f:
-            data = yaml.safe_load(f)
-    except FileNotFoundError:
-        raise
+    with open(path) as f:
+        data = yaml.safe_load(f)
 
     font_size_map = {int(k): int(v) for k, v in (data.get("font_size_map") or {}).items()}
 
