@@ -3,7 +3,7 @@ from pathlib import Path
 
 YANG_DIR = str(Path(__file__).parent.parent / "data" / "yang")
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def yang_dir():
     return YANG_DIR
 
