@@ -1,0 +1,42 @@
+module ietf-interfaces {
+  namespace "urn:ietf:params:xml:ns:yang:ietf-interfaces";
+  prefix if;
+  import ietf-inet-types { prefix inet; }
+  revision 2018-02-20 { description "Initial"; }
+
+  container interfaces {
+    description "Interface list";
+    list interface {
+      key "name";
+      description "Network interface entry";
+      leaf name {
+        type string;
+        description "Interface name";
+      }
+      leaf description {
+        type string;
+        config true;
+        description "Interface description";
+      }
+      leaf mtu {
+        type uint16 { range "68..65535"; }
+        config true;
+        description "Interface MTU in bytes";
+      }
+      leaf enabled {
+        type boolean;
+        default true;
+        config true;
+        description "Whether interface is enabled";
+      }
+      container ipv4 {
+        description "IPv4 config";
+        leaf address {
+          type inet:ipv4-address;
+          config true;
+          description "IPv4 address";
+        }
+      }
+    }
+  }
+}
