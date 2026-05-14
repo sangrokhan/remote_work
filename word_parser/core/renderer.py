@@ -26,6 +26,7 @@ def _render_table(tbl: TableElement, tag: str, counter: int) -> str:
 def render_chunk(chunk: Chunk) -> str:
     parts: list[str] = []
     table_counter = 0
+    image_counter = 0
 
     if chunk.heading_text:
         prefix = "#" * chunk.heading_depth
@@ -40,8 +41,9 @@ def render_chunk(chunk: Chunk) -> str:
             table_counter += 1
             parts.append(_render_table(elem, chunk.tag, table_counter))
         elif isinstance(elem, ImageElement):
+            image_counter += 1
             ext = elem.content_type.split("/")[-1]
-            name = f"{chunk.tag}_img_{chunk.image_counter + 1}.{ext}"
+            name = f"{chunk.tag}_img_{image_counter}.{ext}"
             parts.append(f"![{name}](../images/{name})")
 
     return "\n\n".join(parts)

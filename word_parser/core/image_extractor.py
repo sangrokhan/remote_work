@@ -24,7 +24,7 @@ def extract_images_from_docx(
                 continue
             images.append(
                 ImageElement(
-                    relationship_id=rel.reltype,
+                    relationship_id=rel.rId,
                     content_type=content_type,
                     data=rel.target_part.blob,
                     page_approx=0,
