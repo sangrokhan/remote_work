@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 ARG APT_MIRROR=deb.debian.org
 RUN grep -rl "deb.debian.org" /etc/apt/ | xargs -r sed -i "s|deb.debian.org|${APT_MIRROR}|g" \
