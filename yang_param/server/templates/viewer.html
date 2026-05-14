@@ -1,1 +1,610 @@
-<!DOCTYPE html><html><head><title>YANG Schema Viewer</title></head><body>YANG Schema Viewer</body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YANG Schema Viewer</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Consolas', 'Courier New', monospace;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Top bar ── */
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #252526;
+  border-bottom: 1px solid #3c3c3c;
+  flex-shrink: 0;
+  position: relative;
+}
+
+#topbar-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #cccccc;
+  white-space: nowrap;
+}
+
+#search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  max-width: 480px;
+  position: relative;
+}
+
+#search-input {
+  flex: 1;
+  background: #3c3c3c;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+  outline: none;
+}
+#search-input:focus { border-color: #007acc; }
+#search-input::placeholder { color: #888; }
+
+#search-btn {
+  background: #0e639c;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 12px;
+  white-space: nowrap;
+}
+#search-btn:hover { background: #1177bb; }
+
+#search-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #252526;
+  border: 1px solid #555;
+  border-radius: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0,0,0,.6);
+}
+#search-dropdown.open { display: block; }
+
+/* ── Main layout ── */
+#main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+#tree-panel {
+  width: 320px;
+  min-width: 200px;
+  background: #252526;
+  border-right: 1px solid #3c3c3c;
+  overflow-y: auto;
+  flex-shrink: 0;
+  padding: 6px 0;
+}
+
+#detail-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  background: #1e1e1e;
+}
+
+/* ── Tree rows ── */
+.tn-row {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 3px 8px;
+  gap: 4px;
+  user-select: none;
+  min-height: 24px;
+}
+.tn-row:hover { background: #2a2d2e; }
+.tn-row.selected { background: #094771; }
+
+.tn-toggle {
+  width: 16px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 10px;
+  color: #888;
+}
+
+.tn-name {
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tn-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #3c3c3c;
+  color: #aaa;
+  flex-shrink: 0;
+}
+
+.tn-children { display: none; }
+.tn-children.open { display: block; }
+
+.tn-msg {
+  font-size: 11px;
+  color: #888;
+  font-style: italic;
+  padding: 4px 0;
+}
+
+/* ── Kind colors ── */
+.k-module   { color: #9cdcfe; }
+.k-container{ color: #4ec9b0; }
+.k-list     { color: #ce9178; }
+.k-leaf     { color: #9cdcfe; }
+.k-leaf-list{ color: #dcdcaa; }
+.k-choice   { color: #c586c0; }
+.k-case     { color: #e06c75; }
+
+/* ── Search result items ── */
+.sr-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #3c3c3c;
+}
+.sr-item:last-child { border-bottom: none; }
+.sr-item:hover { background: #2a2d2e; }
+
+.sr-name {
+  font-size: 13px;
+  color: #9cdcfe;
+  white-space: nowrap;
+}
+
+.sr-kind {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #3c3c3c;
+  color: #aaa;
+}
+
+.sr-path {
+  font-size: 11px;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* ── Detail panel ── */
+.detail-hint {
+  color: #555;
+  font-size: 13px;
+  margin-top: 60px;
+  text-align: center;
+}
+
+.detail-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #9cdcfe;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #3c3c3c;
+  padding-bottom: 8px;
+}
+
+.df {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.df-label {
+  color: #888;
+  min-width: 110px;
+  flex-shrink: 0;
+}
+
+.df-value {
+  color: #d4d4d4;
+  word-break: break-word;
+}
+
+.df-pre {
+  background: #2d2d2d;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  color: #ce9178;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.v-path     { color: #ce9178; }
+.v-kind     { color: #4ec9b0; }
+.v-true     { color: #4ec9b0; }
+.v-false    { color: #f44747; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span id="topbar-title">YANG Schema Viewer</span>
+  <div id="search-wrap">
+    <input id="search-input" type="text" placeholder="Search nodes…" />
+    <button id="search-btn">Search</button>
+    <div id="search-dropdown"></div>
+  </div>
+</div>
+
+<div id="main">
+  <div id="tree-panel"></div>
+  <div id="detail-panel">
+    <div class="detail-hint">Select a node in the tree to view details.</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── Utilities ──────────────────────────────────────────────
+
+  async function apiFetch(path) {
+    const res = await fetch(path);
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + path);
+    return res.json();
+  }
+
+  function kindClass(kind) {
+    const map = {
+      container: 'k-container',
+      list: 'k-list',
+      leaf: 'k-leaf',
+      'leaf-list': 'k-leaf-list',
+      choice: 'k-choice',
+      case: 'k-case',
+    };
+    return map[kind] || 'k-leaf';
+  }
+
+  function isExpandable(node) {
+    if (node.children_ids && node.children_ids.length > 0) return true;
+    const expandableKinds = ['container', 'list', 'choice', 'case'];
+    return expandableKinds.includes(node.node_kind);
+  }
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+
+  function msgDiv(text, indent) {
+    const d = el('div', 'tn-msg');
+    d.style.paddingLeft = (indent || 0) + 'px';
+    d.textContent = text;
+    return d;
+  }
+
+  let _selectedRow = null;
+  function selectRow(row) {
+    if (_selectedRow) _selectedRow.classList.remove('selected');
+    _selectedRow = row;
+    if (row) row.classList.add('selected');
+  }
+
+  function buildRow(nameText, nameClass, badgeText, paddingLeft) {
+    const row = el('div', 'tn-row');
+    row.style.paddingLeft = (paddingLeft || 8) + 'px';
+
+    const toggle = el('span', 'tn-toggle');
+    toggle.textContent = '▶';
+
+    const name = el('span', 'tn-name ' + (nameClass || ''));
+    name.textContent = nameText;
+
+    const badge = el('span', 'tn-badge');
+    badge.textContent = badgeText || '';
+
+    row.appendChild(toggle);
+    row.appendChild(name);
+    row.appendChild(badge);
+
+    return { row, toggle };
+  }
+
+  // ── Tree: Module rows ──────────────────────────────────────
+
+  function makeModuleRow(modName) {
+    const wrapper = el('div');
+
+    const { row, toggle } = buildRow(modName, 'k-module', 'module', 8);
+    const children = el('div', 'tn-children');
+
+    let expanded = false;
+    let loaded = false;
+
+    row.addEventListener('click', async function () {
+      selectRow(row);
+      expanded = !expanded;
+      toggle.textContent = expanded ? '▼' : '▶';
+      children.classList.toggle('open', expanded);
+
+      if (expanded && !loaded) {
+        loaded = true;
+        children.replaceChildren(msgDiv('Loading…', 24));
+        try {
+          const data = await apiFetch('/tools/get_root_nodes?module=' + encodeURIComponent(modName));
+          const nodes = data.nodes || [];
+          children.replaceChildren();
+          if (nodes.length === 0) {
+            children.appendChild(msgDiv('(no nodes)', 24));
+          } else {
+            nodes.forEach(function (n) {
+              children.appendChild(makeNodeRow(n, 1));
+            });
+          }
+        } catch (err) {
+          children.replaceChildren(msgDiv('Error: ' + err.message, 24));
+        }
+      }
+    });
+
+    wrapper.appendChild(row);
+    wrapper.appendChild(children);
+    return wrapper;
+  }
+
+  // ── Tree: Node rows ────────────────────────────────────────
+
+  function makeNodeRow(node, depth) {
+    const wrapper = el('div');
+    const indent = 8 + depth * 16;
+
+    const { row, toggle } = buildRow(node.name, kindClass(node.node_kind), node.node_kind, indent);
+    const children = el('div', 'tn-children');
+
+    const expandable = isExpandable(node);
+    if (!expandable) toggle.style.visibility = 'hidden';
+
+    let expanded = false;
+    let loaded = false;
+
+    row.addEventListener('click', async function (e) {
+      e.stopPropagation();
+      selectRow(row);
+      showDetail(node.node_id);
+
+      if (!expandable) return;
+
+      expanded = !expanded;
+      toggle.textContent = expanded ? '▼' : '▶';
+      children.classList.toggle('open', expanded);
+
+      if (expanded && !loaded) {
+        loaded = true;
+        children.replaceChildren(msgDiv('Loading…', indent + 16));
+        try {
+          const data = await apiFetch('/tools/get_children?node_id=' + encodeURIComponent(node.node_id));
+          const kids = data.children || [];
+          children.replaceChildren();
+          if (kids.length === 0) {
+            children.appendChild(msgDiv('(no children)', indent + 16));
+          } else {
+            kids.forEach(function (c) {
+              children.appendChild(makeNodeRow(c, depth + 1));
+            });
+          }
+        } catch (err) {
+          children.replaceChildren(msgDiv('Error: ' + err.message, indent + 16));
+        }
+      }
+    });
+
+    wrapper.appendChild(row);
+    wrapper.appendChild(children);
+    return wrapper;
+  }
+
+  // ── Detail panel ───────────────────────────────────────────
+
+  function renderField(label, value) {
+    if (value === null || value === undefined) return null;
+    if (value === '') return null;
+    if (Array.isArray(value) && value.length === 0) return null;
+    if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) return null;
+
+    const row = el('div', 'df');
+    const lbl = el('span', 'df-label', label);
+    row.appendChild(lbl);
+
+    if (typeof value === 'object') {
+      const pre = document.createElement('pre');
+      pre.className = 'df-pre';
+      pre.textContent = JSON.stringify(value, null, 2);
+      row.appendChild(pre);
+    } else {
+      const val = el('span', 'df-value', String(value));
+      row.appendChild(val);
+    }
+    return row;
+  }
+
+  function renderBoolField(label, value) {
+    if (value === null || value === undefined) return null;
+    const row = el('div', 'df');
+    const lbl = el('span', 'df-label', label);
+    const val = el('span', value ? 'df-value v-true' : 'df-value v-false', value ? 'true' : 'false');
+    row.appendChild(lbl);
+    row.appendChild(val);
+    return row;
+  }
+
+  function renderTextField(label, value, cls) {
+    if (!value) return null;
+    const row = el('div', 'df');
+    const lbl = el('span', 'df-label', label);
+    const val = el('span', 'df-value' + (cls ? ' ' + cls : ''), String(value));
+    row.appendChild(lbl);
+    row.appendChild(val);
+    return row;
+  }
+
+  async function showDetail(nodeId) {
+    const panel = document.getElementById('detail-panel');
+    panel.replaceChildren(msgDiv('Loading…', 0));
+    try {
+      const data = await apiFetch('/tools/get_node?node_id_or_path=' + encodeURIComponent(nodeId));
+      const node = data.node;
+      if (!node) {
+        panel.replaceChildren(msgDiv('Node not found.', 0));
+        return;
+      }
+
+      panel.replaceChildren();
+
+      const title = el('div', 'detail-title', node.name);
+      panel.appendChild(title);
+
+      function appendField(f) { if (f) panel.appendChild(f); }
+
+      appendField(renderTextField('schema_path', node.schema_path, 'v-path'));
+      appendField(renderTextField('node_kind', node.node_kind, 'v-kind'));
+      appendField(renderTextField('module', node.module));
+      appendField(renderTextField('namespace', node.namespace));
+      appendField(renderTextField('prefix', node.prefix));
+      if (node.config !== null && node.config !== undefined) {
+        appendField(renderBoolField('config', node.config));
+      }
+      appendField(renderField('keys', node.keys));
+      appendField(renderField('type_info', node.type_info));
+      if (node.mandatory !== null && node.mandatory !== undefined) {
+        appendField(renderBoolField('mandatory', node.mandatory));
+      }
+      appendField(renderTextField('default', node.default));
+      appendField(renderTextField('when_expr', node.when_expr));
+      appendField(renderField('must_exprs', node.must_exprs));
+      appendField(renderTextField('node_id', node.node_id));
+      appendField(renderTextField('parent_id', node.parent_id));
+      appendField(renderField('children_ids', node.children_ids));
+      appendField(renderField('description', node.description));
+
+    } catch (err) {
+      panel.replaceChildren(msgDiv('Error: ' + err.message, 0));
+    }
+  }
+
+  // ── Search ─────────────────────────────────────────────────
+
+  async function doSearch() {
+    const input = document.getElementById('search-input');
+    const dropdown = document.getElementById('search-dropdown');
+    const keyword = input.value.trim();
+    if (!keyword) return;
+
+    dropdown.replaceChildren(msgDiv('Searching…', 8));
+    dropdown.classList.add('open');
+
+    try {
+      const data = await apiFetch('/tools/search_nodes?keyword=' + encodeURIComponent(keyword) + '&top_k=20');
+      const nodes = data.nodes || [];
+      dropdown.replaceChildren();
+
+      if (nodes.length === 0) {
+        dropdown.appendChild(msgDiv('No results.', 8));
+        return;
+      }
+
+      nodes.forEach(function (n) {
+        const item = el('div', 'sr-item');
+
+        const name = el('span', 'sr-name', n.name);
+        const kind = el('span', 'sr-kind', n.node_kind || '');
+        const path = el('span', 'sr-path', n.schema_path || '');
+
+        item.appendChild(name);
+        item.appendChild(kind);
+        item.appendChild(path);
+
+        item.addEventListener('click', function () {
+          dropdown.classList.remove('open');
+          showDetail(n.node_id);
+        });
+
+        dropdown.appendChild(item);
+      });
+    } catch (err) {
+      dropdown.replaceChildren(msgDiv('Error: ' + err.message, 8));
+    }
+  }
+
+  // ── Bootstrap ──────────────────────────────────────────────
+
+  document.getElementById('search-btn').addEventListener('click', doSearch);
+  document.getElementById('search-input').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') doSearch();
+  });
+
+  document.addEventListener('click', function (e) {
+    const dropdown = document.getElementById('search-dropdown');
+    const wrap = document.getElementById('search-wrap');
+    if (!wrap.contains(e.target)) dropdown.classList.remove('open');
+  });
+
+  (async function bootstrap() {
+    const treePanel = document.getElementById('tree-panel');
+    treePanel.appendChild(msgDiv('Loading modules…', 8));
+    try {
+      const data = await apiFetch('/tools/list_modules');
+      const modules = data.modules || [];
+      treePanel.replaceChildren();
+      if (modules.length === 0) {
+        treePanel.appendChild(msgDiv('No modules found.', 8));
+        return;
+      }
+      modules.forEach(function (mod) {
+        treePanel.appendChild(makeModuleRow(mod));
+      });
+    } catch (err) {
+      treePanel.replaceChildren(msgDiv('Error: ' + err.message, 8));
+    }
+  })();
+
+})();
+</script>
+</body>
+</html>
