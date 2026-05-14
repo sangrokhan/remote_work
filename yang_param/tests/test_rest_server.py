@@ -69,3 +69,27 @@ def test_build_delete_config_running_rejected(client):
     resp = client.post("/tools/build_delete_config", json={"datastore": "running"})
     assert resp.status_code == 200
     assert resp.json()["xml"] is None
+
+
+def test_root_serves_html(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "YANG Schema Viewer" in resp.text
+
+
+def test_get_root_nodes_returns_nodes(client):
+    resp = client.get("/tools/get_root_nodes?module=ietf-interfaces")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "nodes" in data
+    assert len(data["nodes"]) > 0
+    for n in data["nodes"]:
+        assert n["module"] == "ietf-interfaces"
+        assert n["parent_id"] is None
+
+
+def test_get_root_nodes_unknown_module(client):
+    resp = client.get("/tools/get_root_nodes?module=no-such-module")
+    assert resp.status_code == 200
+    assert resp.json()["nodes"] == []
