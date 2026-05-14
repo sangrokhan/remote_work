@@ -1,8 +1,7 @@
 FROM python:3.12-slim
 
 ARG APT_MIRROR=deb.debian.org
-RUN find /etc/apt -name '*.list' -o -name '*.sources' \
-    | xargs sed -i "s|deb.debian.org|${APT_MIRROR}|g" \
+RUN grep -rl "deb.debian.org" /etc/apt/ | xargs -r sed -i "s|deb.debian.org|${APT_MIRROR}|g" \
     && apt-get update \
     && apt-get install -y --no-install-recommends build-essential libyang-dev \
     && rm -rf /var/lib/apt/lists/*

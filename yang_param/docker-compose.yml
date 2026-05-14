@@ -1,6 +1,9 @@
 services:
   yang-viewer:
-    build: .
+    build:
+      context: .
+      args:
+        APT_MIRROR: deb.debian.org
     ports:
       - "12000:8000"
     volumes:
