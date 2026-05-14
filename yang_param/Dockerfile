@@ -1,9 +1,11 @@
 FROM python:3.12-slim-bookworm
 
-ARG APT_MIRROR=deb.debian.org
-RUN grep -rl "deb.debian.org" /etc/apt/ | xargs -r sed -i "s|deb.debian.org|${APT_MIRROR}|g" \
+ARG APT_MIRROR=http://deb.debian.org
+RUN grep -rl "http://deb.debian.org" /etc/apt/ | xargs -r sed -i \
+        -e "s|http://deb.debian.org|${APT_MIRROR}|g" \
+        -e '/debian-security/d' \
     && apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libyang-dev \
+    && apt-get install -y --no-install-recommends build-essential libyang2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
