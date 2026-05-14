@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        APT_MIRROR: http://deb.debian.org
+        APT_MIRROR: deb.debian.org
         PIP_MIRROR: https://pypi.org/simple
     ports:
       - "12000:8000"
