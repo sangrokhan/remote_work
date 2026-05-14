@@ -1,0 +1,14 @@
+services:
+  yang-viewer:
+    build: .
+    ports:
+      - "12000:8000"
+    volumes:
+      - ./data/yang:/app/data/yang
+      - yang-db:/app/data
+    environment:
+      YANG_DIR: /app/data/yang
+      YANG_DB: /app/data/schema.db
+
+volumes:
+  yang-db:
