@@ -1,9 +1,9 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-trixie
 
 ARG APT_MIRROR=deb.debian.org
 RUN grep -rl "deb.debian.org" /etc/apt/ | xargs -r sed -i "s|deb.debian.org|${APT_MIRROR}|g" \
     && apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libyang2-dev \
+    && apt-get install -y --no-install-recommends build-essential libyang3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
