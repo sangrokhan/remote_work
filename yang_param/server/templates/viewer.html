@@ -265,12 +265,164 @@ body {
 .v-kind     { color: #4ec9b0; }
 .v-true     { color: #4ec9b0; }
 .v-false    { color: #f44747; }
+
+/* ── Tabs ── */
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #888;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+.tab-btn:hover { color: #ccc; }
+.tab-btn.active { border-bottom-color: #007acc; color: #fff; }
+
+/* ── Builder panel ── */
+#builder-panel {
+  display: none;
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px;
+  background: #1e1e1e;
+}
+#builder-panel.active { display: flex; flex-direction: column; }
+
+.bl-heading {
+  font-size: 12px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+}
+
+.bl-label {
+  color: #888;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.bl-field { display: flex; flex-direction: column; gap: 4px; }
+
+.bl-input {
+  background: #3c3c3c;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+  outline: none;
+  width: 360px;
+  max-width: 100%;
+}
+.bl-input:focus { border-color: #007acc; }
+.bl-input::placeholder { color: #888; }
+
+.bl-select {
+  background: #3c3c3c;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+  outline: none;
+  cursor: pointer;
+}
+.bl-select:focus { border-color: #007acc; }
+
+.bl-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+
+.bl-btn {
+  background: #0e639c;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 5px 16px;
+  white-space: nowrap;
+  height: 30px;
+}
+.bl-btn:hover { background: #1177bb; }
+.bl-btn.secondary { background: #3c3c3c; color: #ccc; }
+.bl-btn.secondary:hover { background: #4a4a4a; }
+
+.bl-selected-node {
+  background: #2d2d2d;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  max-width: 640px;
+}
+.bl-node-name { font-size: 15px; color: #9cdcfe; font-weight: 600; margin-bottom: 3px; }
+.bl-node-path { font-size: 11px; color: #ce9178; }
+
+.bl-divider { border: none; border-top: 1px solid #3c3c3c; margin: 20px 0; max-width: 640px; }
+
+.bl-xml-wrap { position: relative; max-width: 720px; margin-top: 12px; }
+.bl-xml-out {
+  background: #2d2d2d;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  color: #ce9178;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 12px 40px 12px 14px;
+  white-space: pre;
+  overflow-x: auto;
+  margin: 0;
+  width: 100%;
+}
+.bl-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: #3c3c3c;
+  border: none;
+  border-radius: 3px;
+  color: #aaa;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.bl-copy-btn:hover { color: #fff; background: #4a4a4a; }
+
+.bl-error { color: #f44747; font-size: 12px; margin-top: 6px; }
+
+#bl-search-wrap { position: relative; display: flex; gap: 6px; align-items: center; }
+#bl-search-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 360px;
+  background: #252526;
+  border: 1px solid #555;
+  border-radius: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0,0,0,.6);
+}
+#bl-search-dropdown.open { display: block; }
 </style>
 </head>
 <body>
 
 <div id="topbar">
   <span id="topbar-title">YANG Schema Viewer</span>
+  <div style="display:flex;gap:2px;margin-right:4px;align-self:stretch;align-items:flex-end;">
+    <button class="tab-btn active" data-tab="viewer">Tree Viewer</button>
+    <button class="tab-btn" data-tab="builder">NETCONF Builder</button>
+  </div>
   <div id="search-wrap">
     <input id="search-input" type="text" placeholder="Search nodes…" />
     <button id="search-btn">Search</button>
@@ -283,6 +435,50 @@ body {
   <div id="resizer"></div>
   <div id="detail-panel">
     <div class="detail-hint">Select a node in the tree to view details.</div>
+  </div>
+</div>
+
+<div id="builder-panel">
+  <div class="bl-heading">NETCONF edit-config Builder</div>
+
+  <div style="margin-bottom:16px;">
+    <div class="bl-label">Leaf name</div>
+    <div id="bl-search-wrap">
+      <input id="bl-search-input" class="bl-input" type="text" placeholder="e.g. mtu, description, enabled…" style="width:320px;" />
+      <button id="bl-search-btn" class="bl-btn">Search</button>
+      <div id="bl-search-dropdown"></div>
+    </div>
+  </div>
+
+  <div id="bl-form" style="display:none;">
+    <hr class="bl-divider">
+    <div id="bl-selected-node-display" class="bl-selected-node"></div>
+    <div id="bl-keys-section"></div>
+    <div style="margin-bottom:12px;">
+      <div class="bl-label">Value</div>
+      <input id="bl-value-input" class="bl-input" type="text" placeholder="leaf value" />
+    </div>
+    <div class="bl-row" style="margin-bottom:16px;">
+      <div class="bl-field">
+        <div class="bl-label">Operation</div>
+        <select id="bl-operation" class="bl-select">
+          <option value="merge">merge</option>
+          <option value="replace">replace</option>
+          <option value="delete">delete</option>
+        </select>
+      </div>
+      <div class="bl-field">
+        <div class="bl-label">Datastore</div>
+        <select id="bl-datastore" class="bl-select">
+          <option value="running">running</option>
+          <option value="candidate">candidate</option>
+          <option value="startup">startup</option>
+        </select>
+      </div>
+      <button id="bl-generate-btn" class="bl-btn">Generate</button>
+      <button id="bl-reset-btn" class="bl-btn secondary">Reset</button>
+    </div>
+    <div id="bl-output"></div>
   </div>
 </div>
 
@@ -614,6 +810,191 @@ body {
 
       document.addEventListener('mousemove', onMouseMove);
       document.addEventListener('mouseup', onMouseUp);
+    });
+  })();
+
+  // ── Tab switching ──────────────────────────────────────────
+
+  (function () {
+    const main = document.getElementById('main');
+    const builderPanel = document.getElementById('builder-panel');
+    const tabs = document.querySelectorAll('.tab-btn');
+
+    tabs.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        tabs.forEach(function (b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        const tab = btn.dataset.tab;
+        if (tab === 'viewer') {
+          main.style.display = 'flex';
+          builderPanel.classList.remove('active');
+        } else {
+          main.style.display = 'none';
+          builderPanel.classList.add('active');
+        }
+      });
+    });
+  })();
+
+  // ── NETCONF Builder ────────────────────────────────────────
+
+  (function () {
+    let selectedNode = null;
+
+    function blApiFetch(path) { return apiFetch(path); }
+
+    async function blPostFetch(path, body) {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }
+
+    // Search
+    async function blSearch() {
+      const keyword = document.getElementById('bl-search-input').value.trim();
+      if (!keyword) return;
+      const dropdown = document.getElementById('bl-search-dropdown');
+      dropdown.replaceChildren(msgDiv('Searching…', 8));
+      dropdown.classList.add('open');
+
+      try {
+        const data = await blApiFetch('/tools/search_nodes?keyword=' + encodeURIComponent(keyword) + '&kind=leaf&top_k=20');
+        const nodes = data.nodes || [];
+        dropdown.replaceChildren();
+        if (nodes.length === 0) {
+          dropdown.appendChild(msgDiv('No leaf nodes found.', 8));
+          return;
+        }
+        nodes.forEach(function (n) {
+          const item = el('div', 'sr-item');
+          item.appendChild(el('span', 'sr-name', n.name));
+          item.appendChild(el('span', 'sr-kind', n.node_kind || ''));
+          item.appendChild(el('span', 'sr-path', n.schema_path || ''));
+          item.addEventListener('click', function () {
+            dropdown.classList.remove('open');
+            document.getElementById('bl-search-input').value = n.name;
+            blSelectNode(n);
+          });
+          dropdown.appendChild(item);
+        });
+      } catch (err) {
+        dropdown.replaceChildren(msgDiv('Error: ' + err.message, 8));
+      }
+    }
+
+    // Select node → fetch required keys → show form
+    async function blSelectNode(node) {
+      selectedNode = node;
+      const form = document.getElementById('bl-form');
+      form.style.display = 'block';
+
+      // Display selected node
+      const display = document.getElementById('bl-selected-node-display');
+      display.replaceChildren();
+      const nameEl = el('div', 'bl-node-name', node.name);
+      const pathEl = el('div', 'bl-node-path', node.schema_path || node.node_id);
+      display.appendChild(nameEl);
+      display.appendChild(pathEl);
+
+      // Fetch required keys
+      const keysSection = document.getElementById('bl-keys-section');
+      keysSection.replaceChildren(msgDiv('Loading keys…', 0));
+      try {
+        const data = await blApiFetch('/tools/get_required_keys?node_id=' + encodeURIComponent(node.node_id));
+        const keys = data.required_keys || [];
+        keysSection.replaceChildren();
+        keys.forEach(function (k) {
+          const field = el('div', 'bl-field');
+          field.style.marginBottom = '12px';
+          const lbl = el('div', 'bl-label', 'Key: ' + k.key_name + ' (' + (k.type || 'string') + ')');
+          const inp = el('input', 'bl-input');
+          inp.type = 'text';
+          inp.value = '?';
+          inp.dataset.keyName = k.key_name;
+          inp.placeholder = k.key_name;
+          field.appendChild(lbl);
+          field.appendChild(inp);
+          keysSection.appendChild(field);
+        });
+      } catch (err) {
+        keysSection.replaceChildren(msgDiv('Error loading keys: ' + err.message, 0));
+      }
+
+      document.getElementById('bl-output').replaceChildren();
+    }
+
+    // Generate
+    async function blGenerate() {
+      if (!selectedNode) return;
+      const output = document.getElementById('bl-output');
+      output.replaceChildren(msgDiv('Generating…', 0));
+
+      const keyInputs = document.querySelectorAll('#bl-keys-section input[data-key-name]');
+      const keyValues = {};
+      keyInputs.forEach(function (inp) { keyValues[inp.dataset.keyName] = inp.value; });
+
+      const value = document.getElementById('bl-value-input').value || null;
+      const operation = document.getElementById('bl-operation').value;
+      const datastore = document.getElementById('bl-datastore').value;
+
+      try {
+        const data = await blPostFetch('/tools/build_edit_config', {
+          target_node_id: selectedNode.node_id,
+          key_values: keyValues,
+          value: value,
+          operation: operation,
+          datastore: datastore,
+        });
+
+        output.replaceChildren();
+        if (data.error) {
+          const errEl = el('div', 'bl-error', 'Error: ' + data.error);
+          output.appendChild(errEl);
+          return;
+        }
+
+        const wrap = el('div', 'bl-xml-wrap');
+        const pre = el('pre', 'bl-xml-out', data.xml);
+        const copyBtn = el('button', 'bl-copy-btn', 'Copy');
+        copyBtn.addEventListener('click', function () {
+          navigator.clipboard.writeText(data.xml).then(function () {
+            copyBtn.textContent = 'Copied!';
+            setTimeout(function () { copyBtn.textContent = 'Copy'; }, 1500);
+          });
+        });
+        wrap.appendChild(pre);
+        wrap.appendChild(copyBtn);
+        output.appendChild(wrap);
+      } catch (err) {
+        output.replaceChildren(el('div', 'bl-error', 'Error: ' + err.message));
+      }
+    }
+
+    // Reset
+    function blReset() {
+      selectedNode = null;
+      document.getElementById('bl-search-input').value = '';
+      document.getElementById('bl-form').style.display = 'none';
+      document.getElementById('bl-output').replaceChildren();
+      document.getElementById('bl-value-input').value = '';
+      document.getElementById('bl-search-dropdown').classList.remove('open');
+    }
+
+    document.getElementById('bl-search-btn').addEventListener('click', blSearch);
+    document.getElementById('bl-search-input').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') blSearch();
+    });
+    document.getElementById('bl-generate-btn').addEventListener('click', blGenerate);
+    document.getElementById('bl-reset-btn').addEventListener('click', blReset);
+
+    document.addEventListener('click', function (e) {
+      const wrap = document.getElementById('bl-search-wrap');
+      const dropdown = document.getElementById('bl-search-dropdown');
+      if (!wrap.contains(e.target)) dropdown.classList.remove('open');
     });
   })();
 
