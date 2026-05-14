@@ -40,7 +40,7 @@ def _extract_type_info(node) -> dict:
         return {"base": "unknown"}
 
 
-def _iter_nodes(node, parent_path: str | None) -> Iterator[dict]:
+def _iter_nodes(node, parent_path: str | None, ns_map: dict | None = None) -> Iterator[dict]:
     try:
         keyword = node.keyword()
     except Exception:
@@ -104,8 +104,8 @@ def _iter_nodes(node, parent_path: str | None) -> Iterator[dict]:
     except Exception:
         prefix = ""
 
-    # namespace: libyang 4.x Module has no .ns(), use module name as fallback
-    namespace = mod_name
+    # namespace: use URI from YANG file if available, else fall back to module name
+    namespace = (ns_map or {}).get(mod_name, mod_name)
 
     yield {
         "schema_path": path,
@@ -129,13 +129,34 @@ def _iter_nodes(node, parent_path: str | None) -> Iterator[dict]:
 
     try:
         for child in node.children():
-            yield from _iter_nodes(child, path)
+            yield from _iter_nodes(child, path, ns_map)
     except Exception:
         pass
 
 
+def _build_ns_map(yang_dir: str) -> dict[str, str]:
+    """Scan YANG files to extract module-name → namespace URI mapping."""
+    import re
+    ns_map: dict[str, str] = {}
+    pattern = re.compile(r'^\s*namespace\s+"([^"]+)"', re.MULTILINE)
+    mod_pattern = re.compile(r'^\s*module\s+(\S+)\s*\{', re.MULTILINE)
+    for fname in os.listdir(yang_dir):
+        if not fname.endswith(".yang"):
+            continue
+        try:
+            text = open(os.path.join(yang_dir, fname)).read()
+            mod_m = mod_pattern.search(text)
+            ns_m = pattern.search(text)
+            if mod_m and ns_m:
+                ns_map[mod_m.group(1)] = ns_m.group(1)
+        except Exception:
+            pass
+    return ns_map
+
+
 def parse_yang_dir(yang_dir: str, modules: list[str] | None = None) -> Iterator[dict]:
     ctx = libyang.Context(yang_dir)
+    ns_map = _build_ns_map(yang_dir)
     if modules:
         to_load = modules
     else:
@@ -146,9 +167,9 @@ def parse_yang_dir(yang_dir: str, modules: list[str] | None = None) -> Iterator[
     loaded = []
     for mod_name in to_load:
         try:
-            loaded.append(ctx.load_module(mod_name))
+            loaded.append((mod_name, ctx.load_module(mod_name)))
         except Exception:
             pass
-    for mod in loaded:
+    for mod_name, mod in loaded:
         for top_node in mod.children():
-            yield from _iter_nodes(top_node, None)
+            yield from _iter_nodes(top_node, None, ns_map)
