@@ -36,7 +36,7 @@ def main():
     chunks_dir = doc_out / "chunks"
     images_dir = doc_out / "images"
     chunks_dir.mkdir(parents=True, exist_ok=True)
-    images_dir.mkdir(parents=True, exist_ok=True)
+    images_dir.mkdir(parents=True, exist_ok=True)  # reserved for extracted images (wired in future iteration)
 
     log_level = getattr(logging, (args.log_level or cfg.log_level).upper(), logging.INFO)
     logger = make_logger("parser", str(doc_out / "parse.log"), level=log_level)
@@ -55,9 +55,9 @@ def main():
         label = slugify(chunk.heading_text) if chunk.heading_text else "preamble"
         filename = f"{chunk.index:03d}_{label}.md"
         (chunks_dir / filename).write_text(md, encoding="utf-8")
-        logger.info(f"[parser] Wrote chunk: {filename} (tag={chunk.tag})")
+        logger.info(f"Wrote chunk: {filename} (tag={chunk.tag})")
 
-    logger.info(f"[parser] Done. {len(chunks)} chunks written to {chunks_dir}")
+    logger.info(f"Done. {len(chunks)} chunks written to {chunks_dir}")
 
 
 if __name__ == "__main__":
