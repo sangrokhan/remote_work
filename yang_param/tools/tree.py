@@ -15,6 +15,13 @@ def _record_to_dict(r: NodeRecord) -> dict:
         "config": r.config,
         "keys": r.keys,
         "description": r.description,
+        "children_ids": r.children_ids,
+        "parent_id": r.parent_id,
+        "type_info": r.type_info,
+        "mandatory": r.mandatory,
+        "default": r.default,
+        "when_expr": r.when_expr,
+        "must_exprs": r.must_exprs,
     }
 
 
@@ -64,3 +71,14 @@ def get_ancestors(node_id: str) -> dict:
 
     ancestors.reverse()  # root-first
     return {"ancestors": ancestors}
+
+
+def get_root_nodes(module: str) -> dict:
+    store = get_store()
+    nodes = [
+        _record_to_dict(r)
+        for r in store.all_records()
+        if r.module == module and r.parent_id is None
+    ]
+    nodes.sort(key=lambda n: n["schema_path"])
+    return {"nodes": nodes}

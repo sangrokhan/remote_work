@@ -1,18 +1,32 @@
 from __future__ import annotations
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import tools
 from tools.explore import list_modules, search_nodes, find_leaf
-from tools.tree import get_node, get_children, get_ancestors
+from tools.tree import get_node, get_children, get_ancestors, get_root_nodes
 from tools.keys import get_path_to_leaf, get_required_keys, resolve_instance_path
 from tools.types import get_type_info, validate_value, resolve_identityref
 from tools.builder import build_edit_config, build_get_config, build_delete_config, validate_edit_config
 
+_VIEWER_HTML = Path(__file__).parent / "templates" / "viewer.html"
+
 app = FastAPI(title="YANG Schema Tool", version="0.1.0")
+
+
+@app.get("/")
+def viewer():
+    return FileResponse(_VIEWER_HTML, media_type="text/html")
+
+
+@app.get("/tools/get_root_nodes")
+def api_get_root_nodes(module: str) -> dict:
+    return get_root_nodes(module)
 
 
 # --- Explore ---

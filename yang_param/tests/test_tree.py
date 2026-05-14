@@ -46,3 +46,34 @@ def test_get_ancestors(loaded_store):
     assert "interface" in names
     # Root-first order: interfaces before interface
     assert names.index("interfaces") < names.index("interface")
+
+
+def test_get_node_includes_extended_fields(loaded_store):
+    import tools
+    tools.init_store_from_instance(loaded_store)
+    from tools.tree import get_node
+    any_id = list(loaded_store._cache.keys())[0]
+    result = get_node(any_id)
+    node = result["node"]
+    for field in ("children_ids", "parent_id", "type_info", "mandatory", "default", "when_expr", "must_exprs"):
+        assert field in node, f"Missing field: {field}"
+
+
+def test_get_root_nodes_returns_module_roots(loaded_store):
+    import tools
+    tools.init_store_from_instance(loaded_store)
+    from tools.tree import get_root_nodes
+    result = get_root_nodes("ietf-interfaces")
+    assert "nodes" in result
+    assert len(result["nodes"]) > 0
+    for n in result["nodes"]:
+        assert n["module"] == "ietf-interfaces"
+        assert n["parent_id"] is None
+
+
+def test_get_root_nodes_unknown_module_returns_empty(loaded_store):
+    import tools
+    tools.init_store_from_instance(loaded_store)
+    from tools.tree import get_root_nodes
+    result = get_root_nodes("no-such-module")
+    assert result["nodes"] == []
