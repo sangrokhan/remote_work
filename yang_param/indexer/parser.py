@@ -13,7 +13,14 @@ def _extract_type_info(node) -> dict:
         try:
             ranges = list(t.all_ranges())
             if ranges:
-                info["range"] = [{"min": str(r[0]), "max": str(r[1])} for r in ranges]
+                parsed = []
+                for r in ranges:
+                    if isinstance(r, str) and ".." in r:
+                        lo, hi = r.split("..", 1)
+                        parsed.append({"min": lo.strip(), "max": hi.strip()})
+                    else:
+                        parsed.append({"min": str(r[0]), "max": str(r[1])})
+                info["range"] = parsed
         except Exception:
             pass
         try:
