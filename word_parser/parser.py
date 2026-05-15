@@ -1,6 +1,7 @@
 import argparse
 import logging
 import sys
+import tempfile
 from pathlib import Path
 
 from core.config import load_config
@@ -11,12 +12,37 @@ from core.renderer import render_chunk, slugify
 from parse_logging.parse_logger import make_logger
 
 
+def _read_bytes_via_word(input_path: Path) -> bytes:
+    """Open DRM-protected .docx via Word COM, save decrypted copy, return bytes."""
+    try:
+        import win32com.client
+    except ImportError:
+        raise RuntimeError("pywin32 not installed. Run: pip install pywin32")
+
+    word = win32com.client.Dispatch("Word.Application")
+    word.Visible = False
+    try:
+        doc = word.Documents.Open(str(input_path.resolve()))
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+            tmp_path = tmp.name
+        doc.SaveAs2(tmp_path, FileFormat=16)  # 16 = wdFormatXMLDocument
+        doc.Close(False)
+        return Path(tmp_path).read_bytes()
+    finally:
+        word.Quit()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Parse .docx into markdown chunks")
     parser.add_argument("input", help="Path to .docx file")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--output-dir", default=None, help="Override output directory")
     parser.add_argument("--log-level", default=None, help="Override log level (DEBUG|INFO)")
+    parser.add_argument(
+        "--use-word-com",
+        action="store_true",
+        help="Open via Word COM automation (Windows only, required for DRM-protected files)",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -42,7 +68,11 @@ def main():
     logger = make_logger("parser", str(doc_out / "parse.log"), level=log_level)
 
     try:
-        docx_data = input_path.read_bytes()
+        if args.use_word_com:
+            logger.info("Opening via Word COM automation")
+            docx_data = _read_bytes_via_word(input_path)
+        else:
+            docx_data = input_path.read_bytes()
         elements = list(stream_elements(docx_data))
         elements = merge_tables(elements, logger=logger)
         chunks = build_chunks(elements, cfg, logger=logger)
