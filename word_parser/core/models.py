@@ -32,6 +32,7 @@ class ImageElement:
     content_type: str
     data: bytes
     page_approx: int
+    caption: str = ""
 
 
 @dataclass

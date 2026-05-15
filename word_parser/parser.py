@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 from core.config import load_config
-from core.document import stream_elements
+from core.document import stream_elements, attach_captions
 from core.models import ImageElement
 from core.table_merger import merge_tables
 from core.chunker import build_chunks
@@ -75,12 +75,14 @@ def main():
         from core.models import TableElement as _TE, ParagraphElement as _PE
         n_paras = sum(1 for e in elements if isinstance(e, _PE))
         n_tables = sum(1 for e in elements if isinstance(e, _TE))
+        n_images = sum(1 for e in elements if isinstance(e, ImageElement))
         pages = max((e.page_approx for e in elements), default=1)
         logger.info(
             f"[document] Streamed {len(elements)} elements "
-            f"({n_paras} paragraphs, {n_tables} tables, ~{pages} pages)"
+            f"({n_paras} paragraphs, {n_tables} tables, {n_images} images, ~{pages} pages)"
         )
         elements = merge_tables(elements, logger=logger)
+        elements = attach_captions(elements)
         chunks = build_chunks(elements, cfg, logger=logger)
     except Exception as e:
         logger.error(f"Parse failed: {e}")
@@ -109,7 +111,8 @@ def main():
             if isinstance(elem, ImageElement):
                 image_counter += 1
                 ext = elem.content_type.split("/")[-1]
-                img_name = f"{chunk_slug}_img_{image_counter}.{ext}"
+                stem = slugify(elem.caption) if elem.caption else f"{chunk_slug}_img_{image_counter}"
+                img_name = f"{stem}.{ext}"
                 images_dir = folder_path / "images" / chunk_slug
                 images_dir.mkdir(parents=True, exist_ok=True)
                 (images_dir / img_name).write_bytes(elem.data)
