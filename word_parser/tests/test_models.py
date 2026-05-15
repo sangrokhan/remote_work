@@ -33,6 +33,6 @@ def test_image_element():
 
 
 def test_chunk_defaults():
-    chunk = Chunk(heading_text="Intro", heading_depth=1, tag="intro", elements=[], index=0)
+    chunk = Chunk(heading_text="Intro", heading_depth=1, elements=[], index=0)
     assert chunk.table_counter == 0
     assert chunk.image_counter == 0

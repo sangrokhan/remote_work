@@ -8,8 +8,8 @@ def slugify(text: str) -> str:
     return text.strip("_")
 
 
-def _render_table(tbl: TableElement, tag: str, counter: int) -> str:
-    lines = [f"<!-- table-id: {tag}_table_{counter} -->"]
+def _render_table(tbl: TableElement, slug: str, counter: int) -> str:
+    lines = [f"<!-- table-id: {slug}_table_{counter} -->"]
     if not tbl.rows:
         return "\n".join(lines)
 
@@ -42,11 +42,11 @@ def render_chunk(chunk: Chunk) -> tuple[str, str]:
             content_parts.append(elem.text)
         elif isinstance(elem, TableElement):
             table_counter += 1
-            table_parts.append(_render_table(elem, chunk.tag, table_counter))
+            table_parts.append(_render_table(elem, chunk_slug, table_counter))
         elif isinstance(elem, ImageElement):
             image_counter += 1
             ext = elem.content_type.split("/")[-1]
-            name = f"{chunk.tag}_img_{image_counter}.{ext}"
+            name = f"{chunk_slug}_img_{image_counter}.{ext}"
             content_parts.append(f"![{name}](../images/{chunk_slug}/{name})")
 
     return "\n\n".join(content_parts), "\n\n".join(table_parts)

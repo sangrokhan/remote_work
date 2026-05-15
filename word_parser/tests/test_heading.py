@@ -9,7 +9,6 @@ def make_config(**kwargs):
     defaults = dict(
         heading_styles={"Heading 1": 1, "Heading 2": 2},
         font_size_map={24: 1, 18: 2},
-        heading_tags={},
         table_merge_enabled=True,
         output_dir="output",
         log_level="INFO",

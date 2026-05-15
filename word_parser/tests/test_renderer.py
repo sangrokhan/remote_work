@@ -28,14 +28,14 @@ def test_slugify_special_chars():
 
 
 def test_render_heading():
-    chunk = Chunk(heading_text="Introduction", heading_depth=2, tag="intro", elements=[], index=0)
+    chunk = Chunk(heading_text="Introduction", heading_depth=2, elements=[], index=0)
     content_md, _ = render_chunk(chunk)
     assert content_md.startswith("## Introduction")
 
 
 def test_render_paragraph_body():
     chunk = Chunk(
-        heading_text="Section", heading_depth=1, tag="sec",
+        heading_text="Section", heading_depth=1,
         elements=[normal_para("Some body text")], index=0,
     )
     content_md, _ = render_chunk(chunk)
@@ -45,7 +45,7 @@ def test_render_paragraph_body():
 def test_render_table_gfm():
     rows = [["Name", "Value"], ["foo", "bar"], ["baz", "qux"]]
     chunk = Chunk(
-        heading_text="Config", heading_depth=1, tag="config",
+        heading_text="Config", heading_depth=1,
         elements=[table_elem(rows)], index=0,
     )
     _, table_md = render_chunk(chunk)
@@ -57,7 +57,7 @@ def test_render_table_gfm():
 def test_render_table_id_comment():
     rows = [["A", "B"], ["1", "2"]]
     chunk = Chunk(
-        heading_text="Config", heading_depth=1, tag="config",
+        heading_text="Config", heading_depth=1,
         elements=[table_elem(rows)], index=0,
     )
     _, table_md = render_chunk(chunk)
@@ -67,7 +67,7 @@ def test_render_table_id_comment():
 def test_render_second_table_increments_id():
     rows = [["A"], ["1"]]
     chunk = Chunk(
-        heading_text="Config", heading_depth=1, tag="config",
+        heading_text="Config", heading_depth=1,
         elements=[table_elem(rows), table_elem(rows)], index=0,
     )
     _, table_md = render_chunk(chunk)
@@ -76,7 +76,7 @@ def test_render_second_table_increments_id():
 
 
 def test_render_empty_heading_no_heading_line():
-    chunk = Chunk(heading_text="", heading_depth=0, tag="preamble",
+    chunk = Chunk(heading_text="", heading_depth=0,
                   elements=[normal_para("preamble")], index=0)
     content_md, _ = render_chunk(chunk)
     assert not content_md.startswith("#")

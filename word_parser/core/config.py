@@ -6,7 +6,6 @@ import yaml
 class Config:
     heading_styles: dict[str, int]
     font_size_map: dict[int, int]
-    heading_tags: dict[str, str]
     table_merge_enabled: bool
     output_dir: str
     log_level: str
@@ -22,7 +21,6 @@ def load_config(path: str) -> Config:
     return Config(
         heading_styles=data.get("heading_styles") or {},
         font_size_map=font_size_map,
-        heading_tags=data.get("heading_tags") or {},
         table_merge_enabled=(data.get("table_merge") or {}).get("enabled", True),
         output_dir=data.get("output_dir", "output"),
         log_level=data.get("log_level", "INFO"),

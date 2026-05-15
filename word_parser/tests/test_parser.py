@@ -15,9 +15,6 @@ def write_config(path: Path) -> None:
           "Heading 2": 2
         font_size_map:
           24: 1
-        heading_tags:
-          "Introduction": "intro"
-          "Config": "cfg"
         table_merge:
           enabled: true
         output_dir: output

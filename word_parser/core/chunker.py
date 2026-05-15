@@ -13,18 +13,6 @@ def _slugify(text: str) -> str:
     return text.strip("_")
 
 
-def _resolve_tag(heading_text: str, cfg: Config, logger: logging.Logger | None) -> str:
-    lower = heading_text.lower()
-    for pattern, tag in cfg.heading_tags.items():
-        if pattern.lower() in lower:
-            return tag
-    if logger:
-        logger.warning(
-            f"[chunker] No tag match for heading {heading_text!r} → using 'unknown'"
-        )
-    return "unknown"
-
-
 def build_chunks(
     elements: list[Element],
     cfg: Config,
@@ -35,7 +23,6 @@ def build_chunks(
     current_elements: list[Element] = []
     current_heading = ""
     current_depth = 0
-    current_tag = "preamble"
     current_folder_slugs: list[str] = []
     folder_stack: list[tuple[int, str]] = []  # (depth, slug) for depths < split_depth
     index = 0
@@ -45,7 +32,6 @@ def build_chunks(
         chunk = Chunk(
             heading_text=current_heading,
             heading_depth=current_depth,
-            tag=current_tag,
             elements=list(current_elements),
             index=index,
             folder_slugs=list(current_folder_slugs),
@@ -68,7 +54,6 @@ def build_chunks(
                     current_elements = []
                     current_heading = ""
                     current_depth = 0
-                    current_tag = "preamble"
                     folder_stack = [(d, s) for d, s in folder_stack if d < depth]
                     folder_stack.append((depth, _slugify(elem.text)))
                     current_folder_slugs = [s for _, s in folder_stack]
@@ -85,7 +70,6 @@ def build_chunks(
                     current_elements = []
                     current_heading = elem.text
                     current_depth = depth
-                    current_tag = _resolve_tag(elem.text, cfg, logger)
                     continue
 
                 # depth > split_depth: sub-heading, treat as body content

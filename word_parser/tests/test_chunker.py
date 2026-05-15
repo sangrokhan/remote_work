@@ -8,7 +8,6 @@ def cfg(**kwargs):
     defaults = dict(
         heading_styles={"Heading 1": 1, "Heading 2": 2},
         font_size_map={},
-        heading_tags={"3.2 Configuration": "config", "Parameters": "params"},
         table_merge_enabled=True,
         output_dir="output",
         log_level="INFO",
@@ -52,18 +51,6 @@ def test_two_chunks_from_two_headings():
     assert len(chunks) == 2
     assert chunks[0].heading_text == "Section A"
     assert chunks[1].heading_text == "Section B"
-
-
-def test_chunk_tag_resolved_from_heading_text():
-    elements = [heading_para("3.2 Configuration Details"), normal_para("body")]
-    chunks = build_chunks(elements, cfg(), logger=None)
-    assert chunks[0].tag == "config"
-
-
-def test_chunk_tag_unknown_when_no_match():
-    elements = [heading_para("Unknown Section"), normal_para("body")]
-    chunks = build_chunks(elements, cfg(), logger=None)
-    assert chunks[0].tag == "unknown"
 
 
 def test_preamble_chunk_for_content_before_first_heading():

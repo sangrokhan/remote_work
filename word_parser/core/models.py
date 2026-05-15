@@ -37,7 +37,6 @@ class ImageElement:
 class Chunk:
     heading_text: str
     heading_depth: int
-    tag: str
     elements: list
     index: int
     folder_slugs: list = field(default_factory=list)

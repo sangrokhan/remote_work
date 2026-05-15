@@ -101,12 +101,12 @@ def main():
             if isinstance(elem, ImageElement):
                 image_counter += 1
                 ext = elem.content_type.split("/")[-1]
-                img_name = f"{chunk.tag}_img_{image_counter}.{ext}"
+                img_name = f"{chunk_slug}_img_{image_counter}.{ext}"
                 images_dir = folder_path / "images" / chunk_slug
                 images_dir.mkdir(parents=True, exist_ok=True)
                 (images_dir / img_name).write_bytes(elem.data)
 
-        logger.info(f"Wrote chunk: {filename_stem}.md (tag={chunk.tag}, folder={'/'.join(chunk.folder_slugs) or '.'})")
+        logger.info(f"Wrote chunk: {filename_stem}.md (folder={'/'.join(chunk.folder_slugs) or '.'})")
 
     logger.info(f"Done. {len(chunks)} chunks written to {doc_out}")
 
