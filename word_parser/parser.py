@@ -90,7 +90,7 @@ def main():
 
     for chunk in chunks:
         chunk_slug = slugify(chunk.heading_text) if chunk.heading_text else "preamble"
-        filename_stem = f"{chunk.index:03d}_{chunk_slug}"
+        filename_stem = f"{chunk.folder_index:03d}_{chunk_slug}"
 
         # Build folder path: doc_out / folder_slug_1 / folder_slug_2 / ...
         folder_path = doc_out
