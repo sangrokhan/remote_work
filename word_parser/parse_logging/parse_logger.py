@@ -10,7 +10,8 @@ def make_logger(name: str, log_file: str, level: int = logging.INFO) -> logging.
     fmt = logging.Formatter("%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
                             datefmt="%Y-%m-%d %H:%M:%S")
 
-    console = logging.StreamHandler(sys.stderr)
+    stderr_stream = open(sys.stderr.fileno(), mode="w", encoding="utf-8", buffering=1, closefd=False)
+    console = logging.StreamHandler(stderr_stream)
     console.setLevel(level)
     console.setFormatter(fmt)
 

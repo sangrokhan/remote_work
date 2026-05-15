@@ -13,7 +13,7 @@ class Config:
 
 
 def load_config(path: str) -> Config:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     font_size_map = {int(k): int(v) for k, v in (data.get("font_size_map") or {}).items()}
