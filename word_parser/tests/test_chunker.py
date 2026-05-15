@@ -8,6 +8,7 @@ def cfg(**kwargs):
     defaults = dict(
         heading_styles={"Heading 1": 1, "Heading 2": 2},
         font_size_map={},
+        body_styles=[],
         table_merge_enabled=True,
         output_dir="output",
         log_level="INFO",
