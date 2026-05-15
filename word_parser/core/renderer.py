@@ -50,7 +50,8 @@ def render_chunk(chunk: Chunk) -> tuple[str, str]:
         elif isinstance(elem, ImageElement):
             image_counter += 1
             ext = elem.content_type.split("/")[-1]
-            name = f"{chunk_slug}_img_{image_counter}.{ext}"
+            stem = slugify(elem.caption) if elem.caption else f"{chunk_slug}_img_{image_counter}"
+            name = f"{stem}.{ext}"
             content_parts.append(f"![{name}](../images/{chunk_slug}/{name})")
 
     return "\n\n".join(content_parts), "\n\n".join(table_parts)

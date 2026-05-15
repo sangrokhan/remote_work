@@ -7,6 +7,10 @@ from core.models import ParagraphElement, TableElement, ImageElement, Run
 
 Element = ParagraphElement | TableElement | ImageElement
 
+_A_BLIP = "{http://schemas.openxmlformats.org/drawingml/2006/main}blip"
+_R_EMBED = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+_KNOWN_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/bmp", "image/tiff"}
+
 
 def _is_page_break_para(para) -> bool:
     for run in para.runs:
@@ -28,6 +32,51 @@ def _para_runs(para) -> list[Run]:
 
 def _table_rows(tbl) -> list[list[str]]:
     return [[cell.text for cell in row.cells] for row in tbl.rows]
+
+
+def _extract_drawing_image(para, doc, page_approx: int) -> ImageElement | None:
+    drawing = para._p.find(".//" + qn("w:drawing"))
+    if drawing is None:
+        return None
+    blip = drawing.find(".//" + _A_BLIP)
+    if blip is None:
+        return None
+    r_id = blip.get(_R_EMBED)
+    if r_id is None:
+        return None
+    try:
+        rel = doc.part.rels[r_id]
+        content_type = rel.target_part.content_type
+        if content_type not in _KNOWN_IMAGE_TYPES:
+            return None
+        return ImageElement(
+            relationship_id=r_id,
+            content_type=content_type,
+            data=rel.target_part.blob,
+            page_approx=page_approx,
+        )
+    except (KeyError, AttributeError):
+        return None
+
+
+def attach_captions(elements: list[Element]) -> list[Element]:
+    result: list[Element] = []
+    i = 0
+    while i < len(elements):
+        elem = elements[i]
+        if (
+            isinstance(elem, ImageElement)
+            and i + 1 < len(elements)
+            and isinstance(elements[i + 1], ParagraphElement)
+            and "caption" in elements[i + 1].style_name.lower()
+        ):
+            elem.caption = elements[i + 1].text
+            result.append(elem)
+            i += 2
+        else:
+            result.append(elem)
+            i += 1
+    return result
 
 
 def stream_elements(
@@ -57,6 +106,11 @@ def stream_elements(
                     state["page_approx"] += 1
                     if logger:
                         logger.info(f"[document] Page {state['page_approx']} started")
+                img = _extract_drawing_image(para, doc, state["page_approx"])
+                if img is not None:
+                    state["last_was_page_break"] = False
+                    yield img
+                    continue
                 runs = _para_runs(para)
                 elem = ParagraphElement(
                     text=para.text,
