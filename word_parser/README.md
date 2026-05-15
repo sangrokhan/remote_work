@@ -25,7 +25,19 @@ python parser.py my_doc.docx --config config.yaml --log-level DEBUG
 
 # Custom output directory
 python parser.py my_doc.docx --output-dir /tmp/parsed
+
+# DRM-protected file (Windows only, requires Word installed + pywin32)
+python parser.py my_doc.docx --use-word-com
 ```
+
+### DRM-protected files (Windows only)
+
+```bash
+pip install pywin32
+python parser.py my_doc.docx --use-word-com
+```
+
+Word opens the file (handles DRM authentication), saves a decrypted copy, then the parser processes it normally. Requires Microsoft Word installed and the user to be authenticated to the DRM service.
 
 **Exit codes:** `0` success · `1` file not found · `2` config error · `3` parse error
 
