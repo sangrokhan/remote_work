@@ -10,7 +10,12 @@ def resolve_heading_depth(
 ) -> int | None:
     # Style-first
     if para.style_name in cfg.heading_styles:
-        return cfg.heading_styles[para.style_name]
+        depth = cfg.heading_styles[para.style_name]
+        if logger:
+            logger.debug(
+                f"[heading] Style match: {para.text!r} style={para.style_name!r} → depth={depth} (page≈{para.page_approx})"
+            )
+        return depth
 
     # Font-size fallback: use largest font size across runs
     sizes = [r.font_size for r in para.runs if r.font_size is not None]
