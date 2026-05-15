@@ -17,6 +17,9 @@ def resolve_heading_depth(
             )
         return depth
 
+    if logger:
+        logger.debug(f"[heading] No style match: {para.text[:60]!r} style={para.style_name!r}")
+
     # Font-size fallback: use largest font size across runs
     sizes = [r.font_size for r in para.runs if r.font_size is not None]
     if sizes:
