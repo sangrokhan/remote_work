@@ -42,5 +42,6 @@ class Chunk:
     elements: list
     index: int
     folder_slugs: list = field(default_factory=list)
+    folder_index: int = 0
     table_counter: int = 0
     image_counter: int = 0
