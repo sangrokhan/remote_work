@@ -29,8 +29,8 @@ def test_slugify_special_chars():
 
 def test_render_heading():
     chunk = Chunk(heading_text="Introduction", heading_depth=2, tag="intro", elements=[], index=0)
-    md = render_chunk(chunk)
-    assert md.startswith("## Introduction")
+    content_md, _ = render_chunk(chunk)
+    assert content_md.startswith("## Introduction")
 
 
 def test_render_paragraph_body():
@@ -38,8 +38,8 @@ def test_render_paragraph_body():
         heading_text="Section", heading_depth=1, tag="sec",
         elements=[normal_para("Some body text")], index=0,
     )
-    md = render_chunk(chunk)
-    assert "Some body text" in md
+    content_md, _ = render_chunk(chunk)
+    assert "Some body text" in content_md
 
 
 def test_render_table_gfm():
@@ -48,10 +48,10 @@ def test_render_table_gfm():
         heading_text="Config", heading_depth=1, tag="config",
         elements=[table_elem(rows)], index=0,
     )
-    md = render_chunk(chunk)
-    assert "| Name | Value |" in md
-    assert "| --- | --- |" in md
-    assert "| foo | bar |" in md
+    _, table_md = render_chunk(chunk)
+    assert "| Name | Value |" in table_md
+    assert "| --- | --- |" in table_md
+    assert "| foo | bar |" in table_md
 
 
 def test_render_table_id_comment():
@@ -60,8 +60,8 @@ def test_render_table_id_comment():
         heading_text="Config", heading_depth=1, tag="config",
         elements=[table_elem(rows)], index=0,
     )
-    md = render_chunk(chunk)
-    assert "<!-- table-id: config_table_1 -->" in md
+    _, table_md = render_chunk(chunk)
+    assert "<!-- table-id: config_table_1 -->" in table_md
 
 
 def test_render_second_table_increments_id():
@@ -70,14 +70,14 @@ def test_render_second_table_increments_id():
         heading_text="Config", heading_depth=1, tag="config",
         elements=[table_elem(rows), table_elem(rows)], index=0,
     )
-    md = render_chunk(chunk)
-    assert "<!-- table-id: config_table_1 -->" in md
-    assert "<!-- table-id: config_table_2 -->" in md
+    _, table_md = render_chunk(chunk)
+    assert "<!-- table-id: config_table_1 -->" in table_md
+    assert "<!-- table-id: config_table_2 -->" in table_md
 
 
 def test_render_empty_heading_no_heading_line():
     chunk = Chunk(heading_text="", heading_depth=0, tag="preamble",
                   elements=[normal_para("preamble")], index=0)
-    md = render_chunk(chunk)
-    assert not md.startswith("#")
-    assert "preamble" in md
+    content_md, _ = render_chunk(chunk)
+    assert not content_md.startswith("#")
+    assert "preamble" in content_md
