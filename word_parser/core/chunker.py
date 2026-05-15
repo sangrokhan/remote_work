@@ -25,21 +25,20 @@ def build_chunks(
     current_depth = 0
     current_folder_slugs: list[str] = []
     folder_stack: list[tuple[int, str]] = []  # (depth, slug) for depths < split_depth
-    folder_counters: dict[int, int] = {}      # counter per depth, reset when parent changes
-    file_counters: dict[tuple, int] = {}      # counter per folder context
+    folder_counters: dict[int, int] = {}      # global counter per depth level
+    file_counter: int = 0                     # global counter for all file-level chunks
     index = 0
 
     def flush():
-        nonlocal index
-        folder_key = tuple(current_folder_slugs)
-        file_counters[folder_key] = file_counters.get(folder_key, 0) + 1
+        nonlocal index, file_counter
+        file_counter += 1
         chunk = Chunk(
             heading_text=current_heading,
             heading_depth=current_depth,
             elements=list(current_elements),
             index=index,
             folder_slugs=list(current_folder_slugs),
-            folder_index=file_counters[folder_key],
+            folder_index=file_counter,
         )
         chunks.append(chunk)
         index += 1
@@ -60,10 +59,7 @@ def build_chunks(
                     current_heading = ""
                     current_depth = 0
                     folder_stack = [(d, s) for d, s in folder_stack if d < depth]
-                    folder_counters_new = {k: v for k, v in folder_counters.items() if k < depth}
-                    folder_counters_new[depth] = folder_counters_new.get(depth, 0) + 1
-                    folder_counters.clear()
-                    folder_counters.update(folder_counters_new)
+                    folder_counters[depth] = folder_counters.get(depth, 0) + 1
                     numbered_slug = f"{folder_counters[depth]:03d}_{_slugify(elem.text)}"
                     folder_stack.append((depth, numbered_slug))
                     current_folder_slugs = [s for _, s in folder_stack]
