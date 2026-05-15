@@ -69,6 +69,21 @@ def test_chunk_elements_contain_body_paragraphs():
     assert body in chunks[0].elements
 
 
+def test_sub_heading_gets_heading_depth_annotated():
+    """Headings deeper than split_depth must carry heading_depth for renderer."""
+    h2 = heading_para("Chapter", style="Heading 2")
+    h3 = heading_para("Sub", style="Heading 3")
+    body = normal_para("text")
+    c = cfg(
+        heading_styles={"Heading 1": 1, "Heading 2": 2, "Heading 3": 3},
+        chunk_split_depth=2,
+    )
+    chunks = build_chunks([h2, h3, body], c, logger=None)
+    assert len(chunks) == 1
+    sub_elem = chunks[0].elements[0]
+    assert sub_elem.heading_depth == 3
+
+
 def test_chunk_index_sequential():
     elements = [
         heading_para("A"), normal_para(),

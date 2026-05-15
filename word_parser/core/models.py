@@ -15,6 +15,7 @@ class ParagraphElement:
     runs: list[Run]
     page_approx: int
     is_page_break: bool = False
+    heading_depth: int | None = None
 
 
 @dataclass

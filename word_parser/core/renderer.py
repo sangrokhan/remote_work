@@ -39,7 +39,11 @@ def render_chunk(chunk: Chunk) -> tuple[str, str]:
         if isinstance(elem, ParagraphElement):
             if elem.is_page_break or not elem.text.strip():
                 continue
-            content_parts.append(elem.text)
+            if elem.heading_depth is not None:
+                prefix = "#" * elem.heading_depth
+                content_parts.append(f"{prefix} {elem.text}\n")
+            else:
+                content_parts.append(elem.text)
         elif isinstance(elem, TableElement):
             table_counter += 1
             table_parts.append(_render_table(elem, chunk_slug, table_counter))

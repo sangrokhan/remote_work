@@ -81,6 +81,8 @@ def build_chunks(
                     continue
 
                 # depth > split_depth: sub-heading, treat as body content
+                else:
+                    elem.heading_depth = depth
 
         current_elements.append(elem)
 

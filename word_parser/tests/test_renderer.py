@@ -81,3 +81,15 @@ def test_render_empty_heading_no_heading_line():
     content_md, _ = render_chunk(chunk)
     assert not content_md.startswith("#")
     assert "preamble" in content_md
+
+
+def test_render_sub_heading_as_markdown_header():
+    sub = ParagraphElement(
+        text="Sub Section", style_name="Heading 3",
+        runs=[Run(text="Sub Section", font_size=None, bold=False)],
+        page_approx=1,
+        heading_depth=3,
+    )
+    chunk = Chunk(heading_text="Section", heading_depth=2, elements=[sub], index=0)
+    content_md, _ = render_chunk(chunk)
+    assert "### Sub Section" in content_md
