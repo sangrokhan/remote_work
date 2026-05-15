@@ -1,4 +1,5 @@
 import io
+import logging
 from typing import Generator
 from docx import Document
 from docx.oxml.ns import qn
@@ -29,45 +30,61 @@ def _table_rows(tbl) -> list[list[str]]:
     return [[cell.text for cell in row.cells] for row in tbl.rows]
 
 
-def stream_elements(docx_data: bytes) -> Generator[Element, None, None]:
+def stream_elements(
+    docx_data: bytes,
+    logger: logging.Logger | None = None,
+) -> Generator[Element, None, None]:
     doc = Document(io.BytesIO(docx_data))
     body = doc.element.body
-    page_approx = 1
-    last_was_page_break = False
+    state = {"page_approx": 1, "last_was_page_break": False}
 
-    for child in body.iterchildren():
-        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+    def _iter_children(parent):
+        for child in parent.iterchildren():
+            tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
 
-        if tag == "p":
-            from docx.text.paragraph import Paragraph
-            para = Paragraph(child, doc)
-            is_pb = _is_page_break_para(para)
-            if is_pb:
-                page_approx += 1
-            runs = _para_runs(para)
-            elem = ParagraphElement(
-                text=para.text,
-                style_name=para.style.name if para.style else "Normal",
-                runs=runs,
-                page_approx=page_approx,
-                is_page_break=is_pb,
-            )
-            last_was_page_break = is_pb
-            yield elem
+            if tag == "sdt":
+                # Recurse into content control — paragraphs/tables live in w:sdtContent
+                sdt_content = child.find(qn("w:sdtContent"))
+                if sdt_content is not None:
+                    yield from _iter_children(sdt_content)
+                continue
 
-        elif tag == "tbl":
-            from docx.table import Table
-            tbl = Table(child, doc)
-            rows = _table_rows(tbl)
-            col_count = max(len(r) for r in rows) if rows else 0
-            elem = TableElement(
-                rows=rows,
-                col_count=col_count,
-                page_approx=page_approx,
-                preceded_by_page_break=last_was_page_break,
-            )
-            last_was_page_break = False
-            yield elem
+            if tag == "p":
+                from docx.text.paragraph import Paragraph
+                para = Paragraph(child, doc)
+                is_pb = _is_page_break_para(para)
+                if is_pb:
+                    state["page_approx"] += 1
+                    if logger:
+                        logger.info(f"[document] Page {state['page_approx']} started")
+                runs = _para_runs(para)
+                elem = ParagraphElement(
+                    text=para.text,
+                    style_name=para.style.name if para.style else "Normal",
+                    runs=runs,
+                    page_approx=state["page_approx"],
+                    is_page_break=is_pb,
+                )
+                state["last_was_page_break"] = is_pb
+                yield elem
 
-        else:
-            last_was_page_break = False
+            elif tag == "tbl":
+                from docx.table import Table
+                tbl = Table(child, doc)
+                rows = _table_rows(tbl)
+                col_count = max(len(r) for r in rows) if rows else 0
+                elem = TableElement(
+                    rows=rows,
+                    col_count=col_count,
+                    page_approx=state["page_approx"],
+                    preceded_by_page_break=state["last_was_page_break"],
+                )
+                state["last_was_page_break"] = False
+                yield elem
+
+            else:
+                if logger:
+                    logger.debug(f"[document] Skipping unknown element: {tag!r}")
+                state["last_was_page_break"] = False
+
+    yield from _iter_children(body)

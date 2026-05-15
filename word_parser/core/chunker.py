@@ -66,7 +66,15 @@ def build_chunks(
                             logger.debug(
                                 f"[chunker] Empty chunk: {current_heading!r} depth={current_depth}"
                             )
-                        flush()
+                        if split_depth > 0 and not current_heading:
+                            # Content before first file-level heading — skip, no chunk
+                            if logger and current_elements:
+                                logger.warning(
+                                    f"[chunker] {len(current_elements)} elements before first "
+                                    f"depth-{split_depth} heading — skipped (no matching heading)"
+                                )
+                        else:
+                            flush()
                     current_elements = []
                     current_heading = elem.text
                     current_depth = depth
@@ -79,6 +87,15 @@ def build_chunks(
     if current_elements or current_heading:
         if not current_elements and logger:
             logger.debug(f"[chunker] Empty chunk: {current_heading!r} depth={current_depth}")
-        flush()
+        if split_depth > 0 and not current_heading and not current_elements:
+            pass  # nothing to flush
+        elif split_depth > 0 and not current_heading:
+            if logger:
+                logger.warning(
+                    f"[chunker] {len(current_elements)} trailing elements with no "
+                    f"depth-{split_depth} heading — skipped"
+                )
+        else:
+            flush()
 
     return chunks

@@ -71,7 +71,15 @@ def main():
             docx_data = _read_bytes_via_word(input_path)
         else:
             docx_data = input_path.read_bytes()
-        elements = list(stream_elements(docx_data))
+        elements = list(stream_elements(docx_data, logger=logger))
+        from core.models import TableElement as _TE, ParagraphElement as _PE
+        n_paras = sum(1 for e in elements if isinstance(e, _PE))
+        n_tables = sum(1 for e in elements if isinstance(e, _TE))
+        pages = max((e.page_approx for e in elements), default=1)
+        logger.info(
+            f"[document] Streamed {len(elements)} elements "
+            f"({n_paras} paragraphs, {n_tables} tables, ~{pages} pages)"
+        )
         elements = merge_tables(elements, logger=logger)
         chunks = build_chunks(elements, cfg, logger=logger)
     except Exception as e:
