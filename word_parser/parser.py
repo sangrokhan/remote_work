@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core.config import load_config
 from core.document import stream_elements
+from core.models import ImageElement
 from core.table_merger import merge_tables
 from core.chunker import build_chunks
 from core.renderer import render_chunk, slugify
@@ -59,10 +60,7 @@ def main():
     output_dir = Path(args.output_dir or cfg.output_dir)
     doc_name = input_path.stem
     doc_out = output_dir / doc_name
-    chunks_dir = doc_out / "chunks"
-    images_dir = doc_out / "images"
-    chunks_dir.mkdir(parents=True, exist_ok=True)
-    images_dir.mkdir(parents=True, exist_ok=True)  # reserved for extracted images (wired in future iteration)
+    doc_out.mkdir(parents=True, exist_ok=True)
 
     log_level = getattr(logging, (args.log_level or cfg.log_level).upper(), logging.INFO)
     logger = make_logger("parser", str(doc_out / "parse.log"), level=log_level)
@@ -81,13 +79,36 @@ def main():
         sys.exit(3)
 
     for chunk in chunks:
-        md = render_chunk(chunk)
-        label = slugify(chunk.heading_text) if chunk.heading_text else "preamble"
-        filename = f"{chunk.index:03d}_{label}.md"
-        (chunks_dir / filename).write_text(md, encoding="utf-8")
-        logger.info(f"Wrote chunk: {filename} (tag={chunk.tag})")
+        chunk_slug = slugify(chunk.heading_text) if chunk.heading_text else "preamble"
+        filename_stem = f"{chunk.index:03d}_{chunk_slug}"
 
-    logger.info(f"Done. {len(chunks)} chunks written to {chunks_dir}")
+        # Build folder path: doc_out / folder_slug_1 / folder_slug_2 / ...
+        folder_path = doc_out
+        for slug in chunk.folder_slugs:
+            folder_path = folder_path / slug
+
+        md_dir = folder_path / "md"
+        md_dir.mkdir(parents=True, exist_ok=True)
+
+        content_md, table_md = render_chunk(chunk)
+        (md_dir / f"{filename_stem}.md").write_text(content_md, encoding="utf-8")
+        if table_md.strip():
+            (md_dir / f"{filename_stem}_table.md").write_text(table_md, encoding="utf-8")
+
+        # Save inline images
+        image_counter = 0
+        for elem in chunk.elements:
+            if isinstance(elem, ImageElement):
+                image_counter += 1
+                ext = elem.content_type.split("/")[-1]
+                img_name = f"{chunk.tag}_img_{image_counter}.{ext}"
+                images_dir = folder_path / "images" / chunk_slug
+                images_dir.mkdir(parents=True, exist_ok=True)
+                (images_dir / img_name).write_bytes(elem.data)
+
+        logger.info(f"Wrote chunk: {filename_stem}.md (tag={chunk.tag}, folder={'/'.join(chunk.folder_slugs) or '.'})")
+
+    logger.info(f"Done. {len(chunks)} chunks written to {doc_out}")
 
 
 if __name__ == "__main__":

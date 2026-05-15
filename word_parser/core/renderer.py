@@ -17,33 +17,36 @@ def _render_table(tbl: TableElement, tag: str, counter: int) -> str:
     lines.append("| " + " | ".join(header) + " |")
     lines.append("| " + " | ".join("---" for _ in header) + " |")
     for row in tbl.rows[1:]:
-        # Pad or trim row to match header length
         padded = row + [""] * max(0, len(header) - len(row))
         lines.append("| " + " | ".join(padded[: len(header)]) + " |")
     return "\n".join(lines)
 
 
-def render_chunk(chunk: Chunk) -> str:
-    parts: list[str] = []
+def render_chunk(chunk: Chunk) -> tuple[str, str]:
+    """Return (content_md, table_md). content_md has heading+paragraphs+image refs.
+    table_md has tables only (empty string if none)."""
+    chunk_slug = slugify(chunk.heading_text) if chunk.heading_text else "preamble"
+    content_parts: list[str] = []
+    table_parts: list[str] = []
     table_counter = 0
     image_counter = 0
 
     if chunk.heading_text:
         prefix = "#" * chunk.heading_depth
-        parts.append(f"{prefix} {chunk.heading_text}\n")
+        content_parts.append(f"{prefix} {chunk.heading_text}\n")
 
     for elem in chunk.elements:
         if isinstance(elem, ParagraphElement):
             if elem.is_page_break or not elem.text.strip():
                 continue
-            parts.append(elem.text)
+            content_parts.append(elem.text)
         elif isinstance(elem, TableElement):
             table_counter += 1
-            parts.append(_render_table(elem, chunk.tag, table_counter))
+            table_parts.append(_render_table(elem, chunk.tag, table_counter))
         elif isinstance(elem, ImageElement):
             image_counter += 1
             ext = elem.content_type.split("/")[-1]
             name = f"{chunk.tag}_img_{image_counter}.{ext}"
-            parts.append(f"![{name}](../images/{name})")
+            content_parts.append(f"![{name}](../images/{chunk_slug}/{name})")
 
-    return "\n\n".join(parts)
+    return "\n\n".join(content_parts), "\n\n".join(table_parts)

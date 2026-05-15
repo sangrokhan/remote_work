@@ -10,6 +10,7 @@ class Config:
     table_merge_enabled: bool
     output_dir: str
     log_level: str
+    chunk_split_depth: int = 0  # 0 = split on all headings (flat); N >= 1 = folder structure
 
 
 def load_config(path: str) -> Config:
@@ -25,4 +26,5 @@ def load_config(path: str) -> Config:
         table_merge_enabled=(data.get("table_merge") or {}).get("enabled", True),
         output_dir=data.get("output_dir", "output"),
         log_level=data.get("log_level", "INFO"),
+        chunk_split_depth=int(data.get("chunk_split_depth", 0)),
     )

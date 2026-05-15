@@ -22,3 +22,8 @@ table_merge:
 
 output_dir: "output"
 log_level: "INFO"   # INFO | DEBUG
+
+# Heading depth that becomes chunk files; headings above become folders
+# 0 = split on all headings, flat output (default)
+# 2 = depth-1 headings → folders, depth-2 headings → files
+chunk_split_depth: 2
