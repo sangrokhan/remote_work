@@ -25,12 +25,15 @@ def _render_table(tbl: TableElement, slug: str, counter: int) -> str:
     if not tbl.rows:
         return "\n".join(lines)
 
+    def _cell(text: str) -> str:
+        return text.replace("\n", "<br>")
+
     header = tbl.rows[0]
-    lines.append("| " + " | ".join(header) + " |")
+    lines.append("| " + " | ".join(_cell(c) for c in header) + " |")
     lines.append("| " + " | ".join("---" for _ in header) + " |")
     for row in tbl.rows[1:]:
         padded = row + [""] * max(0, len(header) - len(row))
-        lines.append("| " + " | ".join(padded[: len(header)]) + " |")
+        lines.append("| " + " | ".join(_cell(c) for c in padded[: len(header)]) + " |")
     return "\n".join(lines)
 
 
