@@ -5,7 +5,23 @@ from pathlib import Path
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 from PIL import Image, ImageDraw, ImageFont
+
+
+def _set_vmerge(tc, restart: bool) -> None:
+    """Add proper vMerge element to a cell's tcPr. restart=True → start of span, False → continuation."""
+    from lxml import etree
+    tc_pr = tc.find(qn("w:tcPr"))
+    if tc_pr is None:
+        tc_pr = etree.SubElement(tc, qn("w:tcPr"))
+        tc.insert(0, tc_pr)
+    v_merge = tc_pr.find(qn("w:vMerge"))
+    if v_merge is not None:
+        tc_pr.remove(v_merge)
+    v_merge = etree.SubElement(tc_pr, qn("w:vMerge"))
+    if restart:
+        v_merge.set(qn("w:val"), "restart")
 
 
 def _png_bytes(color: tuple, width: int = 200, height: int = 120, label: str = "") -> bytes:
@@ -126,6 +142,42 @@ def build() -> Document:
     for r_idx, (t, d) in enumerate(plan_data, start=1):
         tbl3.rows[r_idx].cells[0].text = t
         tbl3.rows[r_idx].cells[1].text = d
+
+    # ── H1: 병합 셀 예시 ────────────────────────────────────────────────────
+    doc.add_heading("4. 병합 셀 예시", level=1)
+    doc.add_paragraph("가로/세로 병합 셀이 포함된 표 예시입니다.")
+
+    # 가로 병합: 헤더 행에서 두 컬럼 병합
+    doc.add_heading("4.1 가로 병합", level=2)
+    tbl_h = doc.add_table(rows=3, cols=3)
+    tbl_h.style = "Table Grid"
+    # 첫 행: [병합된 헤더(A+B), C]
+    tbl_h.rows[0].cells[0].merge(tbl_h.rows[0].cells[1])
+    tbl_h.rows[0].cells[0].text = "병합된 헤더"
+    tbl_h.rows[0].cells[2].text = "C"
+    tbl_h.rows[1].cells[0].text = "A1"
+    tbl_h.rows[1].cells[1].text = "B1"
+    tbl_h.rows[1].cells[2].text = "C1"
+    tbl_h.rows[2].cells[0].text = "A2"
+    tbl_h.rows[2].cells[1].text = "B2"
+    tbl_h.rows[2].cells[2].text = "C2"
+
+    # 세로 병합: 첫 컬럼 두 행 병합
+    doc.add_heading("4.2 세로 병합", level=2)
+    tbl_v = doc.add_table(rows=3, cols=2)
+    tbl_v.style = "Table Grid"
+    tbl_v.rows[0].cells[0].text = "헤더1"
+    tbl_v.rows[0].cells[1].text = "헤더2"
+    # 세로 병합: rows[1].cells[0] + rows[2].cells[0]
+    # 세로 병합: rows[1].cells[0] → restart, rows[2].cells[0] → continuation
+    # _tbl.tr_lst 로 raw XML 접근 (python-docx .merge() 는 continuation vMerge 버그 있음)
+    tr1_tcs = tbl_v._tbl.tr_lst[1].tc_lst
+    tr2_tcs = tbl_v._tbl.tr_lst[2].tc_lst
+    _set_vmerge(tr1_tcs[0], restart=True)
+    _set_vmerge(tr2_tcs[0], restart=False)
+    tbl_v.rows[1].cells[0].text = "병합됨"
+    tbl_v.rows[1].cells[1].text = "값1"
+    tbl_v.rows[2].cells[1].text = "값2"
 
     return doc
 

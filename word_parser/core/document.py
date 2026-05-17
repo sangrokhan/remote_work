@@ -44,7 +44,24 @@ def _para_runs(para) -> list[Run]:
 
 
 def _table_rows(tbl) -> list[list[str]]:
-    return [[cell.text for cell in row.cells] for row in tbl.rows]
+    result = []
+    for tr in tbl._tbl.tr_lst:
+        row_data: list[str] = []
+        for tc in tr.tc_lst:
+            tc_pr = tc.find(qn("w:tcPr"))
+            v_merge = tc_pr.find(qn("w:vMerge")) if tc_pr is not None else None
+            grid_span_el = tc_pr.find(qn("w:gridSpan")) if tc_pr is not None else None
+            grid_span = int(grid_span_el.get(qn("w:val"), 1)) if grid_span_el is not None else 1
+
+            if v_merge is not None and v_merge.get(qn("w:val")) != "restart":
+                cell_text = "^"
+            else:
+                cell_text = "".join(t.text or "" for t in tc.iter(qn("w:t")))
+            row_data.append(cell_text)
+            for _ in range(grid_span - 1):
+                row_data.append("")
+        result.append(row_data)
+    return result
 
 
 def _extract_drawing_image(

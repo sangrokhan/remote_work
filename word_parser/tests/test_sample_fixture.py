@@ -43,7 +43,7 @@ def test_image_count(images):
 
 
 def test_table_count(tables):
-    assert len(tables) == 3
+    assert len(tables) == 5
 
 
 def test_paragraph_count_nonzero(paragraphs):
@@ -95,7 +95,7 @@ def test_caption_text_content(images):
 
 def test_table_dimensions(tables):
     dims = sorted((tbl.col_count, len(tbl.rows)) for tbl in tables)
-    assert dims == [(2, 3), (2, 5), (3, 4)]
+    assert dims == [(2, 3), (2, 3), (2, 5), (3, 3), (3, 4)]
 
 
 def test_tables_have_header_row(tables):
@@ -116,7 +116,7 @@ def test_heading_styles_present(paragraphs):
 
 def test_three_h1_headings(paragraphs):
     h1 = [p for p in paragraphs if p.style_name == "Heading 1"]
-    assert len(h1) == 3
+    assert len(h1) == 4
 
 
 def test_h1_text_values(paragraphs):
@@ -124,6 +124,7 @@ def test_h1_text_values(paragraphs):
     assert any("개요" in t for t in texts)
     assert any("기능" in t for t in texts)
     assert any("결론" in t for t in texts)
+    assert any("병합" in t for t in texts)
 
 
 # ── chunking ─────────────────────────────────────────────────────────────────
@@ -143,22 +144,19 @@ def _make_config(split_depth: int) -> Config:
 def test_chunks_at_depth_3(elements):
     cfg = _make_config(split_depth=3)
     chunks = build_chunks(elements, cfg, logger=None)
-    # 5 H3 file-level chunks + 3 preamble chunks (intro paras between H1→H2 folder transitions)
-    assert len(chunks) == 8
+    assert len(chunks) == 11
 
 
 def test_chunks_at_depth_2(elements):
     cfg = _make_config(split_depth=2)
     chunks = build_chunks(elements, cfg, logger=None)
-    # 4 × H2 headings → 4 chunks
-    assert len(chunks) == 4
+    assert len(chunks) == 6
 
 
 def test_chunks_at_depth_1(elements):
     cfg = _make_config(split_depth=1)
     chunks = build_chunks(elements, cfg, logger=None)
-    # 3 × H1 headings → 3 chunks
-    assert len(chunks) == 3
+    assert len(chunks) == 4
 
 
 def test_chunks_contain_images(elements):
@@ -172,5 +170,15 @@ def test_chunks_contain_tables(elements):
     cfg = _make_config(split_depth=3)
     chunks = build_chunks(elements, cfg, logger=None)
     table_chunks = [c for c in chunks if any(isinstance(e, TableElement) for e in c.elements)]
-    # 3rd table (under H2 "3.1 향후 계획", no H3) is orphaned at split_depth=3 → dropped
-    assert len(table_chunks) == 2
+    assert len(table_chunks) == 4
+
+
+def test_horizontal_merge_cell_is_empty(tables):
+    merge_tbl = next(t for t in tables if t.rows[0][0] == "병합된 헤더")
+    assert merge_tbl.rows[0] == ["병합된 헤더", "", "C"]
+
+
+def test_vertical_merge_continuation_is_caret(tables):
+    merge_tbl = next(t for t in tables if t.rows[1][0] == "병합됨")
+    assert merge_tbl.rows[2][0] == "^"
+    assert merge_tbl.rows[2][1] == "값2"
