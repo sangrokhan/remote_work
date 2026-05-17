@@ -9,7 +9,7 @@ from core.document import stream_elements, attach_captions
 from core.models import ImageElement
 from core.table_merger import merge_tables
 from core.chunker import build_chunks
-from core.renderer import render_chunk, slugify
+from core.renderer import render_chunk, slugify, _image_ext
 from parse_logging.parse_logger import make_logger
 
 
@@ -110,7 +110,7 @@ def main():
         for elem in chunk.elements:
             if isinstance(elem, ImageElement):
                 image_counter += 1
-                ext = elem.content_type.split("/")[-1]
+                ext = _image_ext(elem.content_type)
                 stem = slugify(elem.caption) if elem.caption else f"{chunk_slug}_img_{image_counter}"
                 img_name = f"{stem}.{ext}"
                 images_dir = folder_path / "images" / chunk_slug

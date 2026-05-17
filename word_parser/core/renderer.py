@@ -1,6 +1,18 @@
 import re
 from core.models import ParagraphElement, TableElement, ImageElement, Chunk
 
+_EXT_MAP = {
+    "image/x-emf": "emf",
+    "image/emf": "emf",
+    "image/x-wmf": "wmf",
+    "image/wmf": "wmf",
+    "image/svg+xml": "svg",
+}
+
+
+def _image_ext(content_type: str) -> str:
+    return _EXT_MAP.get(content_type, content_type.split("/")[-1])
+
 
 def slugify(text: str) -> str:
     text = text.lower()
@@ -49,7 +61,7 @@ def render_chunk(chunk: Chunk) -> tuple[str, str]:
             table_parts.append(_render_table(elem, chunk_slug, table_counter))
         elif isinstance(elem, ImageElement):
             image_counter += 1
-            ext = elem.content_type.split("/")[-1]
+            ext = _image_ext(elem.content_type)
             stem = slugify(elem.caption) if elem.caption else f"{chunk_slug}_img_{image_counter}"
             name = f"{stem}.{ext}"
             content_parts.append(f"![{name}](../images/{chunk_slug}/{name})")
