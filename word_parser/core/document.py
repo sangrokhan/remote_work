@@ -89,12 +89,18 @@ def _extract_drawing_image(
                         f"[document] Unrecognized image content type: {content_type!r} (rId={r_id}) — skipped"
                     )
                 return None
-            return ImageElement(
+            img = ImageElement(
                 relationship_id=r_id,
                 content_type=content_type,
                 data=rel.target_part.blob,
                 page_approx=page_approx,
             )
+            if logger:
+                logger.info(
+                    f"[document] Image found (DrawingML): rId={r_id}, type={content_type}, "
+                    f"size={len(img.data)} bytes, page~{page_approx}"
+                )
+            return img
         except (KeyError, AttributeError) as e:
             if logger:
                 logger.debug(f"[document] Failed to resolve image relationship {r_id!r}: {e}")
@@ -122,12 +128,18 @@ def _extract_drawing_image(
                         f"[document] Unrecognized VML image content type: {content_type!r} (rId={r_id}) — skipped"
                     )
                 return None
-            return ImageElement(
+            img = ImageElement(
                 relationship_id=r_id,
                 content_type=content_type,
                 data=rel.target_part.blob,
                 page_approx=page_approx,
             )
+            if logger:
+                logger.info(
+                    f"[document] Image found (VML): rId={r_id}, type={content_type}, "
+                    f"size={len(img.data)} bytes, page~{page_approx}"
+                )
+            return img
         except (KeyError, AttributeError) as e:
             if logger:
                 logger.debug(f"[document] Failed to resolve VML image relationship {r_id!r}: {e}")
