@@ -9,7 +9,9 @@ Element = ParagraphElement | TableElement | ImageElement
 
 _A_BLIP = "{http://schemas.openxmlformats.org/drawingml/2006/main}blip"
 _R_EMBED = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+_R_LINK = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}link"
 _V_IMAGEDATA = "{urn:schemas-microsoft-com:vml}imagedata"
+_O_OLEOBJECT = "{urn:schemas-microsoft-com:office:office}OLEObject"
 _KNOWN_IMAGE_TYPES = {
     "image/png",
     "image/jpeg",
@@ -77,11 +79,31 @@ def _extract_drawing_image(
             return None
         r_id = blip.get(_R_EMBED)
         if r_id is None:
-            if logger:
-                logger.debug("[document] a:blip found but no r:embed attribute — skipping paragraph image")
+            r_id_link = blip.get(_R_LINK)
+            if r_id_link is not None:
+                try:
+                    rel = doc.part.rels[r_id_link]
+                    target = rel.target_ref if rel.is_external else "(embedded)"
+                except (KeyError, AttributeError):
+                    target = "(unknown)"
+                if logger:
+                    logger.warning(
+                        f"[document] Linked image skipped (DrawingML r:link): rId={r_id_link}, "
+                        f"target={target!r}, page~{page_approx}"
+                    )
+            else:
+                if logger:
+                    logger.debug("[document] a:blip found but no r:embed attribute — skipping paragraph image")
             return None
         try:
             rel = doc.part.rels[r_id]
+            if rel.is_external:
+                if logger:
+                    logger.warning(
+                        f"[document] External linked image skipped (DrawingML): rId={r_id}, "
+                        f"target={rel.target_ref!r}, page~{page_approx}"
+                    )
+                return None
             content_type = rel.target_part.content_type
             if content_type not in _KNOWN_IMAGE_TYPES:
                 if logger:
@@ -121,6 +143,13 @@ def _extract_drawing_image(
             return None
         try:
             rel = doc.part.rels[r_id]
+            if rel.is_external:
+                if logger:
+                    logger.warning(
+                        f"[document] External linked image skipped (VML): rId={r_id}, "
+                        f"target={rel.target_ref!r}, page~{page_approx}"
+                    )
+                return None
             content_type = rel.target_part.content_type
             if content_type not in _KNOWN_IMAGE_TYPES:
                 if logger:
@@ -200,6 +229,14 @@ def stream_elements(
                     state["last_was_page_break"] = False
                     yield img
                     continue
+                obj = para._p.find(".//" + qn("w:object"))
+                if obj is not None and logger:
+                    ole = obj.find(".//" + _O_OLEOBJECT)
+                    prog_id = ole.get("ProgID", "unknown") if ole is not None else "unknown"
+                    r_id = ole.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id") if ole is not None else None
+                    logger.warning(
+                        f"[document] OLE object skipped: ProgID={prog_id!r}, rId={r_id!r}, page~{state['page_approx']}"
+                    )
                 runs = _para_runs(para)
                 elem = ParagraphElement(
                     text=para.text,
