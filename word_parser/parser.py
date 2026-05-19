@@ -100,10 +100,10 @@ def main():
         md_dir = folder_path / "md"
         md_dir.mkdir(parents=True, exist_ok=True)
 
-        content_md, table_md = render_chunk(chunk)
+        content_md, table_md = render_chunk(chunk, filename_stem=filename_stem)
         (md_dir / f"{filename_stem}.md").write_text(content_md, encoding="utf-8")
         if table_md.strip():
-            (md_dir / f"{filename_stem}_table.md").write_text(table_md, encoding="utf-8")
+            (md_dir / f"{filename_stem}_tables.md").write_text(table_md, encoding="utf-8")
 
         # Save inline images
         image_counter = 0
