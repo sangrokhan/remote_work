@@ -45,12 +45,13 @@ def build_chunks(
 
     def flush_cover():
         nonlocal index
+        cover_folder_slugs = list(current_folder_slugs) or ["000_preamble"]
         chunk = Chunk(
             heading_text="",
             heading_depth=0,
             elements=list(current_elements),
             index=index,
-            folder_slugs=list(current_folder_slugs) + ["000_cover"],
+            folder_slugs=cover_folder_slugs,
             folder_index=0,
         )
         chunks.append(chunk)
