@@ -144,13 +144,13 @@ def _make_config(split_depth: int) -> Config:
 def test_chunks_at_depth_3(elements):
     cfg = _make_config(split_depth=3)
     chunks = build_chunks(elements, cfg, logger=None)
-    assert len(chunks) == 11
+    assert len(chunks) == 15
 
 
 def test_chunks_at_depth_2(elements):
     cfg = _make_config(split_depth=2)
     chunks = build_chunks(elements, cfg, logger=None)
-    assert len(chunks) == 6
+    assert len(chunks) == 10
 
 
 def test_chunks_at_depth_1(elements):
@@ -170,7 +170,7 @@ def test_chunks_contain_tables(elements):
     cfg = _make_config(split_depth=3)
     chunks = build_chunks(elements, cfg, logger=None)
     table_chunks = [c for c in chunks if any(isinstance(e, TableElement) for e in c.elements)]
-    assert len(table_chunks) == 4
+    assert len(table_chunks) == 5
 
 
 def test_horizontal_merge_cell_is_empty(tables):

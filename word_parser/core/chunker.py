@@ -43,6 +43,19 @@ def build_chunks(
         chunks.append(chunk)
         index += 1
 
+    def flush_cover():
+        nonlocal index
+        chunk = Chunk(
+            heading_text="",
+            heading_depth=0,
+            elements=list(current_elements),
+            index=index,
+            folder_slugs=list(current_folder_slugs) + ["000_cover"],
+            folder_index=0,
+        )
+        chunks.append(chunk)
+        index += 1
+
     for elem in elements:
         if isinstance(elem, ParagraphElement):
             depth = resolve_heading_depth(elem, cfg, logger)
@@ -73,12 +86,13 @@ def build_chunks(
                                 f"[chunker] Empty chunk: {current_heading!r} depth={current_depth}"
                             )
                         if split_depth > 0 and not current_heading:
-                            # Content before first file-level heading — skip, no chunk
-                            if logger and current_elements:
-                                logger.warning(
-                                    f"[chunker] {len(current_elements)} elements before first "
-                                    f"depth-{split_depth} heading — skipped (no matching heading)"
-                                )
+                            if current_elements:
+                                if logger:
+                                    logger.info(
+                                        f"[chunker] {len(current_elements)} elements before first "
+                                        f"depth-{split_depth} heading — emitted as cover (000)"
+                                    )
+                                flush_cover()
                         else:
                             flush()
                     current_elements = []
@@ -98,11 +112,13 @@ def build_chunks(
         if split_depth > 0 and not current_heading and not current_elements:
             pass  # nothing to flush
         elif split_depth > 0 and not current_heading:
-            if logger:
-                logger.warning(
-                    f"[chunker] {len(current_elements)} trailing elements with no "
-                    f"depth-{split_depth} heading — skipped"
-                )
+            if current_elements:
+                if logger:
+                    logger.info(
+                        f"[chunker] {len(current_elements)} elements with no "
+                        f"depth-{split_depth} heading — emitted as cover (000)"
+                    )
+                flush_cover()
         else:
             flush()
 
