@@ -48,7 +48,7 @@ def render_chunk(chunk: Chunk) -> tuple[str, str]:
 
     if chunk.heading_text:
         prefix = "#" * chunk.heading_depth
-        content_parts.append(f"{prefix} {chunk.heading_text}\n")
+        content_parts.append(f"{prefix} {chunk.heading_text}")
 
     for elem in chunk.elements:
         if isinstance(elem, ParagraphElement):
@@ -56,7 +56,7 @@ def render_chunk(chunk: Chunk) -> tuple[str, str]:
                 continue
             if elem.heading_depth is not None:
                 prefix = "#" * elem.heading_depth
-                content_parts.append(f"{prefix} {elem.text}\n")
+                content_parts.append(f"{prefix} {elem.text}")
             else:
                 content_parts.append(elem.text)
         elif isinstance(elem, TableElement):
