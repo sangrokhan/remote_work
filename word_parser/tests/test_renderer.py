@@ -29,7 +29,7 @@ def test_slugify_special_chars():
 
 def test_render_heading():
     chunk = Chunk(heading_text="Introduction", heading_depth=2, elements=[], index=0)
-    content_md, _ = render_chunk(chunk)
+    content_md, _ = render_chunk(chunk, filename_stem="001_introduction")
     assert content_md.startswith("## Introduction")
 
 
@@ -38,7 +38,7 @@ def test_render_paragraph_body():
         heading_text="Section", heading_depth=1,
         elements=[normal_para("Some body text")], index=0,
     )
-    content_md, _ = render_chunk(chunk)
+    content_md, _ = render_chunk(chunk, filename_stem="001_section")
     assert "Some body text" in content_md
 
 
@@ -48,20 +48,21 @@ def test_render_table_gfm():
         heading_text="Config", heading_depth=1,
         elements=[table_elem(rows)], index=0,
     )
-    _, table_md = render_chunk(chunk)
+    _, table_md = render_chunk(chunk, filename_stem="001_config")
     assert "| Name | Value |" in table_md
     assert "| --- | --- |" in table_md
     assert "| foo | bar |" in table_md
 
 
-def test_render_table_id_comment():
+def test_render_table_header_format():
     rows = [["A", "B"], ["1", "2"]]
     chunk = Chunk(
         heading_text="Config", heading_depth=1,
         elements=[table_elem(rows)], index=0,
     )
-    _, table_md = render_chunk(chunk)
-    assert "<!-- table-id: config_table_1 -->" in table_md
+    _, table_md = render_chunk(chunk, filename_stem="001_config")
+    assert table_md.startswith("[001_config.md - Table 1]")
+    assert "<!-- table-id:" not in table_md
 
 
 def test_render_second_table_increments_id():
@@ -70,15 +71,15 @@ def test_render_second_table_increments_id():
         heading_text="Config", heading_depth=1,
         elements=[table_elem(rows), table_elem(rows)], index=0,
     )
-    _, table_md = render_chunk(chunk)
-    assert "<!-- table-id: config_table_1 -->" in table_md
-    assert "<!-- table-id: config_table_2 -->" in table_md
+    _, table_md = render_chunk(chunk, filename_stem="001_config")
+    assert "[001_config.md - Table 1]" in table_md
+    assert "[001_config.md - Table 2]" in table_md
 
 
 def test_render_empty_heading_no_heading_line():
     chunk = Chunk(heading_text="", heading_depth=0,
                   elements=[normal_para("preamble")], index=0)
-    content_md, _ = render_chunk(chunk)
+    content_md, _ = render_chunk(chunk, filename_stem="000_preamble")
     assert not content_md.startswith("#")
     assert "preamble" in content_md
 
@@ -89,7 +90,7 @@ def test_render_table_cell_newlines_become_br():
         heading_text="Spec", heading_depth=1,
         elements=[table_elem(rows)], index=0,
     )
-    _, table_md = render_chunk(chunk)
+    _, table_md = render_chunk(chunk, filename_stem="001_spec")
     assert "첫 번째 줄<br>두 번째 줄<br>세 번째 줄" in table_md
     lines = table_md.splitlines()
     data_lines = [l for l in lines if l.startswith("|") and "---" not in l]
@@ -104,5 +105,20 @@ def test_render_sub_heading_as_markdown_header():
         heading_depth=3,
     )
     chunk = Chunk(heading_text="Section", heading_depth=2, elements=[sub], index=0)
-    content_md, _ = render_chunk(chunk)
+    content_md, _ = render_chunk(chunk, filename_stem="001_section")
     assert "### Sub Section" in content_md
+
+
+def test_render_table_reference_in_content():
+    rows = [["A", "B"], ["1", "2"]]
+    chunk = Chunk(
+        heading_text="Config", heading_depth=1,
+        elements=[normal_para("before"), table_elem(rows), normal_para("after")],
+        index=0,
+    )
+    content_md, _ = render_chunk(chunk, filename_stem="001_config")
+    assert "[001_config.md - Table 1]" in content_md
+    lines = content_md.split("\n\n")
+    ref_idx = next(i for i, l in enumerate(lines) if "[001_config.md - Table 1]" in l)
+    assert any("before" in l for l in lines[:ref_idx])
+    assert any("after" in l for l in lines[ref_idx + 1:])

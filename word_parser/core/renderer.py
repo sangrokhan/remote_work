@@ -20,8 +20,8 @@ def slugify(text: str) -> str:
     return text.strip("_")
 
 
-def _render_table(tbl: TableElement, slug: str, counter: int) -> str:
-    lines = [f"<!-- table-id: {slug}_table_{counter} -->"]
+def _render_table(tbl: TableElement, filename_stem: str, counter: int) -> str:
+    lines = [f"[{filename_stem}.md - Table {counter}]"]
     if not tbl.rows:
         return "\n".join(lines)
 
@@ -37,7 +37,7 @@ def _render_table(tbl: TableElement, slug: str, counter: int) -> str:
     return "\n".join(lines)
 
 
-def render_chunk(chunk: Chunk) -> tuple[str, str]:
+def render_chunk(chunk: Chunk, filename_stem: str) -> tuple[str, str]:
     """Return (content_md, table_md). content_md has heading+paragraphs+image refs.
     table_md has tables only (empty string if none)."""
     chunk_slug = slugify(chunk.heading_text) if chunk.heading_text else "preamble"
@@ -61,7 +61,8 @@ def render_chunk(chunk: Chunk) -> tuple[str, str]:
                 content_parts.append(elem.text)
         elif isinstance(elem, TableElement):
             table_counter += 1
-            table_parts.append(_render_table(elem, chunk_slug, table_counter))
+            content_parts.append(f"[{filename_stem}.md - Table {table_counter}]")
+            table_parts.append(_render_table(elem, filename_stem, table_counter))
         elif isinstance(elem, ImageElement):
             image_counter += 1
             ext = _image_ext(elem.content_type)
