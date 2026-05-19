@@ -29,8 +29,9 @@ def test_slugify_special_chars():
 
 def test_render_heading():
     chunk = Chunk(heading_text="Introduction", heading_depth=2, elements=[], index=0)
-    content_md, _ = render_chunk(chunk, filename_stem="001_introduction")
+    content_md, table_md = render_chunk(chunk, filename_stem="001_introduction")
     assert content_md.startswith("## Introduction")
+    assert table_md == ""
 
 
 def test_render_paragraph_body():
@@ -38,8 +39,9 @@ def test_render_paragraph_body():
         heading_text="Section", heading_depth=1,
         elements=[normal_para("Some body text")], index=0,
     )
-    content_md, _ = render_chunk(chunk, filename_stem="001_section")
+    content_md, table_md = render_chunk(chunk, filename_stem="001_section")
     assert "Some body text" in content_md
+    assert table_md == ""
 
 
 def test_render_table_gfm():
@@ -122,3 +124,14 @@ def test_render_table_reference_in_content():
     ref_idx = next(i for i, l in enumerate(lines) if "[001_config.md - Table 1]" in l)
     assert any("before" in l for l in lines[:ref_idx])
     assert any("after" in l for l in lines[ref_idx + 1:])
+
+
+def test_render_empty_row_table_produces_header_only():
+    chunk = Chunk(
+        heading_text="Config", heading_depth=1,
+        elements=[TableElement(rows=[], col_count=0, page_approx=1, preceded_by_page_break=False)],
+        index=0,
+    )
+    content_md, table_md = render_chunk(chunk, filename_stem="001_config")
+    assert "[001_config.md - Table 1]" in content_md
+    assert table_md == "[001_config.md - Table 1]"
