@@ -32,12 +32,13 @@ def build_chunks(
     def flush():
         nonlocal index, file_counter
         file_counter += 1
+        effective_folder_slugs = list(current_folder_slugs) or (["000_preamble"] if split_depth > 0 else [])
         chunk = Chunk(
             heading_text=current_heading,
             heading_depth=current_depth,
             elements=list(current_elements),
             index=index,
-            folder_slugs=list(current_folder_slugs),
+            folder_slugs=effective_folder_slugs,
             folder_index=file_counter,
         )
         chunks.append(chunk)
