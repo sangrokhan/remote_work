@@ -44,6 +44,11 @@ def main():
         action="store_true",
         help="Open via Word COM automation (Windows only, required for DRM-protected files)",
     )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Print every element with its detected heading depth and chunk assignment (stdout)",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -83,7 +88,7 @@ def main():
         )
         elements = merge_tables(elements, logger=logger)
         elements = attach_captions(elements)
-        chunks = build_chunks(elements, cfg, logger=logger)
+        chunks = build_chunks(elements, cfg, logger=logger, trace=args.trace)
     except Exception as e:
         logger.error(f"Parse failed: {e}")
         sys.exit(3)

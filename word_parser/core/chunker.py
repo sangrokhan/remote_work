@@ -17,6 +17,7 @@ def build_chunks(
     elements: list[Element],
     cfg: Config,
     logger: logging.Logger | None,
+    trace: bool = False,
 ) -> list[Chunk]:
     split_depth = cfg.chunk_split_depth
     chunks: list[Chunk] = []
@@ -28,6 +29,10 @@ def build_chunks(
     folder_counters: dict[int, int] = {}      # global counter per depth level
     file_counter: int = 0                     # global counter for all file-level chunks
     index = 0
+
+    def _tr(msg: str) -> None:
+        if trace:
+            print(msg, flush=True)
 
     def flush():
         nonlocal index, file_counter
@@ -61,9 +66,16 @@ def build_chunks(
     for elem in elements:
         if isinstance(elem, ParagraphElement):
             depth = resolve_heading_depth(elem, cfg, logger)
+            text_preview = elem.text[:70].replace("\n", " ") if elem.text else ""
+            depth_label = f"depth={depth}" if depth is not None else "depth=--"
+
             if depth is not None:
                 if split_depth > 0 and depth < split_depth:
                     # Folder-level heading: flush current chunk, update folder stack
+                    _tr(
+                        f"[TRACE] p={elem.page_approx:4d}  para  {elem.style_name!r:30s}  {depth_label:9s}"
+                        f"  → FOLDER  {text_preview!r}"
+                    )
                     if current_elements or current_heading:
                         if not current_elements and logger:
                             logger.debug(
@@ -82,6 +94,10 @@ def build_chunks(
 
                 if split_depth == 0 or depth == split_depth:
                     # File-level heading: start new chunk
+                    _tr(
+                        f"[TRACE] p={elem.page_approx:4d}  para  {elem.style_name!r:30s}  {depth_label:9s}"
+                        f"  → NEW CHUNK[{index}]  {text_preview!r}"
+                    )
                     if current_elements or current_heading:
                         if not current_elements and logger:
                             logger.debug(
@@ -104,7 +120,28 @@ def build_chunks(
 
                 # depth > split_depth: sub-heading, treat as body content
                 else:
+                    _tr(
+                        f"[TRACE] p={elem.page_approx:4d}  para  {elem.style_name!r:30s}  {depth_label:9s}"
+                        f"  → sub-heading in chunk[{index}]  {text_preview!r}"
+                    )
                     elem.heading_depth = depth
+            else:
+                _tr(
+                    f"[TRACE] p={elem.page_approx:4d}  para  {elem.style_name!r:30s}  {depth_label:9s}"
+                    f"  → body of chunk[{index}]  {text_preview!r}"
+                )
+
+        elif isinstance(elem, TableElement):
+            _tr(
+                f"[TRACE] p={elem.page_approx:4d}  table rows={len(elem.rows):3d} cols={elem.col_count:2d}"
+                f"                                   → body of chunk[{index}]"
+            )
+
+        elif isinstance(elem, ImageElement):
+            _tr(
+                f"[TRACE] p={elem.page_approx:4d}  image rId={elem.relationship_id!r:15s}"
+                f"  type={elem.content_type!r:20s}              → body of chunk[{index}]"
+            )
 
         current_elements.append(elem)
 
