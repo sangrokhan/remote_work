@@ -93,6 +93,7 @@ def main():
         logger.error(f"Parse failed: {e}")
         sys.exit(3)
 
+    write_errors = 0
     for chunk in chunks:
         chunk_slug = slugify(chunk.heading_text) if chunk.heading_text else "preamble"
         filename_stem = f"{chunk.folder_index:03d}_{chunk_slug}"
@@ -102,27 +103,38 @@ def main():
         for slug in chunk.folder_slugs:
             folder_path = folder_path / slug
 
-        md_dir = folder_path / "md"
-        md_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            md_dir = folder_path / "md"
+            md_dir.mkdir(parents=True, exist_ok=True)
 
-        content_md, table_md = render_chunk(chunk, filename_stem=filename_stem)
-        (md_dir / f"{filename_stem}.md").write_text(content_md, encoding="utf-8")
-        if table_md.strip():
-            (md_dir / f"{filename_stem}_tables.md").write_text(table_md.strip(), encoding="utf-8")
+            content_md, table_md = render_chunk(chunk, filename_stem=filename_stem)
+            (md_dir / f"{filename_stem}.md").write_text(content_md, encoding="utf-8")
+            if table_md.strip():
+                (md_dir / f"{filename_stem}_tables.md").write_text(table_md.strip(), encoding="utf-8")
 
-        # Save inline images
-        image_counter = 0
-        for elem in chunk.elements:
-            if isinstance(elem, ImageElement):
-                image_counter += 1
-                ext = _image_ext(elem.content_type)
-                stem = slugify(elem.caption) if elem.caption else f"{chunk_slug}_img_{image_counter}"
-                img_name = f"{stem}.{ext}"
-                images_dir = folder_path / "images" / chunk_slug
-                images_dir.mkdir(parents=True, exist_ok=True)
-                (images_dir / img_name).write_bytes(elem.data)
+            # Save inline images
+            image_counter = 0
+            for elem in chunk.elements:
+                if isinstance(elem, ImageElement):
+                    image_counter += 1
+                    ext = _image_ext(elem.content_type)
+                    stem = slugify(elem.caption) if elem.caption else f"{chunk_slug}_img_{image_counter}"
+                    img_name = f"{stem}.{ext}"
+                    images_dir = folder_path / "images" / chunk_slug
+                    images_dir.mkdir(parents=True, exist_ok=True)
+                    (images_dir / img_name).write_bytes(elem.data)
 
-        logger.info(f"Wrote chunk: {filename_stem}.md (folder={'/'.join(chunk.folder_slugs) or '.'})")
+            logger.info(f"Wrote chunk: {filename_stem}.md (folder={'/'.join(chunk.folder_slugs) or '.'})")
+        except Exception as e:
+            write_errors += 1
+            logger.error(
+                f"[parser] Failed to write chunk[{chunk.index}] {filename_stem!r} "
+                f"(heading={chunk.heading_text!r}, page~{chunk.elements[0].page_approx if chunk.elements else '?'}): "
+                f"{type(e).__name__}: {e}"
+            )
+
+    if write_errors:
+        logger.error(f"[parser] {write_errors} chunk(s) failed to write — see errors above")
 
     logger.info(f"Done. {len(chunks)} chunks written to {doc_out}")
 
