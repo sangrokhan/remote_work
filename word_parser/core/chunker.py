@@ -37,7 +37,7 @@ def build_chunks(
     def flush():
         nonlocal index, file_counter
         file_counter += 1
-        effective_folder_slugs = list(current_folder_slugs) or (["000_preamble"] if split_depth > 0 else [])
+        effective_folder_slugs = list(current_folder_slugs) or (["000"] if split_depth > 0 else [])
         chunk = Chunk(
             heading_text=current_heading,
             heading_depth=current_depth,
@@ -51,7 +51,7 @@ def build_chunks(
 
     def flush_cover():
         nonlocal index
-        cover_folder_slugs = list(current_folder_slugs) or ["000_preamble"]
+        cover_folder_slugs = list(current_folder_slugs) or ["000"]
         chunk = Chunk(
             heading_text="",
             heading_depth=0,
@@ -87,7 +87,7 @@ def build_chunks(
                     current_depth = 0
                     folder_stack = [(d, s) for d, s in folder_stack if d < depth]
                     folder_counters[depth] = folder_counters.get(depth, 0) + 1
-                    numbered_slug = f"{folder_counters[depth]:03d}_{_slugify(elem.text)}"
+                    numbered_slug = f"{folder_counters[depth]:03d}"
                     folder_stack.append((depth, numbered_slug))
                     current_folder_slugs = [s for _, s in folder_stack]
                     continue

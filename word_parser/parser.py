@@ -95,8 +95,7 @@ def main():
 
     write_errors = 0
     for chunk in chunks:
-        chunk_slug = slugify(chunk.heading_text) if chunk.heading_text else "preamble"
-        filename_stem = f"{chunk.folder_index:03d}_{chunk_slug}"
+        filename_stem = f"{chunk.folder_index:03d}"
 
         # Build folder path: doc_out / folder_slug_1 / folder_slug_2 / ...
         folder_path = doc_out
@@ -118,9 +117,9 @@ def main():
                 if isinstance(elem, ImageElement):
                     image_counter += 1
                     ext = _image_ext(elem.content_type)
-                    stem = slugify(elem.caption) if elem.caption else f"{chunk_slug}_img_{image_counter}"
+                    stem = slugify(elem.caption) if elem.caption else f"img_{image_counter}"
                     img_name = f"{stem}.{ext}"
-                    images_dir = folder_path / "images" / chunk_slug
+                    images_dir = folder_path / "images" / filename_stem
                     images_dir.mkdir(parents=True, exist_ok=True)
                     (images_dir / img_name).write_bytes(elem.data)
 
