@@ -40,14 +40,19 @@ def _render_table(tbl: TableElement, filename_stem: str, counter: int) -> str:
 def render_chunk(chunk: Chunk, filename_stem: str) -> tuple[str, str]:
     """Return (content_md, table_md). content_md has heading+paragraphs+image refs.
     table_md has tables only (empty string if none)."""
-    chunk_slug = slugify(chunk.heading_text) if chunk.heading_text else "preamble"
     content_parts: list[str] = []
     table_parts: list[str] = []
     table_counter = 0
     image_counter = 0
 
+    # Prepend parent folder headings (depth increases by 1 per level)
+    for i, heading_text in enumerate(chunk.folder_headings):
+        prefix = "#" * (i + 1)
+        content_parts.append(f"{prefix} {heading_text}")
+
     if chunk.heading_text:
-        prefix = "#" * chunk.heading_depth
+        depth = len(chunk.folder_headings) + 1 if chunk.folder_headings else chunk.heading_depth
+        prefix = "#" * depth
         content_parts.append(f"{prefix} {chunk.heading_text}")
 
     for elem in chunk.elements:
@@ -66,8 +71,8 @@ def render_chunk(chunk: Chunk, filename_stem: str) -> tuple[str, str]:
         elif isinstance(elem, ImageElement):
             image_counter += 1
             ext = _image_ext(elem.content_type)
-            stem = slugify(elem.caption) if elem.caption else f"{chunk_slug}_img_{image_counter}"
+            stem = slugify(elem.caption) if elem.caption else f"img_{image_counter}"
             name = f"{stem}.{ext}"
-            content_parts.append(f"![{name}](../images/{chunk_slug}/{name})")
+            content_parts.append(f"![{name}](../images/{filename_stem}/{name})")
 
     return "\n\n".join(content_parts), "\n\n".join(table_parts)

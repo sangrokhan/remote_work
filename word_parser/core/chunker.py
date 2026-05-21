@@ -25,7 +25,7 @@ def build_chunks(
     current_heading = ""
     current_depth = 0
     current_folder_slugs: list[str] = []
-    folder_stack: list[tuple[int, str]] = []  # (depth, slug) for depths < split_depth
+    folder_stack: list[tuple[int, str, str]] = []  # (depth, slug, heading_text) for depths < split_depth
     folder_counters: dict[int, int] = {}      # global counter per depth level
     file_counter: int = 0                     # global counter for all file-level chunks
     index = 0
@@ -38,12 +38,14 @@ def build_chunks(
         nonlocal index, file_counter
         file_counter += 1
         effective_folder_slugs = list(current_folder_slugs) or (["000"] if split_depth > 0 else [])
+        effective_folder_headings = [t for _, _, t in folder_stack] or []
         chunk = Chunk(
             heading_text=current_heading,
             heading_depth=current_depth,
             elements=list(current_elements),
             index=index,
             folder_slugs=effective_folder_slugs,
+            folder_headings=effective_folder_headings,
             folder_index=file_counter,
         )
         chunks.append(chunk)
@@ -52,12 +54,14 @@ def build_chunks(
     def flush_cover():
         nonlocal index
         cover_folder_slugs = list(current_folder_slugs) or ["000"]
+        cover_folder_headings = [t for _, _, t in folder_stack] or []
         chunk = Chunk(
             heading_text="",
             heading_depth=0,
             elements=list(current_elements),
             index=index,
             folder_slugs=cover_folder_slugs,
+            folder_headings=cover_folder_headings,
             folder_index=0,
         )
         chunks.append(chunk)
@@ -85,11 +89,11 @@ def build_chunks(
                     current_elements = []
                     current_heading = ""
                     current_depth = 0
-                    folder_stack = [(d, s) for d, s in folder_stack if d < depth]
+                    folder_stack = [(d, s, t) for d, s, t in folder_stack if d < depth]
                     folder_counters[depth] = folder_counters.get(depth, 0) + 1
                     numbered_slug = f"{folder_counters[depth]:03d}"
-                    folder_stack.append((depth, numbered_slug))
-                    current_folder_slugs = [s for _, s in folder_stack]
+                    folder_stack.append((depth, numbered_slug, elem.text))
+                    current_folder_slugs = [s for _, s, _ in folder_stack]
                     continue
 
                 if split_depth == 0 or depth == split_depth:
