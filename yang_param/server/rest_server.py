@@ -1,9 +1,13 @@
 from __future__ import annotations
 import json
+import logging
 import os
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -221,9 +225,12 @@ async def chat(req: ChatRequest):
 
                 return {"response": "Max tool iterations reached.", "done": True}
     except httpx.HTTPError as e:
+        logger.error("LLM request failed: %s", e)
         raise HTTPException(status_code=502, detail=f"LLM request failed: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        tb = traceback.format_exc()
+        logger.error("Chat error:\n%s", tb)
+        raise HTTPException(status_code=500, detail=tb)
 
 
 # Startup: load store from env vars if not already loaded
