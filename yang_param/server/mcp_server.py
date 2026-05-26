@@ -13,7 +13,7 @@ from tools.explore import list_modules, search_nodes, find_leaf
 from tools.tree import get_node, get_children, get_ancestors
 from tools.keys import get_path_to_leaf, get_required_keys, resolve_instance_path
 from tools.types import get_type_info, validate_value, resolve_identityref
-from tools.builder import build_edit_config, build_get_config, build_delete_config, validate_edit_config
+from tools.builder import build_edit_config, build_get_config, build_get, build_delete_config, validate_edit_config
 
 TOOLS = [
     {"name": "list_modules", "description": "List all loaded YANG modules", "inputSchema": {"type": "object", "properties": {}}},
@@ -30,6 +30,7 @@ TOOLS = [
     {"name": "resolve_identityref", "description": "Resolve identityref candidates by type name", "inputSchema": {"type": "object", "properties": {"type_name": {"type": "string"}, "value": {"type": "string"}}, "required": ["type_name", "value"]}},
     {"name": "build_edit_config", "description": "Build a NETCONF edit-config RPC XML", "inputSchema": {"type": "object", "properties": {"target_node_id": {"type": "string"}, "key_values": {"type": "object"}, "value": {"type": "string"}, "operation": {"type": "string"}, "datastore": {"type": "string"}}, "required": ["target_node_id", "key_values"]}},
     {"name": "build_get_config", "description": "Build a NETCONF get-config RPC XML", "inputSchema": {"type": "object", "properties": {"target_node_id": {"type": "string"}, "key_values": {"type": "object"}, "datastore": {"type": "string"}}, "required": ["target_node_id"]}},
+    {"name": "build_get", "description": "Build a NETCONF get RPC XML (config + operational state)", "inputSchema": {"type": "object", "properties": {"target_node_id": {"type": "string"}, "key_values": {"type": "object"}}, "required": ["target_node_id"]}},
     {"name": "build_delete_config", "description": "Build a NETCONF delete-config RPC XML", "inputSchema": {"type": "object", "properties": {"datastore": {"type": "string"}}, "required": ["datastore"]}},
     {"name": "validate_edit_config", "description": "Validate generated NETCONF XML structure", "inputSchema": {"type": "object", "properties": {"xml": {"type": "string"}}, "required": ["xml"]}},
 ]
@@ -49,6 +50,7 @@ _DISPATCH = {
     "resolve_identityref": lambda a: resolve_identityref(a["type_name"], a["value"]),
     "build_edit_config": lambda a: build_edit_config(**a),
     "build_get_config": lambda a: build_get_config(**a),
+    "build_get": lambda a: build_get(**a),
     "build_delete_config": lambda a: build_delete_config(a["datastore"]),
     "validate_edit_config": lambda a: validate_edit_config(a["xml"]),
 }

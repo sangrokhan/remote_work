@@ -121,6 +121,30 @@ def build_get_config(
     return {"xml": xml_str, "datastore": datastore}
 
 
+def build_get(
+    target_node_id: str,
+    key_values: dict[str, str] | None = None,
+) -> dict:
+    store = get_store()
+    target = store.get_by_id(target_node_id)
+    if not target:
+        return {"xml": None, "error": f"Node not found: {target_node_id}"}
+
+    path_result = get_path_to_leaf(target_node_id)
+    path_nodes = path_result["path"]
+
+    rpc = etree.Element(f"{NC}rpc", nsmap={"nc": NETCONF_NS})
+    get_el = etree.SubElement(rpc, f"{NC}get")
+    filter_el = etree.SubElement(get_el, f"{NC}filter", type="subtree")
+
+    content = _build_hierarchy(path_nodes, key_values or {}, store, None)
+    if content is not None:
+        filter_el.append(content)
+
+    xml_str = etree.tostring(rpc, pretty_print=True, encoding="unicode")
+    return {"xml": xml_str}
+
+
 def build_delete_config(datastore: str) -> dict:
     if datastore == "running":
         return {"xml": None, "error": "Deleting running datastore is not allowed"}
@@ -143,6 +167,7 @@ def validate_edit_config(xml: str) -> dict:
             f"{NC}rpc",
             f"{NC}edit-config",
             f"{NC}get-config",
+            f"{NC}get",
             f"{NC}delete-config",
         }
         if root.tag not in valid_tags:
