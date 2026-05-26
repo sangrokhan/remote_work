@@ -227,6 +227,11 @@ async def chat(req: ChatRequest):
     except Exception as e:
         tb = traceback.format_exc()
         logger.error("Chat error:\n%s", tb)
+        if "wrong version number" in tb or "SSL" in tb:
+            raise HTTPException(
+                status_code=400,
+                detail="SSL error: server uses plain HTTP but URL may be wrong. Check URL uses http:// and correct port.",
+            )
         raise HTTPException(status_code=500, detail=tb)
 
 
