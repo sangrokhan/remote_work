@@ -158,7 +158,7 @@ def api_validate_edit_config(req: ValidateRequest) -> dict:
 class ChatRequest(BaseModel):
     message: str
     llm_url: str
-    model: str = "llama3"
+    model: str = "gemma4-e4b-it"
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
