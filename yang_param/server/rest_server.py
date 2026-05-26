@@ -1,10 +1,15 @@
 from __future__ import annotations
+import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 from pydantic import BaseModel
 
 import tools
@@ -12,7 +17,16 @@ from tools.explore import list_modules, search_nodes, find_leaf
 from tools.tree import get_node, get_children, get_ancestors, get_root_nodes
 from tools.keys import get_path_to_leaf, get_required_keys, resolve_instance_path
 from tools.types import get_type_info, validate_value, resolve_identityref
-from tools.builder import build_edit_config, build_get_config, build_delete_config, validate_edit_config
+from tools.builder import build_edit_config, build_get_config, build_get, build_delete_config, validate_edit_config
+
+_MCP_SERVER = Path(__file__).parent / "mcp_server.py"
+
+_SYSTEM_PROMPT = (
+    "You are a YANG/NETCONF expert assistant with access to tools for exploring "
+    "YANG schemas and building NETCONF XML messages. Use the tools to look up "
+    "schema nodes and construct correct NETCONF operations when the user asks "
+    "about network configuration."
+)
 
 _VIEWER_HTML = Path(__file__).parent / "templates" / "viewer.html"
 
@@ -118,6 +132,14 @@ class GetConfigRequest(BaseModel):
 def api_build_get_config(req: GetConfigRequest) -> dict:
     return build_get_config(req.target_node_id, key_values=req.key_values, datastore=req.datastore)
 
+class GetRequest(BaseModel):
+    target_node_id: str
+    key_values: dict[str, str] | None = None
+
+@app.post("/tools/build_get")
+def api_build_get(req: GetRequest) -> dict:
+    return build_get(req.target_node_id, key_values=req.key_values)
+
 class DeleteConfigRequest(BaseModel):
     datastore: str
 
@@ -131,6 +153,77 @@ class ValidateRequest(BaseModel):
 @app.post("/tools/validate_edit_config")
 def api_validate_edit_config(req: ValidateRequest) -> dict:
     return validate_edit_config(req.xml)
+
+
+class ChatRequest(BaseModel):
+    message: str
+    llm_url: str
+    model: str = "llama3"
+
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    yang_dir = os.environ.get("YANG_DIR", "data/yang")
+    db_path = os.environ.get("YANG_DB", "schema.db")
+
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(_MCP_SERVER)],
+        env={**os.environ, "YANG_DIR": yang_dir, "YANG_DB": db_path},
+    )
+
+    try:
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools_resp = await session.list_tools()
+
+                openai_tools = [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.inputSchema,
+                        },
+                    }
+                    for t in tools_resp.tools
+                ]
+
+                messages = [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": req.message},
+                ]
+
+                async with httpx.AsyncClient(timeout=120) as http:
+                    for _ in range(10):
+                        llm_resp = await http.post(
+                            req.llm_url.rstrip("/") + "/v1/chat/completions",
+                            json={"model": req.model, "messages": messages, "tools": openai_tools},
+                        )
+                        llm_resp.raise_for_status()
+                        data = llm_resp.json()
+                        msg = data["choices"][0]["message"]
+                        messages.append(msg)
+
+                        if not msg.get("tool_calls"):
+                            return {"response": msg.get("content", ""), "done": True}
+
+                        for tc in msg["tool_calls"]:
+                            tool_name = tc["function"]["name"]
+                            tool_args = json.loads(tc["function"]["arguments"])
+                            result = await session.call_tool(tool_name, tool_args)
+                            tool_text = result.content[0].text if result.content else "{}"
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": tool_text,
+                            })
+
+                return {"response": "Max tool iterations reached.", "done": True}
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"LLM request failed: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Startup: load store from env vars if not already loaded
