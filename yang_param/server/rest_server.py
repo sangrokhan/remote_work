@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 import tools
@@ -198,35 +199,31 @@ async def chat(req: ChatRequest):
                     {"role": "user", "content": req.message},
                 ]
 
-                async with httpx.AsyncClient(timeout=120) as http:
-                    for _ in range(10):
-                        llm_resp = await http.post(
-                            req.llm_url,
-                            json={"model": req.model, "messages": messages, "tools": openai_tools},
-                        )
-                        llm_resp.raise_for_status()
-                        data = llm_resp.json()
-                        msg = data["choices"][0]["message"]
-                        messages.append(msg)
+                llm = AsyncOpenAI(base_url=req.llm_url, api_key="none")
+                for _ in range(10):
+                    response = await llm.chat.completions.create(
+                        model=req.model,
+                        messages=messages,
+                        tools=openai_tools,
+                    )
+                    msg = response.choices[0].message
+                    messages.append(msg)
 
-                        if not msg.get("tool_calls"):
-                            return {"response": msg.get("content", ""), "done": True}
+                    if not msg.tool_calls:
+                        return {"response": msg.content or "", "done": True}
 
-                        for tc in msg["tool_calls"]:
-                            tool_name = tc["function"]["name"]
-                            tool_args = json.loads(tc["function"]["arguments"])
-                            result = await session.call_tool(tool_name, tool_args)
-                            tool_text = result.content[0].text if result.content else "{}"
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc["id"],
-                                "content": tool_text,
-                            })
+                    for tc in msg.tool_calls:
+                        tool_name = tc.function.name
+                        tool_args = json.loads(tc.function.arguments)
+                        result = await session.call_tool(tool_name, tool_args)
+                        tool_text = result.content[0].text if result.content else "{}"
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": tool_text,
+                        })
 
                 return {"response": "Max tool iterations reached.", "done": True}
-    except httpx.HTTPError as e:
-        logger.error("LLM request failed: %s", e)
-        raise HTTPException(status_code=502, detail=f"LLM request failed: {e}")
     except Exception as e:
         tb = traceback.format_exc()
         logger.error("Chat error:\n%s", tb)

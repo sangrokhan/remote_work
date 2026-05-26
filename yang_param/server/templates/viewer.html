@@ -605,7 +605,7 @@ body {
 <div id="chat-panel">
   <div id="chat-config">
     <label for="chat-llm-url">LLM server URL</label>
-    <input id="chat-llm-url" class="chat-cfg-input" type="text" placeholder="http://localhost:8000" />
+    <input id="chat-llm-url" class="chat-cfg-input" type="text" placeholder="http://localhost:8000/v1" />
     <label for="chat-model">Model</label>
     <input id="chat-model" class="chat-cfg-input" type="text" placeholder="llama3" />
     <button id="chat-save-btn" class="bl-btn">Save</button>
@@ -1140,7 +1140,7 @@ body {
     const inputEl  = document.getElementById('chat-input');
     const sendBtn  = document.getElementById('chat-send-btn');
 
-    urlEl.value   = localStorage.getItem('chat_llm_url') || 'http://localhost:8000';
+    urlEl.value   = localStorage.getItem('chat_llm_url') || 'http://localhost:8000/v1';
     modelEl.value = localStorage.getItem('chat_model')   || 'gemma4-e4b-it';
 
     saveBtn.addEventListener('click', function () {
