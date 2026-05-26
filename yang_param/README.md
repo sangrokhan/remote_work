@@ -100,7 +100,7 @@ Open `http://localhost:8000` — three tabs:
 #### AI Chat setup
 
 1. Click **AI Chat** tab
-2. Enter your LLM server URL (OpenAI-compatible, e.g. Ollama: `http://192.168.1.100:11434`)
+2. Enter the full LLM endpoint URL (e.g. Ollama: `http://192.168.1.100:11434/v1/chat/completions`)
 3. Enter model name (e.g. `llama3`)
 4. Click **Save** — persisted to browser localStorage
 5. Type a question and press Enter

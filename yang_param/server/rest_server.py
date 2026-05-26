@@ -197,7 +197,7 @@ async def chat(req: ChatRequest):
                 async with httpx.AsyncClient(timeout=120) as http:
                     for _ in range(10):
                         llm_resp = await http.post(
-                            req.llm_url.rstrip("/") + "/v1/chat/completions",
+                            req.llm_url,
                             json={"model": req.model, "messages": messages, "tools": openai_tools},
                         )
                         llm_resp.raise_for_status()
