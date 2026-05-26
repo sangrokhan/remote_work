@@ -164,6 +164,7 @@ class ChatRequest(BaseModel):
     message: str
     llm_url: str
     model: str = "gemma4-e4b-it"
+    history: list[dict[str, Any]] = []
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
@@ -196,6 +197,7 @@ async def chat(req: ChatRequest):
 
                 messages = [
                     {"role": "system", "content": _SYSTEM_PROMPT},
+                    *req.history,
                     {"role": "user", "content": req.message},
                 ]
 

@@ -609,6 +609,7 @@ body {
     <label for="chat-model">Model</label>
     <input id="chat-model" class="chat-cfg-input" type="text" placeholder="llama3" />
     <button id="chat-save-btn" class="bl-btn">Save</button>
+    <button id="chat-clear-btn" class="bl-btn">Clear</button>
   </div>
   <div id="chat-messages"></div>
   <div id="chat-input-row">
@@ -1136,9 +1137,12 @@ body {
     const urlEl    = document.getElementById('chat-llm-url');
     const modelEl  = document.getElementById('chat-model');
     const saveBtn  = document.getElementById('chat-save-btn');
+    const clearBtn = document.getElementById('chat-clear-btn');
     const msgs     = document.getElementById('chat-messages');
     const inputEl  = document.getElementById('chat-input');
     const sendBtn  = document.getElementById('chat-send-btn');
+
+    let conversationHistory = [];
 
     urlEl.value   = localStorage.getItem('chat_llm_url') || 'http://localhost:8000/v1';
     modelEl.value = localStorage.getItem('chat_model')   || 'gemma4-e4b-it';
@@ -1148,6 +1152,11 @@ body {
       localStorage.setItem('chat_model',   modelEl.value.trim());
       saveBtn.textContent = 'Saved!';
       setTimeout(function () { saveBtn.textContent = 'Save'; }, 1500);
+    });
+
+    clearBtn.addEventListener('click', function () {
+      conversationHistory = [];
+      msgs.replaceChildren();
     });
 
     function appendMsg(role, text) {
@@ -1175,12 +1184,15 @@ body {
         const res = await fetch('/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, llm_url, model }),
+          body: JSON.stringify({ message, llm_url, model, history: conversationHistory }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || 'HTTP ' + res.status);
+        const reply = data.response || '(no response)';
         thinking.className = 'chat-msg assistant';
-        thinking.textContent = data.response || '(no response)';
+        thinking.textContent = reply;
+        conversationHistory.push({ role: 'user', content: message });
+        conversationHistory.push({ role: 'assistant', content: reply });
       } catch (err) {
         thinking.className = 'chat-msg error';
         thinking.textContent = 'Error: ' + err.message;
