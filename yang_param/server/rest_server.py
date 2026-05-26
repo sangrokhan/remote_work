@@ -199,7 +199,11 @@ async def chat(req: ChatRequest):
                     {"role": "user", "content": req.message},
                 ]
 
-                llm = AsyncOpenAI(base_url=req.llm_url, api_key="none")
+                llm = AsyncOpenAI(
+                    base_url=req.llm_url,
+                    api_key="none",
+                    http_client=httpx.AsyncClient(verify=False, timeout=120),
+                )
                 for _ in range(10):
                     response = await llm.chat.completions.create(
                         model=req.model,
@@ -227,10 +231,10 @@ async def chat(req: ChatRequest):
     except Exception as e:
         tb = traceback.format_exc()
         logger.error("Chat error:\n%s", tb)
-        if "wrong version number" in tb or "SSL" in tb:
+        if "wrong version number" in tb or "WRONG_VERSION_NUMBER" in tb:
             raise HTTPException(
                 status_code=400,
-                detail="SSL error: server uses plain HTTP but URL may be wrong. Check URL uses http:// and correct port.",
+                detail="SSL error: check URL scheme (http:// vs https://) and port.",
             )
         raise HTTPException(status_code=500, detail=tb)
 
