@@ -14,7 +14,7 @@ def test_tool_list_complete():
         "get_node", "get_children", "get_ancestors",
         "get_path_to_leaf", "get_required_keys", "resolve_instance_path",
         "get_type_info", "validate_value", "resolve_identityref",
-        "build_edit_config", "build_get_config", "build_delete_config",
+        "build_edit_config", "build_get_config", "build_get", "build_delete_config",
         "validate_edit_config",
     }
     assert required <= names, f"Missing tools: {required - names}"
