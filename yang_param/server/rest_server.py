@@ -240,6 +240,7 @@ async def chat(req: ChatRequest):
                         model=req.model,
                         messages=messages,
                         tools=openai_tools,
+                        temperature=0.1,
                     )
                     msg = response.choices[0].message
                     messages.append(msg)
