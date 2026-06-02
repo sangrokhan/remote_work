@@ -1,0 +1,9 @@
+{
+  "name": "token_comm_demo",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test server.test.js",
+    "start": "node server.js"
+  }
+}
