@@ -23,7 +23,8 @@ test('generatePayload returns exactly 300 chars', () => {
 });
 
 test('generatePayload output is valid base64', () => {
-  assert.match(generatePayload(), /^[A-Za-z0-9+/=]+$/);
+  // base64(225 bytes) = exactly 300 chars, no padding (225 % 3 === 0)
+  assert.match(generatePayload(), /^[A-Za-z0-9+/]+$/);
 });
 
 test('GET / returns 200 with HTML containing EventSource', async () => {
@@ -35,14 +36,11 @@ test('GET / returns 200 with HTML containing EventSource', async () => {
 });
 
 test('GET /stream sets text/event-stream content-type', async () => {
-  // Abort immediately after headers arrive — we only need to check headers.
   const ac = new AbortController();
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/stream`, {
-      signal: ac.signal,
-    });
-    assert.equal(res.headers.get('content-type'), 'text/event-stream');
-  } finally {
-    ac.abort();
-  }
+  const res = await fetch(`http://127.0.0.1:${port}/stream`, {
+    signal: ac.signal,
+  });
+  // Headers are fully available once fetch() resolves; abort stops body streaming.
+  assert.equal(res.headers.get('content-type'), 'text/event-stream');
+  ac.abort();
 });
