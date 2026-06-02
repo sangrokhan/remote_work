@@ -72,7 +72,7 @@ function streamHandler(req, res) {
 
 // Start the server only when this file is run directly (not when imported by tests).
 if (import.meta.url === `file://${process.argv[1]}`) {
-  createServer().listen(8080, () => {
-    console.log('listening on :8080 — open http://<your-ip>:8080/ on your phone');
+  createServer().listen(10000, () => {
+    console.log('listening on :10000 — open http://<your-ip>:10000/ on your phone');
   });
 }
