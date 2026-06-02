@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a Go HTTP server that streams SSE events (~300 bytes each, ~1000/sec) so a phone browser can receive token-like traffic and DroidPCap can capture it.
+**Goal:** Build a Node.js HTTP server that streams SSE events (~300 bytes each, ~1000/sec) so a phone browser can receive token-like traffic and DroidPCap can capture it.
 
-**Architecture:** Single `main.go` file with two HTTP handlers: `/` serves an inline HTML page with a JS `EventSource` client, `/stream` sends SSE events at 1ms intervals using `time.Ticker` and `http.Flusher`. A `generatePayload()` helper is extracted for unit testing.
+**Architecture:** `server.js` exports `generatePayload()` and `createServer()` so they can be unit-tested. The server starts only when run directly. `server.test.js` uses Node's built-in `node:test` runner and `fetch` (both available in Node 22, no external deps).
 
-**Tech Stack:** Go 1.21+ stdlib only (`net/http`, `encoding/base64`, `crypto/rand`, `time`)
+**Tech Stack:** Node.js 22, stdlib only (`node:http`, `node:crypto`, `node:test`)
 
 ---
 
@@ -14,47 +14,42 @@
 
 | File | Role |
 |------|------|
-| `go.mod` | Module declaration |
-| `main.go` | HTTP server, both handlers, payload generator |
-| `main_test.go` | Unit tests for payload size and `/` response |
+| `package.json` | Module type (ESM), test + start scripts |
+| `server.js` | HTTP server, SSE stream, payload generator |
+| `server.test.js` | Unit + integration tests |
 
 ---
 
-### Task 1: Initialize Go module
+### Task 1: Initialize package.json
 
 **Files:**
-- Create: `go.mod`
+- Create: `token_comm_demo/package.json`
 
-- [ ] **Step 1: Run go mod init**
+- [ ] **Step 1: Write package.json**
+
+Working dir: `/home/han/.openclaw/workspace/remote_work/.claude/worktrees/token-traffic-sim/token_comm_demo`
+
+Create `package.json`:
+
+```json
+{
+  "name": "token_comm_demo",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test server.test.js",
+    "start": "node server.js"
+  }
+}
+```
+
+- [ ] **Step 2: Commit**
+
+Run from worktree root `/home/han/.openclaw/workspace/remote_work/.claude/worktrees/token-traffic-sim`:
 
 ```bash
-cd /home/han/.openclaw/workspace/remote_work/token_comm_demo
-go mod init token_comm_demo
-```
-
-Expected output:
-```
-go: creating new go.mod: module token_comm_demo
-```
-
-- [ ] **Step 2: Verify go.mod**
-
-```bash
-cat go.mod
-```
-
-Expected:
-```
-module token_comm_demo
-
-go 1.21
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add go.mod
-git commit -m "chore(token_comm_demo): init go module"
+git add token_comm_demo/package.json
+git commit -m "chore(token_comm_demo): init package.json"
 ```
 
 ---
@@ -62,149 +57,121 @@ git commit -m "chore(token_comm_demo): init go module"
 ### Task 2: Write failing tests
 
 **Files:**
-- Create: `main_test.go`
+- Create: `token_comm_demo/server.test.js`
 
-- [ ] **Step 1: Write tests**
+- [ ] **Step 1: Write server.test.js**
 
-Create `main_test.go`:
+Working dir: `/home/han/.openclaw/workspace/remote_work/.claude/worktrees/token-traffic-sim/token_comm_demo`
 
-```go
-package main
+Create `server.test.js`:
 
-import (
-	"context"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-	"time"
-)
+```javascript
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { generatePayload, createServer } from './server.js';
 
-// TestGeneratePayload verifies payload is exactly 300 chars (base64 of 225 bytes).
-func TestGeneratePayload(t *testing.T) {
-	p := generatePayload()
-	if len(p) != 300 {
-		t.Errorf("expected 300 chars, got %d", len(p))
-	}
-}
+let server;
+let port;
 
-// TestGeneratePayloadIsBase64 verifies payload contains only valid base64 characters.
-func TestGeneratePayloadIsBase64(t *testing.T) {
-	p := generatePayload()
-	for _, c := range p {
-		if !strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=", c) {
-			t.Errorf("non-base64 char in payload: %q", c)
-		}
-	}
-}
+// Start a test server on a random port before all tests.
+before(async () => {
+  server = createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  port = server.address().port;
+});
 
-// TestRootHandler verifies / returns 200 and HTML with EventSource.
-func TestRootHandler(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	w := httptest.NewRecorder()
-	rootHandler(w, req)
+// Shut down the test server after all tests.
+after(async () => {
+  await new Promise(resolve => server.close(resolve));
+});
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "EventSource") {
-		t.Error("HTML page must include EventSource JS")
-	}
-	if !strings.Contains(body, "/stream") {
-		t.Error("HTML page must reference /stream endpoint")
-	}
-}
+test('generatePayload returns exactly 300 chars', () => {
+  // base64(225 bytes) = 225 * 4/3 = 300 chars, no padding
+  assert.equal(generatePayload().length, 300);
+});
 
-// TestStreamHeaders verifies /stream sets correct SSE headers.
-// Context is cancelled before the handler starts so it exits immediately after
-// writing headers, without looping on the ticker.
-func TestStreamHeaders(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled — handler exits as soon as it checks Done()
+test('generatePayload output is valid base64', () => {
+  assert.match(generatePayload(), /^[A-Za-z0-9+/=]+$/);
+});
 
-	req := httptest.NewRequest(http.MethodGet, "/stream", nil).WithContext(ctx)
-	w := &flusherRecorder{ResponseRecorder: httptest.NewRecorder()}
+test('GET / returns 200 with HTML containing EventSource', async () => {
+  const res = await fetch(`http://127.0.0.1:${port}/`);
+  assert.equal(res.status, 200);
+  const body = await res.text();
+  assert.ok(body.includes('EventSource'), 'must include EventSource JS');
+  assert.ok(body.includes('/stream'), 'must reference /stream endpoint');
+});
 
-	done := make(chan struct{})
-	go func() {
-		streamHandler(w, req)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("handler did not exit after context cancellation")
-	}
-
-	ct := w.Header().Get("Content-Type")
-	if ct != "text/event-stream" {
-		t.Errorf("expected text/event-stream, got %q", ct)
-	}
-}
-
-// flusherRecorder wraps httptest.ResponseRecorder to implement http.Flusher.
-type flusherRecorder struct {
-	*httptest.ResponseRecorder
-	flushed bool
-}
-
-func (f *flusherRecorder) Flush() {
-	f.flushed = true
-}
+test('GET /stream sets text/event-stream content-type', async () => {
+  // Abort immediately after headers arrive — we only need to check headers.
+  const ac = new AbortController();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/stream`, {
+      signal: ac.signal,
+    });
+    assert.equal(res.headers.get('content-type'), 'text/event-stream');
+  } finally {
+    ac.abort();
+  }
+});
 ```
 
-- [ ] **Step 2: Run tests — expect compile failure (main.go missing)**
+- [ ] **Step 2: Run tests — expect failure (server.js missing)**
 
 ```bash
-cd /home/han/.openclaw/workspace/remote_work/token_comm_demo
-go test ./... 2>&1 | head -20
+cd /home/han/.openclaw/workspace/remote_work/.claude/worktrees/token-traffic-sim/token_comm_demo
+npm test 2>&1 | head -20
 ```
 
-Expected: build error — `generatePayload`, `rootHandler`, `streamHandler` undefined.
+Expected: error — `Cannot find module './server.js'`
 
-- [ ] **Step 3: Commit test file**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add main_test.go
-git commit -m "test(token_comm_demo): add unit tests for payload, handlers"
+git add token_comm_demo/server.test.js
+git commit -m "test(token_comm_demo): add unit tests for payload and HTTP handlers"
 ```
 
 ---
 
-### Task 3: Implement main.go
+### Task 3: Implement server.js
 
 **Files:**
-- Create: `main.go`
+- Create: `token_comm_demo/server.js`
 
-- [ ] **Step 1: Write main.go**
+- [ ] **Step 1: Write server.js**
 
-```go
-package main
+Working dir: `/home/han/.openclaw/workspace/remote_work/.claude/worktrees/token-traffic-sim/token_comm_demo`
 
-import (
-	"crypto/rand"
-	"encoding/base64"
-	"fmt"
-	"log"
-	"net/http"
-	"time"
-)
+Create `server.js`:
 
-// generatePayload creates a 300-char base64 string from 225 random bytes.
-// base64(225 bytes) = 300 chars exactly (225 * 4/3 = 300, no padding needed).
-func generatePayload() string {
-	raw := make([]byte, 225)
-	rand.Read(raw) // crypto/rand; ignoring error — never fails on Linux
-	return base64.StdEncoding.EncodeToString(raw)
+```javascript
+import http from 'node:http';
+import crypto from 'node:crypto';
+
+// generatePayload: 225 random bytes encoded as base64 = exactly 300 chars.
+// Random bytes ensure no HTTP/TCP compression reduces packet size.
+export function generatePayload() {
+  return crypto.randomBytes(225).toString('base64');
 }
 
-// rootHandler serves a simple HTML page with an EventSource client.
-// The page connects to /stream and displays a live event counter and rate.
-func rootHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, `<!DOCTYPE html>
+// createServer: returns an http.Server with / and /stream routes.
+// Exported so tests can bind to a random port without side effects.
+export function createServer() {
+  return http.createServer((req, res) => {
+    if (req.url === '/stream') {
+      streamHandler(req, res);
+    } else {
+      rootHandler(res);
+    }
+  });
+}
+
+// rootHandler: HTML page with EventSource client that connects to /stream
+// and displays a live event counter and per-second rate.
+function rootHandler(res) {
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(`<!DOCTYPE html>
 <html>
 <head><title>Token Traffic Sim</title></head>
 <body>
@@ -214,6 +181,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 <script>
   var count = 0, lastCount = 0;
   var es = new EventSource('/stream');
+  // Increment counter on every SSE message.
   es.onmessage = function() {
     count++;
     document.getElementById('count').textContent = count;
@@ -225,87 +193,65 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
   }, 1000);
 </script>
 </body>
-</html>`)
+</html>`);
 }
 
-// streamHandler sends SSE events at ~1000 events/sec.
-// Each event payload is ~300 bytes (300-char base64 string).
-// Flush() is called after every write to prevent buffering from delaying delivery.
-func streamHandler(w http.ResponseWriter, r *http.Request) {
-	// SSE requires these headers; CORS header allows phone browser access.
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+// streamHandler: sends SSE events at ~1000 events/sec (~300 bytes each).
+// Node.js writable streams flush each res.write() immediately on keep-alive
+// connections, so no explicit flush is needed.
+function streamHandler(req, res) {
+  // SSE required headers; CORS header lets any origin (phone browser) connect.
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  });
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
+  // Fire every 1ms → ~1000 events/sec.
+  // Each SSE frame: "data: <300 chars>\n\n" ≈ 308 bytes on wire.
+  const timer = setInterval(() => {
+    res.write(`data: ${generatePayload()}\n\n`);
+  }, 1);
 
-	// Ticker fires every 1ms → ~1000 events/sec.
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			// SSE event format: "data: <payload>\n\n"
-			fmt.Fprintf(w, "data: %s\n\n", generatePayload())
-			// Flush immediately so the TCP stack sends without waiting for more data.
-			flusher.Flush()
-		case <-r.Context().Done():
-			// Client disconnected or request cancelled.
-			return
-		}
-	}
+  // Clear the interval when the client disconnects to prevent memory leaks.
+  req.on('close', () => clearInterval(timer));
 }
 
-func main() {
-	http.HandleFunc("/", rootHandler)
-	http.HandleFunc("/stream", streamHandler)
-
-	addr := ":8080"
-	log.Printf("listening on %s — open http://<your-ip>:8080/ on your phone", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+// Start the server only when this file is run directly (not when imported by tests).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  createServer().listen(8080, () => {
+    console.log('listening on :8080 — open http://<your-ip>:8080/ on your phone');
+  });
 }
 ```
 
-- [ ] **Step 2: Run tests — expect PASS**
+- [ ] **Step 2: Run tests — expect all 4 PASS**
 
 ```bash
-cd /home/han/.openclaw/workspace/remote_work/token_comm_demo
-go test ./... -v
+cd /home/han/.openclaw/workspace/remote_work/.claude/worktrees/token-traffic-sim/token_comm_demo
+npm test
 ```
 
-Expected:
+Expected output:
 ```
-=== RUN   TestGeneratePayload
---- PASS: TestGeneratePayload (0.00s)
-=== RUN   TestGeneratePayloadIsBase64
---- PASS: TestGeneratePayloadIsBase64 (0.00s)
-=== RUN   TestRootHandler
---- PASS: TestRootHandler (0.00s)
-=== RUN   TestStreamHeaders
---- PASS: TestStreamHeaders (0.00s)
-PASS
-ok  	token_comm_demo	...
+▶ generatePayload returns exactly 300 chars
+  ✔ generatePayload returns exactly 300 chars (Xms)
+▶ generatePayload output is valid base64
+  ✔ generatePayload output is valid base64 (Xms)
+▶ GET / returns 200 with HTML containing EventSource
+  ✔ GET / returns 200 with HTML containing EventSource (Xms)
+▶ GET /stream sets text/event-stream content-type
+  ✔ GET /stream sets text/event-stream content-type (Xms)
+ℹ tests 4
+ℹ pass 4
+ℹ fail 0
 ```
 
-- [ ] **Step 3: Build binary to confirm no compile errors**
+- [ ] **Step 3: Commit**
 
 ```bash
-go build -o token_sim .
-ls -lh token_sim
-```
-
-Expected: binary present, ~4–6 MB.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add main.go
+git add token_comm_demo/server.js
 git commit -m "feat(token_comm_demo): add SSE server, 1000 pps, 300-byte events"
 ```
 
@@ -315,42 +261,34 @@ git commit -m "feat(token_comm_demo): add SSE server, 1000 pps, 300-byte events"
 
 **Files:** none — runtime verification only.
 
-- [ ] **Step 1: Get host IP (phone must reach this)**
+- [ ] **Step 1: Get host IP**
 
 ```bash
-ip -4 addr show | grep inet | grep -v 127 | awk '{print $2}'
+ip -4 addr show | grep inet | grep -v 127 | awk '{print $2}' | cut -d/ -f1
 ```
 
-Note the IP — you'll open `http://<IP>:8080/` on your phone.
+Note the IP — open `http://<IP>:8080/` on phone.
 
-- [ ] **Step 2: Run server**
+- [ ] **Step 2: Start server**
 
 ```bash
-./token_sim
+cd /home/han/.openclaw/workspace/remote_work/.claude/worktrees/token-traffic-sim/token_comm_demo
+node server.js
 ```
 
-Expected log line:
+Expected:
 ```
 listening on :8080 — open http://<your-ip>:8080/ on your phone
 ```
 
-- [ ] **Step 3: Open on phone browser**
+- [ ] **Step 3: Verify on phone**
 
-Navigate to `http://<IP>:8080/`. Verify:
-- Page loads with "Token Traffic Simulator"
+Open `http://<IP>:8080/` in phone browser. Confirm:
+- Page loads "Token Traffic Simulator"
 - Counter increments rapidly
-- Rate display shows ~1000 events/sec
+- Rate shows ~1000 events/sec
 
-- [ ] **Step 4: Start DroidPCap capture on phone**
+- [ ] **Step 4: Capture with DroidPCap**
 
-Filter: `tcp port 8080`  
-Verify captured packets show ~300+ byte payloads at ~1ms intervals.
-
-- [ ] **Step 5: Stop server and clean binary**
-
-```bash
-# Ctrl+C to stop server, then:
-rm token_sim
-git add -u
-git commit -m "chore(token_comm_demo): remove built binary"
-```
+Filter: `tcp port 8080`
+Verify packets ~300+ bytes at ~1ms intervals.
