@@ -83,14 +83,18 @@ function streamHandler(req, res) {
     'Access-Control-Allow-Origin': '*',
   });
 
-  // Fire every 1ms → ~1000 events/sec.
-  // Each SSE frame: "data: <300 chars>\n\n" ≈ 308 bytes on wire.
-  const timer = setInterval(() => {
+  // setImmediate loop: one write per event loop tick, as fast as possible.
+  // Each tick is its own I/O phase, so the socket flushes between writes —
+  // no timer batching, no Nagle coalescing.
+  let active = true;
+  function send() {
+    if (!active || req.destroyed) return;
     res.write(`data: ${generatePayload()}\n\n`);
-  }, 1);
+    setImmediate(send);
+  }
+  setImmediate(send);
 
-  // Clear the interval when the client disconnects to prevent memory leaks.
-  req.on('close', () => clearInterval(timer));
+  req.on('close', () => { active = false; });
 }
 
 // Start the server only when this file is run directly (not when imported by tests).
