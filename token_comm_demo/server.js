@@ -34,13 +34,14 @@ function rootHandler(res) {
 <p>Events received: <span id="count">0</span></p>
 <p>Rate: <span id="rate">0</span> events/sec</p>
 <p>
-  <button id="btn-start" onclick="start()">Start</button>
-  <button id="btn-stop" onclick="stop()" disabled>Stop</button>
+  <button id="btn-start" onclick="startStream()">Start</button>
+  <button id="btn-stop" onclick="stopStream()" disabled>Stop</button>
 </p>
 <script>
   var count = 0, lastCount = 0, es = null;
 
-  function start() {
+  // Avoid naming these start/stop — those are reserved browser globals.
+  function startStream() {
     if (es) return;
     es = new EventSource('/stream');
     // Increment counter on every SSE message.
@@ -52,7 +53,7 @@ function rootHandler(res) {
     document.getElementById('btn-stop').disabled = false;
   }
 
-  function stop() {
+  function stopStream() {
     if (!es) return;
     es.close();
     es = null;
