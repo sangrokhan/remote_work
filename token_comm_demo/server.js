@@ -44,11 +44,8 @@ function rootHandler(res) {
   function startStream() {
     if (es) return;
     es = new EventSource('/stream');
-    // Increment counter on every SSE message.
-    es.onmessage = function() {
-      count++;
-      document.getElementById('count').textContent = count;
-    };
+    // Count only — no DOM write per event (too slow at high pps).
+    es.onmessage = function() { count++; };
     document.getElementById('btn-start').disabled = true;
     document.getElementById('btn-stop').disabled = false;
   }
@@ -61,9 +58,11 @@ function rootHandler(res) {
     document.getElementById('btn-stop').disabled = true;
   }
 
-  // Update rate display every second.
+  // Update both counter and rate once per second — decoupled from message rate.
   setInterval(function() {
-    document.getElementById('rate').textContent = count - lastCount;
+    var rate = count - lastCount;
+    document.getElementById('count').textContent = count;
+    document.getElementById('rate').textContent = rate;
     lastCount = count;
   }, 1000);
 </script>
