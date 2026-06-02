@@ -11,6 +11,9 @@ export function generatePayload() {
 // Exported so tests can bind to a random port without side effects.
 export function createServer() {
   return http.createServer((req, res) => {
+    // Disable Nagle's algorithm so each res.write() sends immediately
+    // without waiting to coalesce with subsequent writes.
+    req.socket.setNoDelay(true);
     if (req.url === '/stream') {
       streamHandler(req, res);
     } else {
