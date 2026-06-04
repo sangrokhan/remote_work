@@ -39,18 +39,40 @@ def to_seconds(ts):
     return float(ts)
 
 
-def parse(path, src, dst):
-    """Yield (no, time_s, size) for each line matching src->dst, in file order."""
+def parse_all(path):
+    """Yield (no, time_s, size, src, dst) for every parseable line, in order."""
     rows = []
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             m = LINE_RE.match(line)
             if not m:
                 continue
-            if m.group("src") == src and m.group("dst") == dst:
-                no = int(m.group("no")) if m.group("no") else None
-                rows.append((no, to_seconds(m.group("time")), int(m.group("size"))))
+            no = int(m.group("no")) if m.group("no") else None
+            rows.append((no, to_seconds(m.group("time")), int(m.group("size")),
+                         m.group("src"), m.group("dst")))
     return rows
+
+
+def dominant_pair(rows):
+    """Return (src, dst) of the most frequent directed IP pair."""
+    counts = {}
+    for _, _, _, src, dst in rows:
+        counts[(src, dst)] = counts.get((src, dst), 0) + 1
+    return max(counts, key=counts.get)
+
+
+def parse(path, src, dst):
+    """Return (no, time_s, size) rows matching src->dst, plus resolved (src,dst).
+
+    If src or dst is None, auto-detect the dominant directed pair.
+    """
+    allrows = parse_all(path)
+    if src is None or dst is None:
+        if not allrows:
+            return [], (src, dst)
+        src, dst = dominant_pair(allrows)
+    rows = [(no, t, size) for no, t, size, s, d in allrows if s == src and d == dst]
+    return rows, (src, dst)
 
 
 def deltas(rows):
@@ -69,15 +91,16 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("file", help="Wireshark plain-text packet-list export")
-    ap.add_argument("--src", required=True, help="source IP (A)")
-    ap.add_argument("--dst", required=True, help="dest IP (B)")
+    ap.add_argument("--src", help="source IP (A); auto-detected if omitted")
+    ap.add_argument("--dst", help="dest IP (B); auto-detected if omitted")
     ap.add_argument("--csv", help="write results to CSV file")
     args = ap.parse_args()
 
-    rows = parse(args.file, args.src, args.dst)
+    rows, (src, dst) = parse(args.file, args.src, args.dst)
     if not rows:
-        print(f"No packets matched {args.src} -> {args.dst}", file=sys.stderr)
+        print(f"No packets matched {src} -> {dst}", file=sys.stderr)
         sys.exit(1)
+    print(f"src={src}  dst={dst}", file=sys.stderr)
 
     result = deltas(rows)
 
