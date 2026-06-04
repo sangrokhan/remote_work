@@ -53,26 +53,15 @@ def parse_all(path):
     return rows
 
 
-def dominant_pair(rows):
-    """Return (src, dst) of the most frequent directed IP pair."""
-    counts = {}
-    for _, _, _, src, dst in rows:
-        counts[(src, dst)] = counts.get((src, dst), 0) + 1
-    return max(counts, key=counts.get)
-
-
 def parse(path, src, dst):
-    """Return (no, time_s, size) rows matching src->dst, plus resolved (src,dst).
-
-    If src or dst is None, auto-detect the dominant directed pair.
-    """
+    """Return (no, time_s, size) rows. Filter by src->dst only if both given;
+    otherwise return all rows unfiltered."""
     allrows = parse_all(path)
-    if src is None or dst is None:
-        if not allrows:
-            return [], (src, dst)
-        src, dst = dominant_pair(allrows)
-    rows = [(no, t, size) for no, t, size, s, d in allrows if s == src and d == dst]
-    return rows, (src, dst)
+    if src and dst:
+        rows = [(no, t, size) for no, t, size, s, d in allrows if s == src and d == dst]
+    else:
+        rows = [(no, t, size) for no, t, size, s, d in allrows]
+    return rows
 
 
 def deltas(rows):
@@ -96,11 +85,15 @@ def main():
     ap.add_argument("--csv", help="write results to CSV file")
     args = ap.parse_args()
 
-    rows, (src, dst) = parse(args.file, args.src, args.dst)
+    rows = parse(args.file, args.src, args.dst)
     if not rows:
-        print(f"No packets matched {src} -> {dst}", file=sys.stderr)
+        who = f"{args.src} -> {args.dst}" if args.src and args.dst else "(no parseable rows)"
+        print(f"No packets matched {who}", file=sys.stderr)
         sys.exit(1)
-    print(f"src={src}  dst={dst}", file=sys.stderr)
+    if args.src and args.dst:
+        print(f"src={args.src}  dst={args.dst}", file=sys.stderr)
+    else:
+        print("all rows (no src/dst filter)", file=sys.stderr)
 
     result = deltas(rows)
 
