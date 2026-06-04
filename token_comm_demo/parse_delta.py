@@ -20,8 +20,8 @@ import sys
 # IPv4 (good enough for capture exports). Time = first float on the line.
 IPV4 = r"\d{1,3}(?:\.\d{1,3}){3}"
 LINE_RE = re.compile(
-    r"^\s*(?P<no>\d+)\s+"            # packet number
-    r"(?P<time>\d+(?:\.\d+)?)\s+"    # time (seconds, relative)
+    r"^\s*(?:(?P<no>\d+)\s+)?"       # optional packet number (No. column may be absent)
+    r"(?P<time>\d+\.\d+)\s+"        # time (seconds, relative; decimal required)
     r"(?P<src>" + IPV4 + r")\s+"     # source IP
     r"(?P<dst>" + IPV4 + r")\s+"     # dest IP
 )
@@ -36,7 +36,8 @@ def parse(path, src, dst):
             if not m:
                 continue
             if m.group("src") == src and m.group("dst") == dst:
-                rows.append((int(m.group("no")), float(m.group("time"))))
+                no = int(m.group("no")) if m.group("no") else None
+                rows.append((no, float(m.group("time"))))
     return rows
 
 
@@ -76,9 +77,9 @@ def main():
         print(f"Wrote {len(result)} rows -> {args.csv}")
     else:
         print(f"{'No':>7}  {'Time(s)':>14}  {'Delta(us)':>14}")
-        for no, t, d in result:
+        for i, (no, t, d) in enumerate(result, 1):
             ds = "" if d is None else f"{d:,.3f}"
-            print(f"{no:>7}  {t:>14.6f}  {ds:>14}")
+            print(f"{no if no is not None else i:>7}  {t:>14.6f}  {ds:>14}")
 
     # stats over deltas (skip first None)
     vals = [d for _, _, d in result if d is not None]
