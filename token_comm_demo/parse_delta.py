@@ -17,14 +17,24 @@ import csv
 import re
 import sys
 
-# IPv4 (good enough for capture exports). Time = first float on the line.
+# IPv4 (good enough for capture exports).
 IPV4 = r"\d{1,3}(?:\.\d{1,3}){3}"
+# Time: clock HH:MM:SS.ffffff  OR  plain decimal seconds.
+TIME = r"(?:\d{1,2}:\d{2}:\d{2}\.\d+|\d+\.\d+)"
 LINE_RE = re.compile(
-    r"^\s*(?:(?P<no>\d+)\s+)?"       # optional packet number (No. column may be absent)
-    r"(?P<time>\d+\.\d+)\s+"        # time (seconds, relative; decimal required)
-    r"(?P<src>" + IPV4 + r")\s+"     # source IP
-    r"(?P<dst>" + IPV4 + r")\s+"     # dest IP
+    r"^\s*(?:(?P<no>\d+)\s+)?"            # optional packet number
+    r"(?P<time>" + TIME + r")\s+"        # time (clock or seconds)
+    r"(?P<src>" + IPV4 + r")\s+"          # source IP
+    r"(?P<dst>" + IPV4 + r")\s+"          # dest IP
 )
+
+
+def to_seconds(ts):
+    """Convert 'HH:MM:SS.ffffff' or 'SSS.ffffff' to float seconds."""
+    if ":" in ts:
+        h, m, s = ts.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    return float(ts)
 
 
 def parse(path, src, dst):
@@ -37,7 +47,7 @@ def parse(path, src, dst):
                 continue
             if m.group("src") == src and m.group("dst") == dst:
                 no = int(m.group("no")) if m.group("no") else None
-                rows.append((no, float(m.group("time"))))
+                rows.append((no, to_seconds(m.group("time"))))
     return rows
 
 
@@ -46,7 +56,8 @@ def deltas(rows):
     out = []
     prev = None
     for no, t in rows:
-        d = None if prev is None else round((t - prev) * 1_000_000, 3)
+        dt = None if prev is None else (t - prev) + (86400 if prev is not None and t < prev else 0)
+        d = None if dt is None else round(dt * 1_000_000, 3)
         out.append((no, t, d))
         prev = t
     return out
