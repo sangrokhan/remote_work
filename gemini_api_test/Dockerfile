@@ -1,0 +1,16 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+ENV PORT=8080
+EXPOSE 8080
+
+# Cloud Run: bind to $PORT, 0.0.0.0. Auth (Vertex + Firestore) via the service
+# account / metadata server (ADC) — no key in env. Set GEMINI_MOCK=1 to run
+# without GCP creds (synthetic data). One worker keeps the single-threaded socket
+# byte counter accurate.
+CMD exec gunicorn --bind "0.0.0.0:${PORT}" --workers 1 --threads 4 --timeout 300 app:app
