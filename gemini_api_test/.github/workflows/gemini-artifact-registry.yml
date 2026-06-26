@@ -1,0 +1,93 @@
+# Build the gemini_api_test image and push it to GCP Artifact Registry.
+#
+# ACTIVATION: GitHub only runs workflows from the REPO ROOT `.github/workflows/`.
+# This copy lives inside the project dir so it can be committed without the
+# `workflow` OAuth scope. To activate, move it to the repo root:
+#     mkdir -p .github/workflows
+#     git mv gemini_api_test/.github/workflows/gemini-artifact-registry.yml \
+#            .github/workflows/
+# (pushing that move requires a token with the `workflow` scope).
+#
+# MANUAL ONLY: triggered via the Actions tab ("Run workflow"). Does NOT run on
+# push/commit.
+#
+# Required GitHub repository config (Settings -> Secrets and variables -> Actions):
+#   Secrets:
+#     GCP_SA_KEY        Service-account JSON key (full file contents). The SA needs
+#                       roles/artifactregistry.writer on the target repo.
+#   Variables:
+#     GCP_PROJECT_ID    e.g. my-project
+#     GCP_REGION        e.g. us-central1   (Artifact Registry location)
+#     AR_REPO           Artifact Registry repo name, e.g. gemini
+#     AR_IMAGE          image name, e.g. gemini-traffic   (optional; defaults below)
+#
+# Create the AR repo once (if it does not exist):
+#   gcloud artifacts repositories create gemini \
+#     --repository-format=docker --location=us-central1
+
+name: Gemini → Artifact Registry
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Extra image tag (besides the commit SHA and 'latest')"
+        required: false
+        default: ""
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      REPO: ${{ vars.AR_REPO }}
+      IMAGE: ${{ vars.AR_IMAGE != '' && vars.AR_IMAGE || 'gemini-traffic' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Compute image path
+        id: img
+        run: |
+          BASE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE}"
+          echo "base=${BASE}" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        working-directory: gemini_api_test
+        run: |
+          docker build \
+            -t "${{ steps.img.outputs.base }}:${{ steps.img.outputs.sha }}" \
+            -t "${{ steps.img.outputs.base }}:latest" \
+            .
+
+      - name: Tag extra (optional)
+        if: ${{ github.event.inputs.image_tag != '' }}
+        env:
+          EXTRA_TAG: ${{ github.event.inputs.image_tag }}
+          BASE: ${{ steps.img.outputs.base }}
+          SHA: ${{ steps.img.outputs.sha }}
+        run: docker tag "${BASE}:${SHA}" "${BASE}:${EXTRA_TAG}"
+
+      - name: Push image
+        run: docker push --all-tags "${{ steps.img.outputs.base }}"
+
+      - name: Summary
+        run: |
+          echo "Pushed:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${{ steps.img.outputs.base }}:${{ steps.img.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${{ steps.img.outputs.base }}:latest" >> "$GITHUB_STEP_SUMMARY"
