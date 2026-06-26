@@ -94,7 +94,8 @@ async function start() {
       mkRec("delta", s.delta, i),
     ])));
 
-    status.textContent = `Done. Saved to ${data.saved_to}`;
+    const s2 = data.saved_to || {};
+    status.textContent = `Done. JSON: ${s2.json || "-"} | Firestore: ${s2.firestore || "off"}`;
     loadHistory();
   } catch (e) {
     status.textContent = "Failed: " + e;

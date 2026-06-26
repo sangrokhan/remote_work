@@ -1,4 +1,8 @@
-"""Single Gemini generateContent call with real wire-byte counting.
+"""Single Vertex AI generateContent call with real wire-byte counting.
+
+Targets **Vertex AI** (aiplatform.googleapis.com), NOT the Developer API.
+Auth = OAuth bearer via Application Default Credentials (google-auth). On Cloud
+Run the token comes from the metadata server / service account automatically.
 
 Measures, per call:
   - wire_sent / wire_recv : raw bytes through the TLS socket (real on-wire bytes)
@@ -6,24 +10,31 @@ Measures, per call:
   - prompt_tokens / resp_tokens / total_tokens : from response usageMetadata
 
 No tcpdump / NET_ADMIN needed: we wrap the socket so every send()/recv() byte is
-counted (this is ciphertext on the wire, ~= plaintext + small TLS overhead).
+counted (ciphertext on the wire, ~= plaintext + small TLS overhead).
 
-Mock mode (GEMINI_MOCK=1 or no key) returns synthetic data so the whole flow and
-charts work without burning quota.
+Mock mode (GEMINI_MOCK=1) returns synthetic data so the whole flow and charts
+work locally without GCP creds or quota.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import socket as _socket
 from dataclasses import dataclass, asdict
 
 import requests
 from urllib3.connection import HTTPSConnection
 
-ENDPOINT_HOST = "generativelanguage.googleapis.com"
-ENDPOINT = f"{ENDPOINT_HOST}:443"
+# Vertex config (overridable via env; project/creds come from ADC on Cloud Run).
+PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("VERTEX_PROJECT", "")
+LOCATION = os.environ.get("VERTEX_LOCATION", "us-central1")
+
+
+def _vertex_host() -> str:
+    return "aiplatform.googleapis.com" if LOCATION == "global" else f"{LOCATION}-aiplatform.googleapis.com"
+
+
+ENDPOINT = f"{_vertex_host()}:443"
 
 # Rough public estimate (USD per token). Clearly an estimate; override via env.
 PRICE_PER_TOKEN = float(os.environ.get("GEMINI_PRICE_PER_TOKEN", "0.0000001"))
@@ -120,6 +131,7 @@ def _build_session() -> requests.Session:
 
 
 _SESSION = None
+_CREDS = None
 
 
 def _session() -> requests.Session:
@@ -129,21 +141,55 @@ def _session() -> requests.Session:
     return _SESSION
 
 
-def _is_mock(api_key: str) -> bool:
-    return os.environ.get("GEMINI_MOCK") == "1" or not api_key
+def is_mock() -> bool:
+    return os.environ.get("GEMINI_MOCK") == "1"
+
+
+def _bearer_token() -> str:
+    """ADC OAuth token (service account on Cloud Run, gcloud creds locally)."""
+    global _CREDS
+    import google.auth
+    from google.auth.transport.requests import Request as GAuthRequest
+
+    if _CREDS is None:
+        _CREDS, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+    if not _CREDS.valid:
+        _CREDS.refresh(GAuthRequest())
+    return _CREDS.token
+
+
+def vertex_url(model: str) -> str:
+    return (
+        f"https://{_vertex_host()}/v1/projects/{PROJECT}/locations/{LOCATION}"
+        f"/publishers/google/models/{model}:generateContent"
+    )
+
+
+def ready() -> tuple[bool, str]:
+    """Whether a real call can be made. Returns (ok, reason_if_not)."""
+    if is_mock():
+        return True, ""
+    if not PROJECT:
+        return False, "GOOGLE_CLOUD_PROJECT not set (or run with GEMINI_MOCK=1)."
+    try:
+        _bearer_token()
+    except Exception as exc:
+        return False, f"No ADC credentials: {exc}"
+    return True, ""
 
 
 def _mock_call(mode: str, turn: int, contents: list) -> CallResult:
     body = json.dumps({"contents": contents})
     req_bytes = len(body.encode("utf-8"))
-    # ~4 chars/token heuristic on the request text.
     text_len = sum(
         len(p.get("text", ""))
         for c in contents
         for p in c.get("parts", [])
     )
     prompt_tokens = max(1, text_len // 4)
-    resp_tokens = 64  # fixed synthetic answer size
+    resp_tokens = 64
     resp_text = "x" * (resp_tokens * 4)
     resp_body = json.dumps(
         {
@@ -156,57 +202,54 @@ def _mock_call(mode: str, turn: int, contents: list) -> CallResult:
         }
     )
     resp_bytes = len(resp_body.encode("utf-8"))
-    # Synthetic wire bytes ~ payload + small TLS/HTTP overhead.
     return CallResult(
-        mode=mode,
-        turn=turn,
-        prompt_tokens=prompt_tokens,
-        resp_tokens=resp_tokens,
+        mode=mode, turn=turn,
+        prompt_tokens=prompt_tokens, resp_tokens=resp_tokens,
         total_tokens=prompt_tokens + resp_tokens,
-        wire_sent=req_bytes + 200,
-        wire_recv=resp_bytes + 200,
-        req_payload_bytes=req_bytes,
-        resp_payload_bytes=resp_bytes,
+        wire_sent=req_bytes + 200, wire_recv=resp_bytes + 200,
+        req_payload_bytes=req_bytes, resp_payload_bytes=resp_bytes,
     )
 
 
-def call_gemini(model: str, contents: list, api_key: str, mode: str, turn: int) -> CallResult:
-    """One generateContent call. Never raises; errors land in CallResult.error."""
-    if _is_mock(api_key):
+def call_gemini(model: str, contents: list, mode: str, turn: int) -> CallResult:
+    """One Vertex generateContent call. Never raises; errors land in .error."""
+    if is_mock():
         return _mock_call(mode, turn, contents)
 
-    url = (
-        f"https://{ENDPOINT_HOST}/v1beta/models/{model}:generateContent"
-        f"?key={api_key}"
-    )
     payload = {"contents": contents}
     body = json.dumps(payload)
     req_payload_bytes = len(body.encode("utf-8"))
 
+    try:
+        token = _bearer_token()
+    except Exception as exc:
+        return CallResult(mode=mode, turn=turn, req_payload_bytes=req_payload_bytes,
+                          error=f"auth_failed: {exc}")
+
     _active_counter["counter"] = None
     try:
         resp = _session().post(
-            url,
+            vertex_url(model),
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
             timeout=120,
         )
-    except Exception as exc:  # network failure
-        return CallResult(
-            mode=mode, turn=turn, req_payload_bytes=req_payload_bytes,
-            error=f"request_failed: {exc}",
-        )
+    except Exception as exc:
+        return CallResult(mode=mode, turn=turn, req_payload_bytes=req_payload_bytes,
+                          error=f"request_failed: {exc}")
 
     counter = _active_counter["counter"]
     wire_sent = counter.sent if counter else req_payload_bytes
     wire_recv = counter.recv if counter else len(resp.content)
-    resp_payload_bytes = len(resp.content)
 
     result = CallResult(
         mode=mode, turn=turn,
         wire_sent=wire_sent, wire_recv=wire_recv,
         req_payload_bytes=req_payload_bytes,
-        resp_payload_bytes=resp_payload_bytes,
+        resp_payload_bytes=len(resp.content),
     )
 
     if resp.status_code != 200:

@@ -26,6 +26,13 @@ with N. By turn 10 stateless already sends several times more tokens per call; t
 cumulative gap is large and grows. Charts should show stateless curving upward
 (quadratic) while delta stays a straight line.
 
+## Platform: Vertex AI on Cloud Run
+
+API calls target **Vertex AI** (`{location}-aiplatform.googleapis.com`), not the
+Developer API. Auth is **ADC** (Application Default Credentials) — OAuth bearer
+token, no API key. On **Cloud Run** the token comes from the attached service
+account / metadata server automatically.
+
 ## How we measure (no account split needed)
 
 Every single call is self-measured and tagged `mode`:
@@ -33,13 +40,20 @@ Every single call is self-measured and tagged `mode`:
 - **Tokens** — from each response's `usageMetadata`
   (`promptTokenCount` / `candidatesTokenCount` / `totalTokenCount`).
 - **Wire bytes** — a socket wrapper counts raw bytes sent/received over the TLS
-  connection (real on-wire bytes, no tcpdump / NET_ADMIN). Cross-checked against
-  JSON payload sizes.
+  connection (real on-wire bytes, no tcpdump / NET_ADMIN). Works unchanged against
+  the Vertex host. Cross-checked against JSON payload sizes.
 
-Because attribution is per-request in our own code, **one API key / account is
-enough**. We do not depend on Google's aggregate billing dashboard. (Optional
-later verification: run the two modes in separate time windows and compare against
-the billing page.)
+Because attribution is per-request in our own code, **one service account /
+project is enough**. We do not depend on Google's aggregate billing dashboard.
+(Optional later verification: run the two modes in separate time windows and
+compare against the billing page.)
+
+## History storage
+
+Each run is **dual-written**: to **Firestore** (collection `gemini_runs`, same ADC
+auth — survives Cloud Run instance recycles, shared cluster-wide) **and** to a
+local JSON file (`data/runs/`, ephemeral on Cloud Run). `/history` reads Firestore
+when available, else the local JSON fallback.
 
 ## What the tool shows
 
@@ -59,9 +73,10 @@ cumulative stateless usage is the bigger-traffic, bigger-cost pattern.
 
 ## Run
 
-See `README.md`. TL;DR — Docker: `docker compose up --build` with
-`GEMINI_API_KEY` exported (or `GEMINI_MOCK=1` to try it without quota), then open
-http://localhost:8000.
+See `README.md`. TL;DR — local: `GEMINI_MOCK=1 python app.py` (no GCP), or set
+`GOOGLE_CLOUD_PROJECT` + `gcloud auth application-default login` for real Vertex.
+Cloud Run: `gcloud run deploy --source .` with a service account holding
+`aiplatform.user` + `datastore.user`. App listens on `$PORT` (8080).
 
 ## Expected result (mock, defaults: 10 turns, 500 chars)
 

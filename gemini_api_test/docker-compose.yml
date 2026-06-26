@@ -2,12 +2,20 @@ services:
   gemini-traffic:
     build: .
     ports:
-      - "8000:8000"
+      - "8080:8080"
     environment:
-      # Supply your key in the shell or a .env file: GEMINI_API_KEY=...
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      # Set to 1 to run without a key (synthetic data, no quota used).
+      # Vertex target
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
+      - VERTEX_LOCATION=${VERTEX_LOCATION:-us-central1}
+      # Local-only: mount a service-account key for ADC (Cloud Run uses metadata).
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
+      # Firestore history (uses same ADC). Set FIRESTORE_DISABLE=1 to skip.
+      - FIRESTORE_COLLECTION=${FIRESTORE_COLLECTION:-gemini_runs}
+      - FIRESTORE_DATABASE=${FIRESTORE_DATABASE:-(default)}
+      # Set to 1 to run without GCP creds (synthetic data, no quota).
       - GEMINI_MOCK=${GEMINI_MOCK:-0}
       - GEMINI_PRICE_PER_TOKEN=${GEMINI_PRICE_PER_TOKEN:-0.0000001}
     volumes:
       - ./data:/app/data
+      # Mount your local gcloud creds for non-mock local runs (optional):
+      # - ~/.config/gcloud:/root/.config/gcloud:ro

@@ -26,7 +26,7 @@ def _user_content(text: str) -> dict:
     return {"role": "user", "parts": [{"text": text}]}
 
 
-def run_experiment(turns: int, message_chars: int, model: str, api_key: str) -> dict:
+def run_experiment(turns: int, message_chars: int, model: str) -> dict:
     messages = _make_messages(turns, message_chars)
     records = []
 
@@ -34,14 +34,14 @@ def run_experiment(turns: int, message_chars: int, model: str, api_key: str) -> 
     history: list[dict] = []
     for k, msg in enumerate(messages, start=1):
         history.append(_user_content(msg))
-        res = call_gemini(model, list(history), api_key, mode="stateless", turn=k)
+        res = call_gemini(model, list(history), mode="stateless", turn=k)
         records.append(res.as_dict())
         # Append a synthetic assistant turn so next request truly resends more.
         history.append({"role": "model", "parts": [{"text": "(ack)"}]})
 
     # Delta: only the current turn.
     for k, msg in enumerate(messages, start=1):
-        res = call_gemini(model, [_user_content(msg)], api_key, mode="delta", turn=k)
+        res = call_gemini(model, [_user_content(msg)], mode="delta", turn=k)
         records.append(res.as_dict())
 
     return {

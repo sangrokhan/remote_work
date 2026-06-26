@@ -6,8 +6,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-ENV PORT=8000
-EXPOSE 8000
+ENV PORT=8080
+EXPOSE 8080
 
-# GEMINI_API_KEY supplied at run time (env). Set GEMINI_MOCK=1 to run without a key.
-CMD ["python", "app.py"]
+# Cloud Run: bind to $PORT, 0.0.0.0. Auth (Vertex + Firestore) via the service
+# account / metadata server (ADC) — no key in env. Set GEMINI_MOCK=1 to run
+# without GCP creds (synthetic data). One worker keeps the single-threaded socket
+# byte counter accurate.
+CMD exec gunicorn --bind "0.0.0.0:${PORT}" --workers 1 --threads 4 --timeout 300 app:app

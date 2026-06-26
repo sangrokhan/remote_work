@@ -10,14 +10,16 @@
 <body>
   <header>
     <h1>Gemini API Traffic Experiment</h1>
-    <p class="sub">Stateless full-history resend vs delta-only — token &amp; wire-byte cost</p>
+    <p class="sub">Vertex AI · stateless full-history resend vs delta-only — token &amp; wire-byte cost</p>
     {% if mock %}
       <p class="badge mock">MOCK MODE (no quota used)</p>
-    {% elif has_key %}
-      <p class="badge live">LIVE (GEMINI_API_KEY set)</p>
+    {% elif ready %}
+      <p class="badge live">LIVE Vertex · {{ project }} / {{ location }}</p>
     {% else %}
-      <p class="badge warn">No API key — set GEMINI_API_KEY or GEMINI_MOCK=1</p>
+      <p class="badge warn">Not ready — {{ reason }}</p>
     {% endif %}
+    <p class="sub">endpoint: {{ endpoint }} · history store:
+      {% if firestore %}Firestore + JSON{% else %}local JSON{% endif %}</p>
   </header>
 
   <section class="controls">
