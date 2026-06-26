@@ -1,0 +1,13 @@
+services:
+  gemini-traffic:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Supply your key in the shell or a .env file: GEMINI_API_KEY=...
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # Set to 1 to run without a key (synthetic data, no quota used).
+      - GEMINI_MOCK=${GEMINI_MOCK:-0}
+      - GEMINI_PRICE_PER_TOKEN=${GEMINI_PRICE_PER_TOKEN:-0.0000001}
+    volumes:
+      - ./data:/app/data

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gemini Traffic Experiment</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <header>
+    <h1>Gemini API Traffic Experiment</h1>
+    <p class="sub">Stateless full-history resend vs delta-only — token &amp; wire-byte cost</p>
+    {% if mock %}
+      <p class="badge mock">MOCK MODE (no quota used)</p>
+    {% elif has_key %}
+      <p class="badge live">LIVE (GEMINI_API_KEY set)</p>
+    {% else %}
+      <p class="badge warn">No API key — set GEMINI_API_KEY or GEMINI_MOCK=1</p>
+    {% endif %}
+  </header>
+
+  <section class="controls">
+    <label>Turns <input id="turns" type="number" value="10" min="1" max="100" /></label>
+    <label>Message chars <input id="chars" type="number" value="500" min="1" /></label>
+    <label>Model <input id="model" type="text" value="gemini-2.0-flash" /></label>
+    <button id="start">▶ Start experiment</button>
+  </section>
+
+  <p id="status"></p>
+
+  <section class="summary" id="summary" hidden></section>
+
+  <section class="charts">
+    <div class="chart-box"><canvas id="tokenChart"></canvas></div>
+    <div class="chart-box"><canvas id="byteChart"></canvas></div>
+  </section>
+
+  <section>
+    <h2>Per-turn detail</h2>
+    <table id="detail"><thead><tr>
+      <th>Mode</th><th>Turn</th><th>Prompt tok</th><th>Resp tok</th>
+      <th>Total tok</th><th>Wire sent</th><th>Wire recv</th><th>Error</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Run history (background collection)</h2>
+    <button id="refresh">Refresh history</button>
+    <pre id="history"></pre>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
