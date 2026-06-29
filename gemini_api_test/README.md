@@ -42,6 +42,24 @@ docker compose up --build                  # http://localhost:8080
 For non-mock local Docker, mount creds (uncomment the gcloud volume in
 `docker-compose.yml`, or set `GOOGLE_APPLICATION_CREDENTIALS`).
 
+## Packet capture (optional)
+
+Tick **capture packets** before **Start** to run `tcpdump` around the experiment,
+filtered to the Vertex host on tcp/443. When the run finishes a **⬇ download
+.pcap** link appears next to Start (open in Wireshark). The TLS payload is
+encrypted — packet **sizes + timing** are the real-traffic proof.
+
+Requires `tcpdump` + raw-socket capability:
+
+- **Local:** run with privileges to open raw sockets (e.g. `sudo`, or
+  `setcap cap_net_raw+ep $(which tcpdump)`).
+- **Docker:** `docker compose up` already adds `NET_RAW` (see `cap_add` in
+  `docker-compose.yml`).
+- **Cloud Run:** NOT supported (gVisor sandbox has no raw sockets). The checkbox
+  shows as unavailable there and the experiment runs normally without a pcap.
+- **Mock mode:** no real traffic leaves the process, so the pcap is empty — the UI
+  reports "no packets captured". Use a live Vertex run for a meaningful pcap.
+
 ## Deploy to Cloud Run
 
 ```bash
@@ -96,3 +114,6 @@ python -m unittest discover tests      # pure metric math, no network
 | `GOOGLE_APPLICATION_CREDENTIALS` | — | local SA key path (ADC) |
 | `PORT` | `8080` | server port (Cloud Run sets this) |
 | `GEMINI_DATA_DIR` | `data/runs` | local JSON dir |
+| `PCAP_DIR` | `data/pcaps` | captured .pcap output dir |
+| `PCAP_IFACE` | `any` | tcpdump capture interface |
+| `PCAP_DISABLE` | `0` | `1` = hide/disable packet capture |
