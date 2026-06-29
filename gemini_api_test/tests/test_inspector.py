@@ -11,13 +11,28 @@ import inspector
 
 class TestSSRFGuard(unittest.TestCase):
     def test_scheme_rejected(self):
-        ok, reason = inspector.ssrf_check("file:///etc/passwd", allow_private=True)
+        ok, reason, ips = inspector.ssrf_check("file:///etc/passwd", allow_private=True)
         self.assertFalse(ok)
         self.assertIn("scheme", reason)
+        self.assertEqual(ips, [])
 
     def test_metadata_ip_always_blocked(self):
         # Link-local / metadata blocked even with allow_private.
         self.assertTrue(inspector._is_blocked("169.254.169.254", allow_private=True))
+
+    def test_ipv4_mapped_metadata_blocked(self):
+        # IPv4-mapped IPv6 must normalize and still be blocked.
+        self.assertTrue(inspector._is_blocked("::ffff:169.254.169.254", allow_private=True))
+
+    def test_sixtofour_metadata_blocked(self):
+        # 6to4-embedded metadata IPv4 (2002:a9fe:a9fe::) must be blocked.
+        self.assertTrue(inspector._is_blocked("2002:a9fe:a9fe::", allow_private=True))
+
+    def test_reserved_always_blocked(self):
+        self.assertTrue(inspector._is_blocked("240.0.0.1", allow_private=True))
+
+    def test_cgnat_always_blocked(self):
+        self.assertTrue(inspector._is_blocked("100.64.1.1", allow_private=True))
 
     def test_private_blocked_by_default(self):
         self.assertTrue(inspector._is_blocked("10.0.0.5", allow_private=False))
