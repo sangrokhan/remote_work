@@ -1,6 +1,12 @@
 FROM python:3.12-slim
 
 WORKDIR /app
+
+# tcpdump for optional packet capture (needs --cap-add=NET_RAW at run time;
+# not available on Cloud Run — capture auto-disables there).
+RUN apt-get update && apt-get install -y --no-install-recommends tcpdump \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

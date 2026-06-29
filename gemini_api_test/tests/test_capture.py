@@ -1,0 +1,42 @@
+"""Unit tests for capture helpers — no tcpdump / root / network needed."""
+
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import capture
+
+
+class TestCapture(unittest.TestCase):
+    def test_filter_with_ips(self):
+        f = capture._filter_expr(["1.2.3.4", "5.6.7.8"])
+        self.assertEqual(f, "tcp port 443 and (host 1.2.3.4 or host 5.6.7.8)")
+
+    def test_filter_no_ips_falls_back(self):
+        self.assertEqual(capture._filter_expr([]), "tcp port 443")
+
+    def test_safe_name_accepts_valid(self):
+        # A name matching the pattern resolves under PCAP_DIR (file need not exist
+        # -> returns None because it doesn't exist, but pattern must pass first).
+        good = "capture_2026-06-29T00-00-00.pcap"
+        self.assertIsNotNone(capture._SAFE_NAME.match(good))
+
+    def test_safe_path_rejects_traversal(self):
+        for bad in ["../etc/passwd", "capture_x.pcap/../y", "run.json",
+                    "capture_; rm -rf.pcap"]:
+            self.assertIsNone(capture.safe_pcap_path(bad))
+
+    def test_available_reports_when_disabled(self):
+        os.environ["PCAP_DISABLE"] = "1"
+        try:
+            ok, reason = capture.available()
+            self.assertFalse(ok)
+            self.assertIn("disabled", reason)
+        finally:
+            del os.environ["PCAP_DISABLE"]
+
+
+if __name__ == "__main__":
+    unittest.main()

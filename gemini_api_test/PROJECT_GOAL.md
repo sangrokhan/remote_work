@@ -42,6 +42,10 @@ Every single call is self-measured and tagged `mode`:
 - **Wire bytes** — a socket wrapper counts raw bytes sent/received over the TLS
   connection (real on-wire bytes, no tcpdump / NET_ADMIN). Works unchanged against
   the Vertex host. Cross-checked against JSON payload sizes.
+- **Packet capture (optional)** — ticking *capture packets* runs `tcpdump` around
+  the experiment, filtered to the Vertex host:443, and produces a downloadable
+  `.pcap`. Independent ground-truth for the wire volume/timing. Needs raw-socket
+  capability (local/Docker `NET_RAW`); unavailable on Cloud Run.
 
 Because attribution is per-request in our own code, **one service account /
 project is enough**. We do not depend on Google's aggregate billing dashboard.
@@ -57,7 +61,8 @@ when available, else the local JSON fallback.
 
 ## What the tool shows
 
-- **Start button** + params (turns, message size, model).
+- **Start button** + params (turns, message size, model, **capture packets** toggle).
+- Optional **⬇ download .pcap** link next to Start after a captured run.
 - Two cumulative charts: **tokens** and **wire bytes**, stateless vs delta.
 - Per-turn detail table and a summary (totals, **ratio**, **cost estimate**).
 - **Background collection:** every run is saved to `data/runs/*.json`; the history

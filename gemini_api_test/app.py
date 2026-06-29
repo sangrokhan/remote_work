@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, abort, jsonify, render_template, request, send_file
 
+import capture as pcap
 from experiment import run_experiment
 from gemini_client import ready, is_mock, ENDPOINT, PROJECT, LOCATION
 from metrics import summarize
@@ -18,6 +19,7 @@ app = Flask(__name__)
 @app.route("/")
 def index():
     ok, reason = ready()
+    cap_ok, cap_reason = pcap.available()
     return render_template(
         "index.html",
         ready=ok,
@@ -27,6 +29,8 @@ def index():
         project=PROJECT or "(unset)",
         location=LOCATION,
         firestore=firestore_active(),
+        capture_ok=cap_ok,
+        capture_reason=cap_reason,
     )
 
 
@@ -40,14 +44,42 @@ def run():
     turns = max(1, min(int(data.get("turns", 10)), 100))
     message_chars = int(data.get("message_chars", 500))
     model = data.get("model", "gemini-2.0-flash")
+    want_capture = bool(data.get("capture", False))
 
-    experiment = run_experiment(turns, message_chars, model)
-    summary = summarize(experiment)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+    capture_info = None
+    if want_capture:
+        cap_ok, cap_reason = pcap.available()
+        if not cap_ok:
+            capture_info = {"ok": False, "error": cap_reason}
+            experiment = run_experiment(turns, message_chars, model)
+        else:
+            with pcap.Capture(timestamp) as cap:
+                experiment = run_experiment(turns, message_chars, model)
+            capture_info = cap.result()
+    else:
+        experiment = run_experiment(turns, message_chars, model)
+
+    summary = summarize(experiment)
     saved = save_run(timestamp, experiment, summary)
 
-    return jsonify({"timestamp": timestamp, "saved_to": saved,
-                    "params": experiment["params"], "summary": summary})
+    resp = {"timestamp": timestamp, "saved_to": saved,
+            "params": experiment["params"], "summary": summary}
+    if capture_info is not None:
+        if capture_info.get("ok") and capture_info.get("file"):
+            capture_info["download"] = f"/download/pcap/{capture_info['file']}"
+        resp["capture"] = capture_info
+    return jsonify(resp)
+
+
+@app.route("/download/pcap/<path:name>")
+def download_pcap(name):
+    path = pcap.safe_pcap_path(name)
+    if path is None:
+        abort(404)
+    return send_file(path, as_attachment=True,
+                     download_name=name, mimetype="application/vnd.tcpdump.pcap")
 
 
 @app.route("/history")

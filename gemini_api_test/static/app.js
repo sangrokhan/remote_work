@@ -61,10 +61,12 @@ async function start() {
   btn.disabled = true;
   status.textContent = "Running…";
   try {
+    document.getElementById("pcapLink").hidden = true;
     const body = {
       turns: +document.getElementById("turns").value,
       message_chars: +document.getElementById("chars").value,
       model: document.getElementById("model").value,
+      capture: document.getElementById("capture").checked,
     };
     const resp = await fetch("/run", {
       method: "POST",
@@ -95,7 +97,19 @@ async function start() {
     ])));
 
     const s2 = data.saved_to || {};
-    status.textContent = `Done. JSON: ${s2.json || "-"} | Firestore: ${s2.firestore || "off"}`;
+    let msg = `Done. JSON: ${s2.json || "-"} | Firestore: ${s2.firestore || "off"}`;
+    const c = data.capture;
+    if (c) {
+      if (c.ok && c.download) {
+        const link = document.getElementById("pcapLink");
+        link.href = c.download;
+        link.hidden = false;
+        msg += ` | pcap: ${fmtBytes(c.bytes)} (${c.host})`;
+      } else {
+        msg += ` | capture: ${c.error || c.note || "no packets"}`;
+      }
+    }
+    status.textContent = msg;
     loadHistory();
   } catch (e) {
     status.textContent = "Failed: " + e;

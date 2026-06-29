@@ -3,6 +3,11 @@ services:
     build: .
     ports:
       - "8080:8080"
+    # Needed for the optional packet-capture toggle (tcpdump raw sockets).
+    # Remove if you don't use capture. Not applicable on Cloud Run.
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
     environment:
       # Vertex target
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}

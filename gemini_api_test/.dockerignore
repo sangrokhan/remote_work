@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 data/runs/*.json
+data/pcaps/*.pcap
 .env
 docs/
 tests/
