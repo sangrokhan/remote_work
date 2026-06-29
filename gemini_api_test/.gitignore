@@ -1,5 +1,6 @@
 data/runs/*.json
 data/pcaps/*.pcap
+data/transcripts/*.json
 __pycache__/
 *.pyc
 .env

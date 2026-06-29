@@ -31,3 +31,12 @@ th:first-child, td:first-child { text-align: left; }
 .summary .ok { color: #7ee2a8; }
 pre { background: #161b22; border: 1px solid #2d3748; border-radius: 8px; padding: 1rem; overflow: auto; font-size: .8rem; }
 #status { color: #8b98a5; min-height: 1.2em; }
+.inspector { background: #11161d; border: 1px solid #2d3748; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+.insp-row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .6rem 0; }
+.insp-row #iUrl { flex: 1; min-width: 16rem; background: #1a2230; border: 1px solid #2d3748; color: #e6e6e6; padding: .45rem; border-radius: 4px; }
+.insp-row select { background: #1a2230; border: 1px solid #2d3748; color: #e6e6e6; padding: .45rem; border-radius: 4px; }
+.insp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+.insp-grid label { display: flex; flex-direction: column; gap: .25rem; font-size: .8rem; color: #8b98a5; }
+.insp-grid textarea { background: #1a2230; border: 1px solid #2d3748; color: #e6e6e6; padding: .45rem; border-radius: 4px; font-family: ui-monospace, monospace; font-size: .8rem; }
+#iStatus { color: #8b98a5; min-height: 1.2em; margin-top: .5rem; }
+@media (max-width: 800px) { .insp-grid { grid-template-columns: 1fr; } }

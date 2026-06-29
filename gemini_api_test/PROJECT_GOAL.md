@@ -68,6 +68,10 @@ when available, else the local JSON fallback.
 - **Background collection:** every run is saved to `data/runs/*.json`; the history
   panel aggregates total tokens + traffic per endpoint
   (`generativelanguage.googleapis.com:443`) across all runs.
+- **Endpoint inspector:** fire a request at any URL (MCP server, A2A agent, Gemini)
+  and capture request/response **headers**, sizes, timing, optional bodies, and
+  detected protocol hints (MCP/A2A/JSON-RPC/SSE) — plaintext, since a TLS pcap
+  can't. SSRF-guarded (private/metadata targets refused by default).
 
 ## The proof
 

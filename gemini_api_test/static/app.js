@@ -136,6 +136,47 @@ async function loadHistory() {
   document.getElementById("history").textContent = JSON.stringify(data.aggregate, null, 2);
 }
 
+async function inspect() {
+  const btn = document.getElementById("inspect");
+  const status = document.getElementById("iStatus");
+  const out = document.getElementById("iResult");
+  const dl = document.getElementById("iDownload");
+  dl.hidden = true;
+  const url = document.getElementById("iUrl").value.trim();
+  if (!url) { status.textContent = "Enter a URL."; return; }
+  btn.disabled = true;
+  status.textContent = "Inspecting…";
+  try {
+    const body = {
+      method: document.getElementById("iMethod").value,
+      url,
+      headers: document.getElementById("iHeaders").value,
+      body: document.getElementById("iBody").value,
+      include_bodies: document.getElementById("iBodies").checked,
+      allow_private: document.getElementById("iPrivate").checked,
+    };
+    const resp = await fetch("/inspect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    out.hidden = false;
+    out.textContent = JSON.stringify(data, null, 2);
+    if (!data.ok) { status.textContent = "✗ " + (data.error || resp.status); return; }
+    const hints = data.protocol_hints && data.protocol_hints.length
+      ? " | protocol: " + data.protocol_hints.join(", ") : "";
+    status.textContent = `✓ ${data.status} · ${data.elapsed_ms}ms · `
+      + `wire ${fmtBytes(data.wire_sent)}↑ ${fmtBytes(data.wire_recv)}↓${hints}`;
+    if (data.download) { dl.href = data.download; dl.hidden = false; }
+  } catch (e) {
+    status.textContent = "Failed: " + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 document.getElementById("start").addEventListener("click", start);
 document.getElementById("refresh").addEventListener("click", loadHistory);
+document.getElementById("inspect").addEventListener("click", inspect);
 loadHistory();

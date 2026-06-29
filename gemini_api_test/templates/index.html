@@ -57,6 +57,36 @@
     <pre id="history"></pre>
   </section>
 
+  <section class="inspector">
+    <h2>Endpoint inspector — MCP / A2A / any URL</h2>
+    <p class="sub">App-layer header + size capture (plaintext, works on Cloud Run).
+      Point it at a local MCP server, an A2A agent, or the Gemini REST endpoint.</p>
+    <div class="insp-row">
+      <select id="iMethod">
+        <option>GET</option><option>POST</option><option>PUT</option>
+        <option>PATCH</option><option>DELETE</option>
+      </select>
+      <input id="iUrl" type="text" placeholder="https://host/path  (e.g. http://localhost:3000/mcp)" />
+      <button id="inspect">🔍 Inspect</button>
+    </div>
+    <div class="insp-grid">
+      <label>Request headers (JSON or <code>Key: value</code> lines)
+        <textarea id="iHeaders" rows="4" placeholder='{"Mcp-Protocol-Version": "2025-06-18"}'></textarea>
+      </label>
+      <label>Body (POST/PUT/PATCH)
+        <textarea id="iBody" rows="4" placeholder='{"jsonrpc":"2.0","method":"tools/list","id":1}'></textarea>
+      </label>
+    </div>
+    <div class="insp-row">
+      <label class="cap"><input id="iBodies" type="checkbox" /> include request/response bodies</label>
+      <label class="cap" title="Permits localhost / private targets such as a local MCP server. Metadata IP stays blocked.">
+        <input id="iPrivate" type="checkbox" /> allow local/private targets</label>
+      <a id="iDownload" class="pcap-link" hidden download>⬇ download transcript</a>
+    </div>
+    <p id="iStatus"></p>
+    <pre id="iResult" hidden></pre>
+  </section>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

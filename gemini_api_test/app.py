@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from flask import Flask, abort, jsonify, render_template, request, send_file
 
 import capture as pcap
+import inspector
 from experiment import run_experiment
 from gemini_client import ready, is_mock, ENDPOINT, PROJECT, LOCATION
 from metrics import summarize
@@ -80,6 +81,39 @@ def download_pcap(name):
         abort(404)
     return send_file(path, as_attachment=True,
                      download_name=name, mimetype="application/vnd.tcpdump.pcap")
+
+
+@app.route("/inspect", methods=["POST"])
+def inspect_endpoint():
+    data = request.get_json(force=True, silent=True) or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "url required"}), 400
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    record = inspector.inspect(
+        method=data.get("method", "GET"),
+        url=url,
+        headers_raw=data.get("headers", ""),
+        body=data.get("body", ""),
+        include_bodies=bool(data.get("include_bodies", False)),
+        allow_private=bool(data.get("allow_private", False)),
+        timestamp=timestamp,
+    )
+    name = inspector.save_transcript(timestamp, record)
+    if name:
+        record["download"] = f"/download/transcript/{name}"
+    status = 200 if record.get("ok") else 400
+    return jsonify(record), status
+
+
+@app.route("/download/transcript/<path:name>")
+def download_transcript(name):
+    path = inspector.safe_transcript_path(name)
+    if path is None:
+        abort(404)
+    return send_file(path, as_attachment=True,
+                     download_name=name, mimetype="application/json")
 
 
 @app.route("/history")

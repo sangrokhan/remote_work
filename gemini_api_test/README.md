@@ -60,6 +60,29 @@ Requires `tcpdump` + raw-socket capability:
 - **Mock mode:** no real traffic leaves the process, so the pcap is empty — the UI
   reports "no packets captured". Use a live Vertex run for a meaningful pcap.
 
+## Endpoint inspector (MCP / A2A / any URL)
+
+A pcap can't show HTTP headers — TLS encrypts them. The **Endpoint inspector**
+panel captures them at the app layer instead: enter a method + URL (a local MCP
+server, an A2A agent, the Gemini REST endpoint), optional headers/body, and get
+back:
+
+- request + **response headers** (plaintext),
+- status, real wire bytes, payload sizes, elapsed ms,
+- **protocol hints** — detected MCP / A2A / JSON-RPC / SSE markers,
+- optional request/response **bodies** (tick *include bodies*),
+- a downloadable **transcript** JSON.
+
+This is where protocol-specific headers (`Mcp-Session-Id`, `text/event-stream`,
+JSON-RPC, A2A agent-card) show up. Note: the Gemini call itself carries no MCP/A2A
+headers — point the inspector at the MCP/A2A hop to see those. Works on Cloud Run
+(no NET_RAW needed).
+
+**SSRF guard:** the inspector refuses targets resolving to private / loopback /
+reserved IPs by default. Tick *allow local/private targets* to reach a localhost
+MCP server. The link-local range (`169.254.0.0/16`, incl. the GCP metadata server
+`169.254.169.254`) is **always** refused. Redirects are not followed.
+
 ## Deploy to Cloud Run
 
 ```bash
@@ -117,3 +140,5 @@ python -m unittest discover tests      # pure metric math, no network
 | `PCAP_DIR` | `data/pcaps` | captured .pcap output dir |
 | `PCAP_IFACE` | `any` | tcpdump capture interface |
 | `PCAP_DISABLE` | `0` | `1` = hide/disable packet capture |
+| `TRANSCRIPT_DIR` | `data/transcripts` | inspector transcript output dir |
+| `INSPECT_MAX_BODY` | `1048576` | max response-body bytes captured (1 MiB) |
