@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -24,7 +25,9 @@ from pathlib import Path
 from gemini_client import _vertex_host, LOCATION  # endpoint host for the filter
 
 PCAP_DIR = Path(os.environ.get("PCAP_DIR", "data/pcaps"))
-_SAFE_NAME = re.compile(r"^capture_[0-9T:\-]+\.pcap$")
+# Filename = timestamp + a high-entropy token so concurrent runs never collide
+# and download URLs are unguessable across requests.
+_SAFE_NAME = re.compile(r"^capture_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
 
 
 def tcpdump_path() -> str | None:
@@ -74,12 +77,20 @@ class Capture:
         self.interface = interface or os.environ.get("PCAP_IFACE", "any")
         self.host = _vertex_host()
         self.ips: list[str] = []
-        self.path = PCAP_DIR / f"capture_{timestamp.replace(':', '-')}.pcap"
+        token = secrets.token_hex(8)  # 64-bit: unguessable + collision-proof
+        self.path = PCAP_DIR / f"capture_{timestamp.replace(':', '-')}_{token}.pcap"
         self.proc: subprocess.Popen | None = None
         self.error = ""
 
     def __enter__(self) -> "Capture":
         PCAP_DIR.mkdir(parents=True, exist_ok=True)
+        # Reserve the path atomically (O_EXCL) so a collision is rejected, never
+        # silently overwriting another request's capture.
+        try:
+            os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            self.error = "pcap_name_collision"
+            return self
         self.ips = _resolve_ips(self.host)
         cmd = [
             tcpdump_path(), "-i", self.interface, "-w", str(self.path),
