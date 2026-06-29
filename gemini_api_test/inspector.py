@@ -25,6 +25,7 @@ import os
 import re
 import secrets
 import socket
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -45,39 +46,85 @@ _HINTS = {
     "agent-card": "A2A agent card",
 }
 
+# --- DNS-rebinding defense -------------------------------------------------
+# We validate the resolved IPs, then must ensure the actual connection uses
+# *those same* IPs (not a second, attacker-flipped resolution). We install a
+# getaddrinfo shim that, while a request is in-flight on this thread, forces the
+# target host to resolve only to the already-vetted IPs. Thread-local, so other
+# requests are unaffected; _orig_getaddrinfo keeps the real resolver.
+_orig_getaddrinfo = socket.getaddrinfo
+_pin = threading.local()
+
+
+def _pinned_getaddrinfo(host, port, *args, **kwargs):
+    pin = getattr(_pin, "value", None)
+    if pin and host == pin["host"]:
+        out = []
+        for ip in pin["ips"]:
+            family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+            out.append((family, socket.SOCK_STREAM, 6, "", (ip, port)))
+        return out
+    return _orig_getaddrinfo(host, port, *args, **kwargs)
+
+
+socket.getaddrinfo = _pinned_getaddrinfo
+
+
+# Networks refused unconditionally (cloud metadata services), in addition to the
+# link-local / multicast / reserved checks below.
+_ALWAYS_BLOCK_NETS = [
+    ipaddress.ip_network("169.254.0.0/16"),   # IPv4 link-local incl. GCP/AWS metadata
+    ipaddress.ip_network("100.64.0.0/10"),    # RFC 6598 CGNAT (not flagged is_private on old Py)
+    ipaddress.ip_network("fd00:ec2::/32"),    # AWS IPv6 metadata
+]
+
 
 def _resolve_ips(host: str) -> list[str]:
-    infos = socket.getaddrinfo(host, None)
+    infos = _orig_getaddrinfo(host, None)
     return sorted({i[4][0] for i in infos})
 
 
+def _normalize(a):
+    """Collapse IPv6 tunnels/maps to the embedded IPv4 so v4 checks apply."""
+    if isinstance(a, ipaddress.IPv6Address):
+        if a.ipv4_mapped:
+            return a.ipv4_mapped
+        if a.sixtofour:
+            return a.sixtofour
+        if a.teredo:
+            return a.teredo[1]  # the embedded client IPv4
+    return a
+
+
 def _is_blocked(ip: str, allow_private: bool) -> bool:
-    a = ipaddress.ip_address(ip)
-    # Always block link-local (includes 169.254.169.254 metadata) + multicast.
-    if a.is_link_local or a.is_multicast or a.is_unspecified:
+    a = _normalize(ipaddress.ip_address(ip))
+    # Always blocked, regardless of allow_private.
+    if a.is_link_local or a.is_multicast or a.is_unspecified or a.is_reserved:
+        return True
+    if any(a in net for net in _ALWAYS_BLOCK_NETS):
         return True
     if allow_private:
         return False
-    return a.is_private or a.is_loopback or a.is_reserved
+    return a.is_private or a.is_loopback
 
 
-def ssrf_check(url: str, allow_private: bool) -> tuple[bool, str]:
-    """Returns (ok, reason_if_blocked)."""
+def ssrf_check(url: str, allow_private: bool) -> tuple[bool, str, list[str]]:
+    """Returns (ok, reason_if_blocked, vetted_ips)."""
     p = urlparse(url)
     if p.scheme not in ("http", "https"):
-        return False, f"scheme '{p.scheme}' not allowed (http/https only)"
+        return False, f"scheme '{p.scheme}' not allowed (http/https only)", []
     if not p.hostname:
-        return False, "no host in URL"
+        return False, "no host in URL", []
     try:
         ips = _resolve_ips(p.hostname)
     except Exception as exc:
-        return False, f"dns_failed: {exc}"
+        return False, f"dns_failed: {exc}", []
     if not ips:
-        return False, "host did not resolve"
+        return False, "host did not resolve", []
     for ip in ips:
         if _is_blocked(ip, allow_private):
-            return False, f"target {ip} blocked (private/link-local; enable allow_private for localhost)"
-    return True, ""
+            return False, f"target {ip} blocked (private/link-local; enable allow_private for localhost)", []
+    return True, "", ips
 
 
 def _protocol_hints(req_headers: dict, resp_headers: dict) -> list[str]:
@@ -128,7 +175,7 @@ def inspect(method: str, url: str, headers_raw: str, body: str,
             include_bodies: bool, allow_private: bool, timestamp: str) -> dict:
     """Perform the request and build the inspection record. Never raises."""
     method = (method or "GET").upper()
-    ok, reason = ssrf_check(url, allow_private)
+    ok, reason, vetted_ips = ssrf_check(url, allow_private)
     if not ok:
         return {"ok": False, "error": f"blocked: {reason}", "url": url}
 
@@ -136,8 +183,12 @@ def inspect(method: str, url: str, headers_raw: str, body: str,
     data = body.encode("utf-8") if (body and method in ("POST", "PUT", "PATCH")) else None
     req_body_bytes = len(data) if data else 0
 
+    host = urlparse(url).hostname
     _active_counter["counter"] = None
     t0 = time.perf_counter()
+    # Pin the connection to the vetted IPs so a rebind between check and connect
+    # can't redirect us to a private/metadata address.
+    _pin.value = {"host": host, "ips": vetted_ips}
     try:
         resp = _session().request(
             method, url, headers=req_headers, data=data, timeout=60,
@@ -145,6 +196,8 @@ def inspect(method: str, url: str, headers_raw: str, body: str,
         )
     except Exception as exc:
         return {"ok": False, "error": f"request_failed: {exc}", "url": url}
+    finally:
+        _pin.value = None
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
     counter = _active_counter["counter"]
