@@ -32,8 +32,8 @@ done
 
 step "4/4  Smoke: /run + /inspect"
 curl -sf -X POST "http://localhost:$FREEPORT/run" \
-  -H 'Content-Type: application/json' -d '{"turns":5}' \
-| python3 -c 'import sys,json;d=json.load(sys.stdin);t=d["summary"]["totals"];assert t["token_ratio"]>1,"token_ratio not >1";print("  /run OK  token_ratio",t["token_ratio"])'
+  -H 'Content-Type: application/json' -d '{"mode":"stateless","turns":5}' \
+| python3 -c 'import sys,json;d=json.load(sys.stdin);t=d["summary"]["totals"];assert d["mode"]=="stateless" and t["tokens"]>0,"run failed";print("  /run OK  mode",d["mode"],"tokens",t["tokens"])'
 
 # allow_private to reach the container'\''s own loopback; wire_recv>0 guards against
 # the makefile recv-counter regression.

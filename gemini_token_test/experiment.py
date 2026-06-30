@@ -1,55 +1,70 @@
-"""Run the same N-turn conversation two ways and collect per-turn metrics.
+"""Run an N-turn conversation in ONE mode and collect per-turn metrics.
 
-stateless: turn k sends the full history (turns 1..k)  -> O(N^2) tokens
-delta    : turn k sends only turn k                    -> O(N) tokens
+stateless: turn k sends the full history (steps 1..k)  -> O(N^2) tokens
+stateful : turn k sends only step k (client-side delta) -> O(N) tokens
 
-Only traffic/tokens are compared. Delta mode loses context by design.
+Request texts are fixed, loaded from a JSON request file, so the request is
+constant even when the response size varies. Only one mode runs per execution;
+compare modes by loading two executions from history.
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from gemini_client import call_gemini, ENDPOINT
 
-
-def _make_messages(turns: int, message_chars: int) -> list[str]:
-    """Synthetic, deterministic user messages of ~message_chars each."""
-    msgs = []
-    for k in range(1, turns + 1):
-        prefix = f"Turn {k}: "
-        filler = ("the quick brown fox jumps over the lazy dog. " * 100)
-        body = (prefix + filler)[:max(message_chars, len(prefix) + 1)]
-        msgs.append(body)
-    return msgs
+MODES = ("stateless", "stateful")
+REQUESTS_DIR = Path(__file__).resolve().parent / "requests"
 
 
-def _user_content(text: str) -> dict:
+def load_request_steps(name: str = "default") -> tuple[list[str], str]:
+    """Return (step_texts, source_label). Falls back to synthetic if missing."""
+    path = REQUESTS_DIR / f"{name}.json"
+    try:
+        data = json.loads(path.read_text())
+        steps = [s["text"] for s in data.get("steps", []) if s.get("text")]
+        if steps:
+            return steps, f"file:{name}.json"
+    except Exception:
+        pass
+    # Fallback: deterministic synthetic steps.
+    steps = [f"Turn {k}. " + ("the quick brown fox. " * 8) for k in range(1, 9)]
+    return steps, "synthetic"
+
+
+def _user(text: str) -> dict:
     return {"role": "user", "parts": [{"text": text}]}
 
 
-def run_experiment(turns: int, message_chars: int, model: str) -> dict:
-    messages = _make_messages(turns, message_chars)
+def run_experiment(mode: str, model: str, request_name: str = "default",
+                   turns: int | None = None) -> dict:
+    if mode not in MODES:
+        mode = "stateless"
+    steps, source = load_request_steps(request_name)
+    if turns:
+        steps = steps[:max(1, min(turns, len(steps)))]
+
     records = []
-
-    # Stateless: history grows each turn.
     history: list[dict] = []
-    for k, msg in enumerate(messages, start=1):
-        history.append(_user_content(msg))
-        res = call_gemini(model, list(history), mode="stateless", turn=k)
-        records.append(res.as_dict())
-        # Append a synthetic assistant turn so next request truly resends more.
-        history.append({"role": "model", "parts": [{"text": "(ack)"}]})
-
-    # Delta: only the current turn.
-    for k, msg in enumerate(messages, start=1):
-        res = call_gemini(model, [_user_content(msg)], mode="delta", turn=k)
+    for k, text in enumerate(steps, start=1):
+        if mode == "stateless":
+            history.append(_user(text))
+            contents = list(history)
+            history.append({"role": "model", "parts": [{"text": "(ack)"}]})
+        else:  # stateful = client-side delta: only this step
+            contents = [_user(text)]
+        res = call_gemini(model, contents, mode=mode, turn=k)
         records.append(res.as_dict())
 
     return {
         "params": {
-            "turns": turns,
-            "message_chars": message_chars,
+            "mode": mode,
+            "turns": len(steps),
             "model": model,
             "endpoint": ENDPOINT,
+            "request_source": source,
         },
         "records": records,
     }

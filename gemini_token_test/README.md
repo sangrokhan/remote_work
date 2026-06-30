@@ -1,8 +1,16 @@
 # Gemini API Traffic Experiment (Vertex AI + Cloud Run)
 
 Proves stateless full-history resend costs far more tokens + network traffic than
-delta-only sending. Calls run against **Vertex AI**; run history is written to
-**Firestore** (and local JSON). See [`PROJECT_GOAL.md`](PROJECT_GOAL.md) for why.
+stateful (new-turn-only) sending. Calls run against **Vertex AI**; each execution
+is written to **Firestore** (and local JSON). See [`PROJECT_GOAL.md`](PROJECT_GOAL.md)
+for why.
+
+**Each execution runs ONE mode** (`stateless` or `stateful`), keyed by a unique
+`exec_id`. Request texts are fixed (loaded from `requests/default.json`). Compare
+two modes by running each, then picking both in the history **Compare** box —
+graphs are plotted from stored data by `exec_id`. If no history is found in
+Firestore, the viewer shows clearly-marked **DUMMY** data. Full design:
+[`docs/superpowers/specs/2026-06-30-mode-toggle-history-graph-design.md`](docs/superpowers/specs/2026-06-30-mode-toggle-history-graph-design.md).
 
 ## Auth model (important)
 

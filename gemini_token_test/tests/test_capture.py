@@ -18,13 +18,16 @@ class TestCapture(unittest.TestCase):
         self.assertEqual(capture._filter_expr([]), "tcp port 443")
 
     def test_safe_name_accepts_valid(self):
-        # Real generated form: timestamp + 16-hex token.
-        good = "capture_2026-06-29T00-00-00_0123456789abcdef.pcap"
+        # Real generated form: mode + timestamp + 16-hex token.
+        good = "capture_stateless_2026-06-29T00-00-00_0123456789abcdef.pcap"
         self.assertIsNotNone(capture._SAFE_NAME.match(good))
+        self.assertIsNotNone(capture._SAFE_NAME.match(
+            "capture_stateful_2026-06-29T00-00-00_0123456789abcdef.pcap"))
 
-    def test_safe_name_rejects_untokened(self):
-        # Old predictable form (no token) must no longer validate.
-        self.assertIsNone(capture._SAFE_NAME.match("capture_2026-06-29T00-00-00.pcap"))
+    def test_safe_name_rejects_modeless(self):
+        # Old form without the mode segment must no longer validate.
+        self.assertIsNone(capture._SAFE_NAME.match(
+            "capture_2026-06-29T00-00-00_0123456789abcdef.pcap"))
 
     def test_safe_path_rejects_traversal(self):
         for bad in ["../etc/passwd", "capture_x.pcap/../y", "run.json",

@@ -27,7 +27,7 @@ from gemini_client import _vertex_host, LOCATION  # endpoint host for the filter
 PCAP_DIR = Path(os.environ.get("PCAP_DIR", "data/pcaps"))
 # Filename = timestamp + a high-entropy token so concurrent runs never collide
 # and download URLs are unguessable across requests.
-_SAFE_NAME = re.compile(r"^capture_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
+_SAFE_NAME = re.compile(r"^capture_(stateless|stateful)_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
 
 
 def tcpdump_path() -> str | None:
@@ -72,13 +72,16 @@ def safe_pcap_path(name: str) -> Path | None:
 class Capture:
     """Context manager: start tcpdump on enter, stop + finalize on exit."""
 
-    def __init__(self, timestamp: str, interface: str | None = None):
+    def __init__(self, timestamp: str, mode: str = "stateless",
+                 interface: str | None = None):
         self.timestamp = timestamp
+        self.mode = mode if mode in ("stateless", "stateful") else "stateless"
         self.interface = interface or os.environ.get("PCAP_IFACE", "any")
         self.host = _vertex_host()
         self.ips: list[str] = []
         token = secrets.token_hex(8)  # 64-bit: unguessable + collision-proof
-        self.path = PCAP_DIR / f"capture_{timestamp.replace(':', '-')}_{token}.pcap"
+        ts = timestamp.replace(":", "-")
+        self.path = PCAP_DIR / f"capture_{self.mode}_{ts}_{token}.pcap"
         self.proc: subprocess.Popen | None = None
         self.error = ""
 

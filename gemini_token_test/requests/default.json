@@ -1,0 +1,14 @@
+{
+  "name": "default",
+  "description": "Fixed per-step request texts. The request is constant; only the response size varies. stateless resends steps 1..k each turn, stateful sends only step k.",
+  "steps": [
+    {"text": "Turn 1. Summarize the benefits of unit testing in software engineering."},
+    {"text": "Turn 2. Now explain the difference between mocks and stubs."},
+    {"text": "Turn 3. Give an example of a flaky test and how to fix it."},
+    {"text": "Turn 4. What is test-driven development and its red-green-refactor loop?"},
+    {"text": "Turn 5. How do you measure code coverage and what are its limits?"},
+    {"text": "Turn 6. Explain contract testing between services."},
+    {"text": "Turn 7. When should you prefer integration tests over unit tests?"},
+    {"text": "Turn 8. Summarize everything discussed so far in three bullet points."}
+  ]
+}
