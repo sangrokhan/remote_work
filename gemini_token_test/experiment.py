@@ -23,19 +23,26 @@ REQUESTS_DIR = Path(__file__).resolve().parent / "requests"
 CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "1800"))
 
 
-def load_request_steps(name: str = "default") -> tuple[list[str], str]:
-    """Return (step_texts, source_label). Falls back to synthetic if missing."""
+def load_request(name: str = "default") -> tuple[str, list[str], str]:
+    """Return (system_prompt, step_texts, source_label).
+
+    The system prompt is a large fixed prefix (persona + tool descriptions) that
+    is reused every turn — ideal for caching (>=2048 tokens). Falls back to
+    synthetic if the file is missing.
+    """
     path = REQUESTS_DIR / f"{name}.json"
     try:
         data = json.loads(path.read_text())
         steps = [s["text"] for s in data.get("steps", []) if s.get("text")]
+        system = data.get("system", "")
+        if isinstance(system, list):
+            system = "\n\n".join(system)
         if steps:
-            return steps, f"file:{name}.json"
+            return system, steps, f"file:{name}.json"
     except Exception:
         pass
-    # Fallback: deterministic synthetic steps.
     steps = [f"Turn {k}. " + ("the quick brown fox. " * 8) for k in range(1, 9)]
-    return steps, "synthetic"
+    return "", steps, "synthetic"
 
 
 def _user(text: str) -> dict:
@@ -46,12 +53,13 @@ def run_experiment(mode: str, model: str, request_name: str = "default",
                    turns: int | None = None) -> dict:
     if mode not in MODES:
         mode = "stateless"
-    steps, source = load_request_steps(request_name)
+    system, steps, source = load_request(request_name)
     if turns:
         steps = steps[:max(1, min(turns, len(steps)))]
 
     records = []
-    history: list[dict] = []
+    # stateless carries the big system prompt every turn; stateful (delta) does not.
+    history: list[dict] = [_user(system)] if system else []
     for k, text in enumerate(steps, start=1):
         if mode == "stateless":
             history.append(_user(text))
@@ -82,14 +90,17 @@ def run_three_stage(model: str, request_name: str = "default",
                     turns: int | None = None) -> dict:
     """Stage 1 stateless scenario -> Stage 2 cumulative caches -> Stage 3 stateful
     replay (cache + question only). Returns one combined document."""
-    steps, source = load_request_steps(request_name)
+    system, steps, source = load_request(request_name)
     if turns:
         steps = steps[:max(1, min(turns, len(steps)))]
     n = len(steps)
 
     # --- Stage 1: stateless scenario, capture every request + response ---------
+    # The big system prompt sits at history[0] and is resent every stateless turn;
+    # it becomes part of every cache (off=1 accounts for it in the indices below).
     scenario, stateless_records = [], []
-    history: list[dict] = []
+    off = 1 if system else 0
+    history: list[dict] = [_user(system)] if system else []
     for k, q in enumerate(steps, start=1):
         history.append(_user(q))
         res = call_gemini(model, list(history), mode="stateless", turn=k)
@@ -105,7 +116,7 @@ def run_three_stage(model: str, request_name: str = "default",
     # --- Stage 2: cumulative caches. cache_k = history[:2k] (k Q&A pairs) -------
     cache_set = []
     for k in range(1, n + 1):
-        c = create_cache(model, history[:2 * k], CACHE_TTL_SECONDS)
+        c = create_cache(model, history[:off + 2 * k], CACHE_TTL_SECONDS)
         cache_set.append({
             "k": k, "cache_id": c["name"], "cached_tokens": c["cached_tokens"],
             "skipped": c["name"] is None, "error": c["error"],
@@ -120,7 +131,7 @@ def run_three_stage(model: str, request_name: str = "default",
         if cache_id:
             contents = [_user(q)]                       # prefix is server-side
         else:
-            contents = history[:2 * (k - 1)] + [_user(q)]  # no cache yet -> send it
+            contents = history[:off + 2 * (k - 1)] + [_user(q)]  # no cache -> send it
         res = call_gemini(model, contents, mode="stateful", turn=k,
                           cached_content=cache_id, cached_tokens_hint=hint)
         rec = res.as_dict()
