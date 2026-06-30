@@ -1,6 +1,12 @@
 services:
   gemini-traffic:
-    build: .
+    build:
+      context: .
+      # Mirror overrides (empty = upstream Docker Hub / PyPI).
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-python:3.12-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
     ports:
       - "8080:8080"
     # Needed for the optional packet-capture toggle (tcpdump raw sockets).

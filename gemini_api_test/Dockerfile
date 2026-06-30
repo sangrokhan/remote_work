@@ -1,6 +1,17 @@
-FROM python:3.12-slim
+# Base image — override for a registry mirror, e.g.
+#   --build-arg BASE_IMAGE=registry.example.com/python:3.12-slim
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
+
+# pip index mirror — override for an internal/regional PyPI, e.g.
+#   --build-arg PIP_INDEX_URL=https://mirror.example.com/pypi/simple
+#   --build-arg PIP_TRUSTED_HOST=mirror.example.com
+ARG PIP_INDEX_URL=
+ARG PIP_TRUSTED_HOST=
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
 
 # tcpdump for optional packet capture (needs --cap-add=NET_RAW at run time;
 # not available on Cloud Run — capture auto-disables there).
