@@ -68,12 +68,18 @@ jobs:
           echo "sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
       - name: Build image
-        working-directory: gemini_token_test
         run: |
+          # Find the build context: works whether the checkout root is the
+          # monorepo (Dockerfile under gemini_token_test/) or the project itself
+          # (Dockerfile at the root).
+          if [ -f gemini_token_test/Dockerfile ]; then CTX=gemini_token_test;
+          elif [ -f Dockerfile ]; then CTX=.;
+          else echo "Dockerfile not found"; ls -la; exit 1; fi
+          echo "Build context: $CTX"
           docker build \
             -t "${{ steps.img.outputs.base }}:${{ steps.img.outputs.sha }}" \
             -t "${{ steps.img.outputs.base }}:latest" \
-            .
+            "$CTX"
 
       - name: Tag extra (optional)
         if: ${{ github.event.inputs.image_tag != '' }}
