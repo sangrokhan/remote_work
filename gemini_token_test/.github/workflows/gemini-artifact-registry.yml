@@ -1,10 +1,10 @@
-# Build the gemini_api_test image and push it to GCP Artifact Registry.
+# Build the gemini_token_test image and push it to GCP Artifact Registry.
 #
 # ACTIVATION: GitHub only runs workflows from the REPO ROOT `.github/workflows/`.
 # This copy lives inside the project dir so it can be committed without the
 # `workflow` OAuth scope. To activate, move it to the repo root:
 #     mkdir -p .github/workflows
-#     git mv gemini_api_test/.github/workflows/gemini-artifact-registry.yml \
+#     git mv gemini_token_test/.github/workflows/gemini-artifact-registry.yml \
 #            .github/workflows/
 # (pushing that move requires a token with the `workflow` scope).
 #
@@ -68,7 +68,7 @@ jobs:
           echo "sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
       - name: Build image
-        working-directory: gemini_api_test
+        working-directory: gemini_token_test
         run: |
           docker build \
             -t "${{ steps.img.outputs.base }}:${{ steps.img.outputs.sha }}" \

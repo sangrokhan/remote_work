@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pre-merge gate: unit tests + docker build + mock-container smoke.
-# Run from gemini_api_test/:  ./preflight.sh   (or: make preflight)
+# Run from gemini_token_test/:  ./preflight.sh   (or: make preflight)
 # Exits non-zero on the first failure. No GCP creds / quota needed (mock mode).
 set -euo pipefail
 cd "$(dirname "$0")"

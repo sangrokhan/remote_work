@@ -46,7 +46,7 @@ modes in separate time windows and compare against the billing page.)
 ## Architecture
 
 ```
-gemini_api_test/
+gemini_token_test/
 ├── app.py                  Flask: routes, serves UI, triggers experiment
 ├── experiment.py           runs the same conversation in both modes, builds records
 ├── gemini_client.py        Gemini call + socket byte counter + usageMetadata capture
