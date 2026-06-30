@@ -27,12 +27,15 @@ function lineChart(ctx, title, labels, statelessData, deltaData, yLabel) {
   });
 }
 
-function renderSummary(s) {
+function renderSummary(s, mock) {
   const t = s.totals;
   const el = document.getElementById("summary");
   el.hidden = false;
+  const mockBadge = mock
+    ? `<p class="badge mock">⚠ MOCK RESULT — synthetic data, no real traffic/cost</p>` : "";
   el.innerHTML = `
     <h2>Result</h2>
+    ${mockBadge}
     <p>Stateless used <span class="big">${t.stateless_tokens.toLocaleString()}</span> tokens
        vs delta <span class="ok">${t.delta_tokens.toLocaleString()}</span> tokens.</p>
     <p><strong>Token ratio:</strong> ${t.token_ratio}× &nbsp;|&nbsp;
@@ -77,7 +80,7 @@ async function start() {
     if (!resp.ok) { status.textContent = "Error: " + (data.error || resp.status); return; }
 
     const s = data.summary;
-    renderSummary(s);
+    renderSummary(s, data.mock);
 
     if (tokenChart) tokenChart.destroy();
     if (byteChart) byteChart.destroy();
@@ -97,7 +100,7 @@ async function start() {
     ])));
 
     const s2 = data.saved_to || {};
-    let msg = `Done. JSON: ${s2.json || "-"} | Firestore: ${s2.firestore || "off"}`;
+    let msg = `${data.mock ? "[MOCK] " : ""}Done. JSON: ${s2.json || "-"} | Firestore: ${s2.firestore || "off"}`;
     const c = data.capture;
     if (c) {
       if (c.ok && c.download) {
