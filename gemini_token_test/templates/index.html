@@ -10,7 +10,7 @@
 <body>
   <header>
     <h1>Gemini API Traffic Experiment</h1>
-    <p class="sub">Vertex AI · stateless full-history resend vs delta-only — token &amp; wire-byte cost</p>
+    <p class="sub">Vertex AI · run one mode per execution (stateless = full resend, stateful = new turn only) · compare via history</p>
     {% if mock %}
       <p class="badge mock">MOCK MODE (no quota used)</p>
     {% elif ready %}
@@ -23,8 +23,12 @@
   </header>
 
   <section class="controls">
+    <label>Mode
+      <select id="mode">
+        {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+      </select>
+    </label>
     <label>Turns <input id="turns" type="number" value="1" min="1" max="100" /></label>
-    <label>Message chars <input id="chars" type="number" value="500" min="1" /></label>
     <label>Model
       <select id="model"><option value="{{ default_model }}">{{ default_model }}</option></select>
     </label>
@@ -54,14 +58,27 @@
     <h2>Per-turn detail</h2>
     <table id="detail"><thead><tr>
       <th>Mode</th><th>Turn</th><th>Prompt tok</th><th>Resp tok</th>
-      <th>Total tok</th><th>Wire sent</th><th>Wire recv</th><th>Error</th>
+      <th>Total tok</th><th>Wire bytes</th><th>Error</th>
     </tr></thead><tbody></tbody></table>
   </section>
 
   <section>
-    <h2>Run history (background collection)</h2>
-    <button id="refresh">Refresh history</button>
-    <pre id="history"></pre>
+    <h2>Execution history (Firestore / JSON)</h2>
+    <p class="sub" id="histSource"></p>
+    <div class="insp-row">
+      <button id="refresh" type="button">⟳ Refresh</button>
+      <span class="sub">Compare:</span>
+      <select id="cmpA"><option value="">— A —</option></select>
+      <select id="cmpB"><option value="">— B —</option></select>
+      <button id="compare" type="button">Plot A vs B</button>
+    </div>
+    <table id="histTable"><thead><tr>
+      <th>exec_id</th><th>mode</th><th>time</th><th>tokens</th><th>wire</th><th>flags</th><th></th>
+    </tr></thead><tbody></tbody></table>
+    <h3>Selected execution log</h3>
+    <p class="sub" id="histDetailMeta"></p>
+    <a id="histDownload" class="pcap-link" hidden download>⬇ download JSON</a>
+    <pre id="histDetail" hidden></pre>
   </section>
 
   <section class="inspector">

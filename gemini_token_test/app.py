@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import os
+import secrets
 from datetime import datetime, timezone
 
 from flask import Flask, abort, jsonify, render_template, request, send_file
 
 import capture as pcap
 import inspector
-from experiment import run_experiment
+from experiment import run_experiment, MODES
 from gemini_client import (
     ready, is_mock, ENDPOINT, PROJECT, LOCATION, DEFAULT_MODEL, list_models,
 )
 from metrics import summarize
-from store import save_run, list_runs, aggregate, firestore_active
+from store import save_run, list_runs, get_run, firestore_active
 
 app = Flask(__name__)
 
@@ -35,6 +36,7 @@ def index():
         capture_ok=cap_ok,
         capture_reason=cap_reason,
         default_model=DEFAULT_MODEL,
+        modes=MODES,
     )
 
 
@@ -50,35 +52,39 @@ def run():
         return jsonify({"error": reason}), 400
 
     data = request.get_json(force=True, silent=True) or {}
+    mode = data.get("mode", "stateless")
+    if mode not in MODES:
+        mode = "stateless"
     # Default 1 turn: a single-turn smoke query for initial testing. Raise it in
-    # the UI to actually compare stateless vs delta.
+    # the UI to send more steps.
     turns = max(1, min(int(data.get("turns", 1)), 100))
-    message_chars = int(data.get("message_chars", 500))
     model = (data.get("model") or DEFAULT_MODEL).strip()
     want_capture = bool(data.get("capture", False))
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
 
     capture_info = None
     if want_capture:
         cap_ok, cap_reason = pcap.available()
         if not cap_ok:
             capture_info = {"ok": False, "error": cap_reason}
-            experiment = run_experiment(turns, message_chars, model)
+            experiment = run_experiment(mode, model, turns=turns)
         else:
-            with pcap.Capture(timestamp) as cap:
-                experiment = run_experiment(turns, message_chars, model)
+            with pcap.Capture(timestamp, mode) as cap:
+                experiment = run_experiment(mode, model, turns=turns)
             capture_info = cap.result()
     else:
-        experiment = run_experiment(turns, message_chars, model)
+        experiment = run_experiment(mode, model, turns=turns)
 
     # Mark synthetic runs so the result (and saved history) can't be mistaken
     # for real traffic.
     experiment["params"]["mock"] = is_mock()
     summary = summarize(experiment)
-    saved = save_run(timestamp, experiment, summary)
+    saved = save_run(exec_id, timestamp, experiment, summary)
 
-    resp = {"timestamp": timestamp, "saved_to": saved, "mock": is_mock(),
+    resp = {"exec_id": exec_id, "timestamp": timestamp, "saved_to": saved,
+            "mock": is_mock(), "mode": mode,
             "params": experiment["params"], "summary": summary}
     if capture_info is not None:
         if capture_info.get("ok") and capture_info.get("file"):
@@ -131,7 +137,28 @@ def download_transcript(name):
 
 @app.route("/history")
 def history():
-    return jsonify({"runs": list_runs(), "aggregate": aggregate()})
+    return jsonify(list_runs())
+
+
+@app.route("/history/<exec_id>")
+def history_one(exec_id):
+    doc = get_run(exec_id)
+    if doc is None:
+        abort(404)
+    return jsonify(doc)
+
+
+@app.route("/download/run/<exec_id>")
+def download_run(exec_id):
+    doc = get_run(exec_id)
+    if doc is None:
+        abort(404)
+    from flask import Response
+    import json as _json
+    return Response(
+        _json.dumps(doc, indent=2), mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{exec_id}.json"'},
+    )
 
 
 if __name__ == "__main__":

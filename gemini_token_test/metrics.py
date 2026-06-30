@@ -1,6 +1,7 @@
-"""Pure metric math: cumulative series, totals, ratio, cost estimate.
+"""Pure metric math for a single-mode run: cumulative series, totals, cost.
 
-No network. Fully unit-testable.
+No network. Fully unit-testable. Cross-mode comparison is done by loading two
+executions from history and overlaying their series (not here).
 """
 
 from __future__ import annotations
@@ -16,9 +17,8 @@ def _cumulative(values: list[float]) -> list[float]:
     return out
 
 
-def _mode_series(records: list[dict], mode: str) -> dict:
-    rows = [r for r in records if r["mode"] == mode]
-    rows.sort(key=lambda r: r["turn"])
+def _series(records: list[dict]) -> dict:
+    rows = sorted(records, key=lambda r: r["turn"])
     tokens = [r["total_tokens"] for r in rows]
     prompt = [r["prompt_tokens"] for r in rows]
     wire = [r["wire_sent"] + r["wire_recv"] for r in rows]
@@ -37,34 +37,19 @@ def _mode_series(records: list[dict], mode: str) -> dict:
 
 
 def summarize(experiment: dict) -> dict:
-    records = experiment["records"]
-    stateless = _mode_series(records, "stateless")
-    delta = _mode_series(records, "delta")
-
-    def total(series, key):
-        return series[key][-1] if series[key] else 0
-
-    sl_tokens = total(stateless, "cum_tokens")
-    dl_tokens = total(delta, "cum_tokens")
-    sl_wire = total(stateless, "cum_wire_bytes")
-    dl_wire = total(delta, "cum_wire_bytes")
-
-    def ratio(a, b):
-        return round(a / b, 2) if b else None
-
-    summary = {
-        "stateless": stateless,
-        "delta": delta,
+    mode = experiment["params"].get("mode", "stateless")
+    series = _series(experiment["records"])
+    last = lambda k: series[k][-1] if series[k] else 0
+    tokens = last("cum_tokens")
+    wire = last("cum_wire_bytes")
+    return {
+        "mode": mode,
+        "series": series,
         "totals": {
-            "stateless_tokens": sl_tokens,
-            "delta_tokens": dl_tokens,
-            "stateless_wire_bytes": sl_wire,
-            "delta_wire_bytes": dl_wire,
-            "token_ratio": ratio(sl_tokens, dl_tokens),
-            "wire_ratio": ratio(sl_wire, dl_wire),
-            "stateless_cost_usd": round(sl_tokens * PRICE_PER_TOKEN, 6),
-            "delta_cost_usd": round(dl_tokens * PRICE_PER_TOKEN, 6),
+            "mode": mode,
+            "tokens": tokens,
+            "wire_bytes": wire,
+            "cost_usd": round(tokens * PRICE_PER_TOKEN, 6),
             "price_per_token": PRICE_PER_TOKEN,
         },
     }
-    return summary

@@ -1,10 +1,10 @@
-"""Persist runs to BOTH local JSON and Firestore (dual-write).
+"""Persist executions to BOTH local JSON and Firestore, keyed by exec_id.
 
-- Always writes a local JSON file under data/runs/.
-- Also writes a Firestore document when Firestore is available (lib installed +
-  ADC creds + project). On Cloud Run this uses the service account automatically.
-- Reads/aggregate prefer Firestore when available (cluster-wide, survives instance
-  recycle); otherwise fall back to the local JSON files.
+- Always writes a local JSON file under data/runs/<exec_id>.json.
+- Also writes a Firestore document (doc id = exec_id) when Firestore is available.
+- Reads prefer Firestore (cluster-wide, survives Cloud Run recycles), else local
+  JSON. If neither has any execution, a clearly-marked DUMMY dataset is returned so
+  the UI/graph still has something to show.
 
 Firestore uses the same ADC auth as Vertex — no extra key needed.
 """
@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("GEMINI_DATA_DIR", "data/runs"))
+# exec_id format: exec_<ts>_<8hex>  or  dummy_<word>. Guards path traversal.
+_SAFE_EXEC = re.compile(r"^(exec_[0-9T\-]+_[0-9a-f]{8}|dummy_[a-z]+)$")
 COLLECTION = os.environ.get("FIRESTORE_COLLECTION", "gemini_runs")
 DATABASE = os.environ.get("FIRESTORE_DATABASE", "(default)")
 
@@ -28,7 +31,6 @@ def _ensure_dir() -> None:
 
 
 def _firestore():
-    """Return a Firestore client, or None if unavailable. Cached."""
     global _fs_client, _fs_checked
     if _fs_checked:
         return _fs_client
@@ -49,37 +51,74 @@ def firestore_active() -> bool:
     return _firestore() is not None
 
 
-def _doc_id(timestamp: str) -> str:
-    return f"run_{timestamp.replace(':', '-')}"
+def _list_item(doc: dict) -> dict:
+    return {
+        "exec_id": doc.get("exec_id"),
+        "timestamp": doc.get("timestamp"),
+        "mode": doc.get("mode"),
+        "mock": doc.get("mock", False),
+        "dummy": doc.get("dummy", False),
+        "totals": doc.get("summary", {}).get("totals", {}),
+    }
 
 
-def save_run(timestamp: str, experiment: dict, summary: dict) -> dict:
-    """Write run to local JSON and (best-effort) Firestore. Returns where it went."""
-    run = {"timestamp": timestamp, "params": experiment["params"], "summary": summary}
-    result = {"json": None, "firestore": None}
+def save_run(exec_id: str, timestamp: str, experiment: dict, summary: dict) -> dict:
+    """Write one execution (doc id = exec_id) to JSON and Firestore."""
+    doc = {
+        "exec_id": exec_id,
+        "timestamp": timestamp,
+        "mode": experiment["params"].get("mode"),
+        "mock": experiment["params"].get("mock", False),
+        "dummy": False,
+        "params": experiment["params"],
+        "summary": summary,
+    }
+    result = {"json": None, "firestore": None, "exec_id": exec_id}
 
-    # Local JSON (always).
     _ensure_dir()
-    path = DATA_DIR / f"{_doc_id(timestamp)}.json"
-    path.write_text(json.dumps(run, indent=2))
+    path = DATA_DIR / f"{exec_id}.json"
+    path.write_text(json.dumps(doc, indent=2))
     result["json"] = str(path)
 
-    # Firestore (best-effort).
     fs = _firestore()
     if fs is not None:
         try:
-            doc = {
-                "timestamp": timestamp,
-                "params": run["params"],
-                "totals": summary["totals"],
-                "summary": summary,
-            }
-            fs.collection(COLLECTION).document(_doc_id(timestamp)).set(doc)
-            result["firestore"] = f"{COLLECTION}/{_doc_id(timestamp)}"
+            fs.collection(COLLECTION).document(exec_id).set(doc)
+            result["firestore"] = f"{COLLECTION}/{exec_id}"
         except Exception as exc:
             result["firestore"] = f"error: {exc}"
-
     return result
+
+
+def _doc_from_firestore(exec_id: str) -> dict | None:
+    fs = _firestore()
+    if fs is None:
+        return None
+    try:
+        snap = fs.collection(COLLECTION).document(exec_id).get()
+        return snap.to_dict() if snap.exists else None
+    except Exception:
+        return None
+
+
+def _doc_from_json(exec_id: str) -> dict | None:
+    p = DATA_DIR / f"{exec_id}.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return None
+
+
+def get_run(exec_id: str) -> dict | None:
+    """Full execution document (incl. summary.series) for the viewer/graph."""
+    if not _SAFE_EXEC.match(exec_id or ""):
+        return None
+    for d in DUMMY_RUNS():
+        if d["exec_id"] == exec_id:
+            return d
+    return _doc_from_firestore(exec_id) or _doc_from_json(exec_id)
 
 
 def _runs_from_firestore() -> list[dict] | None:
@@ -87,17 +126,8 @@ def _runs_from_firestore() -> list[dict] | None:
     if fs is None:
         return None
     try:
-        runs = []
-        for snap in fs.collection(COLLECTION).stream():
-            d = snap.to_dict() or {}
-            runs.append(
-                {
-                    "timestamp": d.get("timestamp", snap.id),
-                    "params": d.get("params", {}),
-                    "totals": d.get("totals", {}),
-                }
-            )
-        runs.sort(key=lambda r: r["timestamp"])
+        runs = [_list_item(s.to_dict() or {}) for s in fs.collection(COLLECTION).stream()]
+        runs.sort(key=lambda r: r.get("timestamp") or "")
         return runs
     except Exception:
         return None
@@ -106,51 +136,66 @@ def _runs_from_firestore() -> list[dict] | None:
 def _runs_from_json() -> list[dict]:
     _ensure_dir()
     runs = []
-    for p in sorted(DATA_DIR.glob("run_*.json")):
+    for p in sorted(DATA_DIR.glob("*.json")):
         try:
-            data = json.loads(p.read_text())
-            runs.append(
-                {
-                    "timestamp": data["timestamp"],
-                    "params": data["params"],
-                    "totals": data["summary"]["totals"],
-                }
-            )
+            runs.append(_list_item(json.loads(p.read_text())))
         except Exception:
             continue
     return runs
 
 
-def list_runs() -> list[dict]:
-    """Prefer Firestore (cluster-wide); fall back to local JSON."""
+def list_runs() -> dict:
+    """Executions for the history viewer. Falls back to DUMMY when none found."""
     fs_runs = _runs_from_firestore()
-    return fs_runs if fs_runs is not None else _runs_from_json()
+    if fs_runs is not None:
+        source = "firestore"
+        runs = fs_runs
+    else:
+        source = "local_json"
+        runs = _runs_from_json()
+    if not runs:
+        return {"source": f"{source} (empty → dummy)", "dummy": True,
+                "runs": [_list_item(d) for d in DUMMY_RUNS()]}
+    return {"source": source, "dummy": False, "runs": runs}
 
 
-def aggregate() -> dict:
-    """Total tokens + traffic across all runs, grouped by endpoint."""
-    runs = list_runs()
-    by_endpoint: dict[str, dict] = {}
-    for r in runs:
-        ep = r["params"].get("endpoint", "unknown")
-        agg = by_endpoint.setdefault(
-            ep,
-            {
-                "runs": 0,
-                "stateless_tokens": 0,
-                "delta_tokens": 0,
-                "stateless_wire_bytes": 0,
-                "delta_wire_bytes": 0,
-            },
-        )
-        t = r["totals"]
-        agg["runs"] += 1
-        agg["stateless_tokens"] += t.get("stateless_tokens", 0)
-        agg["delta_tokens"] += t.get("delta_tokens", 0)
-        agg["stateless_wire_bytes"] += t.get("stateless_wire_bytes", 0)
-        agg["delta_wire_bytes"] += t.get("delta_wire_bytes", 0)
+# --- Dummy backup dataset ----------------------------------------------------
+def _dummy_series(growth):
+    turns = list(range(1, 9))
+    per = [growth(k) for k in turns]
+    wire = [v * 6 for v in per]
+    cum = []
+    acc = 0
+    for v in per:
+        acc += v
+        cum.append(acc)
+    cumw = []
+    acc = 0
+    for v in wire:
+        acc += v
+        cumw.append(acc)
+    return {"turns": turns, "per_turn_tokens": per, "per_turn_prompt_tokens": per,
+            "per_turn_wire_bytes": wire, "cum_tokens": cum, "cum_prompt_tokens": cum,
+            "cum_wire_bytes": cumw, "cum_payload_bytes": cumw, "errors": []}
+
+
+def _dummy_doc(exec_id, mode, growth):
+    series = _dummy_series(growth)
     return {
-        "total_runs": len(runs),
-        "source": "firestore" if firestore_active() else "local_json",
-        "by_endpoint": by_endpoint,
+        "exec_id": exec_id, "timestamp": "2000-01-01T00:00:00", "mode": mode,
+        "mock": False, "dummy": True,
+        "params": {"mode": mode, "turns": 8, "model": "dummy",
+                   "endpoint": "dummy", "request_source": "dummy"},
+        "summary": {"mode": mode, "series": series,
+                    "totals": {"mode": mode, "tokens": series["cum_tokens"][-1],
+                               "wire_bytes": series["cum_wire_bytes"][-1],
+                               "cost_usd": 0.0, "price_per_token": 0.0}},
     }
+
+
+def DUMMY_RUNS() -> list[dict]:
+    # stateless grows ~quadratically, stateful ~flat.
+    return [
+        _dummy_doc("dummy_stateless", "stateless", lambda k: 100 * k),
+        _dummy_doc("dummy_stateful", "stateful", lambda k: 100),
+    ]
