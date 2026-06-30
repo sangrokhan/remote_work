@@ -44,13 +44,15 @@ capture, inspector). `.env` is gitignored; compose auto-loads it.
 
 ### Build behind a mirror (offline / corporate registry)
 
-Override the base image registry and pip index via build args (defaults = Docker
-Hub + pypi.org). With compose, set them in `.env`:
+Override the base image registry, pip index, and Debian apt server via build args
+(defaults = Docker Hub + pypi.org + deb.debian.org). With compose, set them in
+`.env`:
 
 ```bash
 BASE_IMAGE=registry.example.com/python:3.12-slim
 PIP_INDEX_URL=https://mirror.example.com/pypi/simple
 PIP_TRUSTED_HOST=mirror.example.com
+APT_MIRROR=http://mirror.example.com          # scheme+host; replaces deb.debian.org
 ```
 
 Or with plain `docker build`:
@@ -60,6 +62,7 @@ docker build \
   --build-arg BASE_IMAGE=registry.example.com/python:3.12-slim \
   --build-arg PIP_INDEX_URL=https://mirror.example.com/pypi/simple \
   --build-arg PIP_TRUSTED_HOST=mirror.example.com \
+  --build-arg APT_MIRROR=http://mirror.example.com \
   -t gemini-traffic .
 ```
 
