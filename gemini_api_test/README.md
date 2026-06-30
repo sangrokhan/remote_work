@@ -112,6 +112,18 @@ Cloud Run injects `PORT` (8080); the app binds it via gunicorn. Firestore is in
 your project already, so history persists there (the local JSON copy is ephemeral
 on Cloud Run — that's expected).
 
+## Pre-merge gate
+
+Run before merging — exits non-zero on any failure:
+
+```bash
+make preflight        # or: ./preflight.sh
+```
+
+Steps: unit tests → docker build → start mock container → smoke `/run` and
+`/inspect` (the `/inspect` check asserts `wire_recv > 0`, guarding the response
+byte counter). No GCP creds / quota needed. `make test` runs unit tests only.
+
 ## Tests
 
 ```bash
