@@ -35,9 +35,12 @@ Open the page → set turns/message-size → **Start experiment** → charts + t
 ## Docker
 
 ```bash
-export GOOGLE_CLOUD_PROJECT=your-project   # or GEMINI_MOCK=1
-docker compose up --build                  # http://localhost:8080
+cp .env.example .env                       # fill in, or just set GEMINI_MOCK=1
+docker compose up --build                  # http://localhost:8080 (auto-loads .env)
 ```
+
+See [`.env.example`](.env.example) for all parameters (Vertex, Firestore,
+capture, inspector). `.env` is gitignored; compose auto-loads it.
 
 For non-mock local Docker, mount creds (uncomment the gcloud volume in
 `docker-compose.yml`, or set `GOOGLE_APPLICATION_CREDENTIALS`).
