@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from dataclasses import dataclass, asdict
 
 import requests
@@ -54,10 +55,18 @@ class CallResult:
     wire_recv: int = 0
     req_payload_bytes: int = 0
     resp_payload_bytes: int = 0
+    cached_tokens: int = 0
+    response_text: str = ""
     error: str = ""
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+
+# Cached input tokens are billed at 10% of normal for Gemini 2.5+.
+CACHED_DISCOUNT = 0.10
+# Vertex context caching needs >= ~2048 tokens; below this, skip caching.
+MIN_CACHE_TOKENS = int(os.environ.get("MIN_CACHE_TOKENS", "2048"))
 
 
 class _CountingReader:
@@ -225,43 +234,48 @@ def ready() -> tuple[bool, str]:
     return True, ""
 
 
-def _mock_call(mode: str, turn: int, contents: list) -> CallResult:
+def _text_tokens(contents: list) -> int:
+    text_len = sum(len(p.get("text", "")) for c in contents for p in c.get("parts", []))
+    return max(1, text_len // 4)
+
+
+def _mock_call(mode: str, turn: int, contents: list, cached_tokens: int) -> CallResult:
     body = json.dumps({"contents": contents})
     req_bytes = len(body.encode("utf-8"))
-    text_len = sum(
-        len(p.get("text", ""))
-        for c in contents
-        for p in c.get("parts", [])
-    )
-    prompt_tokens = max(1, text_len // 4)
+    prompt_tokens = _text_tokens(contents)  # only what the client actually sends
     resp_tokens = 64
-    resp_text = "x" * (resp_tokens * 4)
-    resp_body = json.dumps(
-        {
-            "candidates": [{"content": {"parts": [{"text": resp_text}]}}],
-            "usageMetadata": {
-                "promptTokenCount": prompt_tokens,
-                "candidatesTokenCount": resp_tokens,
-                "totalTokenCount": prompt_tokens + resp_tokens,
-            },
-        }
-    )
-    resp_bytes = len(resp_body.encode("utf-8"))
+    # Deterministic synthetic answer referencing the last question (for scenarios).
+    last_q = ""
+    for c in reversed(contents):
+        if c.get("role") == "user":
+            last_q = "".join(p.get("text", "") for p in c.get("parts", []))[:40]
+            break
+    resp_text = f"(mock answer to: {last_q}) " + ("lorem ipsum " * 20)
+    resp_bytes = len(resp_text.encode("utf-8")) + 120
     return CallResult(
         mode=mode, turn=turn,
         prompt_tokens=prompt_tokens, resp_tokens=resp_tokens,
-        total_tokens=prompt_tokens + resp_tokens,
+        total_tokens=prompt_tokens + resp_tokens + cached_tokens,
+        cached_tokens=cached_tokens, response_text=resp_text,
         wire_sent=req_bytes + 200, wire_recv=resp_bytes + 200,
         req_payload_bytes=req_bytes, resp_payload_bytes=resp_bytes,
     )
 
 
-def call_gemini(model: str, contents: list, mode: str, turn: int) -> CallResult:
-    """One Vertex generateContent call. Never raises; errors land in .error."""
+def call_gemini(model: str, contents: list, mode: str, turn: int,
+                cached_content: str | None = None,
+                cached_tokens_hint: int = 0) -> CallResult:
+    """One Vertex generateContent call, optionally with a cachedContent ref.
+
+    Never raises; errors land in .error. cached_tokens_hint is used only in mock
+    mode to simulate the cached prefix size.
+    """
     if is_mock():
-        return _mock_call(mode, turn, contents)
+        return _mock_call(mode, turn, contents, cached_tokens_hint if cached_content else 0)
 
     payload = {"contents": contents}
+    if cached_content:
+        payload["cachedContent"] = cached_content
     body = json.dumps(payload)
     req_payload_bytes = len(body.encode("utf-8"))
 
@@ -306,13 +320,67 @@ def call_gemini(model: str, contents: list, mode: str, turn: int) -> CallResult:
         usage = data.get("usageMetadata", {})
         result.prompt_tokens = int(usage.get("promptTokenCount", 0))
         result.resp_tokens = int(usage.get("candidatesTokenCount", 0))
+        result.cached_tokens = int(usage.get("cachedContentTokenCount", 0))
         result.total_tokens = int(
             usage.get("totalTokenCount", result.prompt_tokens + result.resp_tokens)
         )
+        cands = data.get("candidates", [])
+        if cands:
+            parts = cands[0].get("content", {}).get("parts", [])
+            result.response_text = "".join(p.get("text", "") for p in parts)
     except Exception as exc:
         result.error = f"parse_failed: {exc}"
 
     return result
+
+
+def _cache_base_url() -> str:
+    return (f"https://{_vertex_host()}/v1beta1/projects/{PROJECT}"
+            f"/locations/{LOCATION}/cachedContents")
+
+
+def create_cache(model: str, contents: list, ttl_seconds: int = 1800) -> dict:
+    """Create a Vertex cachedContent of `contents`. Returns
+    {name, cached_tokens, error}. Skips (name=None) if below the min token size.
+    Mock mode returns a synthetic cache.
+    """
+    approx = _text_tokens(contents)
+    if approx < MIN_CACHE_TOKENS:
+        return {"name": None, "cached_tokens": 0,
+                "error": f"below_min ({approx} < {MIN_CACHE_TOKENS} tokens)"}
+    if is_mock():
+        return {"name": f"projects/mock/locations/{LOCATION}/cachedContents/"
+                        f"mock_{secrets.token_hex(4)}",
+                "cached_tokens": approx, "error": ""}
+    try:
+        token = _bearer_token()
+        full_model = (f"projects/{PROJECT}/locations/{LOCATION}"
+                      f"/publishers/google/models/{model}")
+        body = json.dumps({"model": full_model, "contents": contents,
+                           "ttl": f"{ttl_seconds}s"})
+        resp = _session().post(_cache_base_url(), data=body, headers={
+            "Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+            timeout=120)
+        if resp.status_code not in (200, 201):
+            return {"name": None, "cached_tokens": 0,
+                    "error": f"http_{resp.status_code}: {resp.text[:200]}"}
+        data = resp.json()
+        tok = int(data.get("usageMetadata", {}).get("totalTokenCount", approx))
+        return {"name": data.get("name"), "cached_tokens": tok, "error": ""}
+    except Exception as exc:
+        return {"name": None, "cached_tokens": 0, "error": f"create_failed: {exc}"}
+
+
+def delete_cache(name: str) -> None:
+    """Best-effort delete of a cachedContent. No-op in mock / on error."""
+    if not name or is_mock() or name.startswith("projects/mock/"):
+        return
+    try:
+        token = _bearer_token()
+        _session().delete(f"https://{_vertex_host()}/v1beta1/{name}",
+                          headers={"Authorization": f"Bearer {token}"}, timeout=60)
+    except Exception:
+        pass
 
 
 # Curated fallback list (2026-06). gemini-2.0-* retired 2026-06-01; 2.5 GA until

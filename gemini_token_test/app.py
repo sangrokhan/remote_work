@@ -10,11 +10,13 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 
 import capture as pcap
 import inspector
-from experiment import run_experiment, MODES
+from experiment import run_experiment, run_three_stage, MODES
 from gemini_client import (
     ready, is_mock, ENDPOINT, PROJECT, LOCATION, DEFAULT_MODEL, list_models,
 )
-from metrics import summarize
+from metrics import summarize, summarize_three_stage
+
+THREE_STAGE = "caching-3stage"
 from store import save_run, list_runs, get_run, firestore_active
 
 app = Flask(__name__)
@@ -36,7 +38,7 @@ def index():
         capture_ok=cap_ok,
         capture_reason=cap_reason,
         default_model=DEFAULT_MODEL,
-        modes=MODES,
+        modes=(*MODES, THREE_STAGE),
     )
 
 
@@ -53,7 +55,7 @@ def run():
 
     data = request.get_json(force=True, silent=True) or {}
     mode = data.get("mode", "stateless")
-    if mode not in MODES:
+    if mode != THREE_STAGE and mode not in MODES:
         mode = "stateless"
     # Default 1 turn: a single-turn smoke query for initial testing. Raise it in
     # the UI to send more steps.
@@ -63,6 +65,16 @@ def run():
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
+
+    # 3-stage caching pipeline: stateless scenario -> caches -> stateful replay.
+    if mode == THREE_STAGE:
+        experiment = run_three_stage(model, turns=turns)
+        experiment["params"]["mock"] = is_mock()
+        summary = summarize_three_stage(experiment)
+        saved = save_run(exec_id, timestamp, experiment, summary)
+        return jsonify({"exec_id": exec_id, "timestamp": timestamp,
+                        "saved_to": saved, "mock": is_mock(), "mode": mode,
+                        "params": experiment["params"], "summary": summary})
 
     capture_info = None
     if want_capture:
