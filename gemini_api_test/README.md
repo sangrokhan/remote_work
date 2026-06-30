@@ -42,6 +42,27 @@ docker compose up --build                  # http://localhost:8080 (auto-loads .
 See [`.env.example`](.env.example) for all parameters (Vertex, Firestore,
 capture, inspector). `.env` is gitignored; compose auto-loads it.
 
+### Build behind a mirror (offline / corporate registry)
+
+Override the base image registry and pip index via build args (defaults = Docker
+Hub + pypi.org). With compose, set them in `.env`:
+
+```bash
+BASE_IMAGE=registry.example.com/python:3.12-slim
+PIP_INDEX_URL=https://mirror.example.com/pypi/simple
+PIP_TRUSTED_HOST=mirror.example.com
+```
+
+Or with plain `docker build`:
+
+```bash
+docker build \
+  --build-arg BASE_IMAGE=registry.example.com/python:3.12-slim \
+  --build-arg PIP_INDEX_URL=https://mirror.example.com/pypi/simple \
+  --build-arg PIP_TRUSTED_HOST=mirror.example.com \
+  -t gemini-traffic .
+```
+
 For non-mock local Docker, mount creds (uncomment the gcloud volume in
 `docker-compose.yml`, or set `GOOGLE_APPLICATION_CREDENTIALS`).
 
