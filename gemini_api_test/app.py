@@ -10,7 +10,9 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 import capture as pcap
 import inspector
 from experiment import run_experiment
-from gemini_client import ready, is_mock, ENDPOINT, PROJECT, LOCATION
+from gemini_client import (
+    ready, is_mock, ENDPOINT, PROJECT, LOCATION, DEFAULT_MODEL, list_models,
+)
 from metrics import summarize
 from store import save_run, list_runs, aggregate, firestore_active
 
@@ -32,7 +34,13 @@ def index():
         firestore=firestore_active(),
         capture_ok=cap_ok,
         capture_reason=cap_reason,
+        default_model=DEFAULT_MODEL,
     )
+
+
+@app.route("/models")
+def models():
+    return jsonify(list_models())
 
 
 @app.route("/run", methods=["POST"])
@@ -42,9 +50,11 @@ def run():
         return jsonify({"error": reason}), 400
 
     data = request.get_json(force=True, silent=True) or {}
-    turns = max(1, min(int(data.get("turns", 10)), 100))
+    # Default 1 turn: a single-turn smoke query for initial testing. Raise it in
+    # the UI to actually compare stateless vs delta.
+    turns = max(1, min(int(data.get("turns", 1)), 100))
     message_chars = int(data.get("message_chars", 500))
-    model = data.get("model", "gemini-2.0-flash")
+    model = (data.get("model") or DEFAULT_MODEL).strip()
     want_capture = bool(data.get("capture", False))
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")

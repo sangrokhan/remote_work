@@ -313,3 +313,49 @@ def call_gemini(model: str, contents: list, mode: str, turn: int) -> CallResult:
         result.error = f"parse_failed: {exc}"
 
     return result
+
+
+# Curated fallback list (2026-06). gemini-2.0-* retired 2026-06-01; 2.5 GA until
+# 2026-10-16. Cheapest GA model first -> used as the default.
+DEFAULT_MODEL = "gemini-2.5-flash-lite"
+STATIC_MODELS = [
+    {"id": "gemini-2.5-flash-lite", "label": "gemini-2.5-flash-lite (GA · cheapest)", "status": "GA"},
+    {"id": "gemini-2.5-flash", "label": "gemini-2.5-flash (GA)", "status": "GA"},
+    {"id": "gemini-2.5-pro", "label": "gemini-2.5-pro (GA)", "status": "GA"},
+    {"id": "gemini-3.1-flash-lite", "label": "gemini-3.1-flash-lite (preview)", "status": "preview"},
+    {"id": "gemini-3.1-pro", "label": "gemini-3.1-pro (preview)", "status": "preview"},
+]
+
+
+def list_models() -> dict:
+    """Available Gemini models for the dropdown.
+
+    Live (real project + creds): query Vertex publisher models. Mock / no creds /
+    any failure: the curated STATIC_MODELS fallback. Always returns a usable list.
+    Returns {source, default, models:[{id,label,status}]}.
+    """
+    fallback = {"source": "static", "default": DEFAULT_MODEL, "models": STATIC_MODELS}
+    if is_mock() or not PROJECT:
+        return fallback
+    try:
+        token = _bearer_token()
+        url = f"https://{_vertex_host()}/v1beta1/publishers/google/models"
+        resp = _session().get(
+            url, headers={"Authorization": f"Bearer {token}"},
+            params={"pageSize": 200}, timeout=30,
+        )
+        if resp.status_code != 200:
+            return {**fallback, "source": f"static-fallback (http_{resp.status_code})"}
+        models = []
+        for m in resp.json().get("publisherModels", []):
+            mid = m.get("name", "").split("/")[-1]
+            if mid.startswith("gemini"):
+                stage = m.get("launchStage", "").replace("GA", "GA").replace("_", " ").lower()
+                models.append({"id": mid, "label": mid, "status": stage})
+        if not models:
+            return {**fallback, "source": "static-fallback (empty)"}
+        models.sort(key=lambda x: x["id"])
+        default = DEFAULT_MODEL if any(m["id"] == DEFAULT_MODEL for m in models) else models[0]["id"]
+        return {"source": "vertex", "default": default, "models": models}
+    except Exception as exc:
+        return {**fallback, "source": f"static-fallback ({type(exc).__name__})"}
