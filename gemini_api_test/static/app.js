@@ -65,7 +65,7 @@ async function start() {
     const body = {
       turns: +document.getElementById("turns").value,
       message_chars: +document.getElementById("chars").value,
-      model: document.getElementById("model").value,
+      model: selectedModel(),
       capture: document.getElementById("capture").checked,
     };
     const resp = await fetch("/run", {
@@ -176,7 +176,62 @@ async function inspect() {
   }
 }
 
+// --- Model dropdown + search -------------------------------------------------
+const CUSTOM = "__custom__";
+let allModels = [];
+
+function selectedModel() {
+  const sel = document.getElementById("model");
+  if (sel.value === CUSTOM) return document.getElementById("modelCustom").value.trim();
+  return sel.value;
+}
+
+function renderModels(filter) {
+  const sel = document.getElementById("model");
+  const prev = sel.value;
+  const f = (filter || "").toLowerCase();
+  const shown = allModels.filter(m => !f || m.id.toLowerCase().includes(f) || (m.label || "").toLowerCase().includes(f));
+  sel.innerHTML = "";
+  for (const m of shown) {
+    const o = document.createElement("option");
+    o.value = m.id;
+    o.textContent = m.label || m.id;
+    sel.appendChild(o);
+  }
+  const custom = document.createElement("option");
+  custom.value = CUSTOM;
+  custom.textContent = "custom…";
+  sel.appendChild(custom);
+  // keep prior selection if still present
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  toggleCustom();
+}
+
+function toggleCustom() {
+  const sel = document.getElementById("model");
+  document.getElementById("modelCustom").hidden = sel.value !== CUSTOM;
+}
+
+async function loadModels() {
+  try {
+    const resp = await fetch("/models");
+    const data = await resp.json();
+    allModels = data.models || [];
+    renderModels("");
+    const sel = document.getElementById("model");
+    if (data.default && [...sel.options].some(o => o.value === data.default)) {
+      sel.value = data.default;
+    }
+    toggleCustom();
+  } catch (e) { /* keep the server-rendered default option */ }
+}
+
+document.getElementById("model").addEventListener("change", toggleCustom);
+document.getElementById("modelFilter").addEventListener("input", e => renderModels(e.target.value));
+document.getElementById("modelRefresh").addEventListener("click", loadModels);
+
 document.getElementById("start").addEventListener("click", start);
 document.getElementById("refresh").addEventListener("click", loadHistory);
 document.getElementById("inspect").addEventListener("click", inspect);
+loadModels();
 loadHistory();
