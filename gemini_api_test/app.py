@@ -72,10 +72,13 @@ def run():
     else:
         experiment = run_experiment(turns, message_chars, model)
 
+    # Mark synthetic runs so the result (and saved history) can't be mistaken
+    # for real traffic.
+    experiment["params"]["mock"] = is_mock()
     summary = summarize(experiment)
     saved = save_run(timestamp, experiment, summary)
 
-    resp = {"timestamp": timestamp, "saved_to": saved,
+    resp = {"timestamp": timestamp, "saved_to": saved, "mock": is_mock(),
             "params": experiment["params"], "summary": summary}
     if capture_info is not None:
         if capture_info.get("ok") and capture_info.get("file"):
