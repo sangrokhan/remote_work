@@ -52,10 +52,18 @@ function renderSummary(totals, mock, dummy) {
   `;
 }
 
-function renderSummary3(t, mock) {
+function renderSummary3(t, mock, pcaps) {
   const el = document.getElementById("summary");
   el.hidden = false;
   const badge = mock ? `<p class="badge mock">⚠ MOCK RESULT — synthetic data</p>` : "";
+  let pcapHtml = "";
+  const ok = pcaps && Object.entries(pcaps).filter(([k, v]) => v && v.download);
+  if (ok && ok.length) {
+    pcapHtml = "<p><strong>pcaps (per stage):</strong> " + ok.map(([k, v]) =>
+      `<a class="pcap-link" href="${v.download}" download>⬇ ${k} (${fmtBytes(v.bytes)})</a>`).join(" ") + "</p>";
+  } else if (pcaps && Object.keys(pcaps).length) {
+    pcapHtml = `<p class="sub">capture ran but produced no packets (mock has no real traffic, or no NET_RAW).</p>`;
+  }
   el.innerHTML = `
     <h2>Result — 3-stage caching (stateless → cache → stateful)</h2>
     ${badge}
@@ -66,6 +74,7 @@ function renderSummary3(t, mock) {
        vs stateful ${fmtBytes(t.stateful_content)} → ${t.content_ratio}×</p>
     <p class="sub">caches used: ${t.caches_used} · cached tokens: ${(t.cached_tokens || 0).toLocaleString()}</p>
     <p class="sub">stateful sends only the new question; the prefix is server-side in the cache.</p>
+    ${pcapHtml}
   `;
 }
 
@@ -104,7 +113,7 @@ async function start() {
 
     const s = data.summary;
     if (s.mode === "caching-3stage") {
-      renderSummary3(s.totals, data.mock);
+      renderSummary3(s.totals, data.mock, data.pcaps);
       plot([
         { label: "stateless (full resend)", series: s.stateless_series, color: "#ff6b6b" },
         { label: "stateful (cache + question)", series: s.stateful_series, color: "#4dd4ac" },
