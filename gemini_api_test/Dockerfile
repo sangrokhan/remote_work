@@ -13,9 +13,18 @@ ARG PIP_TRUSTED_HOST=
 ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
 
+# apt mirror — override the Debian package server (scheme+host, no trailing
+# path), e.g. --build-arg APT_MIRROR=http://mirror.example.com
+# Replaces deb.debian.org; the /debian and /debian-security paths are kept.
+ARG APT_MIRROR=
+
 # tcpdump for optional packet capture (needs --cap-add=NET_RAW at run time;
 # not available on Cloud Run — capture auto-disables there).
-RUN apt-get update && apt-get install -y --no-install-recommends tcpdump \
+RUN if [ -n "$APT_MIRROR" ]; then \
+      sed -i "s|https\?://deb.debian.org|$APT_MIRROR|g" \
+        /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends tcpdump \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
