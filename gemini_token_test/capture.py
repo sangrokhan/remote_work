@@ -27,7 +27,7 @@ from gemini_client import _vertex_host, LOCATION  # endpoint host for the filter
 PCAP_DIR = Path(os.environ.get("PCAP_DIR", "data/pcaps"))
 # Filename = timestamp + a high-entropy token so concurrent runs never collide
 # and download URLs are unguessable across requests.
-_SAFE_NAME = re.compile(r"^capture_(stateless|stateful)_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
+_SAFE_NAME = re.compile(r"^capture_(stateless|stateful|cachebuild)_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
 
 
 def tcpdump_path() -> str | None:
@@ -75,7 +75,7 @@ class Capture:
     def __init__(self, timestamp: str, mode: str = "stateless",
                  interface: str | None = None):
         self.timestamp = timestamp
-        self.mode = mode if mode in ("stateless", "stateful") else "stateless"
+        self.mode = mode if mode in ("stateless", "stateful", "cachebuild") else "stateless"
         self.interface = interface or os.environ.get("PCAP_IFACE", "any")
         self.host = _vertex_host()
         self.ips: list[str] = []

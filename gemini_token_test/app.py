@@ -68,13 +68,20 @@ def run():
 
     # 3-stage caching pipeline: stateless scenario -> caches -> stateful replay.
     if mode == THREE_STAGE:
-        experiment = run_three_stage(model, turns=turns)
+        cap_ok, cap_reason = (True, "")
+        if want_capture:
+            cap_ok, cap_reason = pcap.available()
+        experiment = run_three_stage(model, turns=turns, timestamp=timestamp,
+                                     want_capture=(want_capture and cap_ok))
         experiment["params"]["mock"] = is_mock()
         summary = summarize_three_stage(experiment)
         saved = save_run(exec_id, timestamp, experiment, summary)
-        return jsonify({"exec_id": exec_id, "timestamp": timestamp,
-                        "saved_to": saved, "mock": is_mock(), "mode": mode,
-                        "params": experiment["params"], "summary": summary})
+        resp = {"exec_id": exec_id, "timestamp": timestamp, "saved_to": saved,
+                "mock": is_mock(), "mode": mode, "params": experiment["params"],
+                "summary": summary, "pcaps": experiment.get("pcaps") or {}}
+        if want_capture and not cap_ok:
+            resp["capture_unavailable"] = cap_reason
+        return jsonify(resp)
 
     capture_info = None
     if want_capture:
