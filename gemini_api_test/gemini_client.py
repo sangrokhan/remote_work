@@ -5,12 +5,15 @@ Auth = OAuth bearer via Application Default Credentials (google-auth). On Cloud
 Run the token comes from the metadata server / service account automatically.
 
 Measures, per call:
-  - wire_sent / wire_recv : raw bytes through the TLS socket (real on-wire bytes)
-  - req_payload_bytes / resp_payload_bytes : JSON body sizes (application layer)
+  - wire_sent / wire_recv : bytes of the HTTP request/response as they cross the
+    TLS stream — i.e. headers + content-encoded (often gzip) body, the real
+    transferred size. This is post-decryption HTTP framing, NOT the raw TLS
+    ciphertext; for true packet/ciphertext sizes use the optional pcap capture.
+  - req_payload_bytes / resp_payload_bytes : decoded JSON body sizes (app layer)
   - prompt_tokens / resp_tokens / total_tokens : from response usageMetadata
 
-No tcpdump / NET_ADMIN needed: we wrap the socket so every send()/recv() byte is
-counted (ciphertext on the wire, ~= plaintext + small TLS overhead).
+No tcpdump / NET_ADMIN needed: we wrap the socket (send + makefile read paths) so
+every byte of the HTTP exchange is tallied.
 
 Mock mode (GEMINI_MOCK=1) returns synthetic data so the whole flow and charts
 work locally without GCP creds or quota.
@@ -57,6 +60,41 @@ class CallResult:
         return asdict(self)
 
 
+class _CountingReader:
+    """Wraps the file object returned by socket.makefile(), counting bytes read.
+
+    http.client / urllib3 read the response through sock.makefile() rather than
+    sock.recv(), so the read path must be counted here or wire_recv stays 0.
+    """
+
+    def __init__(self, fp, counter):
+        self._fp = fp
+        self._c = counter
+
+    def read(self, *a, **k):
+        b = self._fp.read(*a, **k)
+        self._c.recv += len(b)
+        return b
+
+    def read1(self, *a, **k):
+        b = self._fp.read1(*a, **k)
+        self._c.recv += len(b)
+        return b
+
+    def readline(self, *a, **k):
+        b = self._fp.readline(*a, **k)
+        self._c.recv += len(b)
+        return b
+
+    def readinto(self, buf):
+        n = self._fp.readinto(buf)
+        self._c.recv += n or 0
+        return n
+
+    def __getattr__(self, name):
+        return getattr(self._fp, name)
+
+
 class _CountingSocket:
     """Wraps a socket, tallying every byte sent and received."""
 
@@ -83,6 +121,13 @@ class _CountingSocket:
         n = self._sock.recv_into(buf, *args, **kwargs)
         self.recv += n
         return n
+
+    def makefile(self, mode="r", *args, **kwargs):
+        fp = self._sock.makefile(mode, *args, **kwargs)
+        # Only the readable binary path carries response bytes worth counting.
+        if "b" in mode and "w" not in mode and "+" not in mode:
+            return _CountingReader(fp, self)
+        return fp
 
     def __getattr__(self, name):
         return getattr(self._sock, name)
