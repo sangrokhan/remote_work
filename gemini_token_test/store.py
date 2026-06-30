@@ -73,6 +73,10 @@ def save_run(exec_id: str, timestamp: str, experiment: dict, summary: dict) -> d
         "params": experiment["params"],
         "summary": summary,
     }
+    # Carry any extra payload (records, scenario, cache_set, *_records) verbatim.
+    for k, v in experiment.items():
+        if k != "params":
+            doc[k] = v
     result = {"json": None, "firestore": None, "exec_id": exec_id}
 
     _ensure_dir()

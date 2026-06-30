@@ -11,12 +11,16 @@ compare modes by loading two executions from history.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-from gemini_client import call_gemini, ENDPOINT
+from gemini_client import (
+    call_gemini, create_cache, delete_cache, ENDPOINT,
+)
 
 MODES = ("stateless", "stateful")
 REQUESTS_DIR = Path(__file__).resolve().parent / "requests"
+CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "1800"))
 
 
 def load_request_steps(name: str = "default") -> tuple[list[str], str]:
@@ -67,4 +71,74 @@ def run_experiment(mode: str, model: str, request_name: str = "default",
             "request_source": source,
         },
         "records": records,
+    }
+
+
+def _model(text: str) -> dict:
+    return {"role": "model", "parts": [{"text": text}]}
+
+
+def run_three_stage(model: str, request_name: str = "default",
+                    turns: int | None = None) -> dict:
+    """Stage 1 stateless scenario -> Stage 2 cumulative caches -> Stage 3 stateful
+    replay (cache + question only). Returns one combined document."""
+    steps, source = load_request_steps(request_name)
+    if turns:
+        steps = steps[:max(1, min(turns, len(steps)))]
+    n = len(steps)
+
+    # --- Stage 1: stateless scenario, capture every request + response ---------
+    scenario, stateless_records = [], []
+    history: list[dict] = []
+    for k, q in enumerate(steps, start=1):
+        history.append(_user(q))
+        res = call_gemini(model, list(history), mode="stateless", turn=k)
+        ans = res.response_text or ""
+        history.append(_model(ans))
+        scenario.append({
+            "turn": k, "question": q, "answer": ans,
+            "req_bytes": res.req_payload_bytes, "resp_bytes": res.resp_payload_bytes,
+            "wire_sent": res.wire_sent, "wire_recv": res.wire_recv, "error": res.error,
+        })
+        stateless_records.append(res.as_dict())
+
+    # --- Stage 2: cumulative caches. cache_k = history[:2k] (k Q&A pairs) -------
+    cache_set = []
+    for k in range(1, n + 1):
+        c = create_cache(model, history[:2 * k], CACHE_TTL_SECONDS)
+        cache_set.append({
+            "k": k, "cache_id": c["name"], "cached_tokens": c["cached_tokens"],
+            "skipped": c["name"] is None, "error": c["error"],
+        })
+
+    # --- Stage 3: stateful replay. turn k uses cache_(k-1) + question only ------
+    stateful_records = []
+    for k, q in enumerate(steps, start=1):
+        cache = cache_set[k - 2] if k >= 2 else None
+        cache_id = cache["cache_id"] if cache else None
+        hint = cache["cached_tokens"] if cache else 0
+        if cache_id:
+            contents = [_user(q)]                       # prefix is server-side
+        else:
+            contents = history[:2 * (k - 1)] + [_user(q)]  # no cache yet -> send it
+        res = call_gemini(model, contents, mode="stateful", turn=k,
+                          cached_content=cache_id, cached_tokens_hint=hint)
+        rec = res.as_dict()
+        rec["cache_id"] = cache_id
+        rec["used_cache"] = cache_id is not None
+        stateful_records.append(rec)
+
+    # --- cleanup caches (best-effort) ------------------------------------------
+    if os.environ.get("KEEP_CACHE") != "1":
+        for c in cache_set:
+            if c["cache_id"]:
+                delete_cache(c["cache_id"])
+
+    return {
+        "params": {"mode": "caching-3stage", "turns": n, "model": model,
+                   "endpoint": ENDPOINT, "request_source": source},
+        "scenario": scenario,
+        "cache_set": cache_set,
+        "stateless_records": stateless_records,
+        "stateful_records": stateful_records,
     }

@@ -52,6 +52,23 @@ function renderSummary(totals, mock, dummy) {
   `;
 }
 
+function renderSummary3(t, mock) {
+  const el = document.getElementById("summary");
+  el.hidden = false;
+  const badge = mock ? `<p class="badge mock">⚠ MOCK RESULT — synthetic data</p>` : "";
+  el.innerHTML = `
+    <h2>Result — 3-stage caching (stateless → cache → stateful)</h2>
+    ${badge}
+    <p><strong>Traffic (wire bytes):</strong> stateless ${fmtBytes(t.stateless_wire)}
+       vs stateful <span class="ok">${fmtBytes(t.stateful_wire)}</span>
+       → <span class="big">${t.wire_ratio}×</span> less sent</p>
+    <p><strong>Content length (payload):</strong> stateless ${fmtBytes(t.stateless_content)}
+       vs stateful ${fmtBytes(t.stateful_content)} → ${t.content_ratio}×</p>
+    <p class="sub">caches used: ${t.caches_used} · cached tokens: ${(t.cached_tokens || 0).toLocaleString()}</p>
+    <p class="sub">stateful sends only the new question; the prefix is server-side in the cache.</p>
+  `;
+}
+
 function renderDetail(series, mode) {
   const tb = document.querySelector("#detail tbody");
   tb.innerHTML = "";
@@ -86,9 +103,18 @@ async function start() {
     if (!resp.ok) { status.textContent = "Error: " + (data.error || resp.status); return; }
 
     const s = data.summary;
-    renderSummary(s.totals, data.mock, false);
-    plot([{ label: s.mode, series: s.series, color: modeColor(s.mode) }]);
-    renderDetail(s.series, s.mode);
+    if (s.mode === "caching-3stage") {
+      renderSummary3(s.totals, data.mock);
+      plot([
+        { label: "stateless (full resend)", series: s.stateless_series, color: "#ff6b6b" },
+        { label: "stateful (cache + question)", series: s.stateful_series, color: "#4dd4ac" },
+      ]);
+      document.querySelector("#detail tbody").innerHTML = "";
+    } else {
+      renderSummary(s.totals, data.mock, false);
+      plot([{ label: s.mode, series: s.series, color: modeColor(s.mode) }]);
+      renderDetail(s.series, s.mode);
+    }
 
     const s2 = data.saved_to || {};
     let msg = `${data.mock ? "[MOCK] " : ""}Done. exec_id: ${data.exec_id} | Firestore: ${s2.firestore || "off"}`;
@@ -162,7 +188,15 @@ async function viewExec(execId) {
   dl.href = "/download/run/" + encodeURIComponent(execId);
   dl.hidden = false;
   // plot this execution from stored series
-  plot([{ label: doc.mode, series: doc.summary.series, color: modeColor(doc.mode) }]);
+  const sm = doc.summary || {};
+  if (sm.mode === "caching-3stage") {
+    plot([
+      { label: "stateless", series: sm.stateless_series, color: "#ff6b6b" },
+      { label: "stateful (cache+Q)", series: sm.stateful_series, color: "#4dd4ac" },
+    ]);
+  } else if (sm.series) {
+    plot([{ label: doc.mode, series: sm.series, color: modeColor(doc.mode) }]);
+  }
 }
 
 async function compare() {

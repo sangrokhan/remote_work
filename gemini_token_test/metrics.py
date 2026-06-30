@@ -36,6 +36,32 @@ def _series(records: list[dict]) -> dict:
     }
 
 
+def summarize_three_stage(experiment: dict) -> dict:
+    """Stateless vs stateful series (cumulative wire + content) for the 3-stage
+    caching run, plus traffic-ratio totals."""
+    sl = _series(experiment["stateless_records"])
+    sf = _series(experiment["stateful_records"])
+    last2 = lambda s, k: s[k][-1] if s[k] else 0
+    sl_wire, sf_wire = last2(sl, "cum_wire_bytes"), last2(sf, "cum_wire_bytes")
+    sl_cont, sf_cont = last2(sl, "cum_payload_bytes"), last2(sf, "cum_payload_bytes")
+    cached = sum(r.get("cached_tokens", 0) for r in experiment["stateful_records"])
+    used = sum(1 for r in experiment["stateful_records"] if r.get("used_cache"))
+    ratio = lambda a, b: round(a / b, 2) if b else None
+    return {
+        "mode": "caching-3stage",
+        "stateless_series": sl,
+        "stateful_series": sf,
+        "totals": {
+            "mode": "caching-3stage",
+            "stateless_wire": sl_wire, "stateful_wire": sf_wire,
+            "wire_ratio": ratio(sl_wire, sf_wire),
+            "stateless_content": sl_cont, "stateful_content": sf_cont,
+            "content_ratio": ratio(sl_cont, sf_cont),
+            "cached_tokens": cached, "caches_used": used,
+        },
+    }
+
+
 def summarize(experiment: dict) -> dict:
     mode = experiment["params"].get("mode", "stateless")
     series = _series(experiment["records"])
