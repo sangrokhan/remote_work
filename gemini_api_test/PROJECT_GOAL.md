@@ -39,9 +39,10 @@ Every single call is self-measured and tagged `mode`:
 
 - **Tokens** — from each response's `usageMetadata`
   (`promptTokenCount` / `candidatesTokenCount` / `totalTokenCount`).
-- **Wire bytes** — a socket wrapper counts raw bytes sent/received over the TLS
-  connection (real on-wire bytes, no tcpdump / NET_ADMIN). Works unchanged against
-  the Vertex host. Cross-checked against JSON payload sizes.
+- **Wire bytes** — a socket wrapper counts the HTTP request/response bytes crossing
+  the TLS stream (headers + content-encoded body — the real transferred size; not
+  raw ciphertext). No tcpdump / NET_ADMIN. Works unchanged against the Vertex host.
+  Cross-checked against decoded JSON payload sizes.
 - **Packet capture (optional)** — ticking *capture packets* runs `tcpdump` around
   the experiment, filtered to the Vertex host:443, and produces a downloadable
   `.pcap`. Independent ground-truth for the wire volume/timing. Needs raw-socket

@@ -121,8 +121,9 @@ python -m unittest discover tests      # pure metric math, no network
 ## What's measured per call
 
 - Tokens — from Vertex response `usageMetadata`.
-- Wire bytes — raw bytes through the TLS socket (real on-wire), cross-checked vs
-  JSON payload size.
+- Wire bytes — HTTP bytes crossing the TLS stream (headers + content-encoded body;
+  real transferred size, not raw ciphertext), cross-checked vs decoded JSON payload
+  size. For true packet/ciphertext sizes use the optional pcap.
 - Everything tagged `mode = stateless | delta`. One service account is enough —
   attribution is per-request in our own code, not from billing.
 
