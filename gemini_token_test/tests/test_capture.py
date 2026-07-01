@@ -34,6 +34,34 @@ class TestCapture(unittest.TestCase):
                     "capture_; rm -rf.pcap"]:
             self.assertIsNone(capture.safe_pcap_path(bad))
 
+    def test_parse_tcpdump_stats_full(self):
+        text = (
+            "130 packets captured\n"
+            "137 packets received by filter\n"
+            "7 packets dropped by kernel\n"
+            "0 packets dropped by interface\n"
+        )
+        self.assertEqual(capture._parse_tcpdump_stats(text), {
+            "captured": 130,
+            "received_by_filter": 137,
+            "dropped_by_kernel": 7,
+            "dropped_by_interface": 0,
+        })
+
+    def test_parse_tcpdump_stats_partial_and_empty(self):
+        # Only some lines present (e.g. no "dropped by interface" on some platforms).
+        self.assertEqual(
+            capture._parse_tcpdump_stats("42 packets captured\n"),
+            {"captured": 42},
+        )
+        self.assertEqual(capture._parse_tcpdump_stats(""), {})
+
+    def test_snaplen_default_and_env(self):
+        # Default snaplen is the header-only 100 bytes.
+        c = capture.Capture("2026-06-29T00:00:00", "stateless")
+        self.assertEqual(c.snaplen, capture.PCAP_SNAPLEN)
+        self.assertEqual(capture.PCAP_SNAPLEN, 100)
+
     def test_available_reports_when_disabled(self):
         os.environ["PCAP_DISABLE"] = "1"
         try:

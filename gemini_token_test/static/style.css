@@ -22,6 +22,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .controls label.cap input { width: auto; }
 .pcap-link { color: #7ee2a8; font-weight: 600; text-decoration: none; padding: .55rem .8rem; border: 1px solid #2d6a4f; border-radius: 6px; }
 .pcap-link:hover { background: #0d3b1e; }
+.capture-log { background: #0d1117; border: 1px solid #2d3748; border-radius: 8px; padding: .7rem .9rem; margin: .6rem 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; color: #9fb3c8; }
+.capture-log strong { color: #cbd5e0; }
+.capture-log .caplog { margin-top: .35rem; }
+.capture-log .caplog.warn { color: #ffb454; }
+.capture-log .caplog.warn strong { color: #ffb454; }
 .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
 .chart-box { background: #161b22; border: 1px solid #2d3748; border-radius: 8px; padding: 1rem; }
 @media (max-width: 800px) { .charts { grid-template-columns: 1fr; } }

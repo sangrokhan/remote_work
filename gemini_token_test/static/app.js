@@ -78,6 +78,27 @@ function renderSummary3(t, mock, pcaps) {
   `;
 }
 
+// Render tcpdump capture stats (captured / received / dropped) per stage. `entries`
+// is a {label: captureResult} map — one entry for single mode, one per stage for 3-stage.
+function renderCaptureLog(entries) {
+  const box = document.getElementById("captureLog");
+  const rows = [];
+  Object.entries(entries || {}).forEach(([label, v]) => {
+    if (!v || !v.stats || !Object.keys(v.stats).length) return;
+    const d = v.dropped || 0;
+    const cls = d > 0 ? "caplog warn" : "caplog";
+    rows.push(`<div class="${cls}">${label}: `
+      + `${v.stats.captured ?? "?"} captured · `
+      + `${v.stats.received_by_filter ?? "?"} recv by filter · `
+      + `<strong>${d} dropped</strong> · snaplen ${v.snaplen ?? "?"}`
+      + (d > 0 ? ` — capture loss (expect “ACKed unseen segment” warnings)` : "")
+      + `</div>`);
+  });
+  if (!rows.length) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = `<strong>Capture log (tcpdump)</strong>${rows.join("")}`;
+}
+
 function renderDetail(series, mode) {
   const tb = document.querySelector("#detail tbody");
   tb.innerHTML = "";
@@ -98,6 +119,7 @@ async function start() {
   status.textContent = "Running…";
   try {
     document.getElementById("pcapLink").hidden = true;
+    document.getElementById("captureLog").hidden = true;
     const body = {
       mode: document.getElementById("mode").value,
       turns: +document.getElementById("turns").value,
@@ -114,6 +136,7 @@ async function start() {
     const s = data.summary;
     if (s.mode === "caching-3stage") {
       renderSummary3(s.totals, data.mock, data.pcaps);
+      renderCaptureLog(data.pcaps);
       plot([
         { label: "stateless (full resend)", series: s.stateless_series, color: "#ff6b6b" },
         { label: "stateful (cache + question)", series: s.stateful_series, color: "#4dd4ac" },
@@ -121,6 +144,7 @@ async function start() {
       document.querySelector("#detail tbody").innerHTML = "";
     } else {
       renderSummary(s.totals, data.mock, false);
+      renderCaptureLog(data.capture ? { [s.mode]: data.capture } : {});
       plot([{ label: s.mode, series: s.series, color: modeColor(s.mode) }]);
       renderDetail(s.series, s.mode);
     }
@@ -133,6 +157,7 @@ async function start() {
         const link = document.getElementById("pcapLink");
         link.href = c.download; link.hidden = false;
         msg += ` | pcap: ${fmtBytes(c.bytes)} (${c.host})`;
+        if (c.stats && Object.keys(c.stats).length) msg += ` | dropped: ${c.dropped || 0}`;
       } else {
         msg += ` | capture: ${c.error || c.note || "no packets"}`;
       }

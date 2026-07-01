@@ -25,9 +25,38 @@ from pathlib import Path
 from gemini_client import _vertex_host, LOCATION  # endpoint host for the filter
 
 PCAP_DIR = Path(os.environ.get("PCAP_DIR", "data/pcaps"))
+# Snaplen: bytes captured per packet. TLS payload is encrypted (unreadable), so we
+# only need L2-L4 headers + TLS record header for sizes/timing. Truncating to ~100
+# bytes slashes disk I/O per packet, which is the main cause of kernel drops (the
+# "ACKed unseen segment" / "previous segment not captured" warnings) under load.
+# The original on-wire length is still recorded in each frame, so packet sizes stay
+# exact in Wireshark.
+PCAP_SNAPLEN = int(os.environ.get("PCAP_SNAPLEN", "100"))
 # Filename = timestamp + a high-entropy token so concurrent runs never collide
 # and download URLs are unguessable across requests.
 _SAFE_NAME = re.compile(r"^capture_(stateless|stateful|cachebuild)_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
+# tcpdump prints capture stats to stderr on exit (SIGINT). Parse the drop counts so
+# the UI can surface capture loss instead of silently producing a lossy pcap.
+_STAT_RE = re.compile(
+    r"(\d+)\s+packets\s+(captured|received by filter|dropped by kernel|dropped by interface)"
+)
+
+
+def _parse_tcpdump_stats(text: str) -> dict:
+    """Extract packet counters from tcpdump's stderr summary.
+
+    tcpdump exit summary looks like:
+        123 packets captured
+        130 packets received by filter
+        7 packets dropped by kernel
+        0 packets dropped by interface
+    Returns {captured, received_by_filter, dropped_by_kernel, dropped_by_interface}
+    for whichever lines are present.
+    """
+    stats: dict = {}
+    for m in _STAT_RE.finditer(text):
+        stats[m.group(2).replace(" ", "_")] = int(m.group(1))
+    return stats
 
 
 def tcpdump_path() -> str | None:
@@ -82,8 +111,10 @@ class Capture:
         token = secrets.token_hex(8)  # 64-bit: unguessable + collision-proof
         ts = timestamp.replace(":", "-")
         self.path = PCAP_DIR / f"capture_{self.mode}_{ts}_{token}.pcap"
+        self.snaplen = PCAP_SNAPLEN
         self.proc: subprocess.Popen | None = None
         self.error = ""
+        self.stats: dict = {}
 
     def __enter__(self) -> "Capture":
         PCAP_DIR.mkdir(parents=True, exist_ok=True)
@@ -97,7 +128,7 @@ class Capture:
         self.ips = _resolve_ips(self.host)
         cmd = [
             tcpdump_path(), "-i", self.interface, "-w", str(self.path),
-            "-U", "-n", _filter_expr(self.ips),
+            "-s", str(self.snaplen), "-U", "-n", _filter_expr(self.ips),
         ]
         try:
             self.proc = subprocess.Popen(
@@ -122,6 +153,13 @@ class Capture:
             self.proc.wait(timeout=5)
         except Exception:
             self.proc.kill()
+        # tcpdump writes its capture/drop summary to stderr on exit; read it so the
+        # UI can report packets dropped by kernel/interface (capture loss).
+        try:
+            err = (self.proc.stderr.read() or b"").decode(errors="replace")
+            self.stats = _parse_tcpdump_stats(err)
+        except Exception:
+            pass
         finally:
             self.proc = None
 
@@ -131,6 +169,9 @@ class Capture:
             return {"ok": False, "error": self.error, "host": self.host,
                     "location": LOCATION}
         size = self.path.stat().st_size if self.path.exists() else 0
+        dropped = (self.stats.get("dropped_by_kernel", 0)
+                   + self.stats.get("dropped_by_interface", 0))
+        log = self._log_lines(dropped)
         return {
             "ok": size > 0,
             "file": self.path.name,
@@ -138,5 +179,27 @@ class Capture:
             "host": self.host,
             "ips": self.ips,
             "filter": _filter_expr(self.ips),
+            "snaplen": self.snaplen,
+            "stats": self.stats,
+            "dropped": dropped,
+            "log": log,
             "note": "" if size > 0 else "no packets captured (mock has no real traffic)",
         }
+
+    def _log_lines(self, dropped: int) -> list[str]:
+        """Human-readable capture log lines for the UI."""
+        if not self.stats:
+            return []
+        s = self.stats
+        lines = [
+            f"tcpdump[{self.mode}]: {s.get('captured', '?')} captured, "
+            f"{s.get('received_by_filter', '?')} received by filter, "
+            f"{dropped} dropped (snaplen={self.snaplen})"
+        ]
+        if dropped:
+            lines.append(
+                f"⚠ {dropped} packet(s) dropped during capture — pcap may show "
+                "'ACKed unseen segment' / 'previous segment not captured'. "
+                "Capture overloaded; try larger PCAP_SNAPLEN headroom or a quieter host."
+            )
+        return lines
