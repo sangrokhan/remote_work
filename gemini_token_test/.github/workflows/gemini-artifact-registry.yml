@@ -13,13 +13,24 @@
 #
 # Required GitHub repository config (Settings -> Secrets and variables -> Actions):
 #   Secrets:
-#     GCP_SA_KEY        Service-account JSON key (full file contents). The SA needs
-#                       roles/artifactregistry.writer on the target repo.
+#     GCP_SA_KEY        Service-account JSON key (full file contents). The SA needs:
+#                         roles/artifactregistry.writer  (push image)
+#                         roles/run.developer            (deploy Cloud Run)
+#                         roles/iam.serviceAccountUser   (act as the Cloud Run
+#                                                         runtime service account)
 #   Variables:
 #     GCP_PROJECT_ID    e.g. my-project
 #     GCP_REGION        e.g. us-central1   (Artifact Registry location)
 #     AR_REPO           Artifact Registry repo name, e.g. gemini
 #     AR_IMAGE          image name, e.g. gemini-traffic   (optional; defaults below)
+#     CLOUD_RUN_SERVICE Cloud Run service name to deploy, e.g. gemini-traffic
+#     CLOUD_RUN_REGION  Cloud Run region (optional; defaults to GCP_REGION)
+#
+# Cloud Run deploy preserves the previous revision's config: only the image is
+# swapped. Env vars, VPC connector / egress settings, runtime service account,
+# memory, concurrency, etc. are inherited from the running revision because no
+# flag resets them. To change env later, use `--update-env-vars` (merge), NOT
+# `--set-env-vars` (full overwrite).
 #
 # Create the AR repo once (if it does not exist):
 #   gcloud artifacts repositories create gemini \
@@ -44,6 +55,8 @@ jobs:
       REGION: ${{ vars.GCP_REGION }}
       REPO: ${{ vars.AR_REPO }}
       IMAGE: ${{ vars.AR_IMAGE != '' && vars.AR_IMAGE || 'gemini-traffic' }}
+      SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      RUN_REGION: ${{ vars.CLOUD_RUN_REGION != '' && vars.CLOUD_RUN_REGION || vars.GCP_REGION }}
 
     steps:
       - name: Checkout
@@ -92,8 +105,29 @@ jobs:
       - name: Push image
         run: docker push --all-tags "${{ steps.img.outputs.base }}"
 
+      # Deploy the just-pushed SHA-tagged image to Cloud Run. Only --image is
+      # given, so the previous revision's env vars, VPC/egress, runtime SA,
+      # memory, concurrency, etc. are all inherited unchanged.
+      - name: Deploy to Cloud Run
+        env:
+          IMG: ${{ steps.img.outputs.base }}:${{ steps.img.outputs.sha }}
+        run: |
+          if [ -z "${SERVICE}" ]; then
+            echo "CLOUD_RUN_SERVICE variable is not set" >&2
+            exit 1
+          fi
+          gcloud run deploy "${SERVICE}" \
+            --image="${IMG}" \
+            --region="${RUN_REGION}" \
+            --project="${PROJECT_ID}" \
+            --quiet
+
       - name: Summary
         run: |
           echo "Pushed:" >> "$GITHUB_STEP_SUMMARY"
           echo "- ${{ steps.img.outputs.base }}:${{ steps.img.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- ${{ steps.img.outputs.base }}:latest" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deployed to Cloud Run:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- service: ${SERVICE} (region: ${RUN_REGION})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- image:   ${{ steps.img.outputs.base }}:${{ steps.img.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
