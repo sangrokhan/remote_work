@@ -195,6 +195,24 @@ def _session() -> requests.Session:
     return _SESSION
 
 
+def reset_session() -> None:
+    """Close pooled connections and drop the session so the next call opens a
+    fresh TCP socket (new 3-way handshake).
+
+    The global session pools TLS connections and reuses one socket across turns
+    and stages, so per-stage pcaps miss the SYN/SYN-ACK/ACK and show "ACK for
+    unseen segment" warnings. Calling this between capture stages guarantees each
+    stage's pcap starts from a clean handshake and ends with the socket teardown.
+    """
+    global _SESSION
+    if _SESSION is not None:
+        try:
+            _SESSION.close()  # closes all pooled sockets (sends FIN)
+        except Exception:
+            pass
+        _SESSION = None
+
+
 def is_mock() -> bool:
     return os.environ.get("GEMINI_MOCK") == "1"
 
