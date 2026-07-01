@@ -188,5 +188,7 @@ python -m unittest discover tests      # pure metric math, no network
 | `PCAP_DIR` | `data/pcaps` | captured .pcap output dir |
 | `PCAP_IFACE` | `any` | tcpdump capture interface |
 | `PCAP_DISABLE` | `0` | `1` = hide/disable packet capture |
+| `CAPTURE_WARMUP_SECONDS` | `2` | settle time after tcpdump starts before the first request (clean handshake in each per-stage pcap) |
+| `CAPTURE_DRAIN_SECONDS` | `1` | drain time after the socket closes before tcpdump stops (clean teardown) |
 | `TRANSCRIPT_DIR` | `data/transcripts` | inspector transcript output dir |
 | `INSPECT_MAX_BODY` | `1048576` | max response-body bytes captured (1 MiB) |

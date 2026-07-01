@@ -12,15 +12,21 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 from gemini_client import (
-    call_gemini, create_cache, delete_cache, ENDPOINT,
+    call_gemini, create_cache, delete_cache, reset_session, ENDPOINT,
 )
 
 MODES = ("stateless", "stateful")
 REQUESTS_DIR = Path(__file__).resolve().parent / "requests"
 CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "1800"))
+# Per-stage capture pacing: settle time after tcpdump starts before the first
+# request (clean handshake), and drain time after the socket closes before
+# tcpdump stops (clean teardown). Both configurable via env.
+CAPTURE_WARMUP_SECONDS = float(os.environ.get("CAPTURE_WARMUP_SECONDS", "2"))
+CAPTURE_DRAIN_SECONDS = float(os.environ.get("CAPTURE_DRAIN_SECONDS", "1"))
 
 
 def load_request(name: str = "default") -> tuple[str, list[str], str]:
@@ -106,13 +112,22 @@ def run_three_stage(model: str, request_name: str = "default",
     def _begin(stage_mode):
         if not want_capture:
             return None
+        # Drop any pooled socket from the previous stage so this stage opens a
+        # fresh TCP connection; start tcpdump, then wait so the first request's
+        # 3-way handshake lands inside this stage's pcap.
+        reset_session()
         cap = pcap.Capture(timestamp or "0", stage_mode)
         cap.__enter__()
+        time.sleep(CAPTURE_WARMUP_SECONDS)
         return cap
 
     def _end(cap, key):
         if cap is None:
             return
+        # Close the socket while tcpdump is still running so the FIN teardown is
+        # captured, drain briefly, then stop the capture.
+        reset_session()
+        time.sleep(CAPTURE_DRAIN_SECONDS)
         cap.__exit__(None, None, None)
         r = cap.result()
         if r.get("ok") and r.get("file"):
