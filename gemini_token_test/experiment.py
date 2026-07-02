@@ -74,7 +74,9 @@ def run_experiment(mode: str, model: str, request_name: str = "default",
         else:  # stateful = client-side delta: only this step
             contents = [_user(text)]
         res = call_gemini(model, contents, mode=mode, turn=k)
-        records.append(res.as_dict())
+        rec = res.as_dict()
+        rec["question"] = text  # pair the sent question with response_text (answer)
+        records.append(rec)
 
     return {
         "params": {
@@ -151,7 +153,9 @@ def run_three_stage(model: str, request_name: str = "default",
             "req_bytes": res.req_payload_bytes, "resp_bytes": res.resp_payload_bytes,
             "wire_sent": res.wire_sent, "wire_recv": res.wire_recv, "error": res.error,
         })
-        stateless_records.append(res.as_dict())
+        rec = res.as_dict()
+        rec["question"] = q  # store question alongside response_text (answer)
+        stateless_records.append(rec)
     _end(cap, "stateless")
 
     # --- Stage 2: cumulative caches. cache_k = history[:2k] (k Q&A pairs) -------
@@ -179,6 +183,7 @@ def run_three_stage(model: str, request_name: str = "default",
         res = call_gemini(model, contents, mode="stateful", turn=k,
                           cached_content=cache_id, cached_tokens_hint=hint)
         rec = res.as_dict()
+        rec["question"] = q  # store question alongside response_text (answer)
         rec["cache_id"] = cache_id
         rec["used_cache"] = cache_id is not None
         stateful_records.append(rec)
