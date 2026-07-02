@@ -57,6 +57,10 @@ class CallResult:
     resp_payload_bytes: int = 0
     cached_tokens: int = 0
     response_text: str = ""
+    # Raw JSON bodies exactly as sent to / received from the server (no headers,
+    # so no bearer token). Lets the log show the full wire payload per step.
+    request_json: str = ""
+    response_json: str = ""
     error: str = ""
 
     def as_dict(self) -> dict:
@@ -270,6 +274,15 @@ def _mock_call(mode: str, turn: int, contents: list, cached_tokens: int) -> Call
             break
     resp_text = f"(mock answer to: {last_q}) " + ("lorem ipsum " * 20)
     resp_bytes = len(resp_text.encode("utf-8")) + 120
+    # Synthetic response body mirroring the real generateContent shape.
+    resp_json = json.dumps({
+        "candidates": [{"content": {"role": "model",
+                                    "parts": [{"text": resp_text}]}}],
+        "usageMetadata": {"promptTokenCount": prompt_tokens,
+                          "candidatesTokenCount": resp_tokens,
+                          "cachedContentTokenCount": cached_tokens,
+                          "totalTokenCount": prompt_tokens + resp_tokens + cached_tokens},
+    })
     return CallResult(
         mode=mode, turn=turn,
         prompt_tokens=prompt_tokens, resp_tokens=resp_tokens,
@@ -277,6 +290,7 @@ def _mock_call(mode: str, turn: int, contents: list, cached_tokens: int) -> Call
         cached_tokens=cached_tokens, response_text=resp_text,
         wire_sent=req_bytes + 200, wire_recv=resp_bytes + 200,
         req_payload_bytes=req_bytes, resp_payload_bytes=resp_bytes,
+        request_json=body, response_json=resp_json,
     )
 
 
@@ -301,7 +315,7 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
         token = _bearer_token()
     except Exception as exc:
         return CallResult(mode=mode, turn=turn, req_payload_bytes=req_payload_bytes,
-                          error=f"auth_failed: {exc}")
+                          request_json=body, error=f"auth_failed: {exc}")
 
     _active_counter["counter"] = None
     try:
@@ -316,7 +330,7 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
         )
     except Exception as exc:
         return CallResult(mode=mode, turn=turn, req_payload_bytes=req_payload_bytes,
-                          error=f"request_failed: {exc}")
+                          request_json=body, error=f"request_failed: {exc}")
 
     counter = _active_counter["counter"]
     wire_sent = counter.sent if counter else req_payload_bytes
@@ -327,6 +341,8 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
         wire_sent=wire_sent, wire_recv=wire_recv,
         req_payload_bytes=req_payload_bytes,
         resp_payload_bytes=len(resp.content),
+        request_json=body,
+        response_json=resp.text,  # raw response body exactly as received
     )
 
     if resp.status_code != 200:
