@@ -1,0 +1,5 @@
+# runtime-generated settings (per machine)
+config.ini
+
+# compiled artifact (built on Windows via Ahk2Exe)
+*.exe
