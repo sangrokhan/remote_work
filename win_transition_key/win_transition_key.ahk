@@ -35,6 +35,8 @@ for i, d in dirs {
     setb := g.Add("Button", "x+4 yp w40", "Set")       ; or capture via Set
     setb.OnEvent("Click", CaptureKey.Bind(d))
     dw  := g.Add("Edit", "x+8 yp w55 vDwell" d, "1.0")
+    testb := g.Add("Button", "x+8 yp w45", "Test")     ; send this key now
+    testb.OnEvent("Click", TestSend.Bind(d))
     ctrls[d] := {en: en, key: key, dwell: dw}
 }
 
@@ -44,6 +46,10 @@ stopBtn   := g.Add("Button", "x+14 yp w130 h32", "Stop")
 applyBtn.OnEvent("Click", (*) => ApplyStart())
 stopBtn.OnEvent("Click", (*) => StopMon())
 g.OnEvent("Close", (*) => g.Hide())                   ; X hides to tray
+
+; live diagnostic readout (updated by the poll timer while RUNNING)
+g.Add("Text", "xm y+14 w400", "Debug (push an edge and watch):")
+dbgTxt := g.Add("Edit", "xm y+4 w400 r7 ReadOnly -Wrap")
 
 ; ------------------------------------------------------------------ tray menu
 tray := A_TrayMenu
@@ -161,18 +167,28 @@ StopMon() {
 
 ; Poll cursor against the virtual-desktop outer edges (true physical walls).
 CheckEdges() {
-    global states, dirs
+    global states, dirs, dbgTxt
     vx := SysGet(76)        ; SM_XVIRTUALSCREEN
     vy := SysGet(77)        ; SM_YVIRTUALSCREEN
     vw := SysGet(78)        ; SM_CXVIRTUALSCREEN
     vh := SysGet(79)        ; SM_CYVIRTUALSCREEN
     MouseGetPos(&mx, &my)
+    info := "Virtual desktop: left=" vx " top=" vy " right=" (vx + vw - 1) " bottom=" (vy + vh - 1) "`r`n"
+    info .= "Cursor: x=" mx "  y=" my "`r`n"
     for d in dirs {
-        if (!states.Has(d))
+        if (!states.Has(d)) {
+            info .= d ": (not applied yet)`r`n"
             continue
+        }
         st := states[d]
-        if (!st.enabled || st.send = "")
+        if (!st.enabled) {
+            info .= d ": disabled`r`n"
             continue
+        }
+        if (st.send = "") {
+            info .= d ": no key set`r`n"
+            continue
+        }
         inZone := false
         switch d {
             case "Up":    inZone := (my <= vy)
@@ -180,21 +196,50 @@ CheckEdges() {
             case "Left":  inZone := (mx <= vx)
             case "Right": inZone := (mx >= vx + vw - 1)
         }
+        remain := 0
         if (inZone) {
             if (st.armed) {
                 if (st.enterTick = 0)
                     st.enterTick := A_TickCount
-                else if (A_TickCount - st.enterTick >= st.dwellMs) {
+                remain := st.dwellMs - (A_TickCount - st.enterTick)
+                if (remain <= 0) {
                     Send st.send
                     st.armed := false
                     st.enterTick := 0
+                    SoundBeep 800, 120
+                    ToolTip "FIRED  " d "  ->  " st.send
+                    SetTimer ClearTip, -1500
                 }
             }
         } else {
             st.enterTick := 0
             st.armed := true
         }
+        info .= d ": " (inZone ? "IN-ZONE" : "outside")
+             . "  armed=" (st.armed ? "Y" : "N")
+             . (inZone && st.armed ? "  fires in " (remain > 0 ? remain : 0) "ms" : "")
+             . "  send=" st.send "`r`n"
     }
+    dbgTxt.Value := info
+}
+
+; Send a direction's key immediately (isolates the send path / dongle from
+; edge detection). Also proves whether the target reacts to synthetic keys.
+TestSend(d, *) {
+    global ctrls
+    s := DisplayToSend(Trim(ctrls[d].key.Value))
+    if (s = "") {
+        MsgBox "Set a key for '" d "' first.", "Nothing to test", "Iconx"
+        return
+    }
+    SoundBeep 600, 120
+    ToolTip "TEST send  " d "  ->  " s
+    SetTimer ClearTip, -1500
+    Send s
+}
+
+ClearTip() {
+    ToolTip
 }
 
 SaveConfig() {

@@ -72,6 +72,35 @@ Dwell=1.5
 
 You can hand-edit it; changes load on next launch.
 
+## Troubleshooting — "pushing the edge does nothing"
+
+The app has a built-in **Debug readout** + **beep/tooltip on fire** + per-row
+**Test** button to isolate where it breaks.
+
+**Step 1 — is the key send even working?**
+Click a direction's **Test** button. You should hear a beep and see a "TEST send"
+tooltip, and the key is injected.
+- Does your PC switch / react? → send path works. Skip to Step 2.
+- Beep + tooltip but the **KVM dongle does NOT switch** → your dongle only reacts
+  to the **physical** keyboard, not software-injected keys. **No software tool
+  can drive it this way.** (Verify: press the physical key — if that switches but
+  Test doesn't, the dongle ignores synthetic input.) This tool can't help that
+  dongle; you'd need a software KVM (Deskflow / Input Leap / Mouse Without Borders)
+  or a dongle whose switch key a program can send.
+
+**Step 2 — is the edge being detected?**
+Click **Apply / Start** (status must go green **RUNNING**), then push the cursor
+into the edge and watch the **Debug** box:
+- `Cursor: x= y=` should reach the `Virtual desktop` boundary numbers.
+- The direction line should flip to **IN-ZONE** and count down `fires in …ms`.
+- If the cursor **never reaches** the outer number → **multi-monitor**: that edge
+  isn't the outer wall, the cursor crosses to the next monitor. Use the true
+  outer edge, or tell me your monitor layout and I'll add per-monitor edges.
+- If it reaches IN-ZONE and beeps **FIRED** but nothing switches → it's the
+  dongle issue from Step 1, not detection.
+
+Tell me which step fails and what the Debug box shows — that pinpoints it.
+
 ## Notes / limits
 
 - Windows only (AutoHotkey).
