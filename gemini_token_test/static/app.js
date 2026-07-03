@@ -119,6 +119,7 @@ async function start() {
   status.textContent = "Running…";
   try {
     document.getElementById("pcapLink").hidden = true;
+    document.getElementById("chatLink").hidden = true;
     document.getElementById("captureLog").hidden = true;
     const body = {
       mode: document.getElementById("mode").value,
@@ -147,6 +148,12 @@ async function start() {
       renderCaptureLog(data.capture ? { [s.mode]: data.capture } : {});
       plot([{ label: s.mode, series: s.series, color: modeColor(s.mode) }]);
       renderDetail(s.series, s.mode);
+    }
+
+    if (data.exec_id) {
+      const chatLink = document.getElementById("chatLink");
+      chatLink.href = "/download/chat/" + encodeURIComponent(data.exec_id);
+      chatLink.hidden = false;
     }
 
     const s2 = data.saved_to || {};

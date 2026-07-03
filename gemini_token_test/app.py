@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from datetime import datetime, timezone
@@ -110,6 +111,65 @@ def run():
             capture_info["download"] = f"/download/pcap/{capture_info['file']}"
         resp["capture"] = capture_info
     return jsonify(resp)
+
+
+def _parse_json(s):
+    """Turn a raw JSON string back into an object for a clean export; keep the
+    original string if it isn't valid JSON (e.g. an error body)."""
+    if not isinstance(s, str) or not s:
+        return s
+    try:
+        return json.loads(s)
+    except Exception:
+        return s
+
+
+def _chat_turns(records, stage):
+    out = []
+    for r in records or []:
+        out.append({
+            "turn": r.get("turn"),
+            "stage": stage,
+            "question": r.get("question", ""),
+            "answer": r.get("response_text", ""),
+            "request": _parse_json(r.get("request_json", "")),
+            "response": _parse_json(r.get("response_json", "")),
+            "error": r.get("error", ""),
+        })
+    return out
+
+
+def build_chat_export(doc: dict) -> dict:
+    """Trim a stored run down to the chat: per-step question/answer + the raw
+    request/response JSON sent to and received from the server."""
+    mode = doc.get("mode")
+    turns = []
+    if mode == THREE_STAGE:
+        turns += _chat_turns(doc.get("stateless_records"), "stateless")
+        turns += _chat_turns(doc.get("stateful_records"), "stateful")
+    else:
+        turns += _chat_turns(doc.get("records"), mode)
+    return {
+        "exec_id": doc.get("exec_id"),
+        "mode": mode,
+        "timestamp": doc.get("timestamp"),
+        "mock": doc.get("mock", False),
+        "turns": turns,
+    }
+
+
+@app.route("/download/chat/<exec_id>")
+def download_chat(exec_id):
+    doc = get_run(exec_id)
+    if doc is None:
+        abort(404)
+    from flask import Response
+    payload = build_chat_export(doc)
+    return Response(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="chat_{exec_id}.json"'},
+    )
 
 
 @app.route("/download/pcap/<path:name>")
