@@ -54,24 +54,24 @@ def parse_all(path):
 
 
 def parse(path, src, dst):
-    """Return (no, time_s, size) rows. Filter by src->dst only if both given;
-    otherwise return all rows unfiltered."""
+    """Return (no, time_s, size, src, dst) rows. Filter by src->dst only if
+    both given; otherwise return all rows unfiltered."""
     allrows = parse_all(path)
     if src and dst:
-        rows = [(no, t, size) for no, t, size, s, d in allrows if s == src and d == dst]
+        rows = [(no, t, size, s, d) for no, t, size, s, d in allrows if s == src and d == dst]
     else:
-        rows = [(no, t, size) for no, t, size, s, d in allrows]
+        rows = [(no, t, size, s, d) for no, t, size, s, d in allrows]
     return rows
 
 
 def deltas(rows):
-    """Return list of (no, time_s, delta_us, size). First packet delta = None."""
+    """Return list of (no, time_s, delta_us, size, src, dst). First delta = None."""
     out = []
     prev = None
-    for no, t, size in rows:
+    for no, t, size, s, d in rows:
         dt = None if prev is None else (t - prev) + (86400 if prev is not None and t < prev else 0)
-        d = None if dt is None else round(dt * 1_000_000, 3)
-        out.append((no, t, d, size))
+        du = None if dt is None else round(dt * 1_000_000, 3)
+        out.append((no, t, du, size, s, d))
         prev = t
     return out
 
@@ -100,19 +100,21 @@ def main():
     if args.csv:
         with open(args.csv, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["no", "time_s", "delta_us", "size"])
-            for no, t, d, size in result:
-                w.writerow([no, f"{t:.6f}", "" if d is None else f"{d:.3f}", size])
+            w.writerow(["no", "time_s", "delta_us", "size", "src", "dst"])
+            for no, t, d, size, s, dd in result:
+                w.writerow([no, f"{t:.6f}", "" if d is None else f"{d:.3f}", size, s, dd])
         print(f"Wrote {len(result)} rows -> {args.csv}")
     else:
-        print(f"{'No':>7}  {'Time(s)':>14}  {'Delta(us)':>14}  {'Size':>7}")
-        for i, (no, t, d, size) in enumerate(result, 1):
+        print(f"{'No':>7}  {'Time(s)':>14}  {'Delta(us)':>14}  {'Size':>7}  "
+              f"{'Source':>15}  {'Destination':>15}")
+        for i, (no, t, d, size, s, dd) in enumerate(result, 1):
             ds = "" if d is None else f"{d:,.3f}"
-            print(f"{no if no is not None else i:>7}  {t:>14.6f}  {ds:>14}  {size:>7}")
+            print(f"{no if no is not None else i:>7}  {t:>14.6f}  {ds:>14}  {size:>7}  "
+                  f"{s:>15}  {dd:>15}")
 
     # stats over deltas (skip first None) and sizes
-    vals = [d for _, _, d, _ in result if d is not None]
-    sizes = [s for _, _, _, s in result]
+    vals = [d for _, _, d, _, _, _ in result if d is not None]
+    sizes = [s for _, _, _, s, _, _ in result]
     if vals:
         print(f"\nmatched={len(result)}  deltas={len(vals)}  "
               f"min={min(vals):,.3f}us  max={max(vals):,.3f}us  "
