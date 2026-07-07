@@ -1,6 +1,6 @@
 {
   "name": "default",
-  "description": "Agent-style scenario: a large fixed system prompt (persona + tool descriptions, ~2k+ tokens) is reused every turn. stateless resends it each turn; stateful caches it and sends only the new question.",
+  "description": "Agent-style scenario: a large fixed system prompt (persona + tool descriptions, ~2k+ tokens) is reused every turn. stateless resends it each turn; stateful caches it and sends only the new question. 20-turn single incident with strong continuity — later turns lean on earlier ones via pronouns and ellipsis ('that same check', 'the thing we disabled', 'bring it back'), so with full context they read coherently, but with the prior turns missing each question is ambiguous. Set turns=20 to run the whole thread.",
   "system": [
     "You are ATLAS, a meticulous senior software-operations agent embedded in a large enterprise platform. You act on behalf of engineers to investigate incidents, query infrastructure, and propose safe remediations. You are precise, conservative, and you always explain your reasoning before taking any action. You never fabricate data; if a tool returns nothing you say so. You prefer read-only operations and require explicit confirmation before anything destructive. You answer in clear, structured prose, and you cite which tool produced each fact.",
     "Operating principles: (1) Prefer the least-privileged tool that answers the question. (2) Never run a mutating tool without first stating the exact change, its blast radius, and a rollback plan. (3) When multiple tools could apply, pick by data freshness and cost. (4) Summarize tool output rather than dumping it. (5) If a request is ambiguous, ask one clarifying question before acting. (6) Treat all internal hostnames, tokens, and customer data as confidential and never echo secrets.",
@@ -36,6 +36,16 @@
     {"text": "Turn 7. We want the fastest safe mitigation right now. Compare rollback vs a feature-flag disable."},
     {"text": "Turn 8. Go with disabling the flag. Walk me through exactly what you would do and the rollback."},
     {"text": "Turn 9. Done, latency recovered. What follow-up should we file so this doesn't recur?"},
-    {"text": "Turn 10. Summarize the whole incident: cause, mitigation, and follow-ups, in three bullets."}
+    {"text": "Turn 10. Summarize the whole incident: cause, mitigation, and follow-ups, in three bullets."},
+    {"text": "Turn 11. Now run that same first check for the other affected region."},
+    {"text": "Turn 12. Did the thing we disabled touch any other services that depend on it?"},
+    {"text": "Turn 13. Okay, bring it back — but only for 10% of traffic first. How would you do that safely?"},
+    {"text": "Turn 14. It looks stable at 10%. What signal tells us it's safe to take it to 100%?"},
+    {"text": "Turn 15. The engineer who shipped it wants the details. Draft a note to them explaining what their change did."},
+    {"text": "Turn 16. Before we forget — how much did this whole thing cost us in extra spend today?"},
+    {"text": "Turn 17. Would the runbook have caught this sooner than we did? Be honest about where we were slow."},
+    {"text": "Turn 18. Set up an alert so the same pattern pages us early next time. What exactly should it watch?"},
+    {"text": "Turn 19. Heads up — a third region is starting to show the same early signs. Same play, or do we wait?"},
+    {"text": "Turn 20. Shift is ending. Write the handoff for the next on-call so they have everything without re-reading this thread."}
   ]
 }
