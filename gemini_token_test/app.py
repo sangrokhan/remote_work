@@ -18,7 +18,7 @@ from gemini_client import (
 from metrics import summarize, summarize_three_stage
 
 THREE_STAGE = "caching-3stage"
-from store import save_run, list_runs, get_run, firestore_active
+from store import save_run, list_runs, get_run, firestore_active, delete_run
 
 app = Flask(__name__)
 
@@ -277,6 +277,12 @@ def history_one(exec_id):
     if doc is None:
         abort(404)
     return jsonify(doc)
+
+
+@app.route("/history/<exec_id>", methods=["DELETE"])
+def history_delete(exec_id):
+    res = delete_run(exec_id)
+    return jsonify(res), (200 if res.get("ok") else 400)
 
 
 @app.route("/download/run/<exec_id>")

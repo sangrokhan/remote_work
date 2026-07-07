@@ -229,7 +229,8 @@ async function loadHistory() {
     tr.innerHTML = `<td>${r.exec_id}</td><td>${r.mode || ""}</td><td>${r.timestamp || ""}</td>
       <td>${(r.totals?.tokens ?? "").toLocaleString?.() ?? ""}</td>
       <td>${r.totals?.wire_bytes != null ? fmtBytes(r.totals.wire_bytes) : ""}</td>
-      <td>${flags}</td><td><button data-id="${r.exec_id}" class="viewBtn">view</button></td>`;
+      <td>${flags}</td><td><button data-id="${r.exec_id}" class="viewBtn">view</button>
+      <button data-id="${r.exec_id}" class="delBtn"${r.dummy ? " disabled title='dummy row'" : ""}>🗑 delete</button></td>`;
     tb.appendChild(tr);
     for (const sel of [cmpA, cmpB]) {
       const o = document.createElement("option");
@@ -239,6 +240,23 @@ async function loadHistory() {
   }
   document.querySelectorAll(".viewBtn").forEach(b =>
     b.addEventListener("click", () => viewExec(b.dataset.id)));
+  document.querySelectorAll(".delBtn").forEach(b =>
+    b.addEventListener("click", () => deleteExec(b.dataset.id)));
+}
+
+async function deleteExec(execId) {
+  if (!confirm("Delete execution " + execId + "?\nThis permanently removes its stored record.")) return;
+  const resp = await fetch("/history/" + encodeURIComponent(execId), { method: "DELETE" });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.ok) { alert("Delete failed: " + (data.error || resp.status)); return; }
+  // Clear the detail pane if it was showing the run we just deleted.
+  const meta = document.getElementById("histDetailMeta");
+  if (meta.textContent.startsWith(execId)) {
+    meta.textContent = "";
+    document.getElementById("histDetail").hidden = true;
+    document.getElementById("histDownload").hidden = true;
+  }
+  loadHistory();
 }
 
 async function fetchExec(execId) {

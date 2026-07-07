@@ -36,6 +36,8 @@ table.compare th, table.compare td { text-align: left; vertical-align: top; whit
 table.compare td.num, table.compare th:first-child { text-align: right; width: 3.5rem; color: #9fb3c8; }
 table.compare th:nth-child(2), table.compare td:nth-child(2) { width: 22%; }
 h2 .pcap-link { font-size: .8rem; margin-left: .6rem; padding: .3rem .6rem; }
+.delBtn { background: #3a1416; border: 1px solid #6a2d2d; color: #ffb4b4; margin-left: .3rem; }
+.delBtn:hover:not(:disabled) { background: #5a1e22; }
 table { width: 100%; border-collapse: collapse; font-size: .85rem; }
 th, td { padding: .35rem .5rem; text-align: right; border-bottom: 1px solid #2d3748; }
 th:first-child, td:first-child { text-align: left; }

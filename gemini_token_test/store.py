@@ -94,6 +94,32 @@ def save_run(exec_id: str, timestamp: str, experiment: dict, summary: dict) -> d
     return result
 
 
+def delete_run(exec_id: str) -> dict:
+    """Delete one stored execution from local JSON and Firestore. Rejects bad ids
+    and the synthetic dummy rows."""
+    if not _SAFE_EXEC.match(exec_id or "") or exec_id.startswith("dummy_"):
+        return {"ok": False, "exec_id": exec_id, "error": "invalid or non-deletable exec_id"}
+    json_deleted = False
+    p = DATA_DIR / f"{exec_id}.json"
+    try:
+        if p.exists():
+            p.unlink()
+            json_deleted = True
+    except Exception as exc:
+        return {"ok": False, "exec_id": exec_id, "error": f"json_delete_failed: {exc}"}
+    fs_deleted = None
+    fs = _firestore()
+    if fs is not None:
+        try:
+            fs.collection(COLLECTION).document(exec_id).delete()
+            fs_deleted = True
+        except Exception as exc:
+            fs_deleted = f"error: {exc}"
+    ok = json_deleted or fs_deleted is True
+    return {"ok": ok, "exec_id": exec_id, "json_deleted": json_deleted,
+            "firestore_deleted": fs_deleted, "error": "" if ok else "not_found"}
+
+
 def _doc_from_firestore(exec_id: str) -> dict | None:
     fs = _firestore()
     if fs is None:
