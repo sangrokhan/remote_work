@@ -79,7 +79,8 @@ def run():
         saved = save_run(exec_id, timestamp, experiment, summary)
         resp = {"exec_id": exec_id, "timestamp": timestamp, "saved_to": saved,
                 "mock": is_mock(), "mode": mode, "params": experiment["params"],
-                "summary": summary, "pcaps": experiment.get("pcaps") or {}}
+                "summary": summary, "pcaps": experiment.get("pcaps") or {},
+                "comparison": build_comparison(experiment)}
         if want_capture and not cap_ok:
             resp["capture_unavailable"] = cap_reason
         return jsonify(resp)
@@ -156,6 +157,46 @@ def build_chat_export(doc: dict) -> dict:
         "mock": doc.get("mock", False),
         "turns": turns,
     }
+
+
+def build_comparison(doc: dict) -> list[dict]:
+    """Per-step side-by-side rows for the 3-stage run: the query plus the
+    stateless and stateful responses, matched by turn."""
+    sl = {r.get("turn"): r for r in doc.get("stateless_records") or []}
+    sf = {r.get("turn"): r for r in doc.get("stateful_records") or []}
+    rows = []
+    for turn in sorted(set(sl) | set(sf), key=lambda t: (t is None, t)):
+        q = (sl.get(turn) or sf.get(turn) or {}).get("question", "")
+        rows.append({
+            "turn": turn,
+            "query": q,
+            "stateless_response": (sl.get(turn) or {}).get("response_text", ""),
+            "stateful_response": (sf.get(turn) or {}).get("response_text", ""),
+        })
+    return rows
+
+
+@app.route("/download/compare/<exec_id>")
+def download_compare(exec_id):
+    """CSV of the per-step comparison (turn, query, stateless, stateful)."""
+    import csv
+    import io
+    doc = get_run(exec_id)
+    if doc is None:
+        abort(404)
+    rows = build_comparison(doc)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["turn", "query", "stateless_response", "stateful_response"])
+    for r in rows:
+        writer.writerow([r["turn"], r["query"],
+                         r["stateless_response"], r["stateful_response"]])
+    from flask import Response
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="compare_{exec_id}.csv"'},
+    )
 
 
 @app.route("/download/chat/<exec_id>")

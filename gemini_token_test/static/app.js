@@ -112,6 +112,33 @@ function renderDetail(series, mode) {
   });
 }
 
+// 3-stage side-by-side table: one row per step, columns query / stateless resp /
+// stateful resp. Uses textContent so response text can't break the layout or inject HTML.
+function renderCompare3(rows, execId) {
+  const sec = document.getElementById("compare3");
+  const tb = document.querySelector("#compareTable tbody");
+  tb.innerHTML = "";
+  (rows || []).forEach(r => {
+    const tr = document.createElement("tr");
+    [r.turn, r.query, r.stateless_response, r.stateful_response].forEach((v, i) => {
+      const td = document.createElement("td");
+      td.textContent = (v == null) ? "" : String(v);
+      if (i === 0) td.className = "num";
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  const csv = document.getElementById("compareCsv");
+  const has = !!(rows && rows.length);
+  if (has && execId) {
+    csv.href = "/download/compare/" + encodeURIComponent(execId);
+    csv.hidden = false;
+  } else {
+    csv.hidden = true;
+  }
+  sec.hidden = !has;
+}
+
 async function start() {
   const btn = document.getElementById("start");
   const status = document.getElementById("status");
@@ -121,6 +148,7 @@ async function start() {
     document.getElementById("pcapLink").hidden = true;
     document.getElementById("chatLink").hidden = true;
     document.getElementById("captureLog").hidden = true;
+    document.getElementById("compare3").hidden = true;
     const body = {
       mode: document.getElementById("mode").value,
       turns: +document.getElementById("turns").value,
@@ -142,10 +170,12 @@ async function start() {
         { label: "stateless (full resend)", series: s.stateless_series, color: "#ff6b6b" },
         { label: "stateful (cache + question)", series: s.stateful_series, color: "#4dd4ac" },
       ]);
+      renderCompare3(data.comparison, data.exec_id);
       document.querySelector("#detail tbody").innerHTML = "";
     } else {
       renderSummary(s.totals, data.mock, false);
       renderCaptureLog(data.capture ? { [s.mode]: data.capture } : {});
+      document.getElementById("compare3").hidden = true;
       plot([{ label: s.mode, series: s.series, color: modeColor(s.mode) }]);
       renderDetail(s.series, s.mode);
     }

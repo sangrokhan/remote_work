@@ -30,6 +30,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
 .chart-box { background: #161b22; border: 1px solid #2d3748; border-radius: 8px; padding: 1rem; }
 @media (max-width: 800px) { .charts { grid-template-columns: 1fr; } }
+.table-scroll { overflow-x: auto; }
+table.compare { table-layout: fixed; }
+table.compare th, table.compare td { text-align: left; vertical-align: top; white-space: pre-wrap; word-break: break-word; }
+table.compare td.num, table.compare th:first-child { text-align: right; width: 3.5rem; color: #9fb3c8; }
+table.compare th:nth-child(2), table.compare td:nth-child(2) { width: 22%; }
+h2 .pcap-link { font-size: .8rem; margin-left: .6rem; padding: .3rem .6rem; }
 table { width: 100%; border-collapse: collapse; font-size: .85rem; }
 th, td { padding: .35rem .5rem; text-align: right; border-bottom: 1px solid #2d3748; }
 th:first-child, td:first-child { text-align: left; }
