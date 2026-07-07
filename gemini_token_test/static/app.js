@@ -120,7 +120,7 @@ function renderCompare3(rows, execId) {
   tb.innerHTML = "";
   (rows || []).forEach(r => {
     const tr = document.createElement("tr");
-    [r.turn, r.query, r.stateless_response, r.stateful_response].forEach((v, i) => {
+    [r.turn, r.query, r.stateless_response, r.nocontext_response, r.stateful_response].forEach((v, i) => {
       const td = document.createElement("td");
       td.textContent = (v == null) ? "" : String(v);
       if (i === 0) td.className = "num";

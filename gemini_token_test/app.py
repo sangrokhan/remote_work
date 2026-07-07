@@ -163,14 +163,16 @@ def build_comparison(doc: dict) -> list[dict]:
     """Per-step side-by-side rows for the 3-stage run: the query plus the
     stateless and stateful responses, matched by turn."""
     sl = {r.get("turn"): r for r in doc.get("stateless_records") or []}
+    nc = {r.get("turn"): r for r in doc.get("nocontext_records") or []}
     sf = {r.get("turn"): r for r in doc.get("stateful_records") or []}
     rows = []
-    for turn in sorted(set(sl) | set(sf), key=lambda t: (t is None, t)):
-        q = (sl.get(turn) or sf.get(turn) or {}).get("question", "")
+    for turn in sorted(set(sl) | set(nc) | set(sf), key=lambda t: (t is None, t)):
+        q = (sl.get(turn) or nc.get(turn) or sf.get(turn) or {}).get("question", "")
         rows.append({
             "turn": turn,
             "query": q,
             "stateless_response": (sl.get(turn) or {}).get("response_text", ""),
+            "nocontext_response": (nc.get(turn) or {}).get("response_text", ""),
             "stateful_response": (sf.get(turn) or {}).get("response_text", ""),
         })
     return rows
@@ -197,10 +199,12 @@ def download_compare(exec_id):
     buf = io.StringIO()
     buf.write("﻿")  # BOM: nudge Excel toward UTF-8
     writer = csv.writer(buf)
-    writer.writerow(["turn", "query", "stateless_response", "stateful_response"])
+    writer.writerow(["turn", "query", "stateless_response",
+                     "nocontext_response", "stateful_response"])
     for r in rows:
         writer.writerow([_csv_safe(r["turn"]), _csv_safe(r["query"]),
                          _csv_safe(r["stateless_response"]),
+                         _csv_safe(r["nocontext_response"]),
                          _csv_safe(r["stateful_response"])])
     from flask import Response
     return Response(

@@ -158,6 +158,18 @@ def run_three_stage(model: str, request_name: str = "default",
         stateless_records.append(rec)
     _end(cap, "stateless")
 
+    # --- Stage 1b: stateless no-context. Each turn sends ONLY the current question
+    # — no system prompt, no accumulated history, no cache. The model gets a pure
+    # question with zero continuity, so context-dependent turns go ambiguous. ----
+    nocontext_records = []
+    cap = _begin("nocontext")
+    for k, q in enumerate(steps, start=1):
+        res = call_gemini(model, [_user(q)], mode="stateless-nocontext", turn=k)
+        rec = res.as_dict()
+        rec["question"] = q  # store question alongside response_text (answer)
+        nocontext_records.append(rec)
+    _end(cap, "nocontext")
+
     # --- Stage 2: cumulative caches. cache_k = history[:2k] (k Q&A pairs) -------
     cache_set = []
     cap = _begin("cachebuild")
@@ -202,5 +214,6 @@ def run_three_stage(model: str, request_name: str = "default",
         "scenario": scenario,
         "cache_set": cache_set,
         "stateless_records": stateless_records,
+        "nocontext_records": nocontext_records,
         "stateful_records": stateful_records,
     }

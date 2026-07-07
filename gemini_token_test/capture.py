@@ -34,7 +34,7 @@ PCAP_DIR = Path(os.environ.get("PCAP_DIR", "data/pcaps"))
 PCAP_SNAPLEN = int(os.environ.get("PCAP_SNAPLEN", "100"))
 # Filename = timestamp + a high-entropy token so concurrent runs never collide
 # and download URLs are unguessable across requests.
-_SAFE_NAME = re.compile(r"^capture_(stateless|stateful|cachebuild)_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
+_SAFE_NAME = re.compile(r"^capture_(stateless|stateful|cachebuild|nocontext)_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
 # tcpdump prints capture stats to stderr on exit (SIGINT). Parse the drop counts so
 # the UI can surface capture loss instead of silently producing a lossy pcap.
 _STAT_RE = re.compile(
@@ -104,7 +104,7 @@ class Capture:
     def __init__(self, timestamp: str, mode: str = "stateless",
                  interface: str | None = None):
         self.timestamp = timestamp
-        self.mode = mode if mode in ("stateless", "stateful", "cachebuild") else "stateless"
+        self.mode = mode if mode in ("stateless", "stateful", "cachebuild", "nocontext") else "stateless"
         self.interface = interface or os.environ.get("PCAP_IFACE", "any")
         self.host = _vertex_host()
         self.ips: list[str] = []
