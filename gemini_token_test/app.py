@@ -185,16 +185,27 @@ def download_compare(exec_id):
     if doc is None:
         abort(404)
     rows = build_comparison(doc)
+
+    def _csv_safe(v):
+        # Neutralize CSV formula injection: a cell a spreadsheet would treat as a
+        # formula (leading = + - @ TAB CR) is prefixed with a quote so it stays text.
+        s = "" if v is None else str(v)
+        if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+            s = "'" + s
+        return s
+
     buf = io.StringIO()
+    buf.write("﻿")  # BOM: nudge Excel toward UTF-8
     writer = csv.writer(buf)
     writer.writerow(["turn", "query", "stateless_response", "stateful_response"])
     for r in rows:
-        writer.writerow([r["turn"], r["query"],
-                         r["stateless_response"], r["stateful_response"]])
+        writer.writerow([_csv_safe(r["turn"]), _csv_safe(r["query"]),
+                         _csv_safe(r["stateless_response"]),
+                         _csv_safe(r["stateful_response"])])
     from flask import Response
     return Response(
         buf.getvalue(),
-        mimetype="text/csv",
+        mimetype="text/csv",  # Flask appends charset=utf-8
         headers={"Content-Disposition": f'attachment; filename="compare_{exec_id}.csv"'},
     )
 
