@@ -73,9 +73,12 @@ def _execute_run(data: dict, on_progress=None):
         cap_ok, cap_reason = (True, "")
         if want_capture:
             cap_ok, cap_reason = pcap.available()
+        # Pause between stages to stay under Vertex per-minute quotas; skip in mock
+        # (no real quota) so tests/dev runs don't sleep.
+        pause = 0 if is_mock() else float(os.environ.get("STAGE_PAUSE_SECONDS", "60"))
         experiment = run_three_stage(model, turns=turns, timestamp=timestamp,
                                      want_capture=(want_capture and cap_ok),
-                                     on_progress=on_progress)
+                                     on_progress=on_progress, stage_pause_seconds=pause)
         experiment["params"]["mock"] = is_mock()
         summary = summarize_three_stage(experiment)
         saved = save_run(exec_id, timestamp, experiment, summary)
@@ -147,7 +150,11 @@ def run_stream():
 
     def gen():
         while True:
-            ev = q.get()
+            try:
+                ev = q.get(timeout=15)
+            except queue.Empty:
+                yield ": keepalive\n\n"  # keep proxies from idle-timing out the stream
+                continue
             if ev is None:
                 break
             yield f"data: {json.dumps(ev)}\n\n"

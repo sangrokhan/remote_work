@@ -98,13 +98,16 @@ def _model(text: str) -> dict:
 
 def run_three_stage(model: str, request_name: str = "default",
                     turns: int | None = None, want_capture: bool = False,
-                    timestamp: str = "", on_progress=None) -> dict:
-    """Stage 1 stateless scenario -> Stage 2 cumulative caches -> Stage 3 stateful
-    replay (cache + question only). Returns one combined document.
+                    timestamp: str = "", on_progress=None,
+                    stage_pause_seconds: float = 0) -> dict:
+    """Stage order: stateless -> caches -> stateful -> no-context. Returns one
+    combined document.
 
     When want_capture is set, each stage is captured to its own pcap
-    (stateless / cachebuild / stateful) so the traffic of each stage is separable.
-    on_progress(event) is called once per turn with {stage, turn, turns}.
+    (stateless / cachebuild / stateful / nocontext) so each stage's traffic is
+    separable. on_progress(event) is called once per turn with {stage, turn, turns}.
+    stage_pause_seconds inserts a pause between stages (spreads calls out to stay
+    under Vertex per-minute quotas); during it on_progress emits {stage:'pause'}.
     """
     system, steps, source = load_request(request_name)
     if turns:
@@ -114,6 +117,17 @@ def run_three_stage(model: str, request_name: str = "default",
     def _prog(stage, turn):
         if on_progress:
             on_progress({"stage": stage, "turn": turn, "turns": n})
+
+    def _pause():
+        # Space stages out so a burst of turns doesn't trip Vertex RPM/TPM limits.
+        # Tick every few seconds so the UI (and the SSE connection) stays alive.
+        rem = int(stage_pause_seconds)
+        while rem > 0:
+            if on_progress:
+                on_progress({"stage": "pause", "turn": rem, "turns": int(stage_pause_seconds)})
+            step = min(5, rem)
+            time.sleep(step)
+            rem -= step
 
     import capture as pcap  # lazy: avoids hard dependency when capture unused
     pcaps: dict = {}
@@ -165,19 +179,7 @@ def run_three_stage(model: str, request_name: str = "default",
         rec["question"] = q  # store question alongside response_text (answer)
         stateless_records.append(rec)
     _end(cap, "stateless")
-
-    # --- Stage 1b: stateless no-context. Each turn sends ONLY the current question
-    # — no system prompt, no accumulated history, no cache. The model gets a pure
-    # question with zero continuity, so context-dependent turns go ambiguous. ----
-    nocontext_records = []
-    cap = _begin("nocontext")
-    for k, q in enumerate(steps, start=1):
-        _prog("nocontext", k)
-        res = call_gemini(model, [_user(q)], mode="stateless-nocontext", turn=k)
-        rec = res.as_dict()
-        rec["question"] = q  # store question alongside response_text (answer)
-        nocontext_records.append(rec)
-    _end(cap, "nocontext")
+    _pause()
 
     # --- Stage 2: cumulative caches. cache_k = history[:2k] (k Q&A pairs) -------
     cache_set = []
@@ -190,6 +192,7 @@ def run_three_stage(model: str, request_name: str = "default",
             "skipped": c["name"] is None, "error": c["error"],
         })
     _end(cap, "cachebuild")
+    _pause()
 
     # --- Stage 3: stateful replay. turn k uses cache_(k-1) + question only ------
     stateful_records = []
@@ -211,6 +214,21 @@ def run_three_stage(model: str, request_name: str = "default",
         rec["used_cache"] = cache_id is not None
         stateful_records.append(rec)
     _end(cap, "stateful")
+    _pause()
+
+    # --- Stage 4: stateless no-context. Each turn sends ONLY the current question
+    # — no system prompt, no accumulated history, no cache. The model gets a pure
+    # question with zero continuity, so context-dependent turns go ambiguous. Run
+    # last since it has no dependency on the earlier stages. ----------------------
+    nocontext_records = []
+    cap = _begin("nocontext")
+    for k, q in enumerate(steps, start=1):
+        _prog("nocontext", k)
+        res = call_gemini(model, [_user(q)], mode="stateless-nocontext", turn=k)
+        rec = res.as_dict()
+        rec["question"] = q  # store question alongside response_text (answer)
+        nocontext_records.append(rec)
+    _end(cap, "nocontext")
 
     # --- cleanup caches (best-effort) ------------------------------------------
     if os.environ.get("KEEP_CACHE") != "1":

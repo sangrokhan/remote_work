@@ -147,6 +147,7 @@ const STAGE_LABELS = {
 };
 
 function progressText(p) {
+  if (p.stage === "pause") return `⏸ Pausing between stages — ${p.turn}s left (rate-limit spacing)…`;
   const label = STAGE_LABELS[p.stage] || p.stage;
   return `Running… ${label} — turn ${p.turn}/${p.turns}`;
 }
@@ -202,7 +203,8 @@ async function start() {
     };
     const data = await runStreaming(body, (p) => { status.textContent = progressText(p); });
     if (!data || data.__error || data.error || !data.summary) {
-      status.textContent = "Error: " + ((data && (data.__error || data.error)) || "no result");
+      status.textContent = "Error: " + ((data && (data.__error || data.error))
+        || "stream ended early (server timeout or Vertex rate limit?)");
       return;
     }
 

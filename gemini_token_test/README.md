@@ -189,6 +189,7 @@ python -m unittest discover tests      # pure metric math, no network
 | `PCAP_IFACE` | `any` | tcpdump capture interface |
 | `PCAP_SNAPLEN` | `100` | bytes captured per packet (`tcpdump -s`). Header-only; TLS payload is encrypted anyway. Smaller = less disk I/O = fewer kernel drops. Original packet length is still recorded, so sizes stay exact. |
 | `PCAP_DISABLE` | `0` | `1` = hide/disable packet capture |
+| `STAGE_PAUSE_SECONDS` | `60` | pause between 3-stage stages (stateless → caches → stateful → no-context) to stay under Vertex per-minute quotas. Ignored in mock. Set `0` to disable. |
 | `CAPTURE_WARMUP_SECONDS` | `2` | settle time after tcpdump starts before the first request (clean handshake in each per-stage pcap) |
 | `CAPTURE_DRAIN_SECONDS` | `1` | drain time after the socket closes before tcpdump stops (clean teardown) |
 | `TRANSCRIPT_DIR` | `data/transcripts` | inspector transcript output dir |
