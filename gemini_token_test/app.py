@@ -48,13 +48,14 @@ def models():
     return jsonify(list_models())
 
 
-@app.route("/run", methods=["POST"])
-def run():
+def _execute_run(data: dict, on_progress=None):
+    """Run one experiment and build the response dict. on_progress(event) is
+    called per turn (event: {stage, turn, turns}) so callers can stream progress.
+    Returns (resp_dict, status_code)."""
     ok, reason = ready()
     if not ok:
-        return jsonify({"error": reason}), 400
+        return {"error": reason}, 400
 
-    data = request.get_json(force=True, silent=True) or {}
     mode = data.get("mode", "stateless")
     if mode != THREE_STAGE and mode not in MODES:
         mode = "stateless"
@@ -73,7 +74,8 @@ def run():
         if want_capture:
             cap_ok, cap_reason = pcap.available()
         experiment = run_three_stage(model, turns=turns, timestamp=timestamp,
-                                     want_capture=(want_capture and cap_ok))
+                                     want_capture=(want_capture and cap_ok),
+                                     on_progress=on_progress)
         experiment["params"]["mock"] = is_mock()
         summary = summarize_three_stage(experiment)
         saved = save_run(exec_id, timestamp, experiment, summary)
@@ -83,20 +85,20 @@ def run():
                 "comparison": build_comparison(experiment)}
         if want_capture and not cap_ok:
             resp["capture_unavailable"] = cap_reason
-        return jsonify(resp)
+        return resp, 200
 
     capture_info = None
     if want_capture:
         cap_ok, cap_reason = pcap.available()
         if not cap_ok:
             capture_info = {"ok": False, "error": cap_reason}
-            experiment = run_experiment(mode, model, turns=turns)
+            experiment = run_experiment(mode, model, turns=turns, on_progress=on_progress)
         else:
             with pcap.Capture(timestamp, mode) as cap:
-                experiment = run_experiment(mode, model, turns=turns)
+                experiment = run_experiment(mode, model, turns=turns, on_progress=on_progress)
             capture_info = cap.result()
     else:
-        experiment = run_experiment(mode, model, turns=turns)
+        experiment = run_experiment(mode, model, turns=turns, on_progress=on_progress)
 
     # Mark synthetic runs so the result (and saved history) can't be mistaken
     # for real traffic.
@@ -111,7 +113,47 @@ def run():
         if capture_info.get("ok") and capture_info.get("file"):
             capture_info["download"] = f"/download/pcap/{capture_info['file']}"
         resp["capture"] = capture_info
-    return jsonify(resp)
+    return resp, 200
+
+
+@app.route("/run", methods=["POST"])
+def run():
+    data = request.get_json(force=True, silent=True) or {}
+    resp, code = _execute_run(data)
+    return jsonify(resp), code
+
+
+@app.route("/run/stream", methods=["POST"])
+def run_stream():
+    """Same as /run but streams per-turn progress as Server-Sent Events, then a
+    final 'done' event carrying the full result (or 'error')."""
+    import queue
+    import threading
+    from flask import Response
+
+    data = request.get_json(force=True, silent=True) or {}
+    q: "queue.Queue" = queue.Queue()
+
+    def work():
+        try:
+            resp, code = _execute_run(data, on_progress=lambda ev: q.put({"type": "progress", **ev}))
+            q.put({"type": "done", "status": code, "payload": resp})
+        except Exception as exc:  # never leak a half-stream; report and end
+            q.put({"type": "error", "error": str(exc)})
+        finally:
+            q.put(None)
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def gen():
+        while True:
+            ev = q.get()
+            if ev is None:
+                break
+            yield f"data: {json.dumps(ev)}\n\n"
+
+    return Response(gen(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 def _parse_json(s):

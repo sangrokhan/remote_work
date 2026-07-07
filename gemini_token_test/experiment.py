@@ -56,7 +56,7 @@ def _user(text: str) -> dict:
 
 
 def run_experiment(mode: str, model: str, request_name: str = "default",
-                   turns: int | None = None) -> dict:
+                   turns: int | None = None, on_progress=None) -> dict:
     if mode not in MODES:
         mode = "stateless"
     system, steps, source = load_request(request_name)
@@ -67,6 +67,8 @@ def run_experiment(mode: str, model: str, request_name: str = "default",
     # stateless carries the big system prompt every turn; stateful (delta) does not.
     history: list[dict] = [_user(system)] if system else []
     for k, text in enumerate(steps, start=1):
+        if on_progress:
+            on_progress({"stage": mode, "turn": k, "turns": len(steps)})
         if mode == "stateless":
             history.append(_user(text))
             contents = list(history)
@@ -96,17 +98,22 @@ def _model(text: str) -> dict:
 
 def run_three_stage(model: str, request_name: str = "default",
                     turns: int | None = None, want_capture: bool = False,
-                    timestamp: str = "") -> dict:
+                    timestamp: str = "", on_progress=None) -> dict:
     """Stage 1 stateless scenario -> Stage 2 cumulative caches -> Stage 3 stateful
     replay (cache + question only). Returns one combined document.
 
     When want_capture is set, each stage is captured to its own pcap
     (stateless / cachebuild / stateful) so the traffic of each stage is separable.
+    on_progress(event) is called once per turn with {stage, turn, turns}.
     """
     system, steps, source = load_request(request_name)
     if turns:
         steps = steps[:max(1, min(turns, len(steps)))]
     n = len(steps)
+
+    def _prog(stage, turn):
+        if on_progress:
+            on_progress({"stage": stage, "turn": turn, "turns": n})
 
     import capture as pcap  # lazy: avoids hard dependency when capture unused
     pcaps: dict = {}
@@ -144,6 +151,7 @@ def run_three_stage(model: str, request_name: str = "default",
     history: list[dict] = [_user(system)] if system else []
     cap = _begin("stateless")
     for k, q in enumerate(steps, start=1):
+        _prog("stateless", k)
         history.append(_user(q))
         res = call_gemini(model, list(history), mode="stateless", turn=k)
         ans = res.response_text or ""
@@ -164,6 +172,7 @@ def run_three_stage(model: str, request_name: str = "default",
     nocontext_records = []
     cap = _begin("nocontext")
     for k, q in enumerate(steps, start=1):
+        _prog("nocontext", k)
         res = call_gemini(model, [_user(q)], mode="stateless-nocontext", turn=k)
         rec = res.as_dict()
         rec["question"] = q  # store question alongside response_text (answer)
@@ -174,6 +183,7 @@ def run_three_stage(model: str, request_name: str = "default",
     cache_set = []
     cap = _begin("cachebuild")
     for k in range(1, n + 1):
+        _prog("cachebuild", k)
         c = create_cache(model, history[:off + 2 * k], CACHE_TTL_SECONDS)
         cache_set.append({
             "k": k, "cache_id": c["name"], "cached_tokens": c["cached_tokens"],
@@ -185,6 +195,7 @@ def run_three_stage(model: str, request_name: str = "default",
     stateful_records = []
     cap = _begin("stateful")
     for k, q in enumerate(steps, start=1):
+        _prog("stateful", k)
         cache = cache_set[k - 2] if k >= 2 else None
         cache_id = cache["cache_id"] if cache else None
         hint = cache["cached_tokens"] if cache else 0

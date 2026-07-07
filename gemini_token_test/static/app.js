@@ -139,6 +139,51 @@ function renderCompare3(rows, execId) {
   sec.hidden = !has;
 }
 
+const STAGE_LABELS = {
+  stateless: "Stateless (full resend)",
+  nocontext: "Stateless — no context",
+  cachebuild: "Building caches",
+  stateful: "Stateful (cache + question)",
+};
+
+function progressText(p) {
+  const label = STAGE_LABELS[p.stage] || p.stage;
+  return `Running… ${label} — turn ${p.turn}/${p.turns}`;
+}
+
+// POST to the streaming endpoint and drain Server-Sent Events: forward each
+// per-turn progress event to onProgress, return the final result payload.
+async function runStreaming(body, onProgress) {
+  const resp = await fetch("/run/stream", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok || !resp.body) {
+    let err = resp.status;
+    try { err = (await resp.json()).error || err; } catch (e) {}
+    return { __error: err };
+  }
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", result = null;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const line = buf.slice(0, idx).split("\n").find(l => l.startsWith("data:"));
+      buf = buf.slice(idx + 2);
+      if (!line) continue;
+      let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch (e) { continue; }
+      if (ev.type === "progress") onProgress(ev);
+      else if (ev.type === "done") result = ev.payload;
+      else if (ev.type === "error") result = { __error: ev.error };
+    }
+  }
+  return result;
+}
+
 async function start() {
   const btn = document.getElementById("start");
   const status = document.getElementById("status");
@@ -155,12 +200,11 @@ async function start() {
       model: selectedModel(),
       capture: document.getElementById("capture").checked,
     };
-    const resp = await fetch("/run", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
-    if (!resp.ok) { status.textContent = "Error: " + (data.error || resp.status); return; }
+    const data = await runStreaming(body, (p) => { status.textContent = progressText(p); });
+    if (!data || data.__error || data.error || !data.summary) {
+      status.textContent = "Error: " + ((data && (data.__error || data.error)) || "no result");
+      return;
+    }
 
     const s = data.summary;
     if (s.mode === "caching-3stage") {
