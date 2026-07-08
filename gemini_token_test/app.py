@@ -202,6 +202,7 @@ def build_chat_export(doc: dict) -> dict:
     turns = []
     if mode == THREE_STAGE:
         turns += _chat_turns(doc.get("stateless_records"), "stateless")
+        turns += _chat_turns(doc.get("nocontext_records"), "nocontext")
         turns += _chat_turns(doc.get("stateful_records"), "stateful")
     else:
         turns += _chat_turns(doc.get("records"), mode)
