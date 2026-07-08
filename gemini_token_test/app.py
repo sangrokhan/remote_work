@@ -74,8 +74,14 @@ def _execute_run(data: dict, on_progress=None):
         if want_capture:
             cap_ok, cap_reason = pcap.available()
         # Pause between stages to stay under Vertex per-minute quotas; skip in mock
-        # (no real quota) so tests/dev runs don't sleep.
-        pause = 0 if is_mock() else float(os.environ.get("STAGE_PAUSE_SECONDS", "60"))
+        # (no real quota) so tests/dev runs don't sleep. UI value wins over the
+        # STAGE_PAUSE_SECONDS default; clamped to a sane 0..600s.
+        if is_mock():
+            pause = 0
+        else:
+            raw = data.get("pause_seconds")
+            pause = float(raw) if raw is not None else float(os.environ.get("STAGE_PAUSE_SECONDS", "60"))
+            pause = max(0.0, min(pause, 600.0))
         experiment = run_three_stage(model, turns=turns, timestamp=timestamp,
                                      want_capture=(want_capture and cap_ok),
                                      on_progress=on_progress, stage_pause_seconds=pause)

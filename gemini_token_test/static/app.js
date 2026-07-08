@@ -200,6 +200,7 @@ async function start() {
       turns: +document.getElementById("turns").value,
       model: selectedModel(),
       capture: document.getElementById("capture").checked,
+      pause_seconds: +document.getElementById("pauseSeconds").value,
     };
     const data = await runStreaming(body, (p) => { status.textContent = progressText(p); });
     if (!data || data.__error || data.error || !data.summary) {
