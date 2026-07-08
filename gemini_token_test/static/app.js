@@ -144,6 +144,7 @@ const STAGE_LABELS = {
   nocontext: "Stateless — no context",
   cachebuild: "Building caches",
   stateful: "Stateful (cache + question)",
+  interaction: "Interaction API (server-side state)",
 };
 
 function progressText(p) {
@@ -154,8 +155,8 @@ function progressText(p) {
 
 // POST to the streaming endpoint and drain Server-Sent Events: forward each
 // per-turn progress event to onProgress, return the final result payload.
-async function runStreaming(body, onProgress) {
-  const resp = await fetch("/run/stream", {
+async function runStreaming(body, onProgress, url = "/run/stream") {
+  const resp = await fetch(url, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -183,6 +184,61 @@ async function runStreaming(body, onProgress) {
     }
   }
   return result;
+}
+
+// --- Interaction API test (stateful, server-side history) --------------------
+function renderInteraction(data) {
+  const sec = document.getElementById("interactionResult");
+  const tb = document.querySelector("#interactionTable tbody");
+  tb.innerHTML = "";
+  (data.records || []).forEach(r => {
+    const tr = document.createElement("tr");
+    [r.turn, r.question, r.response_text, r.interaction_id, r.error].forEach((v, i) => {
+      const td = document.createElement("td");
+      td.textContent = (v == null) ? "" : String(v);
+      if (i === 0) td.className = "num";
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  const p = data.params || {};
+  document.getElementById("interactionMeta").textContent =
+    `${data.mock ? "[MOCK] " : ""}model: ${p.model || "?"} · endpoint: ${p.endpoint || "?"} · exec_id: ${data.exec_id || "?"}`;
+  const dl = document.getElementById("interactionChat");
+  const blob = new Blob([JSON.stringify(data.records || [], null, 2)], { type: "application/json" });
+  if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);
+  const u = URL.createObjectURL(blob);
+  dl.href = u; dl.dataset.url = u; dl.download = `interaction_${data.exec_id || "run"}.json`;
+  dl.hidden = false;
+  sec.hidden = false;
+}
+
+async function startInteraction() {
+  const btn = document.getElementById("startInteraction");
+  const status = document.getElementById("status");
+  btn.disabled = true;
+  status.textContent = "Interaction API…";
+  try {
+    document.getElementById("interactionResult").hidden = true;
+    const body = {
+      turns: +document.getElementById("turns").value,
+      model: selectedModel(),
+    };
+    const data = await runStreaming(body, (p) => { status.textContent = progressText(p); }, "/interaction/test");
+    if (!data || data.__error || data.error || !data.records) {
+      status.textContent = "Error: " + ((data && (data.__error || data.error)) || "no result");
+      return;
+    }
+    renderInteraction(data);
+    const errs = (data.records || []).filter(r => r.error).length;
+    status.textContent = `${data.mock ? "[MOCK] " : ""}Interaction done. exec_id: ${data.exec_id}`
+      + (errs ? ` | ${errs} turn(s) errored` : "");
+    loadHistory();
+  } catch (e) {
+    status.textContent = "Failed: " + e;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function start() {
@@ -434,6 +490,7 @@ document.getElementById("model").addEventListener("change", toggleCustom);
 document.getElementById("modelFilter").addEventListener("input", e => renderModels(e.target.value));
 document.getElementById("modelRefresh").addEventListener("click", loadModels);
 document.getElementById("start").addEventListener("click", start);
+document.getElementById("startInteraction").addEventListener("click", startInteraction);
 document.getElementById("refresh").addEventListener("click", loadHistory);
 document.getElementById("compare").addEventListener("click", compare);
 document.getElementById("inspect").addEventListener("click", inspect);

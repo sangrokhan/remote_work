@@ -169,6 +169,59 @@ def run_stream():
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.route("/interaction/test", methods=["POST"])
+def interaction_test():
+    """Experimental: replay the scenario over the stateful Interactions API and
+    stream per-turn progress (SSE), then a final 'done' with the per-turn records.
+    Additive — does not touch the generateContent run flow."""
+    import queue
+    import threading
+    from flask import Response
+
+    data = request.get_json(force=True, silent=True) or {}
+    q: "queue.Queue" = queue.Queue()
+
+    def work():
+        try:
+            ok, reason = ready()
+            if not ok:
+                q.put({"type": "done", "status": 400, "payload": {"error": reason}})
+                return
+            turns = max(1, min(int(data.get("turns", 1)), 100))
+            model = (data.get("model") or DEFAULT_MODEL).strip()
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
+            from interaction_client import run_interaction
+            exp = run_interaction(model, turns=turns,
+                                  on_progress=lambda ev: q.put({"type": "progress", **ev}))
+            exp["params"]["mock"] = is_mock()
+            saved = save_run(exec_id, timestamp, exp, {"mode": "interaction"})
+            payload = {"exec_id": exec_id, "timestamp": timestamp, "mock": is_mock(),
+                       "mode": "interaction", "params": exp["params"],
+                       "records": exp["interaction_records"], "saved_to": saved}
+            q.put({"type": "done", "status": 200, "payload": payload})
+        except Exception as exc:
+            q.put({"type": "error", "error": str(exc)})
+        finally:
+            q.put(None)
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def gen():
+        while True:
+            try:
+                ev = q.get(timeout=15)
+            except queue.Empty:
+                yield ": keepalive\n\n"
+                continue
+            if ev is None:
+                break
+            yield f"data: {json.dumps(ev)}\n\n"
+
+    return Response(gen(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 def _parse_json(s):
     """Turn a raw JSON string back into an object for a clean export; keep the
     original string if it isn't valid JSON (e.g. an error body)."""
