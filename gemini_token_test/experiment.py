@@ -216,15 +216,20 @@ def run_three_stage(model: str, request_name: str = "default",
     _end(cap, "stateful")
     _pause()
 
-    # --- Stage 4: stateless no-context. Each turn sends ONLY the current question
-    # — no system prompt, no accumulated history, no cache. The model gets a pure
-    # question with zero continuity, so context-dependent turns go ambiguous. Run
+    # --- Stage 4: stateless no-context. The system prompt rides ONLY the first
+    # query; every later turn sends just the bare question — no system prompt, no
+    # prior question/answer, no cache. Models a naive client that primes context
+    # once and then forgets it, so continuity-dependent turns go ambiguous. Run
     # last since it has no dependency on the earlier stages. ----------------------
     nocontext_records = []
     cap = _begin("nocontext")
     for k, q in enumerate(steps, start=1):
         _prog("nocontext", k)
-        res = call_gemini(model, [_user(q)], mode="stateless-nocontext", turn=k)
+        if k == 1 and system:
+            contents = [_user(system), _user(q)]  # system prompt sent with first query only
+        else:
+            contents = [_user(q)]                 # later turns: bare question, nothing else
+        res = call_gemini(model, contents, mode="stateless-nocontext", turn=k)
         rec = res.as_dict()
         rec["question"] = q  # store question alongside response_text (answer)
         nocontext_records.append(rec)
