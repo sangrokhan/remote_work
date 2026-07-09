@@ -148,6 +148,9 @@ const STAGE_LABELS = {
 };
 
 function progressText(p) {
+  if (p.stage === "provisioning") {
+    return `⏳ Provisioning agent sandbox — attempt ${p.attempt}, ${((p.at_ms || 0) / 1000).toFixed(0)}s…`;
+  }
   if (p.stage === "pause") return `⏸ Pausing between stages — ${p.turn}s left (rate-limit spacing)…`;
   const label = STAGE_LABELS[p.stage] || p.stage;
   let s = `Running… ${label} — turn ${p.turn}/${p.turns}`;
@@ -207,8 +210,14 @@ function renderInteraction(data) {
     tb.appendChild(tr);
   });
   const p = data.params || {};
+  const w = p.warmup || {};
+  const warm = w.skipped
+    ? `env reused (${w.env_id})`
+    : (w.env_id
+        ? `sandbox provisioned in ${(w.elapsed_ms / 1000).toFixed(1)}s (${w.attempts} attempt${w.attempts === 1 ? "" : "s"}) → ${w.env_id}`
+        : `warmup failed: ${w.error || "unknown"}`);
   document.getElementById("interactionMeta").textContent =
-    `${data.mock ? "[MOCK] " : ""}model: ${p.model || "?"} · endpoint: ${p.endpoint || "?"} · exec_id: ${data.exec_id || "?"}`;
+    `${data.mock ? "[MOCK] " : ""}agent: ${p.agent || "?"} · ${warm} · exec_id: ${data.exec_id || "?"}`;
   const dl = document.getElementById("interactionChat");
   const blob = new Blob([JSON.stringify(data.records || [], null, 2)], { type: "application/json" });
   if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);

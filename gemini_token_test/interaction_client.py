@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 
 from gemini_client import (
@@ -48,6 +49,25 @@ INTERACTION_API_REVISION = os.environ.get("INTERACTION_API_REVISION", "2026-05-2
 # restore async behavior. Per-request HTTP timeout is also tunable.
 INTERACTION_BACKGROUND = os.environ.get("INTERACTION_BACKGROUND") == "1"
 INTERACTION_TIMEOUT = float(os.environ.get("INTERACTION_TIMEOUT", "180"))
+# The first interaction provisions a sandbox container on demand and can come back
+# with a "resource setup has just started" style error instead of an answer. So we
+# warm the environment up first with a throwaway prompt, retry until it yields an
+# environment id, then run the real turns against that id (reuse = no provisioning
+# latency). Set INTERACTION_ENV_ID to skip warmup entirely (sandbox TTL is 7 days).
+INTERACTION_ENV_ID = os.environ.get("INTERACTION_ENV_ID", "")
+INTERACTION_WARMUP_TIMEOUT = float(os.environ.get("INTERACTION_WARMUP_TIMEOUT", "300"))
+INTERACTION_WARMUP_INTERVAL = float(os.environ.get("INTERACTION_WARMUP_INTERVAL", "5"))
+INTERACTION_WARMUP_TEXT = os.environ.get("INTERACTION_WARMUP_TEXT", "ready")
+
+# A setup-in-progress response is retryable; a real bad request is not.
+_SETUP_PENDING = re.compile(r"setup|provision|not ready|unavailable", re.I)
+
+
+def _setup_pending(r: dict) -> bool:
+    status = r.get("status")
+    if status in (200, 201) or status is None:
+        return False
+    return bool(_SETUP_PENDING.search(r.get("response_json") or ""))
 
 
 def interactions_url() -> str:
@@ -154,7 +174,7 @@ def _call_interaction(text: str, prev_id: str | None, environment,
         return {"error": f"request_failed: {exc}", "request_json": payload,
                 "response_json": "", "elapsed_ms": _ms()}
 
-    out = {"request_json": payload}
+    out = {"request_json": payload, "status": resp.status_code}
     if resp.status_code not in (200, 201):
         raw = resp.text
         out["response_json"] = raw
@@ -206,6 +226,40 @@ def _call_interaction(text: str, prev_id: str | None, environment,
     return out
 
 
+def warmup_environment(on_progress=None) -> dict:
+    """Provision the agent sandbox before the scenario runs.
+
+    Sends a throwaway prompt with environment={"type":"remote"} and retries while
+    the service reports setup-in-progress, until it returns an environment id or
+    INTERACTION_WARMUP_TIMEOUT elapses. The warmup interaction is deliberately NOT
+    chained into the scenario (no previous_interaction_id), so turn 1 still starts
+    a clean conversation — only the environment is reused.
+    Returns {env_id, attempts, elapsed_ms, error}."""
+    if is_mock():
+        return {"env_id": "mock_env", "attempts": 1, "elapsed_ms": 0, "error": ""}
+
+    t0 = time.monotonic()
+    attempts = 0
+    last_err = ""
+    while (time.monotonic() - t0) < INTERACTION_WARMUP_TIMEOUT:
+        attempts += 1
+        if on_progress:
+            on_progress({"stage": "provisioning", "attempt": attempts,
+                         "at_ms": int((time.monotonic() - t0) * 1000)})
+        r = _call_interaction(INTERACTION_WARMUP_TEXT, None, {"type": "remote"})
+        if r.get("environment_id"):
+            return {"env_id": r["environment_id"], "attempts": attempts,
+                    "elapsed_ms": int((time.monotonic() - t0) * 1000), "error": ""}
+        last_err = r.get("error", "")
+        if not _setup_pending(r):
+            break                      # a real error — don't spin on it
+        time.sleep(INTERACTION_WARMUP_INTERVAL)
+
+    return {"env_id": "", "attempts": attempts,
+            "elapsed_ms": int((time.monotonic() - t0) * 1000),
+            "error": last_err or "warmup_timeout: sandbox never became ready"}
+
+
 def run_interaction(model: str, request_name: str = "default",
                     turns: int | None = None, on_progress=None) -> dict:
     """Replay the scenario over the Interactions API. Turn 1 sends system + first
@@ -219,9 +273,16 @@ def run_interaction(model: str, request_name: str = "default",
         steps = steps[:max(1, min(turns, len(steps)))]
     n = len(steps)
 
+    # Initialization stage: get a ready sandbox before any question is asked, so
+    # provisioning latency isn't charged to turn 1 (and doesn't 400 it).
+    warmup = {"env_id": INTERACTION_ENV_ID, "attempts": 0, "elapsed_ms": 0,
+              "error": "", "skipped": bool(INTERACTION_ENV_ID)}
+    if not INTERACTION_ENV_ID:
+        warmup = {**warmup_environment(on_progress), "skipped": False}
+
     records = []
     prev_id: str | None = None
-    env_id: str | None = None
+    env_id: str | None = warmup.get("env_id") or None
     for k, q in enumerate(steps, start=1):
         if on_progress:
             on_progress({"stage": "interaction", "turn": k, "turns": n})
@@ -259,13 +320,13 @@ def run_interaction(model: str, request_name: str = "default",
             "elapsed_ms": r.get("elapsed_ms"),
             "first_event_ms": r.get("first_event_ms"),
             "event_types": r.get("event_types", []),
-            "provisioned_env": (k == 1),
+            "reused_env": bool(env_id),   # true = sandbox came from warmup, no provisioning
             "error": r.get("error", ""),
         })
 
     return {
         "params": {"mode": "interaction", "turns": n, "model": model,
                    "agent": INTERACTION_AGENT, "endpoint": interactions_url(),
-                   "request_source": source},
+                   "request_source": source, "warmup": warmup},
         "interaction_records": records,
     }
