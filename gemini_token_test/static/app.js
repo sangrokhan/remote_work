@@ -230,102 +230,111 @@ function renderInteraction(data) {
   sec.hidden = false;
 }
 
-async function startInteraction() {
-  const btn = document.getElementById("startInteraction");
+// Drives a streaming run button: disables it, hides stale output, streams progress
+// into the status line, and validates the final payload. Returns the result, or
+// null when the run errored (the status line already says why).
+async function streamedRun({ button, url, startText, hide, body, requires, missingMsg }) {
+  const btn = document.getElementById(button);
   const status = document.getElementById("status");
   btn.disabled = true;
-  status.textContent = "Interaction API…";
+  status.textContent = startText;
   try {
-    document.getElementById("interactionResult").hidden = true;
-    const body = {
-      turns: +document.getElementById("turns").value,
-      model: selectedModel(),
-    };
-    const data = await runStreaming(body, (p) => { status.textContent = progressText(p); }, "/interaction/test");
-    if (!data || data.__error || data.error || !data.records) {
-      status.textContent = "Error: " + ((data && (data.__error || data.error)) || "no result");
-      return;
+    (hide || []).forEach(id => { document.getElementById(id).hidden = true; });
+    const data = await runStreaming(body(), (p) => { status.textContent = progressText(p); }, url);
+    const err = data && (data.__error || data.error);
+    if (!data || err || !data[requires]) {
+      status.textContent = "Error: " + (err || missingMsg);
+      return null;
     }
-    renderInteraction(data);
-    const errs = (data.records || []).filter(r => r.error).length;
-    status.textContent = `${data.mock ? "[MOCK] " : ""}Interaction done. exec_id: ${data.exec_id}`
-      + (errs ? ` | ${errs} turn(s) errored` : "");
-    loadHistory();
+    return data;
   } catch (e) {
     status.textContent = "Failed: " + e;
+    return null;
   } finally {
     btn.disabled = false;
   }
 }
 
+async function startInteraction() {
+  const data = await streamedRun({
+    button: "startInteraction",
+    url: "/interaction/test",
+    startText: "Interaction API…",
+    hide: ["interactionResult"],
+    requires: "records",
+    missingMsg: "no result",
+    body: () => ({
+      turns: +document.getElementById("turns").value,
+      model: selectedModel(),
+    }),
+  });
+  if (!data) return;
+
+  renderInteraction(data);
+  const errs = data.records.filter(r => r.error).length;
+  document.getElementById("status").textContent =
+    `${data.mock ? "[MOCK] " : ""}Interaction done. exec_id: ${data.exec_id}`
+    + (errs ? ` | ${errs} turn(s) errored` : "");
+  loadHistory();
+}
+
 async function start() {
-  const btn = document.getElementById("start");
-  const status = document.getElementById("status");
-  btn.disabled = true;
-  status.textContent = "Running…";
-  try {
-    document.getElementById("pcapLink").hidden = true;
-    document.getElementById("chatLink").hidden = true;
-    document.getElementById("captureLog").hidden = true;
-    document.getElementById("compare3").hidden = true;
-    const body = {
+  const data = await streamedRun({
+    button: "start",
+    url: "/run/stream",
+    startText: "Running…",
+    hide: ["pcapLink", "chatLink", "captureLog", "compare3"],
+    requires: "summary",
+    missingMsg: "stream ended early (server timeout or Vertex rate limit?)",
+    body: () => ({
       mode: document.getElementById("mode").value,
       turns: +document.getElementById("turns").value,
       model: selectedModel(),
       capture: document.getElementById("capture").checked,
       pause_seconds: +document.getElementById("pauseSeconds").value,
-    };
-    const data = await runStreaming(body, (p) => { status.textContent = progressText(p); });
-    if (!data || data.__error || data.error || !data.summary) {
-      status.textContent = "Error: " + ((data && (data.__error || data.error))
-        || "stream ended early (server timeout or Vertex rate limit?)");
-      return;
-    }
+    }),
+  });
+  if (!data) return;
 
-    const s = data.summary;
-    if (s.mode === "caching-3stage") {
-      renderSummary3(s.totals, data.mock, data.pcaps);
-      renderCaptureLog(data.pcaps);
-      plot([
-        { label: "stateless (full resend)", series: s.stateless_series, color: "#ff6b6b" },
-        { label: "stateful (cache + question)", series: s.stateful_series, color: "#4dd4ac" },
-      ]);
-      renderCompare3(data.comparison, data.exec_id);
-      document.querySelector("#detail tbody").innerHTML = "";
-    } else {
-      renderSummary(s.totals, data.mock, false);
-      renderCaptureLog(data.capture ? { [s.mode]: data.capture } : {});
-      document.getElementById("compare3").hidden = true;
-      plot([{ label: s.mode, series: s.series, color: modeColor(s.mode) }]);
-      renderDetail(s.series, s.mode);
-    }
-
-    if (data.exec_id) {
-      const chatLink = document.getElementById("chatLink");
-      chatLink.href = "/download/chat/" + encodeURIComponent(data.exec_id);
-      chatLink.hidden = false;
-    }
-
-    const s2 = data.saved_to || {};
-    let msg = `${data.mock ? "[MOCK] " : ""}Done. exec_id: ${data.exec_id} | Firestore: ${s2.firestore || "off"}`;
-    const c = data.capture;
-    if (c) {
-      if (c.ok && c.download) {
-        const link = document.getElementById("pcapLink");
-        link.href = c.download; link.hidden = false;
-        msg += ` | pcap: ${fmtBytes(c.bytes)} (${c.host})`;
-        if (c.stats && Object.keys(c.stats).length) msg += ` | dropped: ${c.dropped || 0}`;
-      } else {
-        msg += ` | capture: ${c.error || c.note || "no packets"}`;
-      }
-    }
-    status.textContent = msg;
-    loadHistory();
-  } catch (e) {
-    status.textContent = "Failed: " + e;
-  } finally {
-    btn.disabled = false;
+  const s = data.summary;
+  if (s.mode === "caching-3stage") {
+    renderSummary3(s.totals, data.mock, data.pcaps);
+    renderCaptureLog(data.pcaps);
+    plot([
+      { label: "stateless (full resend)", series: s.stateless_series, color: "#ff6b6b" },
+      { label: "stateful (cache + question)", series: s.stateful_series, color: "#4dd4ac" },
+    ]);
+    renderCompare3(data.comparison, data.exec_id);
+    document.querySelector("#detail tbody").innerHTML = "";
+  } else {
+    renderSummary(s.totals, data.mock, false);
+    renderCaptureLog(data.capture ? { [s.mode]: data.capture } : {});
+    document.getElementById("compare3").hidden = true;
+    plot([{ label: s.mode, series: s.series, color: modeColor(s.mode) }]);
+    renderDetail(s.series, s.mode);
   }
+
+  if (data.exec_id) {
+    const chatLink = document.getElementById("chatLink");
+    chatLink.href = "/download/chat/" + encodeURIComponent(data.exec_id);
+    chatLink.hidden = false;
+  }
+
+  const s2 = data.saved_to || {};
+  let msg = `${data.mock ? "[MOCK] " : ""}Done. exec_id: ${data.exec_id} | Firestore: ${s2.firestore || "off"}`;
+  const c = data.capture;
+  if (c) {
+    if (c.ok && c.download) {
+      const link = document.getElementById("pcapLink");
+      link.href = c.download; link.hidden = false;
+      msg += ` | pcap: ${fmtBytes(c.bytes)} (${c.host})`;
+      if (c.stats && Object.keys(c.stats).length) msg += ` | dropped: ${c.dropped || 0}`;
+    } else {
+      msg += ` | capture: ${c.error || c.note || "no packets"}`;
+    }
+  }
+  document.getElementById("status").textContent = msg;
+  loadHistory();
 }
 
 // --- Execution history viewer ------------------------------------------------

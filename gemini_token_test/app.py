@@ -132,75 +132,46 @@ def run():
     return jsonify(resp), code
 
 
-@app.route("/run/stream", methods=["POST"])
-def run_stream():
-    """Same as /run but streams per-turn progress as Server-Sent Events, then a
-    final 'done' event carrying the full result (or 'error')."""
+def _execute_interaction(data: dict, on_progress=None):
+    """Replay the scenario over the stateful Interactions API. Same contract as
+    _execute_run: returns (resp_dict, status_code)."""
+    ok, reason = ready()
+    if not ok:
+        return {"error": reason}, 400
+
+    turns = max(1, min(int(data.get("turns", 1)), 100))
+    model = (data.get("model") or DEFAULT_MODEL).strip()
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
+
+    from interaction_client import run_interaction
+    experiment = run_interaction(model, turns=turns, on_progress=on_progress)
+    experiment["params"]["mock"] = is_mock()
+    saved = save_run(exec_id, timestamp, experiment, {"mode": "interaction"})
+    return {"exec_id": exec_id, "timestamp": timestamp, "mock": is_mock(),
+            "mode": "interaction", "params": experiment["params"],
+            "records": experiment["interaction_records"], "saved_to": saved}, 200
+
+
+def _sse_response(run):
+    """Stream a long run as Server-Sent Events.
+
+    `run(emit)` executes on a worker thread and returns (payload, status_code);
+    `emit(event)` publishes a progress event. Clients see any number of
+    `progress` events, then exactly one `done` (or `error`). A ": keepalive"
+    comment every 15s stops proxies idling out a slow run.
+    """
     import queue
     import threading
     from flask import Response
 
-    data = request.get_json(force=True, silent=True) or {}
     q: "queue.Queue" = queue.Queue()
 
     def work():
         try:
-            resp, code = _execute_run(data, on_progress=lambda ev: q.put({"type": "progress", **ev}))
-            q.put({"type": "done", "status": code, "payload": resp})
+            payload, code = run(lambda ev: q.put({"type": "progress", **ev}))
+            q.put({"type": "done", "status": code, "payload": payload})
         except Exception as exc:  # never leak a half-stream; report and end
-            q.put({"type": "error", "error": str(exc)})
-        finally:
-            q.put(None)
-
-    threading.Thread(target=work, daemon=True).start()
-
-    def gen():
-        while True:
-            try:
-                ev = q.get(timeout=15)
-            except queue.Empty:
-                yield ": keepalive\n\n"  # keep proxies from idle-timing out the stream
-                continue
-            if ev is None:
-                break
-            yield f"data: {json.dumps(ev)}\n\n"
-
-    return Response(gen(), mimetype="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@app.route("/interaction/test", methods=["POST"])
-def interaction_test():
-    """Experimental: replay the scenario over the stateful Interactions API and
-    stream per-turn progress (SSE), then a final 'done' with the per-turn records.
-    Additive — does not touch the generateContent run flow."""
-    import queue
-    import threading
-    from flask import Response
-
-    data = request.get_json(force=True, silent=True) or {}
-    q: "queue.Queue" = queue.Queue()
-
-    def work():
-        try:
-            ok, reason = ready()
-            if not ok:
-                q.put({"type": "done", "status": 400, "payload": {"error": reason}})
-                return
-            turns = max(1, min(int(data.get("turns", 1)), 100))
-            model = (data.get("model") or DEFAULT_MODEL).strip()
-            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-            exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
-            from interaction_client import run_interaction
-            exp = run_interaction(model, turns=turns,
-                                  on_progress=lambda ev: q.put({"type": "progress", **ev}))
-            exp["params"]["mock"] = is_mock()
-            saved = save_run(exec_id, timestamp, exp, {"mode": "interaction"})
-            payload = {"exec_id": exec_id, "timestamp": timestamp, "mock": is_mock(),
-                       "mode": "interaction", "params": exp["params"],
-                       "records": exp["interaction_records"], "saved_to": saved}
-            q.put({"type": "done", "status": 200, "payload": payload})
-        except Exception as exc:
             q.put({"type": "error", "error": str(exc)})
         finally:
             q.put(None)
@@ -220,6 +191,21 @@ def interaction_test():
 
     return Response(gen(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/run/stream", methods=["POST"])
+def run_stream():
+    """Same as /run but streams per-turn progress, then a final 'done' event."""
+    data = request.get_json(force=True, silent=True) or {}
+    return _sse_response(lambda emit: _execute_run(data, on_progress=emit))
+
+
+@app.route("/interaction/test", methods=["POST"])
+def interaction_test():
+    """Experimental: the scenario over the Interactions API, streamed. Additive —
+    does not touch the generateContent run flow."""
+    data = request.get_json(force=True, silent=True) or {}
+    return _sse_response(lambda emit: _execute_interaction(data, on_progress=emit))
 
 
 def _parse_json(s):
