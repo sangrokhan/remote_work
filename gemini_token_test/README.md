@@ -12,6 +12,9 @@ graphs are plotted from stored data by `exec_id`. If no history is found in
 Firestore, the viewer shows clearly-marked **DUMMY** data. Full design:
 [`docs/superpowers/specs/2026-06-30-mode-toggle-history-graph-design.md`](docs/superpowers/specs/2026-06-30-mode-toggle-history-graph-design.md).
 
+Diagrams of the components and the per-turn call flow for each case (stateless,
+no-context, cache-based stateful, Interaction API): [`docs/call-flow.md`](docs/call-flow.md).
+
 ## Auth model (important)
 
 - **Vertex AI** and **Firestore** both use **ADC** (Application Default
