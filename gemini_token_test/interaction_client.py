@@ -44,10 +44,10 @@ INTERACTION_LOCATION = os.environ.get("INTERACTION_LOCATION", "global")
 # The base first-party agent works on the fly; override with a custom agent id.
 INTERACTION_AGENT = os.environ.get("INTERACTION_AGENT", "antigravity-preview-05-2026")
 INTERACTION_API_REVISION = os.environ.get("INTERACTION_API_REVISION", "2026-05-20")
-# background=true queues the interaction as an async task (extra wait). For a
-# foreground streamed reply we default to false — set INTERACTION_BACKGROUND=1 to
-# restore async behavior. Per-request HTTP timeout is also tunable.
-INTERACTION_BACKGROUND = os.environ.get("INTERACTION_BACKGROUND") == "1"
+# Agent interactions REQUIRE background=true — the service rejects background=false
+# with "agent interactions must set background to true" / invalid request. Keep the
+# env override for other agent types, but default to true.
+INTERACTION_BACKGROUND = os.environ.get("INTERACTION_BACKGROUND", "1") == "1"
 INTERACTION_TIMEOUT = float(os.environ.get("INTERACTION_TIMEOUT", "180"))
 # The first interaction provisions a sandbox container on demand and can come back
 # with a "resource setup has just started" style error instead of an answer. So we
@@ -141,7 +141,7 @@ def _call_interaction(text: str, prev_id: str | None, environment,
      event_types, first_event_ms}."""
     body = {
         "stream": True,
-        "background": INTERACTION_BACKGROUND,  # false = foreground stream (faster)
+        "background": INTERACTION_BACKGROUND,  # required true for agent interactions
         "store": True,               # persist so previous_interaction_id works next turn
         "agent": INTERACTION_AGENT,
         "environment": environment,
