@@ -211,13 +211,14 @@ function renderInteraction(data) {
   });
   const p = data.params || {};
   const w = p.warmup || {};
-  const warm = w.skipped
-    ? `env reused (${w.env_id})`
-    : (w.env_id
-        ? `sandbox provisioned in ${(w.elapsed_ms / 1000).toFixed(1)}s (${w.attempts} attempt${w.attempts === 1 ? "" : "s"}) → ${w.env_id}`
-        : `warmup failed: ${w.error || "unknown"}`);
+  const target = p.target === "agent" ? `agent: ${p.agent}` : `model: ${p.model || "?"}`;
+  let warm;
+  if (p.target !== "agent") warm = "no sandbox (model mode)";
+  else if (w.skipped) warm = `env reused (${w.env_id})`;
+  else if (w.env_id) warm = `sandbox provisioned in ${(w.elapsed_ms / 1000).toFixed(1)}s (${w.attempts} attempt${w.attempts === 1 ? "" : "s"})`;
+  else warm = `warmup failed: ${w.error || "unknown"}`;
   document.getElementById("interactionMeta").textContent =
-    `${data.mock ? "[MOCK] " : ""}agent: ${p.agent || "?"} · ${warm} · exec_id: ${data.exec_id || "?"}`;
+    `${data.mock ? "[MOCK] " : ""}${target} · background: ${p.background} · ${warm} · exec_id: ${data.exec_id || "?"}`;
   const dl = document.getElementById("interactionChat");
   const blob = new Blob([JSON.stringify(data.records || [], null, 2)], { type: "application/json" });
   if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);

@@ -41,13 +41,26 @@ from experiment import load_request, _user  # scenario steps + message shape
 INTERACTION_HOST = os.environ.get("INTERACTION_HOST", "aiplatform.googleapis.com")
 # Interactions live under locations/global, not the regional Vertex location.
 INTERACTION_LOCATION = os.environ.get("INTERACTION_LOCATION", "global")
-# The base first-party agent works on the fly; override with a custom agent id.
-INTERACTION_AGENT = os.environ.get("INTERACTION_AGENT", "antigravity-preview-05-2026")
+# Two targets are possible. Leave INTERACTION_AGENT empty (default) to run a plain
+# Gemini model via the `model` field — no agent, no sandbox, no provisioning, so it
+# is far faster. Set INTERACTION_AGENT (e.g. "antigravity-preview-05-2026") to run
+# the coding agent instead, which provisions a remote sandbox per environment.
+INTERACTION_AGENT = os.environ.get("INTERACTION_AGENT", "")
 INTERACTION_API_REVISION = os.environ.get("INTERACTION_API_REVISION", "2026-05-20")
-# Agent interactions REQUIRE background=true — the service rejects background=false
-# with "agent interactions must set background to true" / invalid request. Keep the
-# env override for other agent types, but default to true.
-INTERACTION_BACKGROUND = os.environ.get("INTERACTION_BACKGROUND", "1") == "1"
+
+
+def _agent_mode() -> bool:
+    return bool(INTERACTION_AGENT)
+
+
+def _background_default() -> bool:
+    """Agent interactions REQUIRE background=true (the service rejects false with
+    "agent interactions must set background to true"). Model interactions don't, so
+    they stream in the foreground. INTERACTION_BACKGROUND overrides either way."""
+    env = os.environ.get("INTERACTION_BACKGROUND")
+    if env is not None:
+        return env == "1"
+    return _agent_mode()
 INTERACTION_TIMEOUT = float(os.environ.get("INTERACTION_TIMEOUT", "180"))
 # The first interaction provisions a sandbox container on demand and can come back
 # with a "resource setup has just started" style error instead of an answer. So we
@@ -120,17 +133,17 @@ def _mock_interaction(turn: int, text: str, prev_id: str | None) -> dict:
         f"data: {json.dumps({'event_type': 'interaction.output', 'output': _input(ans)})}\n\n"
         f"data: {json.dumps({'event_type': 'interaction.complete', 'interaction': {'id': iid, 'environment_id': 'mock_env', 'status': 'completed', 'usage': {'total_tokens': _text_tokens([_user(text)]) + 40}}})}\n\n"
     )
+    req = {"input": _input(text), "previous_interaction_id": prev_id}
     return {"id": iid, "environment_id": "mock_env", "text": ans,
-            "request_json": json.dumps({"input": _input(text),
-                                        "previous_interaction_id": prev_id}),
-            "response_json": stream, "error": "",
-            "elapsed_ms": 0, "first_event_ms": 0,
+            "request": req, "request_json": json.dumps(req),
+            "response_json": stream, "response_events": _parse_sse(stream),
+            "error": "", "elapsed_ms": 0, "first_event_ms": 0,
             "event_types": [{"event_type": "interaction.output", "at_ms": 0},
                             {"event_type": "interaction.complete", "at_ms": 0}]}
 
 
 def _call_interaction(text: str, prev_id: str | None, environment,
-                      on_event=None) -> dict:
+                      model: str = "", on_event=None) -> dict:
     """One interaction request. `environment` is {"type":"remote"} on the first
     turn or the returned env id (str) on continuation.
 
@@ -141,12 +154,17 @@ def _call_interaction(text: str, prev_id: str | None, environment,
      event_types, first_event_ms}."""
     body = {
         "stream": True,
-        "background": INTERACTION_BACKGROUND,  # required true for agent interactions
+        "background": _background_default(),
         "store": True,               # persist so previous_interaction_id works next turn
-        "agent": INTERACTION_AGENT,
-        "environment": environment,
         "input": _input(text),
     }
+    if _agent_mode():
+        # Agent target: needs a sandbox environment provisioned for it.
+        body["agent"] = INTERACTION_AGENT
+        body["environment"] = environment
+    else:
+        # Plain model target: `agent` is only required when `model` is absent.
+        body["model"] = model
     if prev_id:
         body["previous_interaction_id"] = prev_id
     payload = json.dumps(body)
@@ -174,7 +192,7 @@ def _call_interaction(text: str, prev_id: str | None, environment,
         return {"error": f"request_failed: {exc}", "request_json": payload,
                 "response_json": "", "elapsed_ms": _ms()}
 
-    out = {"request_json": payload, "status": resp.status_code}
+    out = {"request": body, "request_json": payload, "status": resp.status_code}
     if resp.status_code not in (200, 201):
         raw = resp.text
         out["response_json"] = raw
@@ -184,6 +202,7 @@ def _call_interaction(text: str, prev_id: str | None, environment,
 
     # Read the SSE stream incrementally so each event is timestamped on arrival.
     lines: list[str] = []
+    events: list = []
     event_types: list[dict] = []
     iid = env_id = None
     texts: list[str] = []
@@ -202,6 +221,7 @@ def _call_interaction(text: str, prev_id: str | None, environment,
             ev = json.loads(chunk)
         except Exception:
             continue
+        events.append(ev)
         at = _ms()
         if first_event_ms is None:
             first_event_ms = at
@@ -215,14 +235,15 @@ def _call_interaction(text: str, prev_id: str | None, environment,
             env_id = inter.get("environment_id") or env_id
         texts.append(_extract_text(ev))
 
-    out["response_json"] = "\n".join(lines)
+    out["response_json"] = "\n".join(lines)   # raw SSE text, exactly as received
+    out["response_events"] = events           # same stream, parsed into objects
     out["id"] = iid
     out["environment_id"] = env_id
     out["text"] = "".join(texts)
     out["event_types"] = event_types
     out["first_event_ms"] = first_event_ms
     out["elapsed_ms"] = _ms()
-    out["error"] = "" if event_types else "no_sse_events (see response_json)"
+    out["error"] = "" if event_types else "no_sse_events (see response_raw)"
     return out
 
 
@@ -235,6 +256,10 @@ def warmup_environment(on_progress=None) -> dict:
     chained into the scenario (no previous_interaction_id), so turn 1 still starts
     a clean conversation — only the environment is reused.
     Returns {env_id, attempts, elapsed_ms, error}."""
+    if not _agent_mode():
+        # Model interactions have no sandbox to provision.
+        return {"env_id": "", "attempts": 0, "elapsed_ms": 0, "error": "",
+                "skipped": True, "reason": "model mode (no agent sandbox)"}
     if is_mock():
         return {"env_id": "mock_env", "attempts": 1, "elapsed_ms": 0, "error": ""}
 
@@ -263,22 +288,26 @@ def warmup_environment(on_progress=None) -> dict:
 def run_interaction(model: str, request_name: str = "default",
                     turns: int | None = None, on_progress=None) -> dict:
     """Replay the scenario over the Interactions API. Turn 1 sends system + first
-    question and opens the interaction (provisioning a remote environment); each
-    later turn sends only the new question with previous_interaction_id + the
-    returned environment, so the server keeps the history. `model` is ignored —
-    the interaction runs on INTERACTION_AGENT. on_progress fires per turn with
-    {stage:'interaction', turn, turns}."""
+    question and opens the interaction; each later turn sends only the new question
+    with previous_interaction_id, so the server keeps the history.
+
+    Target is `model` (plain Gemini model, no sandbox — fast) unless
+    INTERACTION_AGENT is set, in which case the agent runs in a remote sandbox that
+    is warmed up first. on_progress fires per turn with {stage:'interaction', turn,
+    turns} (and {stage:'provisioning'} during agent warmup)."""
     system, steps, source = load_request(request_name)
     if turns:
         steps = steps[:max(1, min(turns, len(steps)))]
     n = len(steps)
 
-    # Initialization stage: get a ready sandbox before any question is asked, so
-    # provisioning latency isn't charged to turn 1 (and doesn't 400 it).
-    warmup = {"env_id": INTERACTION_ENV_ID, "attempts": 0, "elapsed_ms": 0,
-              "error": "", "skipped": bool(INTERACTION_ENV_ID)}
-    if not INTERACTION_ENV_ID:
-        warmup = {**warmup_environment(on_progress), "skipped": False}
+    # Initialization stage (agent mode only): get a ready sandbox before any
+    # question is asked, so provisioning latency isn't charged to turn 1.
+    if _agent_mode() and INTERACTION_ENV_ID:
+        warmup = {"env_id": INTERACTION_ENV_ID, "attempts": 0, "elapsed_ms": 0,
+                  "error": "", "skipped": True, "reason": "INTERACTION_ENV_ID set"}
+    else:
+        warmup = warmup_environment(on_progress)
+        warmup.setdefault("skipped", False)
 
     records = []
     prev_id: str | None = None
@@ -287,21 +316,21 @@ def run_interaction(model: str, request_name: str = "default",
         if on_progress:
             on_progress({"stage": "interaction", "turn": k, "turns": n})
         # System instruction placement isn't documented; prepend it to the first
-        # turn's text so the agent is primed once, then rely on server-side state.
+        # turn's text so the model is primed once, then rely on server-side state.
         text = f"{system}\n\n{q}" if (k == 1 and system) else q
-        # First turn provisions a remote environment; later turns reuse it by id.
+        # Agent mode reuses the warmed sandbox by id; model mode has no environment.
         environment = env_id if env_id else {"type": "remote"}
 
         if is_mock():
             r = _mock_interaction(k, text, prev_id)
         else:
             # Forward each SSE event to the UI so a stall is attributable to the
-            # stage it happens in (provisioning vs agent work).
+            # stage it happens in (provisioning vs the model/agent working).
             def _ev(et, at_ms, _k=k):
                 if on_progress:
                     on_progress({"stage": "interaction", "turn": _k, "turns": n,
                                  "event": et or "", "at_ms": at_ms})
-            r = _call_interaction(text, prev_id, environment, on_event=_ev)
+            r = _call_interaction(text, prev_id, environment, model=model, on_event=_ev)
 
         if r.get("id"):
             prev_id = r["id"]            # chain the next turn onto this interaction
@@ -313,8 +342,13 @@ def run_interaction(model: str, request_name: str = "default",
             "response_text": r.get("text", ""),
             "interaction_id": r.get("id"),
             "environment_id": r.get("environment_id"),
-            "request_json": r.get("request_json", ""),
-            "response_json": r.get("response_json", ""),
+            # `request` is the body we POSTed, as an object; `response_events` is the
+            # SSE stream parsed into objects. The *_raw fields keep the exact bytes
+            # (the response is an SSE stream, not a JSON document).
+            "request": r.get("request", {}),
+            "request_raw": r.get("request_json", ""),
+            "response_events": r.get("response_events", []),
+            "response_raw": r.get("response_json", ""),
             # Timing: elapsed_ms is the whole turn; first_event_ms is how long the
             # server took before its first SSE event (i.e. provisioning + queueing).
             "elapsed_ms": r.get("elapsed_ms"),
@@ -325,8 +359,12 @@ def run_interaction(model: str, request_name: str = "default",
         })
 
     return {
-        "params": {"mode": "interaction", "turns": n, "model": model,
-                   "agent": INTERACTION_AGENT, "endpoint": interactions_url(),
+        "params": {"mode": "interaction", "turns": n,
+                   "target": "agent" if _agent_mode() else "model",
+                   "model": "" if _agent_mode() else model,
+                   "agent": INTERACTION_AGENT,
+                   "background": _background_default(),
+                   "endpoint": interactions_url(),
                    "request_source": source, "warmup": warmup},
         "interaction_records": records,
     }

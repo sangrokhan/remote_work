@@ -193,6 +193,10 @@ python -m unittest discover tests      # pure metric math, no network
 | `PCAP_SNAPLEN` | `100` | bytes captured per packet (`tcpdump -s`). Header-only; TLS payload is encrypted anyway. Smaller = less disk I/O = fewer kernel drops. Original packet length is still recorded, so sizes stay exact. |
 | `PCAP_DISABLE` | `0` | `1` = hide/disable packet capture |
 | `STAGE_PAUSE_SECONDS` | `60` | pause between 3-stage stages (stateless → caches → stateful → no-context) to stay under Vertex per-minute quotas. Ignored in mock. Set `0` to disable. |
+| `INTERACTION_AGENT` | *(empty)* | Interaction API target. Empty = run the selected Gemini model via the `model` field (no sandbox, fast). Set to an agent id (e.g. `antigravity-preview-05-2026`) to run the coding agent in a remote sandbox instead. |
+| `INTERACTION_BACKGROUND` | *(auto)* | `background` flag. Defaults to `1` in agent mode (required) and `0` in model mode. |
+| `INTERACTION_ENV_ID` | *(empty)* | Reuse an existing agent sandbox and skip warmup (agent mode only; sandbox TTL is 7 days). |
+| `INTERACTION_WARMUP_TIMEOUT` / `_INTERVAL` | `300` / `5` | Bound on the agent-sandbox warmup retry loop, in seconds. |
 | `CAPTURE_WARMUP_SECONDS` | `2` | settle time after tcpdump starts before the first request (clean handshake in each per-stage pcap) |
 | `CAPTURE_DRAIN_SECONDS` | `1` | drain time after the socket closes before tcpdump stops (clean teardown) |
 | `TRANSCRIPT_DIR` | `data/transcripts` | inspector transcript output dir |

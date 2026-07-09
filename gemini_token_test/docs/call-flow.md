@@ -145,9 +145,24 @@ turn falls back too.
 ## 3. Interaction API (`/interaction/test`)
 
 Genuinely stateful: the **server** stores the conversation. The client sends only
-the new question plus `previous_interaction_id`. The agent runs in a sandbox
-container that is provisioned on demand — so we warm it up *before* asking
-anything, otherwise turn 1 pays for (or fails on) provisioning.
+the new question plus `previous_interaction_id`.
+
+Two targets, chosen by `INTERACTION_AGENT`:
+
+| | `model` mode (default) | `agent` mode (`INTERACTION_AGENT` set) |
+|---|---|---|
+| body field | `model: gemini-2.5-flash` | `agent: antigravity-preview-05-2026` |
+| sandbox | none | remote container, provisioned on demand |
+| `background` | `false` (foreground stream) | **`true` — required**; the service rejects `false` |
+| warmup | not needed | yes, before turn 1 |
+| speed | fast | slow (container + agent work) |
+
+`agent` is only required when `model` is absent. Model mode skips the sandbox
+entirely, which is why it's much faster.
+
+The warmup below applies to **agent mode only**: the container is provisioned on
+demand, so we warm it up *before* asking anything, otherwise turn 1 pays for (or
+fails on) provisioning.
 
 ```mermaid
 sequenceDiagram
@@ -155,7 +170,7 @@ sequenceDiagram
   participant I as Interactions API
 
   rect rgb(240,240,240)
-  Note over C,I: init stage — warmup_environment()
+  Note over C,I: init stage — warmup_environment() [agent mode only]
   loop until env_id, or WARMUP_TIMEOUT
     C->>I: POST environment={type:remote}, input="ready"
     alt sandbox still provisioning
@@ -169,12 +184,12 @@ sequenceDiagram
   end
 
   rect rgb(240,240,240)
-  Note over C,I: scenario turns
-  C->>I: POST environment=env_id, store=true, input=[S, q₁]
+  Note over C,I: scenario turns (model mode: no environment field)
+  C->>I: POST model=…, store=true, input=[S, q₁]
   I-->>C: SSE stream → a₁, interaction.id = id₁
-  C->>I: POST environment=env_id, previous_interaction_id=id₁, input=[q₂]
+  C->>I: POST model=…, previous_interaction_id=id₁, input=[q₂]
   I-->>C: SSE → a₂ (server recalled the history)
-  C->>I: POST environment=env_id, previous_interaction_id=id₂, input=[q₃]
+  C->>I: POST model=…, previous_interaction_id=id₂, input=[q₃]
   I-->>C: SSE → a₃
   end
 ```
