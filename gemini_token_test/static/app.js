@@ -150,7 +150,10 @@ const STAGE_LABELS = {
 function progressText(p) {
   if (p.stage === "pause") return `⏸ Pausing between stages — ${p.turn}s left (rate-limit spacing)…`;
   const label = STAGE_LABELS[p.stage] || p.stage;
-  return `Running… ${label} — turn ${p.turn}/${p.turns}`;
+  let s = `Running… ${label} — turn ${p.turn}/${p.turns}`;
+  // Interaction turns report each SSE event, so a stall shows which stage owns it.
+  if (p.event) s += ` · ${p.event} @ ${((p.at_ms || 0) / 1000).toFixed(1)}s`;
+  return s;
 }
 
 // POST to the streaming endpoint and drain Server-Sent Events: forward each
@@ -191,12 +194,14 @@ function renderInteraction(data) {
   const sec = document.getElementById("interactionResult");
   const tb = document.querySelector("#interactionTable tbody");
   tb.innerHTML = "";
+  const secs = (ms) => (ms == null ? "" : (ms / 1000).toFixed(1));
   (data.records || []).forEach(r => {
     const tr = document.createElement("tr");
-    [r.turn, r.question, r.response_text, r.interaction_id, r.error].forEach((v, i) => {
+    [r.turn, r.question, r.response_text, secs(r.elapsed_ms), secs(r.first_event_ms),
+     r.interaction_id, r.error].forEach((v, i) => {
       const td = document.createElement("td");
       td.textContent = (v == null) ? "" : String(v);
-      if (i === 0) td.className = "num";
+      if (i === 0 || i === 3 || i === 4) td.className = "num";
       tr.appendChild(td);
     });
     tb.appendChild(tr);

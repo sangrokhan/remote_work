@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from gemini_client import (
     PROJECT, _bearer_token, _session, is_mock, _text_tokens,
@@ -102,13 +103,22 @@ def _mock_interaction(turn: int, text: str, prev_id: str | None) -> dict:
     return {"id": iid, "environment_id": "mock_env", "text": ans,
             "request_json": json.dumps({"input": _input(text),
                                         "previous_interaction_id": prev_id}),
-            "response_json": stream, "error": ""}
+            "response_json": stream, "error": "",
+            "elapsed_ms": 0, "first_event_ms": 0,
+            "event_types": [{"event_type": "interaction.output", "at_ms": 0},
+                            {"event_type": "interaction.complete", "at_ms": 0}]}
 
 
-def _call_interaction(text: str, prev_id: str | None, environment) -> dict:
+def _call_interaction(text: str, prev_id: str | None, environment,
+                      on_event=None) -> dict:
     """One interaction request. `environment` is {"type":"remote"} on the first
-    turn or the returned env id (str) on continuation. Returns
-    {id, environment_id, text, request_json, response_json, error}."""
+    turn or the returned env id (str) on continuation.
+
+    Events are parsed as they arrive (not after the fact) and reported through
+    on_event(event_type, elapsed_ms) so a long stall is attributable to the stage
+    it happens in — e.g. environment provisioning vs the agent thinking. Returns
+    {id, environment_id, text, request_json, response_json, error, elapsed_ms,
+     event_types, first_event_ms}."""
     body = {
         "stream": True,
         "background": INTERACTION_BACKGROUND,  # false = foreground stream (faster)
@@ -121,11 +131,16 @@ def _call_interaction(text: str, prev_id: str | None, environment) -> dict:
         body["previous_interaction_id"] = prev_id
     payload = json.dumps(body)
 
+    t0 = time.monotonic()
+
+    def _ms() -> int:
+        return int((time.monotonic() - t0) * 1000)
+
     try:
         token = _bearer_token()
     except Exception as exc:
         return {"error": f"auth_failed: {exc}", "request_json": payload,
-                "response_json": ""}
+                "response_json": "", "elapsed_ms": _ms()}
 
     try:
         resp = _session().post(
@@ -137,27 +152,57 @@ def _call_interaction(text: str, prev_id: str | None, environment) -> dict:
         )
     except Exception as exc:
         return {"error": f"request_failed: {exc}", "request_json": payload,
-                "response_json": ""}
+                "response_json": "", "elapsed_ms": _ms()}
 
-    raw = resp.text  # consume the whole stream (small for our turns)
-    out = {"request_json": payload, "response_json": raw}
+    out = {"request_json": payload}
     if resp.status_code not in (200, 201):
+        raw = resp.text
+        out["response_json"] = raw
         out["error"] = f"http_{resp.status_code}: {raw[:300]}"
+        out["elapsed_ms"] = _ms()
         return out
 
-    events = _parse_sse(raw)
+    # Read the SSE stream incrementally so each event is timestamped on arrival.
+    lines: list[str] = []
+    event_types: list[dict] = []
     iid = env_id = None
-    texts = []
-    for ev in events:
+    texts: list[str] = []
+    first_event_ms = None
+    for line in resp.iter_lines(decode_unicode=True):
+        if line is None:
+            continue
+        lines.append(line)
+        s = line.strip()
+        if not s.startswith("data:"):
+            continue
+        chunk = s[5:].strip()
+        if not chunk or chunk == "[DONE]":
+            continue
+        try:
+            ev = json.loads(chunk)
+        except Exception:
+            continue
+        at = _ms()
+        if first_event_ms is None:
+            first_event_ms = at
+        et = ev.get("event_type") if isinstance(ev, dict) else None
+        event_types.append({"event_type": et, "at_ms": at})
+        if on_event:
+            on_event(et, at)
         inter = ev.get("interaction") if isinstance(ev, dict) else None
         if isinstance(inter, dict):
             iid = inter.get("id") or iid
             env_id = inter.get("environment_id") or env_id
         texts.append(_extract_text(ev))
+
+    out["response_json"] = "\n".join(lines)
     out["id"] = iid
     out["environment_id"] = env_id
     out["text"] = "".join(texts)
-    out["error"] = "" if events else "no_sse_events (see response_json)"
+    out["event_types"] = event_types
+    out["first_event_ms"] = first_event_ms
+    out["elapsed_ms"] = _ms()
+    out["error"] = "" if event_types else "no_sse_events (see response_json)"
     return out
 
 
@@ -189,7 +234,13 @@ def run_interaction(model: str, request_name: str = "default",
         if is_mock():
             r = _mock_interaction(k, text, prev_id)
         else:
-            r = _call_interaction(text, prev_id, environment)
+            # Forward each SSE event to the UI so a stall is attributable to the
+            # stage it happens in (provisioning vs agent work).
+            def _ev(et, at_ms, _k=k):
+                if on_progress:
+                    on_progress({"stage": "interaction", "turn": _k, "turns": n,
+                                 "event": et or "", "at_ms": at_ms})
+            r = _call_interaction(text, prev_id, environment, on_event=_ev)
 
         if r.get("id"):
             prev_id = r["id"]            # chain the next turn onto this interaction
@@ -203,6 +254,12 @@ def run_interaction(model: str, request_name: str = "default",
             "environment_id": r.get("environment_id"),
             "request_json": r.get("request_json", ""),
             "response_json": r.get("response_json", ""),
+            # Timing: elapsed_ms is the whole turn; first_event_ms is how long the
+            # server took before its first SSE event (i.e. provisioning + queueing).
+            "elapsed_ms": r.get("elapsed_ms"),
+            "first_event_ms": r.get("first_event_ms"),
+            "event_types": r.get("event_types", []),
+            "provisioned_env": (k == 1),
             "error": r.get("error", ""),
         })
 
