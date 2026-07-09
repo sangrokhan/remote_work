@@ -42,6 +42,11 @@ INTERACTION_LOCATION = os.environ.get("INTERACTION_LOCATION", "global")
 # The base first-party agent works on the fly; override with a custom agent id.
 INTERACTION_AGENT = os.environ.get("INTERACTION_AGENT", "antigravity-preview-05-2026")
 INTERACTION_API_REVISION = os.environ.get("INTERACTION_API_REVISION", "2026-05-20")
+# background=true queues the interaction as an async task (extra wait). For a
+# foreground streamed reply we default to false — set INTERACTION_BACKGROUND=1 to
+# restore async behavior. Per-request HTTP timeout is also tunable.
+INTERACTION_BACKGROUND = os.environ.get("INTERACTION_BACKGROUND") == "1"
+INTERACTION_TIMEOUT = float(os.environ.get("INTERACTION_TIMEOUT", "180"))
 
 
 def interactions_url() -> str:
@@ -106,7 +111,7 @@ def _call_interaction(text: str, prev_id: str | None, environment) -> dict:
     {id, environment_id, text, request_json, response_json, error}."""
     body = {
         "stream": True,
-        "background": True,
+        "background": INTERACTION_BACKGROUND,  # false = foreground stream (faster)
         "store": True,               # persist so previous_interaction_id works next turn
         "agent": INTERACTION_AGENT,
         "environment": environment,
@@ -128,7 +133,7 @@ def _call_interaction(text: str, prev_id: str | None, environment) -> dict:
             headers={"Content-Type": "application/json",
                      "Authorization": f"Bearer {token}",
                      "Api-Revision": INTERACTION_API_REVISION},
-            timeout=180, stream=True,
+            timeout=INTERACTION_TIMEOUT, stream=True,
         )
     except Exception as exc:
         return {"error": f"request_failed: {exc}", "request_json": payload,
