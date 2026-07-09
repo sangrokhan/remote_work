@@ -217,8 +217,10 @@ function renderInteraction(data) {
   else if (w.skipped) warm = `env reused (${w.env_id})`;
   else if (w.env_id) warm = `sandbox provisioned in ${(w.elapsed_ms / 1000).toFixed(1)}s (${w.attempts} attempt${w.attempts === 1 ? "" : "s"})`;
   else warm = `warmup failed: ${w.error || "unknown"}`;
+  const tools = `tools: ${(p.tools || []).length ? (p.tools || []).map(t => t.type || "?").join(",") : "none"}`
+    + (p.tool_choice ? ` (tool_choice=${p.tool_choice})` : "");
   document.getElementById("interactionMeta").textContent =
-    `${data.mock ? "[MOCK] " : ""}${target} · background: ${p.background} · ${warm} · exec_id: ${data.exec_id || "?"}`;
+    `${data.mock ? "[MOCK] " : ""}${target} · background: ${p.background} · ${tools} · ${warm} · exec_id: ${data.exec_id || "?"}`;
   const dl = document.getElementById("interactionChat");
   const blob = new Blob([JSON.stringify(data.records || [], null, 2)], { type: "application/json" });
   if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);

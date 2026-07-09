@@ -49,6 +49,26 @@ INTERACTION_AGENT = os.environ.get("INTERACTION_AGENT", "")
 INTERACTION_API_REVISION = os.environ.get("INTERACTION_API_REVISION", "2026-05-20")
 
 
+# The scenario's system prompt describes tools and tells the model to call them.
+# generateContent declares no tools, so the model only *describes* what it would do.
+# The Interactions API can actually invoke built-in tools (google_search,
+# code_execution, computer_use, …), so a plain Q&A comparison must switch them off:
+# an empty `tools` list plus tool_choice="none" (valid: auto|any|none|validated).
+# Both are interaction-scoped and must be re-sent on every request.
+# Set INTERACTION_TOOL_CHOICE="" to omit the field, or INTERACTION_TOOLS to a JSON
+# list like [{"type":"google_search"}] to allow specific tools.
+INTERACTION_TOOL_CHOICE = os.environ.get("INTERACTION_TOOL_CHOICE", "none")
+_TOOLS_ENV_SET = "INTERACTION_TOOLS" in os.environ or "INTERACTION_TOOL_CHOICE" in os.environ
+
+
+def _tools() -> list:
+    try:
+        v = json.loads(os.environ.get("INTERACTION_TOOLS", "[]"))
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
 def _agent_mode() -> bool:
     return bool(INTERACTION_AGENT)
 
@@ -159,12 +179,21 @@ def _call_interaction(text: str, prev_id: str | None, environment,
         "input": _input(text),
     }
     if _agent_mode():
-        # Agent target: needs a sandbox environment provisioned for it.
+        # Agent target: needs a sandbox environment provisioned for it. Tooling is
+        # the agent's whole purpose, so only constrain it when asked explicitly.
         body["agent"] = INTERACTION_AGENT
         body["environment"] = environment
+        if _TOOLS_ENV_SET:
+            body["tools"] = _tools()
+            if INTERACTION_TOOL_CHOICE:
+                body["tool_choice"] = INTERACTION_TOOL_CHOICE
     else:
         # Plain model target: `agent` is only required when `model` is absent.
+        # Declare no tools and forbid tool calls so we get a pure text answer.
         body["model"] = model
+        body["tools"] = _tools()
+        if INTERACTION_TOOL_CHOICE:
+            body["tool_choice"] = INTERACTION_TOOL_CHOICE
     if prev_id:
         body["previous_interaction_id"] = prev_id
     payload = json.dumps(body)
@@ -364,6 +393,7 @@ def run_interaction(model: str, request_name: str = "default",
                    "model": "" if _agent_mode() else model,
                    "agent": INTERACTION_AGENT,
                    "background": _background_default(),
+                   "tools": _tools(), "tool_choice": INTERACTION_TOOL_CHOICE,
                    "endpoint": interactions_url(),
                    "request_source": source, "warmup": warmup},
         "interaction_records": records,
