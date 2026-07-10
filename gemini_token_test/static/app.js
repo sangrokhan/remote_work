@@ -99,35 +99,40 @@ function renderCaptureLog(entries) {
   box.innerHTML = `<strong>Capture log (tcpdump)</strong>${rows.join("")}`;
 }
 
-function renderDetail(series, mode) {
-  const tb = document.querySelector("#detail tbody");
+// Replace a tbody with one row per entry of `rows` (each an array of cell values).
+// Cells are set via textContent, so model output can't break the layout or inject
+// HTML. `numeric` lists the column indexes to right-align.
+function fillTable(tbodySelector, rows, numeric = []) {
+  const tb = document.querySelector(tbodySelector);
   tb.innerHTML = "";
-  (series.turns || []).forEach((turn, i) => {
-    const prompt = series.per_turn_prompt_tokens[i];
-    const total = series.per_turn_tokens[i];
+  rows.forEach(cells => {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${mode}</td><td>${turn}</td><td>${prompt}</td>
-      <td>${total - prompt}</td><td>${total}</td><td>${series.per_turn_wire_bytes[i]}</td><td></td>`;
-    tb.appendChild(tr);
-  });
-}
-
-// 3-stage side-by-side table: one row per step, columns query / stateless resp /
-// stateful resp. Uses textContent so response text can't break the layout or inject HTML.
-function renderCompare3(rows, execId) {
-  const sec = document.getElementById("compare3");
-  const tb = document.querySelector("#compareTable tbody");
-  tb.innerHTML = "";
-  (rows || []).forEach(r => {
-    const tr = document.createElement("tr");
-    [r.turn, r.query, r.stateless_response, r.nocontext_response, r.stateful_response].forEach((v, i) => {
+    cells.forEach((v, i) => {
       const td = document.createElement("td");
       td.textContent = (v == null) ? "" : String(v);
-      if (i === 0) td.className = "num";
+      if (numeric.includes(i)) td.className = "num";
       tr.appendChild(td);
     });
     tb.appendChild(tr);
   });
+}
+
+function renderDetail(series, mode) {
+  const rows = (series.turns || []).map((turn, i) => {
+    const prompt = series.per_turn_prompt_tokens[i];
+    const total = series.per_turn_tokens[i];
+    return [mode, turn, prompt, total - prompt, total, series.per_turn_wire_bytes[i], ""];
+  });
+  fillTable("#detail tbody", rows);
+}
+
+// 3-stage side-by-side table: one row per step, columns query / stateless resp /
+// no-context resp / stateful resp.
+function renderCompare3(rows, execId) {
+  const sec = document.getElementById("compare3");
+  fillTable("#compareTable tbody",
+    (rows || []).map(r => [r.turn, r.query, r.stateless_response,
+                           r.nocontext_response, r.stateful_response]), [0]);
   const csv = document.getElementById("compareCsv");
   const has = !!(rows && rows.length);
   if (has && execId) {
@@ -195,20 +200,11 @@ async function runStreaming(body, onProgress, url = "/run/stream") {
 // --- Interaction API test (stateful, server-side history) --------------------
 function renderInteraction(data) {
   const sec = document.getElementById("interactionResult");
-  const tb = document.querySelector("#interactionTable tbody");
-  tb.innerHTML = "";
   const secs = (ms) => (ms == null ? "" : (ms / 1000).toFixed(1));
-  (data.records || []).forEach(r => {
-    const tr = document.createElement("tr");
-    [r.turn, r.question, r.response_text, secs(r.elapsed_ms), secs(r.first_event_ms),
-     r.interaction_id, r.error].forEach((v, i) => {
-      const td = document.createElement("td");
-      td.textContent = (v == null) ? "" : String(v);
-      if (i === 0 || i === 3 || i === 4) td.className = "num";
-      tr.appendChild(td);
-    });
-    tb.appendChild(tr);
-  });
+  fillTable("#interactionTable tbody",
+    (data.records || []).map(r => [r.turn, r.question, r.response_text,
+      secs(r.elapsed_ms), secs(r.first_event_ms), r.interaction_id, r.error]),
+    [0, 3, 4]);
   const p = data.params || {};
   const w = p.warmup || {};
   const target = p.target === "agent" ? `agent: ${p.agent}` : `model: ${p.model || "?"}`;
@@ -233,9 +229,10 @@ function renderInteraction(data) {
 // Drives a streaming run button: disables it, hides stale output, streams progress
 // into the status line, and validates the final payload. Returns the result, or
 // null when the run errored (the status line already says why).
-async function streamedRun({ button, url, startText, hide, body, requires, missingMsg }) {
+async function streamedRun({ button, url, startText, hide, body, requires, missingMsg,
+                            statusId = "status" }) {
   const btn = document.getElementById(button);
-  const status = document.getElementById("status");
+  const status = document.getElementById(statusId);
   btn.disabled = true;
   status.textContent = startText;
   try {
@@ -260,7 +257,8 @@ async function startInteraction() {
     button: "startInteraction",
     url: "/interaction/test",
     startText: "Interaction API…",
-    hide: ["interactionResult"],
+    statusId: "interactionStatus",
+    hide: ["interactionResult", "interactionChat"],
     requires: "records",
     missingMsg: "no result",
     body: () => ({
@@ -272,7 +270,7 @@ async function startInteraction() {
 
   renderInteraction(data);
   const errs = data.records.filter(r => r.error).length;
-  document.getElementById("status").textContent =
+  document.getElementById("interactionStatus").textContent =
     `${data.mock ? "[MOCK] " : ""}Interaction done. exec_id: ${data.exec_id}`
     + (errs ? ` | ${errs} turn(s) errored` : "");
   loadHistory();

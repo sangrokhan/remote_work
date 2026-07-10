@@ -44,7 +44,6 @@
       capture packets{% if not capture_ok %} (unavailable: {{ capture_reason }}){% endif %}
     </label>
     <button id="start">▶ Start experiment</button>
-    <button id="startInteraction" title="Replay the scenario over the stateful Interactions API (server keeps history via previous_interaction_id)">🧪 Test Interaction API</button>
     <a id="pcapLink" class="pcap-link" hidden download>⬇ download .pcap</a>
     <a id="chatLink" class="pcap-link" hidden download>⬇ download chat JSON</a>
   </section>
@@ -60,15 +59,22 @@
     <div class="chart-box"><canvas id="byteChart"></canvas></div>
   </section>
 
-  <section id="interactionResult" hidden>
-    <h2>Interaction API (stateful, server-side history)
+  <section>
+    <h2>Interaction API (stateful, server-side history)</h2>
+    <p class="sub">Replays the scenario over the Interactions API — the server keeps the
+      history via <code>previous_interaction_id</code>. Uses the Turns and Model above.</p>
+    <div class="insp-row">
+      <button id="startInteraction" type="button">🧪 Test Interaction API</button>
       <a id="interactionChat" class="pcap-link" hidden download>⬇ download JSON</a>
-    </h2>
-    <p class="sub" id="interactionMeta"></p>
-    <div class="table-scroll">
-      <table id="interactionTable" class="compare"><thead><tr>
-        <th>Turn</th><th>Query</th><th>Response</th><th>Total (s)</th><th>1st event (s)</th><th>interaction_id</th><th>Error</th>
-      </tr></thead><tbody></tbody></table>
+      <span class="sub" id="interactionStatus"></span>
+    </div>
+    <div id="interactionResult" hidden>
+      <p class="sub" id="interactionMeta"></p>
+      <div class="table-scroll">
+        <table id="interactionTable" class="compare"><thead><tr>
+          <th>Turn</th><th>Query</th><th>Response</th><th>Total (s)</th><th>1st event (s)</th><th>interaction_id</th><th>Error</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
     </div>
   </section>
 

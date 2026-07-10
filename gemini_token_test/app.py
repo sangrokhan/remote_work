@@ -208,6 +208,18 @@ def interaction_test():
     return _sse_response(lambda emit: _execute_interaction(data, on_progress=emit))
 
 
+def _attachment(body: str, mimetype: str, filename: str):
+    """A downloadable response. Flask appends charset=utf-8 to the mimetype."""
+    from flask import Response
+    return Response(body, mimetype=mimetype,
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+def _json_attachment(payload, filename: str):
+    return _attachment(json.dumps(payload, indent=2, ensure_ascii=False),
+                       "application/json", filename)
+
+
 def _parse_json(s):
     """Turn a raw JSON string back into an object for a clean export; keep the
     original string if it isn't valid JSON (e.g. an error body)."""
@@ -301,12 +313,7 @@ def download_compare(exec_id):
                          _csv_safe(r["stateless_response"]),
                          _csv_safe(r["nocontext_response"]),
                          _csv_safe(r["stateful_response"])])
-    from flask import Response
-    return Response(
-        buf.getvalue(),
-        mimetype="text/csv",  # Flask appends charset=utf-8
-        headers={"Content-Disposition": f'attachment; filename="compare_{exec_id}.csv"'},
-    )
+    return _attachment(buf.getvalue(), "text/csv", f"compare_{exec_id}.csv")
 
 
 @app.route("/download/chat/<exec_id>")
@@ -314,13 +321,7 @@ def download_chat(exec_id):
     doc = get_run(exec_id)
     if doc is None:
         abort(404)
-    from flask import Response
-    payload = build_chat_export(doc)
-    return Response(
-        json.dumps(payload, indent=2, ensure_ascii=False),
-        mimetype="application/json",
-        headers={"Content-Disposition": f'attachment; filename="chat_{exec_id}.json"'},
-    )
+    return _json_attachment(build_chat_export(doc), f"chat_{exec_id}.json")
 
 
 @app.route("/download/pcap/<path:name>")
@@ -389,12 +390,7 @@ def download_run(exec_id):
     doc = get_run(exec_id)
     if doc is None:
         abort(404)
-    from flask import Response
-    import json as _json
-    return Response(
-        _json.dumps(doc, indent=2), mimetype="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{exec_id}.json"'},
-    )
+    return _json_attachment(doc, f"{exec_id}.json")
 
 
 if __name__ == "__main__":
