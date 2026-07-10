@@ -195,8 +195,8 @@ python -m unittest discover tests      # pure metric math, no network
 | `STAGE_PAUSE_SECONDS` | `60` | pause between 3-stage stages (stateless → caches → stateful → no-context) to stay under Vertex per-minute quotas. Ignored in mock. Set `0` to disable. |
 | `INTERACTION_AGENT` | *(empty)* | Interaction API target. Empty = run the selected Gemini model via the `model` field (no sandbox, fast). Set to an agent id (e.g. `antigravity-preview-05-2026`) to run the coding agent in a remote sandbox instead. |
 | `INTERACTION_BACKGROUND` | *(auto)* | `background` flag. Defaults to `1` in agent mode (required) and `0` in model mode. |
-| `INTERACTION_TOOL_CHOICE` | `none` | `tool_choice` sent with each interaction: `auto`, `any`, `none`, `validated`. `none` keeps the model from invoking tools, so it answers in text. Empty = omit the field. |
-| `INTERACTION_TOOLS` | `[]` | JSON list of tools to declare, e.g. `[{"type":"google_search"}]`. Empty list = no tools available. In agent mode these two are only sent if you set them explicitly. |
+| `INTERACTION_TOOL_CHOICE` | `none` | Sent as `generation_config.tool_choice`: `auto`, `any`, `none`, `validated`. `none` keeps the model from invoking tools, so it answers in text. Empty = omit the field. Model mode only — agent interactions take no `generation_config`. |
+| `INTERACTION_TOOLS` | `[]` | JSON list of tools to declare, e.g. `[{"type":"google_search"}]`. Empty list = no tools available. In agent mode this is only sent if you set it explicitly. |
 | `INTERACTION_ENV_ID` | *(empty)* | Reuse an existing agent sandbox and skip warmup (agent mode only; sandbox TTL is 7 days). |
 | `INTERACTION_WARMUP_TIMEOUT` / `_INTERVAL` | `300` / `5` | Bound on the agent-sandbox warmup retry loop, in seconds. |
 | `CAPTURE_WARMUP_SECONDS` | `2` | settle time after tcpdump starts before the first request (clean handshake in each per-stage pcap) |

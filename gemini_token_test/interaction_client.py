@@ -54,7 +54,13 @@ INTERACTION_API_REVISION = os.environ.get("INTERACTION_API_REVISION", "2026-05-2
 # The Interactions API can actually invoke built-in tools (google_search,
 # code_execution, computer_use, …), so a plain Q&A comparison must switch them off:
 # an empty `tools` list plus tool_choice="none" (valid: auto|any|none|validated).
-# Both are interaction-scoped and must be re-sent on every request.
+#
+# `tool_choice` is NOT a top-level field — it lives in `generation_config`, which
+# only model interactions accept (CreateAgentInteraction has no generation_config,
+# so an agent's tool use cannot be constrained this way). Sending it at the top
+# level fails with "unknown parameter tool_choice".
+#
+# `tools` is top-level and interaction-scoped: re-send it on every request.
 # Set INTERACTION_TOOL_CHOICE="" to omit the field, or INTERACTION_TOOLS to a JSON
 # list like [{"type":"google_search"}] to allow specific tools.
 INTERACTION_TOOL_CHOICE = os.environ.get("INTERACTION_TOOL_CHOICE", "none")
@@ -180,20 +186,19 @@ def _call_interaction(text: str, prev_id: str | None, environment,
     }
     if _agent_mode():
         # Agent target: needs a sandbox environment provisioned for it. Tooling is
-        # the agent's whole purpose, so only constrain it when asked explicitly.
+        # the agent's whole purpose, so only constrain it when asked explicitly —
+        # and only via `tools`, since agent interactions take no generation_config.
         body["agent"] = INTERACTION_AGENT
         body["environment"] = environment
         if _TOOLS_ENV_SET:
             body["tools"] = _tools()
-            if INTERACTION_TOOL_CHOICE:
-                body["tool_choice"] = INTERACTION_TOOL_CHOICE
     else:
         # Plain model target: `agent` is only required when `model` is absent.
         # Declare no tools and forbid tool calls so we get a pure text answer.
         body["model"] = model
         body["tools"] = _tools()
         if INTERACTION_TOOL_CHOICE:
-            body["tool_choice"] = INTERACTION_TOOL_CHOICE
+            body["generation_config"] = {"tool_choice": INTERACTION_TOOL_CHOICE}
     if prev_id:
         body["previous_interaction_id"] = prev_id
     payload = json.dumps(body)
@@ -393,7 +398,9 @@ def run_interaction(model: str, request_name: str = "default",
                    "model": "" if _agent_mode() else model,
                    "agent": INTERACTION_AGENT,
                    "background": _background_default(),
-                   "tools": _tools(), "tool_choice": INTERACTION_TOOL_CHOICE,
+                   "tools": _tools(),
+                   # agent interactions take no generation_config, so no tool_choice
+                   "tool_choice": "" if _agent_mode() else INTERACTION_TOOL_CHOICE,
                    "endpoint": interactions_url(),
                    "request_source": source, "warmup": warmup},
         "interaction_records": records,
