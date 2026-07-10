@@ -6,3 +6,5 @@ __pycache__/
 .env
 .venv/
 .venv-preflight/
+# Scratch file; has held a printed access token. Never commit it.
+temp

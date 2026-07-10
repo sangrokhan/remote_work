@@ -197,6 +197,77 @@ async function runStreaming(body, onProgress, url = "/run/stream") {
   return result;
 }
 
+// --- Interaction API capability probe ----------------------------------------
+// One row per (target, model). A target that failed on auth or allowlist never
+// reached the schema questions, so it gets a single explanatory row instead of a
+// grid of "unsupported" that would read as a finding it isn't.
+function probeRows(targets) {
+  const rows = [];
+  (targets || []).forEach(t => {
+    const models = Object.entries(t.models || {});
+    if (!models.length) {
+      rows.push([t.target, "—", t.verdict, "", "", "", t.reason || t.control_message || ""]);
+      return;
+    }
+    models.forEach(([model, e]) => rows.push([
+      t.target, model,
+      e.interactions_stream.verdict,
+      e.interactions_nonstream.verdict,
+      e.generate_content.verdict,
+      e.usage_reported ? "yes" : "no",
+      e.interactions_nonstream.error || e.interactions_stream.error || "",
+    ]));
+  });
+  return rows;
+}
+
+function renderProbe(data) {
+  fillTable("#probeTable tbody", probeRows(data.targets));
+
+  const c = data.conclusion || {};
+  document.getElementById("probeConclusion").textContent =
+    `${data.mock ? "[MOCK] " : ""}${c.next_step}: ${c.summary}`;
+
+  // The system-prompt answer decides how many bytes a stateful turn really costs,
+  // so surface it next to the conclusion rather than burying it in the JSON.
+  const sys = (data.targets || [])
+    .map(t => [t.target, (t.checks || {}).system_instruction || {}])
+    .find(([, s]) => s.verdict === "persisted" || s.verdict === "per_turn");
+  document.getElementById("probeSystem").textContent = sys
+    ? `system_instruction on ${sys[0]}: ${sys[1].verdict} — ${sys[1].meaning}`
+    : "system_instruction: not probed (no model interaction succeeded).";
+
+  const dl = document.getElementById("probeJson");
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);
+  const u = URL.createObjectURL(blob);
+  dl.href = u; dl.dataset.url = u; dl.download = "interaction_probe.json";
+  dl.hidden = false;
+  document.getElementById("probeResult").hidden = false;
+}
+
+async function startProbe() {
+  const btn = document.getElementById("startProbe");
+  const status = document.getElementById("probeStatus");
+  btn.disabled = true;
+  status.textContent = "Probing… (a handful of live calls)";
+  document.getElementById("probeResult").hidden = true;
+  try {
+    const resp = await fetch("/interaction/probe", { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok || data.error) {
+      status.textContent = "Error: " + (data.error || resp.status);
+      return;
+    }
+    renderProbe(data);
+    status.textContent = `Probe done → ${(data.conclusion || {}).next_step}`;
+  } catch (e) {
+    status.textContent = "Failed: " + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // --- Interaction API test (stateful, server-side history) --------------------
 function renderInteraction(data) {
   const sec = document.getElementById("interactionResult");
@@ -514,6 +585,7 @@ document.getElementById("model").addEventListener("change", toggleCustom);
 document.getElementById("modelFilter").addEventListener("input", e => renderModels(e.target.value));
 document.getElementById("modelRefresh").addEventListener("click", loadModels);
 document.getElementById("start").addEventListener("click", start);
+document.getElementById("startProbe").addEventListener("click", startProbe);
 document.getElementById("startInteraction").addEventListener("click", startInteraction);
 document.getElementById("refresh").addEventListener("click", loadHistory);
 document.getElementById("compare").addEventListener("click", compare);

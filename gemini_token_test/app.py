@@ -11,6 +11,7 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 
 import capture as pcap
 import inspector
+import probe
 from experiment import run_experiment, run_three_stage, MODES
 from gemini_client import (
     ready, is_mock, ENDPOINT, PROJECT, LOCATION, DEFAULT_MODEL, list_models,
@@ -198,6 +199,17 @@ def run_stream():
     """Same as /run but streams per-turn progress, then a final 'done' event."""
     data = request.get_json(force=True, silent=True) or {}
     return _sse_response(lambda emit: _execute_run(data, on_progress=emit))
+
+
+@app.route("/interaction/probe", methods=["POST"])
+def interaction_probe():
+    """Which Interactions API surface, if any, serves a plain Gemini model?
+
+    Runs a matrix of small live calls and reports the raw verdicts. Nothing is
+    persisted: the point is to decide what the performance experiment can even
+    measure, before it is built.
+    """
+    return jsonify(probe.probe_interactions())
 
 
 @app.route("/interaction/test", methods=["POST"])

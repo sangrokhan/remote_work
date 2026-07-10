@@ -60,6 +60,30 @@
   </section>
 
   <section>
+    <h2>Interaction API capability probe</h2>
+    <p class="sub">Small live calls that answer what the docs don't: does a plain Gemini
+      <code>model</code> interaction work on Vertex, is <code>stream:false</code> accepted,
+      is a regional path served, does the response carry <code>usage</code>, and does
+      <code>system_instruction</code> survive <code>previous_interaction_id</code>.
+      Nothing is saved. Each call sends "hi" and caps output at 16 tokens.</p>
+    <div class="insp-row">
+      <button id="startProbe" type="button">🔍 Probe Interactions API</button>
+      <a id="probeJson" class="pcap-link" hidden download>⬇ download JSON</a>
+      <span class="sub" id="probeStatus"></span>
+    </div>
+    <div id="probeResult" hidden>
+      <p class="sub" id="probeConclusion"></p>
+      <div class="table-scroll">
+        <table id="probeTable" class="compare"><thead><tr>
+          <th>Target</th><th>Model</th><th>stream</th><th>non-stream</th>
+          <th>generateContent</th><th>usage</th><th>Server said</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <p class="sub" id="probeSystem"></p>
+    </div>
+  </section>
+
+  <section>
     <h2>Interaction API (stateful, server-side history)</h2>
     <p class="sub">Replays the scenario over the Interactions API — the server keeps the
       history via <code>previous_interaction_id</code>. Uses the Turns and Model above.</p>
