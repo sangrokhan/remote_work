@@ -54,6 +54,12 @@ def base_url() -> str:
     return os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 
 
+def api_host() -> str:
+    """Hostname only — what the packet capture filters on."""
+    from urllib.parse import urlparse
+    return urlparse(base_url()).hostname or "api.openai.com"
+
+
 def api_key() -> str:
     key = os.environ.get("OPENAI_API_KEY", "")
     if not key:
@@ -92,23 +98,42 @@ class CallResult:
 
     latency_ms: int = 0
     response_id: str = ""
-    # request bodies are NOT compressed by default, so req_payload_bytes is what
-    # the stateless arm really pushes uphill every single turn
-    raw_request: dict = field(default_factory=dict)
+    error: str = ""
+
+    # The JSON bodies exactly as sent and received. Bodies only — never headers,
+    # which carry the bearer token. This is what makes the result auditable: the
+    # numbers say the stateless arm re-sent 21 kB, and these say what was in it.
+    request_json: str = ""
+    response_json: str = ""
 
     @property
     def billed_uncached_tokens(self) -> int:
         return max(self.input_tokens - self.cached_tokens, 0)
 
-    def as_dict(self) -> dict:
+    def as_dict(self, *, bodies: bool = False) -> dict:
         d = asdict(self)
-        d.pop("raw_request", None)
+        if not bodies:
+            # metrics rows stay small; the bodies are written once, separately
+            d.pop("request_json", None)
+            d.pop("response_json", None)
         d["billed_uncached_tokens"] = self.billed_uncached_tokens
         return d
 
 
-def _post(url: str, body: dict) -> tuple[dict, int, int, int, int, int]:
-    """POST json, returning (response_json, wire_sent, wire_recv, req_bytes, resp_bytes, latency_ms)."""
+@dataclass
+class _Exchange:
+    """One HTTP round trip, measured."""
+    data: dict
+    wire_sent: int
+    wire_recv: int
+    req_bytes: int
+    resp_bytes: int
+    latency_ms: int
+    request_json: str
+    response_json: str
+
+
+def _post(url: str, body: dict) -> _Exchange:
     payload = json.dumps(body).encode()
     sess = session()
     t0 = time.perf_counter()
@@ -122,8 +147,16 @@ def _post(url: str, body: dict) -> tuple[dict, int, int, int, int, int]:
     latency_ms = int((time.perf_counter() - t0) * 1000)
     if resp.status_code >= 400:
         raise RuntimeError(f"{resp.status_code} from {url}: {resp.text[:500]}")
-    data = resp.json()
-    return data, w.sent, w.recv, len(payload), len(resp.content), latency_ms
+    return _Exchange(
+        data=resp.json(),
+        wire_sent=w.sent,
+        wire_recv=w.recv,
+        req_bytes=len(payload),
+        resp_bytes=len(resp.content),
+        latency_ms=latency_ms,
+        request_json=payload.decode(),
+        response_json=resp.text,
+    )
 
 
 def create_conversation(system: str) -> tuple[str, CallResult]:
@@ -134,20 +167,21 @@ def create_conversation(system: str) -> tuple[str, CallResult]:
     """
     url = f"{base_url()}/conversations"
     body = {"items": [{"type": "message", "role": "system", "content": system}]}
-    data, sent, recv, req_b, resp_b, ms = _post(url, body)
+    x = _post(url, body)
     res = CallResult(
         arm="responses_stateful",
         turn=0,  # turn 0 = setup, not a model call
         url=url,
-        wire_sent=sent,
-        wire_recv=recv,
-        req_payload_bytes=req_b,
-        resp_payload_bytes=resp_b,
-        latency_ms=ms,
-        response_id=data.get("id", ""),
-        raw_request=body,
+        wire_sent=x.wire_sent,
+        wire_recv=x.wire_recv,
+        req_payload_bytes=x.req_bytes,
+        resp_payload_bytes=x.resp_bytes,
+        latency_ms=x.latency_ms,
+        response_id=x.data.get("id", ""),
+        request_json=x.request_json,
+        response_json=x.response_json,
     )
-    return data["id"], res
+    return x.data["id"], res
 
 
 def _chat_body(model: str, system: str, history: list[dict],
@@ -251,20 +285,21 @@ def call(arm: str, *, model: str, system: str, history: list[dict], question: st
                                conversation=conversation, cache_key=cache_key)
         parse = _parse_responses
 
-    data, sent, recv, req_b, resp_b, ms = _post(url, body)
-    text, usage = parse(data)
+    x = _post(url, body)
+    text, usage = parse(x.data)
 
     return CallResult(
         arm=arm,
         turn=turn,
         url=url,
         text=text,
-        wire_sent=sent,
-        wire_recv=recv,
-        req_payload_bytes=req_b,
-        resp_payload_bytes=resp_b,
-        latency_ms=ms,
-        response_id=data.get("id", ""),
-        raw_request=body,
+        wire_sent=x.wire_sent,
+        wire_recv=x.wire_recv,
+        req_payload_bytes=x.req_bytes,
+        resp_payload_bytes=x.resp_bytes,
+        latency_ms=x.latency_ms,
+        response_id=x.data.get("id", ""),
+        request_json=x.request_json,
+        response_json=x.response_json,
         **usage,
     )

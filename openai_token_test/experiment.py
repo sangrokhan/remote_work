@@ -12,15 +12,11 @@ wire.py is unambiguous: only ever one request in flight.
 
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import fixture as fixture_mod
 import openai_client as oc
-
-RESULTS_DIR = Path(__file__).parent / "results"
+import wire
 
 
 @dataclass
@@ -54,7 +50,7 @@ def run_arm(arm: str, fx: fixture_mod.Fixture, *, model: str, turns: int,
 
     if arm == "responses_stateful":
         conversation, setup = oc.create_conversation(fx.system)
-        run.setup = setup.as_dict()
+        run.setup = setup.as_dict(bodies=True)
 
     for k, question in enumerate(fx.head(turns), start=1):
         res = oc.call(
@@ -67,7 +63,7 @@ def run_arm(arm: str, fx: fixture_mod.Fixture, *, model: str, turns: int,
             conversation=conversation,
             cache_key=cache_key,
         )
-        run.turns.append(res.as_dict())
+        run.turns.append(res.as_dict(bodies=True))
 
         # The stateless arms must carry the transcript forward themselves; that
         # growing list is exactly what they re-upload next turn. The stateful arm
@@ -84,15 +80,43 @@ def run_arm(arm: str, fx: fixture_mod.Fixture, *, model: str, turns: int,
 
 def run_experiment(*, fixture_name: str = "perf", model: str = oc.DEFAULT_MODEL,
                    turns: int = 10, repeats: int = 3,
-                   arms: tuple[str, ...] = oc.ARMS, on_turn=None) -> dict:
+                   arms: tuple[str, ...] = oc.ARMS, capture: bool = False,
+                   on_turn=None) -> dict:
+    """Run every arm over the fixture.
+
+    `capture` wraps each arm in its own tcpdump, so the pcap for an arm contains
+    only that arm's packets. One pcap for the whole run would put all three arms
+    in one file and the whole point — comparing their traffic — would be lost.
+
+    The socket byte tally is global and single-threaded, so arms must not overlap;
+    they run strictly one after another.
+    """
     fx = fixture_mod.load(fixture_name)
     turns = min(turns, len(fx.steps))
 
     runs: list[dict] = []
+    captures: list[dict] = []
+
     for repeat in range(1, repeats + 1):
         for arm in arms:
-            run = run_arm(arm, fx, model=model, turns=turns, repeat=repeat,
-                          on_turn=on_turn)
+            if capture:
+                import capture as cap_mod
+                from datetime import datetime, timezone
+                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                # a fresh socket per arm, so each pcap opens on a real TCP
+                # handshake instead of mid-stream on a pooled connection
+                wire.reset_session()
+                with cap_mod.Capture(ts, arm=arm) as cap:
+                    run = run_arm(arm, fx, model=model, turns=turns,
+                                  repeat=repeat, on_turn=on_turn)
+                wire.reset_session()
+                res = cap.result()
+                res["repeat"] = repeat
+                captures.append(res)
+            else:
+                run = run_arm(arm, fx, model=model, turns=turns, repeat=repeat,
+                              on_turn=on_turn)
+
             runs.append({"arm": run.arm, "repeat": run.repeat,
                          "setup": run.setup, "turns": run.turns})
 
@@ -107,16 +131,11 @@ def run_experiment(*, fixture_name: str = "perf", model: str = oc.DEFAULT_MODEL,
             "max_output_tokens": oc.DEFAULT_MAX_OUTPUT_TOKENS,
             "reasoning_effort": oc.DEFAULT_REASONING_EFFORT,
             "stream": False,
+            "capture": capture,
         },
         "runs": runs,
+        "captures": captures,
     }
-
-
-def save(experiment: dict, name: str) -> Path:
-    RESULTS_DIR.mkdir(exist_ok=True)
-    path = RESULTS_DIR / f"{name}.json"
-    path.write_text(json.dumps(experiment, indent=2))
-    return path
 
 
 def _progress(arm: str, k: int, n: int, res: oc.CallResult) -> None:
@@ -130,27 +149,44 @@ def _progress(arm: str, k: int, n: int, res: oc.CallResult) -> None:
 def main() -> None:
     import argparse
 
+    import metrics
+    import store
+
     ap = argparse.ArgumentParser(description="OpenAI stateless-vs-stateful traffic experiment")
     ap.add_argument("--fixture", default="perf")
     ap.add_argument("--model", default=oc.DEFAULT_MODEL)
     ap.add_argument("--turns", type=int, default=10)
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--arms", default=",".join(oc.ARMS))
-    ap.add_argument("--name", default="run")
+    ap.add_argument("--capture", action="store_true",
+                    help="run tcpdump around each arm and keep the .pcap")
     args = ap.parse_args()
 
     arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
     print(f"model={args.model} fixture={args.fixture} turns={args.turns} "
-          f"repeats={args.repeats} arms={list(arms)}\n", flush=True)
+          f"repeats={args.repeats} arms={list(arms)}", flush=True)
+
+    if args.capture:
+        import capture as cap_mod
+        ok, why = cap_mod.available()
+        print(f"capture: {'ready' if ok else 'UNAVAILABLE — ' + why}")
+        if not ok:
+            print("continuing without packet capture\n")
+        args.capture = ok
+    print(flush=True)
 
     exp = run_experiment(fixture_name=args.fixture, model=args.model,
                          turns=args.turns, repeats=args.repeats, arms=arms,
-                         on_turn=_progress)
-    path = save(exp, args.name)
-    print(f"\nsaved {path}")
+                         capture=args.capture, on_turn=_progress)
 
-    import metrics
-    metrics.print_summary(metrics.summarize(exp))
+    summary = metrics.summarize(exp)
+    exec_id = store.new_exec_id()
+    manifest = store.save_run(exec_id, exp, summary, exp.get("captures"))
+
+    metrics.print_summary(summary)
+    print(f"\nsaved {manifest['dir']}")
+    print(f"  run.json · summary.csv · charts.png · {manifest['bodies']} raw bodies"
+          + (f" · {manifest['captures']} pcaps" if manifest["captures"] else ""))
 
 
 if __name__ == "__main__":

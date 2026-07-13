@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenAI stateless vs stateful — traffic</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Stateless vs stateful, on the wire</h1>
+  <p class="sub">
+    Same model, same conversation, three ways of remembering it. Watch what the
+    client has to upload each turn — and what it gets billed for regardless.
+  </p>
+  <div id="status" class="status">loading…</div>
+</header>
+
+<section class="panel">
+  <h2>Run</h2>
+  <div class="controls">
+    <label>fixture
+      <select id="fixture"></select>
+    </label>
+    <label>turns
+      <input id="turns" type="number" min="1" max="50" value="10">
+    </label>
+    <label>repeats
+      <input id="repeats" type="number" min="1" max="10" value="1">
+    </label>
+    <label class="check">
+      <input id="capture" type="checkbox">
+      capture packets (.pcap)
+    </label>
+    <button id="start">Start</button>
+  </div>
+  <div id="arms" class="arms"></div>
+  <div id="cost-hint" class="hint"></div>
+</section>
+
+<section class="panel" id="progress-panel" hidden>
+  <h2>Progress</h2>
+  <div id="progress"></div>
+  <pre id="log"></pre>
+</section>
+
+<section class="panel" id="result-panel" hidden>
+  <h2>Result</h2>
+  <div id="headline" class="headline"></div>
+  <div class="table-wrap">
+    <table id="totals"></table>
+  </div>
+  <h3>Per turn — upload bytes</h3>
+  <div class="table-wrap">
+    <table id="perturn"></table>
+  </div>
+  <img id="charts" alt="cumulative upload bytes and input tokens" hidden>
+  <div id="captures"></div>
+  <div id="downloads" class="downloads"></div>
+</section>
+
+<section class="panel">
+  <h2>History</h2>
+  <div class="table-wrap">
+    <table id="history"></table>
+  </div>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
