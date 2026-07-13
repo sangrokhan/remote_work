@@ -150,7 +150,8 @@ def create_conversation(system: str) -> tuple[str, CallResult]:
     return data["id"], res
 
 
-def _chat_body(model: str, system: str, history: list[dict]) -> dict:
+def _chat_body(model: str, system: str, history: list[dict],
+               cache_key: str | None = None) -> dict:
     body = {
         "model": model,
         "messages": [{"role": "system", "content": system}] + history,
@@ -159,11 +160,14 @@ def _chat_body(model: str, system: str, history: list[dict]) -> dict:
     }
     if DEFAULT_REASONING_EFFORT:
         body["reasoning_effort"] = DEFAULT_REASONING_EFFORT
+    if cache_key:
+        body["prompt_cache_key"] = cache_key
     return body
 
 
 def _responses_body(model: str, items: list[dict], *, store: bool,
-                    conversation: str | None = None) -> dict:
+                    conversation: str | None = None,
+                    cache_key: str | None = None) -> dict:
     body: dict = {
         "model": model,
         "input": items,
@@ -175,6 +179,8 @@ def _responses_body(model: str, items: list[dict], *, store: bool,
         body["conversation"] = conversation
     if DEFAULT_REASONING_EFFORT:
         body["reasoning"] = {"effort": DEFAULT_REASONING_EFFORT}
+    if cache_key:
+        body["prompt_cache_key"] = cache_key
     return body
 
 
@@ -208,13 +214,19 @@ def _parse_responses(data: dict) -> tuple[str, dict]:
 
 
 def call(arm: str, *, model: str, system: str, history: list[dict], question: str,
-         turn: int, conversation: str | None = None) -> CallResult:
+         turn: int, conversation: str | None = None,
+         cache_key: str | None = None) -> CallResult:
     """Run one turn on one arm.
 
     `history` is the conversation so far as [{role, content}, ...], NOT including
     the system prompt and NOT including the current question. The stateless arms
     resend all of it; the stateful arm ignores it and sends only `question`,
     because the server is already holding the same thing.
+
+    `cache_key` pins the prompt-cache routing. Without it, whether a call hits the
+    cache depends on which node it lands on — measured live, an identical prefix
+    hit 2/5 times unkeyed and 4/5 keyed. Unkeyed, cached_tokens is noise and so is
+    every cost figure computed from it.
     """
     if arm not in ARMS:
         raise ValueError(f"unknown arm: {arm}")
@@ -223,19 +235,20 @@ def call(arm: str, *, model: str, system: str, history: list[dict], question: st
 
     if arm == "chat_stateless":
         url = f"{base_url()}/chat/completions"
-        body = _chat_body(model, system, history + [user_msg])
+        body = _chat_body(model, system, history + [user_msg], cache_key=cache_key)
         parse = _parse_chat
     elif arm == "responses_stateless":
         url = f"{base_url()}/responses"
         items = [{"role": "system", "content": system}] + history + [user_msg]
-        body = _responses_body(model, items, store=False)
+        body = _responses_body(model, items, store=False, cache_key=cache_key)
         parse = _parse_responses
     else:  # responses_stateful
         if not conversation:
             raise ValueError("responses_stateful needs a conversation id")
         url = f"{base_url()}/responses"
         # only the new question. system + prior turns already live on the server.
-        body = _responses_body(model, [user_msg], store=True, conversation=conversation)
+        body = _responses_body(model, [user_msg], store=True,
+                               conversation=conversation, cache_key=cache_key)
         parse = _parse_responses
 
     data, sent, recv, req_b, resp_b, ms = _post(url, body)

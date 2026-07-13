@@ -31,11 +31,26 @@ class ArmRun:
     turns: list[dict] = field(default_factory=list)
 
 
+def cache_key_for(arm: str, repeat: int) -> str:
+    """Stable within one arm-run, distinct across arms and across repeats.
+
+    Stable, because prompt-cache routing only sticks if the key does not change
+    turn to turn. Distinct across arms, because a shared key would let whichever
+    arm ran first warm the cache for the one that ran second, and the second arm
+    would look cheaper for no reason but its position. Distinct across repeats,
+    because each repeat is supposed to be an independent conversation that starts
+    cold — reusing the key would hand repeats 2..N a warm first turn and make the
+    averaged cold-start cost a fiction.
+    """
+    return f"otst-{arm}-r{repeat}"
+
+
 def run_arm(arm: str, fx: fixture_mod.Fixture, *, model: str, turns: int,
             repeat: int, on_turn=None) -> ArmRun:
     run = ArmRun(arm=arm, repeat=repeat)
     history: list[dict] = []
     conversation = None
+    cache_key = cache_key_for(arm, repeat)
 
     if arm == "responses_stateful":
         conversation, setup = oc.create_conversation(fx.system)
@@ -50,6 +65,7 @@ def run_arm(arm: str, fx: fixture_mod.Fixture, *, model: str, turns: int,
             question=question,
             turn=k,
             conversation=conversation,
+            cache_key=cache_key,
         )
         run.turns.append(res.as_dict())
 
