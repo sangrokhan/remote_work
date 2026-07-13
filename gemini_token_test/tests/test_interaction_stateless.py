@@ -91,3 +91,39 @@ def test_the_inline_arm_still_chains_and_stores(monkeypatch):
 def test_client_history_is_off_by_default(monkeypatch):
     b = _bodies(monkeypatch, turns=1)[0]
     assert b["store"] is True
+
+
+# --- wired into the comparison --------------------------------------------
+
+def test_the_arm_exists_and_is_a_headline_arm():
+    assert "interaction_stateless" in experiment.COMPARE_ARMS
+    assert "interaction_stateless" in experiment.DEFAULT_ARMS
+
+
+def test_the_arm_produces_the_shared_record(monkeypatch):
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    out = experiment.run_comparison("gemini-3.1-flash-lite", turns=2,
+                                    arms=["interaction_stateless"])
+    recs = [r for r in out["records"] if r["arm"] == "interaction_stateless"]
+    assert [r["turn"] for r in recs] == [1, 2]
+    assert all(r["phase"] == "steady" for r in recs)
+    assert all("wire_sent" in r and "input_tokens" in r for r in recs)
+
+
+def test_all_three_interaction_arms_run_side_by_side(monkeypatch):
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    out = experiment.run_comparison(
+        "gemini-3.1-flash-lite", turns=1,
+        arms=["interaction", "interaction_inline", "interaction_stateless"])
+    assert {r["arm"] for r in out["records"]} == {
+        "interaction", "interaction_inline", "interaction_stateless"}
+
+
+def test_the_arm_resends_a_growing_history_through_the_comparison(monkeypatch):
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    out = experiment.run_comparison("gemini-3.1-flash-lite", turns=3,
+                                    arms=["interaction_stateless"])
+    recs = sorted((r for r in out["records"] if r["arm"] == "interaction_stateless"),
+                  key=lambda r: r["turn"])
+    sizes = [len(json.loads(r["request_raw"])["input"]) for r in recs]
+    assert sizes == [1, 3, 5]
