@@ -220,11 +220,13 @@ answer"** — one caches the prefix, the other keeps the whole conversation
 server-side. `interaction_stateless` fills the remaining cell of the endpoint
 × who-keeps-the-history matrix: the interactions endpoint, but the client
 keeps the history, like stateless. A live 3-turn run (2026-07-13,
-gemini-3.1-flash-lite) shows its `input_tokens` tracking `stateless` turn for
-turn (4459/4825/5337 vs 4459/4885/5413) rather than `interaction`'s
-(4459/4886/5465), which grows at the same rate — proof the server actually
-reads the client-supplied history rather than accepting and ignoring it.
-Against `interaction`, the wire gap (21701/23342/25600 vs 21700/21755/21722)
+gemini-3.1-flash-lite) shows its `input_tokens` growing turn over turn
+(4459/4825/5337) rather than staying flat at the turn-1 value — the result
+you'd see if the server accepted the client-supplied `Step[]` and then
+ignored it, billing only `S + q_k` on every turn. Wire bytes alone can't
+catch that failure mode, since the client keeps sending the full history
+either way; only the growing token count proves the history is reaching the
+model. Against `interaction`, the wire gap (21701/23342/25600 vs 21700/21755/21722)
 is exactly what `previous_interaction_id` buys: ~3.9 KB by turn 3, widening
 every turn — a **bytes** saving, not a token one. `interaction`'s
 input_tokens (4459/4886/5465) grow at the same rate as every other arm's,
