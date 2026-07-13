@@ -102,6 +102,38 @@
     </div>
   </section>
 
+  <section>
+    <h2>Stateless vs Cached vs Interaction — performance comparison</h2>
+    <p class="sub">Replays one scenario across arms and overlays cumulative <strong>wire
+      bytes</strong> (network) and <strong>input tokens</strong> (billing) on separate axes.
+      The cache-build upload is charged to the <code>cached</code> arm as setup, so a
+      front-loaded cache does not look free. Uses the Turns and Model above.</p>
+    <div class="insp-row">
+      <label><input type="checkbox" class="cmpArm" value="stateless" checked /> stateless</label>
+      <label><input type="checkbox" class="cmpArm" value="cached" checked /> cached</label>
+      <label><input type="checkbox" class="cmpArm" value="interaction" checked /> interaction</label>
+      <label><input type="checkbox" class="cmpArm" value="nocontext" /> nocontext</label>
+    </div>
+    <div class="insp-row">
+      <button id="startCompare" type="button">📊 Run comparison</button>
+      <a id="compareArmsJson" class="pcap-link" hidden download>⬇ download JSON</a>
+      <span class="sub" id="compareArmsStatus"></span>
+    </div>
+    <div id="compareArmsResult" hidden>
+      <div class="table-scroll">
+        <table id="compareArmsTable" class="compare"><thead><tr>
+          <th>Arm</th><th>Setup wire</th><th>Steady wire</th><th>Total wire</th>
+          <th>Total input tok</th><th>Cached tok</th><th>Output tok</th>
+          <th>Latency mean (s)</th><th>Errors</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="charts">
+        <div class="chart-box"><canvas id="compareWireChart"></canvas></div>
+        <div class="chart-box"><canvas id="compareTokenChart"></canvas></div>
+      </div>
+    </div>
+  </section>
+
   <section id="compare3" hidden>
     <h2>Per-step comparison
       <a id="compareCsv" class="pcap-link" hidden download>⬇ download CSV</a>

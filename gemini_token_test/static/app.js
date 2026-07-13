@@ -1,4 +1,5 @@
 let tokenChart, byteChart;
+let compareWireChart, compareTokenChart;
 
 function fmtBytes(n) {
   if (n < 1024) return n + " B";
@@ -148,8 +149,16 @@ const STAGE_LABELS = {
   stateless: "Stateless (full resend)",
   nocontext: "Stateless — no context",
   cachebuild: "Building caches",
+  cached: "Cached (build + reference)",
   stateful: "Stateful (cache + question)",
   interaction: "Interaction API (server-side state)",
+};
+
+const ARM_COLORS = {
+  stateless: "#ff6b6b",
+  cached: "#4dd4ac",
+  interaction: "#5b8def",
+  nocontext: "#f6c453",
 };
 
 function progressText(p) {
@@ -344,6 +353,86 @@ async function startInteraction() {
   document.getElementById("interactionStatus").textContent =
     `${data.mock ? "[MOCK] " : ""}Interaction done. exec_id: ${data.exec_id}`
     + (errs ? ` | ${errs} turn(s) errored` : "");
+  loadHistory();
+}
+
+// --- Stateless vs Cached vs Interaction comparison ---------------------------
+// Overlay each arm's cumulative wire bytes and input tokens on their own axes.
+// x is the steady turn index; setup cost is folded into the arm's starting point
+// (metrics offsets the cumulative series), so cached does not start free.
+function plotCompare(summary) {
+  const arms = summary.arms || [];
+  const maxLen = Math.max(0, ...arms.map(a => (summary.series[a].turns || []).length));
+  const labels = Array.from({ length: maxLen }, (_, i) => i + 1);
+  const mk = (key) => arms.map(a => {
+    const c = ARM_COLORS[a] || "#9aa5b1";
+    return {
+      label: a, data: summary.series[a][key],
+      borderColor: c, backgroundColor: c + "22", fill: false, tension: .2,
+    };
+  });
+  const opts = (title, yLabel) => ({
+    responsive: true,
+    plugins: { title: { display: true, text: title, color: "#e6e6e6" }, legend: { labels: { color: "#cbd5e0" } } },
+    scales: {
+      x: { title: { display: true, text: "steady turn", color: "#8b98a5" }, ticks: { color: "#8b98a5" }, grid: { color: "#2d3748" } },
+      y: { title: { display: true, text: yLabel, color: "#8b98a5" }, ticks: { color: "#8b98a5" }, grid: { color: "#2d3748" } },
+    },
+  });
+  if (compareWireChart) compareWireChart.destroy();
+  if (compareTokenChart) compareTokenChart.destroy();
+  compareWireChart = new Chart(document.getElementById("compareWireChart"),
+    { type: "line", data: { labels, datasets: mk("cum_wire") }, options: opts("Cumulative wire bytes (incl. setup)", "bytes") });
+  compareTokenChart = new Chart(document.getElementById("compareTokenChart"),
+    { type: "line", data: { labels, datasets: mk("cum_input_tokens") }, options: opts("Cumulative input tokens (incl. setup)", "tokens") });
+}
+
+function renderCompareArms(data) {
+  const s = data.summary;
+  const t = s.totals;
+  const secs = (ms) => (ms == null ? "" : (ms / 1000).toFixed(1));
+  fillTable("#compareArmsTable tbody",
+    (s.arms || []).map(a => [
+      STAGE_LABELS[a] || a,
+      fmtBytes(t[a].setup_wire), fmtBytes(t[a].steady_wire), fmtBytes(t[a].total_wire),
+      (t[a].total_input_tokens || 0).toLocaleString(),
+      (t[a].cached_tokens || 0).toLocaleString(),
+      (t[a].output_tokens || 0).toLocaleString(),
+      secs(t[a].latency.mean), t[a].errors,
+    ]),
+    [1, 2, 3, 4, 5, 6, 7, 8]);
+  plotCompare(s);
+
+  const dl = document.getElementById("compareArmsJson");
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);
+  const u = URL.createObjectURL(blob);
+  dl.href = u; dl.dataset.url = u; dl.download = `comparison_${data.exec_id || "run"}.json`;
+  dl.hidden = false;
+  document.getElementById("compareArmsResult").hidden = false;
+}
+
+async function startCompare() {
+  const arms = Array.from(document.querySelectorAll(".cmpArm:checked")).map(c => c.value);
+  const data = await streamedRun({
+    button: "startCompare",
+    url: "/compare/stream",
+    startText: "Comparison…",
+    statusId: "compareArmsStatus",
+    hide: ["compareArmsResult", "compareArmsJson"],
+    requires: "summary",
+    missingMsg: "no result",
+    body: () => ({
+      turns: +document.getElementById("turns").value,
+      model: selectedModel(),
+      arms: arms.length ? arms : undefined,
+    }),
+  });
+  if (!data) return;
+
+  renderCompareArms(data);
+  document.getElementById("compareArmsStatus").textContent =
+    `${data.mock ? "[MOCK] " : ""}Comparison done. exec_id: ${data.exec_id}`;
   loadHistory();
 }
 
@@ -587,6 +676,7 @@ document.getElementById("modelRefresh").addEventListener("click", loadModels);
 document.getElementById("start").addEventListener("click", start);
 document.getElementById("startProbe").addEventListener("click", startProbe);
 document.getElementById("startInteraction").addEventListener("click", startInteraction);
+document.getElementById("startCompare").addEventListener("click", startCompare);
 document.getElementById("refresh").addEventListener("click", loadHistory);
 document.getElementById("compare").addEventListener("click", compare);
 document.getElementById("inspect").addEventListener("click", inspect);

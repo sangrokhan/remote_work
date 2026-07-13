@@ -12,11 +12,11 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 import capture as pcap
 import inspector
 import probe
-from experiment import run_experiment, run_three_stage, MODES
+from experiment import run_experiment, run_three_stage, run_comparison, MODES, COMPARE_ARMS
 from gemini_client import (
     ready, is_mock, ENDPOINT, PROJECT, LOCATION, DEFAULT_MODEL, list_models,
 )
-from metrics import summarize, summarize_three_stage
+from metrics import summarize, summarize_three_stage, summarize_comparison
 
 THREE_STAGE = "caching-3stage"
 from store import save_run, list_runs, get_run, firestore_active, delete_run
@@ -154,6 +154,31 @@ def _execute_interaction(data: dict, on_progress=None):
             "records": experiment["interaction_records"], "saved_to": saved}, 200
 
 
+def _execute_compare(data: dict, on_progress=None):
+    """Replay one scenario across the comparison arms (stateless / cached /
+    interaction, plus optional nocontext) and summarize per-arm wire bytes,
+    input tokens, and latency. Same (resp, code) contract as _execute_run."""
+    ok, reason = ready()
+    if not ok:
+        return {"error": reason}, 400
+
+    turns = max(1, min(int(data.get("turns", 1)), 100))
+    model = (data.get("model") or DEFAULT_MODEL).strip()
+    arms = data.get("arms") or list(COMPARE_ARMS)
+    arms = [a for a in arms if a in COMPARE_ARMS] or list(COMPARE_ARMS)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
+
+    experiment = run_comparison(model, turns=turns, arms=arms, on_progress=on_progress)
+    experiment["params"]["mock"] = is_mock()
+    summary = summarize_comparison(experiment)
+    saved = save_run(exec_id, timestamp, experiment, summary)
+    return {"exec_id": exec_id, "timestamp": timestamp, "saved_to": saved,
+            "mock": is_mock(), "mode": "comparison", "params": experiment["params"],
+            "records": experiment["records"], "summary": summary}, 200
+
+
 def _sse_response(run):
     """Stream a long run as Server-Sent Events.
 
@@ -199,6 +224,21 @@ def run_stream():
     """Same as /run but streams per-turn progress, then a final 'done' event."""
     data = request.get_json(force=True, silent=True) or {}
     return _sse_response(lambda emit: _execute_run(data, on_progress=emit))
+
+
+@app.route("/compare", methods=["POST"])
+def compare():
+    """Run the stateless-vs-cached-vs-interaction comparison in one shot."""
+    data = request.get_json(force=True, silent=True) or {}
+    resp, code = _execute_compare(data)
+    return jsonify(resp), code
+
+
+@app.route("/compare/stream", methods=["POST"])
+def compare_stream():
+    """Same as /compare but streams per-arm progress, then a final 'done' event."""
+    data = request.get_json(force=True, silent=True) or {}
+    return _sse_response(lambda emit: _execute_compare(data, on_progress=emit))
 
 
 @app.route("/interaction/probe", methods=["POST"])

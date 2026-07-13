@@ -62,6 +62,70 @@ def summarize_three_stage(experiment: dict) -> dict:
     }
 
 
+def _latency_stats(values: list[int]) -> dict:
+    if not values:
+        return {"mean": 0, "median": 0, "min": 0, "max": 0}
+    s = sorted(values)
+    n = len(s)
+    median = s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+    return {"mean": round(sum(s) / n, 1), "median": median,
+            "min": s[0], "max": s[-1]}
+
+
+def summarize_comparison(comparison: dict) -> dict:
+    """Per-arm series and totals for a run_comparison result.
+
+    Keeps wire bytes and input tokens on separate axes, and keeps the cache-build
+    setup cost visible: an arm's cumulative series is offset by its setup cost, so
+    the chart shows the true bytes/tokens spent to have run k turns that way, and a
+    front-loaded cache does not look free.
+    """
+    records = comparison["records"]
+    arms = comparison["params"].get("arms") or []
+    if not arms:
+        arms = list(dict.fromkeys(r["arm"] for r in records))
+
+    series: dict = {}
+    totals: dict = {}
+    for arm in arms:
+        setup = [r for r in records if r["arm"] == arm and r["phase"] == "setup"]
+        steady = sorted((r for r in records if r["arm"] == arm and r["phase"] == "steady"),
+                        key=lambda r: r["turn"])
+        setup_wire = sum(r["wire_sent"] + r["wire_recv"] for r in setup)
+        setup_tokens = sum(r["input_tokens"] for r in setup)
+
+        per_wire = [r["wire_sent"] + r["wire_recv"] for r in steady]
+        per_in = [r["input_tokens"] for r in steady]
+        # Offset the cumulative series by the setup cost so it starts where the
+        # arm actually stands after paying to enable itself.
+        cum_wire = [v + setup_wire for v in _cumulative(per_wire)]
+        cum_in = [v + setup_tokens for v in _cumulative(per_in)]
+
+        series[arm] = {
+            "turns": [r["turn"] for r in steady],
+            "per_turn_wire": per_wire,
+            "per_turn_input_tokens": per_in,
+            "cum_wire": cum_wire,
+            "cum_input_tokens": cum_in,
+        }
+        steady_wire = sum(per_wire)
+        totals[arm] = {
+            "setup_wire": setup_wire,
+            "setup_tokens": setup_tokens,
+            "steady_wire": steady_wire,
+            "steady_input_tokens": sum(per_in),
+            "total_wire": setup_wire + steady_wire,
+            "total_input_tokens": setup_tokens + sum(per_in),
+            "cached_tokens": sum(r["cached_tokens"] for r in steady),
+            "output_tokens": sum(r["output_tokens"] for r in steady),
+            "thought_tokens": sum(r["thought_tokens"] for r in steady),
+            "latency": _latency_stats([r["elapsed_ms"] for r in steady]),
+            "errors": sum(1 for r in setup + steady if r["error"]),
+        }
+
+    return {"mode": "comparison", "arms": arms, "series": series, "totals": totals}
+
+
 def summarize(experiment: dict) -> dict:
     mode = experiment["params"].get("mode", "stateless")
     series = _series(experiment["records"])
