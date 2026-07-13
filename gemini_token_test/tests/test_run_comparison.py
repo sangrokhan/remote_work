@@ -129,3 +129,49 @@ def test_thought_tokens_are_captured(monkeypatch):
     # comparable with the interaction arm which always reports them.
     out = _run(monkeypatch, ["stateless"])
     assert all("thought_tokens" in r for r in out["records"])
+
+
+# --- per-turn progress -----------------------------------------------------
+
+def _steps(events, arm):
+    return [(e["phase"], e["turn"]) for e in events
+            if e["stage"] == arm and e.get("phase")]
+
+
+def test_stateless_arm_reports_every_turn(monkeypatch):
+    # Only the interaction arm ever emitted turn events, so the other arms sat at
+    # "turn 0/N" for the whole run and a stall was indistinguishable from progress.
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    events = []
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=3, arms=["stateless"],
+                              on_progress=events.append)
+    assert _steps(events, "stateless") == [("steady", 1), ("steady", 2), ("steady", 3)]
+
+
+def test_nocontext_arm_reports_every_turn(monkeypatch):
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    events = []
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=2, arms=["nocontext"],
+                              on_progress=events.append)
+    assert _steps(events, "nocontext") == [("steady", 1), ("steady", 2)]
+
+
+def test_cached_arm_reports_the_cache_builds_and_the_steady_turns(monkeypatch):
+    # The cached arm builds one cache per turn before it answers anything. That is
+    # the slowest part of the run; it must not look like a hang.
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    events = []
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=2, arms=["cached"],
+                              on_progress=events.append)
+    assert _steps(events, "cached") == [
+        ("setup", 1), ("setup", 2), ("steady", 1), ("steady", 2),
+    ]
+
+
+def test_turn_events_carry_the_total(monkeypatch):
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    events = []
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=3, arms=["stateless"],
+                              on_progress=events.append)
+    turns = [e for e in events if e["stage"] == "stateless" and e.get("phase")]
+    assert all(e["turns"] == 3 for e in turns)

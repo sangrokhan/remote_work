@@ -274,11 +274,20 @@ def _common_from_call(res, arm: str, phase: str, turn: int, question: str) -> di
     }
 
 
-def _arm_stateless(model, system, steps) -> list:
+def _tick(on_progress, arm: str, phase: str, turn: int, turns: int) -> None:
+    """Announce the call about to be made. Without this an arm sits at turn 0/N for
+    its whole run and a stall is indistinguishable from progress."""
+    if on_progress:
+        on_progress({"stage": arm, "phase": phase, "turn": turn, "turns": turns})
+
+
+def _arm_stateless(model, system, steps, on_progress=None) -> list:
     """Full history every turn: system + q1..qk + a1..a(k-1)."""
     recs = []
+    n = len(steps)
     history = [_user(system)] if system else []
     for k, q in enumerate(steps, start=1):
+        _tick(on_progress, "stateless", "steady", k, n)
         history.append(_user(q))
         res = call_gemini(model, list(history), mode="stateless", turn=k)
         history.append(_model(res.response_text or ""))
@@ -286,17 +295,19 @@ def _arm_stateless(model, system, steps) -> list:
     return recs
 
 
-def _arm_nocontext(model, system, steps) -> list:
+def _arm_nocontext(model, system, steps, on_progress=None) -> list:
     """New question only; the system prompt rides the first turn alone."""
     recs = []
+    n = len(steps)
     for k, q in enumerate(steps, start=1):
+        _tick(on_progress, "nocontext", "steady", k, n)
         contents = [_user(system), _user(q)] if (k == 1 and system) else [_user(q)]
         res = call_gemini(model, contents, mode="stateless-nocontext", turn=k)
         recs.append(_common_from_call(res, "nocontext", "steady", k, q))
     return recs
 
 
-def _arm_cached(model, system, steps) -> list:
+def _arm_cached(model, system, steps, on_progress=None) -> list:
     """Stage 2 (cachebuild, setup bucket) + stage 3 (cached, steady).
 
     Cache k holds the system prompt + the first k Q&A pairs; turn k>=2 references
@@ -316,6 +327,7 @@ def _arm_cached(model, system, steps) -> list:
     recs = []
     cache_set = []
     for k in range(1, n + 1):
+        _tick(on_progress, "cached", "setup", k, n)
         c = create_cache(model, history[:off + 2 * k], CACHE_TTL_SECONDS,
                          system_instruction="")
         cache_set.append(c)
@@ -333,6 +345,7 @@ def _arm_cached(model, system, steps) -> list:
         recs.append(rec)
 
     for k, q in enumerate(steps, start=1):
+        _tick(on_progress, "cached", "steady", k, n)
         cache = cache_set[k - 2] if k >= 2 else None
         cache_id = cache["name"] if cache else None
         hint = cache["cached_tokens"] if cache else 0
@@ -377,11 +390,11 @@ def _arm_interaction(model, request_name, turns, on_progress) -> list:
 
 def _run_arm(arm, model, system, steps, request_name, n, on_progress) -> list:
     if arm == "stateless":
-        return _arm_stateless(model, system, steps)
+        return _arm_stateless(model, system, steps, on_progress)
     if arm == "cached":
-        return _arm_cached(model, system, steps)
+        return _arm_cached(model, system, steps, on_progress)
     if arm == "nocontext":
-        return _arm_nocontext(model, system, steps)
+        return _arm_nocontext(model, system, steps, on_progress)
     if arm == "interaction":
         return _arm_interaction(model, request_name, n, on_progress)
     return []

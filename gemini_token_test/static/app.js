@@ -54,8 +54,11 @@ function progressText(p) {
     return `⏸ Rate-limit spacing — ${p.remaining}s / ${p.pause_total}s until ${next}…`;
   }
   const label = ARM_LABELS[p.stage] || p.stage;
+  // The cached arm builds a cache per turn before it answers anything — the
+  // slowest stretch of the run, so say which of the two it is in.
+  const what = p.phase === "setup" ? "building cache" : "turn";
   let s = `Running… ${label}`;
-  if (p.turns) s += ` — turn ${p.turn}/${p.turns}`;
+  if (p.turns) s += ` — ${what} ${p.turn}/${p.turns}`;
   // Interaction turns report each SSE event, so a stall shows which stage owns it.
   if (p.event) s += ` · ${p.event} @ ${((p.at_ms || 0) / 1000).toFixed(1)}s`;
   return s;
