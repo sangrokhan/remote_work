@@ -38,6 +38,7 @@ const ARM_LABELS = {
   cached: "Cached (build + reference)",
   interaction: "Interaction (system_instruction each turn)",
   interaction_inline: "Interaction (system prompt in 1st user turn)",
+  interaction_stateless: "Interaction (client-side history, store:false)",
   nocontext: "Stateless — no context",
   cachebuild: "Building caches",
 };
@@ -47,6 +48,7 @@ const ARM_COLORS = {
   cached: "#4dd4ac",
   interaction: "#5b8def",
   interaction_inline: "#c58af9",
+  interaction_stateless: "#f78c6b",
   nocontext: "#f6c453",
 };
 
@@ -253,9 +255,11 @@ function plotCompare(summary) {
   // arm missing. Give each its own dash pattern and marker so both stay legible
   // where they coincide.
   const ARM_DASH = { stateless: [], cached: [], interaction: [7, 4],
-                     interaction_inline: [3, 3], nocontext: [2, 3] };
+                     interaction_inline: [3, 3], interaction_stateless: [6, 2, 2, 2],
+                     nocontext: [2, 3] };
   const ARM_POINT = { stateless: "circle", cached: "rect", interaction: "triangle",
-                      interaction_inline: "star", nocontext: "cross" };
+                      interaction_inline: "star", interaction_stateless: "rectRot",
+                      nocontext: "cross" };
   const mk = (key) => arms.map(a => {
     const c = ARM_COLORS[a] || "#9aa5b1";
     return {
