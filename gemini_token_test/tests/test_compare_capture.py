@@ -120,3 +120,34 @@ def test_arms_still_get_a_fresh_connection_without_capture(monkeypatch):
     experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
                               arms=["stateless", "cached"])
     assert log.count("reset") == 3   # once before the loop, once after each arm
+
+
+# --- the pcap must name the arm it captured -------------------------------
+
+def test_every_arm_name_survives_into_its_filename():
+    # The label alphabet excluded '_', so `interaction_inline` fell through to the
+    # "stateless" fallback: a 4-arm capture wrote two files called
+    # capture_stateless_*, one of which was the inline arm. A pcap that lies about
+    # which arm it holds defeats the only thing a per-arm pcap is for.
+    for arm in experiment.COMPARE_ARMS:
+        cap = capture.Capture("2026-07-13T00:00:00", mode=arm)
+        assert cap.mode == arm, f"{arm} was relabelled {cap.mode}"
+        assert f"capture_{arm}_" in cap.path.name
+
+
+def test_generated_names_are_downloadable():
+    for arm in experiment.COMPARE_ARMS:
+        cap = capture.Capture("2026-07-13T00:00:00", mode=arm)
+        assert capture._SAFE_NAME.match(cap.path.name), cap.path.name
+
+
+def test_a_label_that_cannot_be_named_is_an_error_not_a_silent_rename():
+    # Falling back to "stateless" is how the mislabelling hid. Refuse instead.
+    cap = capture.Capture("2026-07-13T00:00:00", mode="../etc/passwd")
+    assert cap.error
+    assert cap.result()["ok"] is False
+
+
+def test_traversal_is_still_rejected_by_the_download_guard():
+    assert capture.safe_pcap_path("../../etc/passwd") is None
+    assert capture.safe_pcap_path("capture_a/b_2026_0000000000000000.pcap") is None

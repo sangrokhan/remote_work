@@ -68,10 +68,13 @@ PCAP_DIR = Path(os.environ["PCAP_DIR"]) if os.environ.get("PCAP_DIR") else _defa
 PCAP_SNAPLEN = int(os.environ.get("PCAP_SNAPLEN", "100"))
 # Filename = timestamp + a high-entropy token so concurrent runs never collide
 # and download URLs are unguessable across requests.
-_SAFE_NAME = re.compile(r"^capture_[a-z0-9-]{1,32}_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
+_SAFE_NAME = re.compile(r"^capture_[a-z0-9_-]{1,32}_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
 # The label names the run being captured (an arm, a stage). Anything outside this
-# alphabet could escape the pcap directory once it lands in a filename.
-_SAFE_LABEL = re.compile(r"^[a-z0-9-]{1,32}$")
+# alphabet could escape the pcap directory once it lands in a filename. Underscores
+# belong here: arm names carry them (interaction_inline), and leaving them out meant
+# such an arm quietly took the fallback label and shipped a pcap claiming to be a
+# different arm.
+_SAFE_LABEL = re.compile(r"^[a-z0-9_-]{1,32}$")
 # tcpdump prints capture stats to stderr on exit (SIGINT). Parse the drop counts so
 # the UI can surface capture loss instead of silently producing a lossy pcap.
 _STAT_RE = re.compile(
@@ -213,19 +216,29 @@ class Capture:
     def __init__(self, timestamp: str, mode: str = "stateless",
                  interface: str | None = None):
         self.timestamp = timestamp
-        self.mode = mode if _SAFE_LABEL.match(mode or "") else "stateless"
+        self.mode = mode or ""
         self.interface = interface or os.environ.get("PCAP_IFACE", "any")
         self.host = api_host()
         self.ips: list[str] = []
-        token = secrets.token_hex(8)  # 64-bit: unguessable + collision-proof
-        ts = timestamp.replace(":", "-")
-        self.path = PCAP_DIR / f"capture_{self.mode}_{ts}_{token}.pcap"
         self.snaplen = PCAP_SNAPLEN
         self.proc: subprocess.Popen | None = None
         self.error = ""
         self.stats: dict = {}
+        # Refuse a label we cannot put in a filename, rather than substituting a
+        # different one. The old fallback renamed anything unspellable to
+        # "stateless", which is how an arm shipped a pcap claiming to be another arm
+        # — silently, which is the only way a mislabelled capture can do real damage.
+        if not _SAFE_LABEL.match(self.mode):
+            self.error = f"unsafe_capture_label: {self.mode!r}"
+            self.path = PCAP_DIR / "invalid.pcap"
+            return
+        token = secrets.token_hex(8)  # 64-bit: unguessable + collision-proof
+        ts = timestamp.replace(":", "-")
+        self.path = PCAP_DIR / f"capture_{self.mode}_{ts}_{token}.pcap"
 
     def __enter__(self) -> "Capture":
+        if self.error:          # rejected label; never touch the filesystem
+            return self
         PCAP_DIR.mkdir(parents=True, exist_ok=True)
         # Reserve the path atomically (O_EXCL) so a collision is rejected, never
         # silently overwriting another request's capture.
