@@ -309,17 +309,17 @@ def _arm_nocontext(model, system, steps, on_progress=None) -> list:
     return recs
 
 
-def _arm_cached(model, system, steps, transcript, on_progress=None) -> list:
-    """Cache generation, then the measured turns.
+def _arm_cached_prep(model, system, steps, transcript, on_progress=None) -> tuple:
+    """Build one cache per turn from the real stateless transcript. Runs before the
+    capture window opens; its cost is not part of what is being measured.
 
     `transcript` is what the model actually answered in the stateless arm. The
     caches are built from it, not from a placeholder: a cache of a conversation that
     never happened measures nothing.
 
-    Cache k holds the system prompt plus the first k real Q&A pairs. Turn k >= 2
-    references cache_(k-1) and sends only the new question, so the prefix never goes
-    back over the wire; turn 1 has no prior cache and sends the system prompt with
-    its question, exactly as stateless would.
+    Cache k holds the system prompt plus the first k real Q&A pairs. Returns
+    (records, cache_set); cache_set is the state the steady stage and the teardown
+    stage both need.
 
     The generation calls are recorded under the `cachegen` phase and left out of the
     comparison totals. They are preparation, not the thing being measured -- and
@@ -351,7 +351,19 @@ def _arm_cached(model, system, steps, transcript, on_progress=None) -> list:
             "response_text": "", "error": c.get("error", ""),
             "cache_id": c.get("name"), "skipped": c.get("name") is None,
         })
+    return recs, cache_set
 
+
+def _arm_cached_steady(model, system, steps, cache_set, on_progress=None) -> list:
+    """The measured turns. Turn k >= 2 references cache_(k-1) and sends only the new
+    question, so the prefix never goes back over the wire; turn 1 has no prior cache
+    and sends the system prompt with its question, exactly as stateless would.
+
+    Runs inside the capture window, on a fresh connection -- this is the thing being
+    measured.
+    """
+    n = len(steps)
+    recs = []
     for k, q in enumerate(steps, start=1):
         _tick(on_progress, "cached", "steady", k, n)
         cache = cache_set[k - 2] if k >= 2 else None
@@ -366,12 +378,18 @@ def _arm_cached(model, system, steps, transcript, on_progress=None) -> list:
         rec = _common_from_call(res, "cached", "steady", k, q)
         rec["cache_id"] = cache_id
         recs.append(rec)
-
-    if os.environ.get("KEEP_CACHE") != "1":
-        for c in cache_set:
-            if c.get("name"):
-                delete_cache(c["name"])
     return recs
+
+
+def _arm_cached_teardown(cache_set) -> None:
+    """Delete the caches built in prep. Runs after the capture window closes and
+    after wall_ms is recorded; its cost is neither captured nor timed, and (like
+    today) its DELETE calls are not recorded at all."""
+    if os.environ.get("KEEP_CACHE") == "1":
+        return
+    for c in cache_set or []:
+        if c.get("name"):
+            delete_cache(c["name"])
 
 
 def _arm_interaction(model, request_name, turns, on_progress,
@@ -431,11 +449,21 @@ def _settle_seconds() -> float:
     return float(os.environ.get("PCAP_SETTLE_SECONDS", "1.0"))
 
 
-def _run_arm(arm, model, system, steps, request_name, n, on_progress, transcript=None) -> list:
+def _arm_prep(arm, model, system, steps, on_progress=None, transcript=None) -> tuple:
+    """Runs before the capture window opens. A no-op for every arm except cached,
+    which needs its caches built first. Returns (records, state); state is handed
+    to the matching steady/teardown call."""
+    if arm == "cached":
+        return _arm_cached_prep(model, system, steps, transcript or [], on_progress)
+    return [], None
+
+
+def _arm_steady(arm, model, system, steps, request_name, n, on_progress, state) -> list:
+    """The measured stage: runs inside the capture window, on a fresh connection."""
     if arm == "stateless":
         return _arm_stateless(model, system, steps, on_progress)
     if arm == "cached":
-        return _arm_cached(model, system, steps, transcript or [], on_progress)
+        return _arm_cached_steady(model, system, steps, state, on_progress)
     if arm == "nocontext":
         return _arm_nocontext(model, system, steps, on_progress)
     if arm == "interaction":
@@ -447,6 +475,13 @@ def _run_arm(arm, model, system, steps, request_name, n, on_progress, transcript
         return _arm_interaction(model, request_name, n, on_progress,
                                 arm="interaction_stateless", client_history=True)
     return []
+
+
+def _arm_teardown(arm, state) -> None:
+    """Runs after the capture window closes and after wall_ms is recorded. A no-op
+    for every arm except cached, which deletes the caches it built in prep."""
+    if arm == "cached":
+        _arm_cached_teardown(state)
 
 
 def _order_arms(arms: list) -> list:
@@ -474,9 +509,9 @@ def run_comparison(model: str, request_name: str = "perf",
     Arms hit the same rate-limited project back to back, so pause_seconds spaces
     them apart; the gap goes between arms only, never after the last one.
 
-    Returns {params, records, pcaps, wall_ms}. wall_ms is the arm's start-to-finish
-    clock, which unlike the sum of call latencies also covers what an arm does
-    between calls (building caches, deleting them).
+    Returns {params, records, pcaps, wall_ms}. wall_ms covers only the arm's steady
+    stage -- the same window the pcap captures -- not any prep (e.g. the cached
+    arm's cache builds) or teardown (its cache deletes), which run outside both.
     """
     arms = _order_arms(list(arms) if arms else list(DEFAULT_ARMS))
     system, steps, source = load_request(request_name)
@@ -504,22 +539,38 @@ def run_comparison(model: str, request_name: str = "perf",
                 time.sleep(1)
         if on_progress:
             on_progress({"stage": arm, "turn": 0, "turns": n})
+
+        prep_recs, state = _arm_prep(arm, model, system, steps, on_progress, transcript)
+        # Prep (e.g. the cached arm's cache builds) runs on the shared session,
+        # outside the capture window, and leaves a keep-alive connection open behind
+        # it. If the steady stage reused that connection, its capture would open
+        # onto an already-established connection (no SYN in the pcap) and prep's own
+        # FIN could land inside the steady pcap. Close it now, before the window
+        # opens, so the steady stage always starts from a fresh connection -- same
+        # hazard _close_connection's own docstring is about, one arm earlier.
+        _close_connection()
+
         t0 = time.monotonic()
         if want_capture:
             with pcap.Capture(timestamp, arm) as cap:
-                arm_recs = _run_arm(arm, model, system, steps, request_name, n,
-                                    on_progress, transcript)
+                steady_recs = _arm_steady(arm, model, system, steps, request_name, n,
+                                          on_progress, state)
                 _close_connection(_settle_seconds())
             pcaps[arm] = cap.result()
         else:
-            arm_recs = _run_arm(arm, model, system, steps, request_name, n,
-                                on_progress, transcript)
+            steady_recs = _arm_steady(arm, model, system, steps, request_name, n,
+                                      on_progress, state)
             _close_connection()
-        records += arm_recs
-        if arm == "stateless":
-            transcript = [r["response_text"] for r in arm_recs
-                          if r["phase"] == "steady"]
         wall_ms[arm] = int((time.monotonic() - t0) * 1000)
+
+        # Teardown (e.g. deleting the cached arm's caches) runs after the capture
+        # window has closed and after wall_ms is recorded, so neither counts it.
+        _arm_teardown(arm, state)
+
+        records += prep_recs + steady_recs
+        if arm == "stateless":
+            transcript = [r["response_text"] for r in steady_recs
+                          if r["phase"] == "steady"]
 
     return {
         "params": {"mode": "comparison", "turns": n, "model": model,

@@ -123,8 +123,10 @@ def summarize_comparison(comparison: dict) -> dict:
             "cachegen_tokens": sum(r["input_tokens"] for r in gen),
             "cachegen_ms": sum(r["elapsed_ms"] for r in gen),
             # Two clocks: call_ms is time spent inside measured calls, while wall_ms
-            # is the arm's start-to-finish time, so it also covers the cache builds
-            # and deletes that happen between them.
+            # is the steady stage's start-to-finish time -- the same window the pcap
+            # covers. Neither includes prep (e.g. building caches) or teardown
+            # (deleting them); those run outside both, and cachegen_ms below is the
+            # only place prep's cost is reported.
             "call_ms": sum(r["elapsed_ms"] for r in steady),
             "wall_ms": wall.get(arm, 0),
             "errors": sum(1 for r in gen + steady if r["error"]),
