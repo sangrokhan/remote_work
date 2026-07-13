@@ -454,6 +454,14 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
 
     if resp.status_code != 200:
         result.error = f"http_{resp.status_code}: {resp.text[:200]}"
+        # A restricted-VIP refusal is a 403 that reads like a rejected key. Name it,
+        # or the operator spends the afternoon rotating a key that works fine.
+        if resp.status_code == 403:
+            import netdiag
+            if netdiag.is_vip_block(resp.text):
+                result.error += (" — NOT a key problem: this VPC routes "
+                                 "googleapis.com to a restricted VIP that does not "
+                                 "carry the Gemini Developer API. See /diagnose.")
         return result
 
     try:

@@ -11,6 +11,7 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 
 import capture as pcap
 import inspector
+import netdiag
 import probe
 from experiment import run_experiment, run_three_stage, run_comparison, MODES, COMPARE_ARMS
 from gemini_client import (
@@ -30,6 +31,9 @@ def index():
     on generativelanguage with an API key, so Vertex project/location would only
     tell the operator to check the wrong thing when a call fails."""
     ok, reason = ready()
+    # A restricted-VIP route refuses every call with a 403 that reads like a bad
+    # key. Say so up front rather than letting the operator rotate a working key.
+    diag = netdiag.diagnose(api_host()) if not is_mock() else {"reachable": True}
     return render_template(
         "index.html",
         ready=ok,
@@ -40,12 +44,39 @@ def index():
         firestore=firestore_active(),
         default_model=DEFAULT_MODEL,
         arms=COMPARE_ARMS,
+        diag=diag,
     )
 
 
 @app.route("/models")
 def models():
-    return jsonify(list_models())
+    """The catalog, plus what the probe learned about the interaction arm.
+
+    The catalog decides two arms (generateContent, createCachedContent) and is
+    silent on the third -- no interactions method is ever advertised -- so a model
+    is only fully "ready" once the probe has answered for it. Unprobed stays
+    unknown; it is never assumed either way.
+    """
+    out = list_models()
+    verdicts = probe.interaction_verdicts()
+    for m in out["models"]:
+        v = verdicts.get(m["id"])
+        m["can_interact"] = None if v is None else (v == "supported")
+        if m["can_interact"] is True:
+            m["label"] = f"{m['id']} — all 3 arms (cache + interaction verified)"
+        elif m["can_interact"] is False:
+            m["label"] = f"{m['id']} — no interaction arm ({v})"
+        # can_cache=False already says which arm breaks; leave that label alone.
+        m["all_arms_ready"] = bool(m["comparison_ready"] and m["can_interact"])
+    out["probed"] = bool(verdicts)
+    return jsonify(out)
+
+
+@app.route("/diagnose")
+def diagnose():
+    """Where the API host actually resolves. A 403 from a restricted-VIP route
+    reads exactly like a rejected key; this is what tells them apart."""
+    return jsonify(netdiag.diagnose(api_host()))
 
 
 def _execute_run(data: dict, on_progress=None):
@@ -255,15 +286,16 @@ def compare_stream():
     return _sse_response(lambda emit: _execute_compare(data, on_progress=emit))
 
 
-@app.route("/interaction/probe", methods=["POST"])
+@app.route("/interaction/probe", methods=["GET", "POST"])
 def interaction_probe():
     """Which Interactions API surface, if any, serves a plain Gemini model?
 
     Runs a matrix of small live calls and reports the raw verdicts. Nothing is
-    persisted: the point is to decide what the performance experiment can even
-    measure, before it is built.
+    persisted. The page probes on load, so the result is cached; POST {"force":true}
+    re-runs it for real.
     """
-    return jsonify(probe.probe_interactions())
+    data = request.get_json(force=True, silent=True) or {}
+    return jsonify(probe.probe_cached(force=bool(data.get("force"))))
 
 
 @app.route("/interaction/test", methods=["POST"])

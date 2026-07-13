@@ -35,14 +35,16 @@ import re
 import time
 
 from gemini_client import (
-    LOCATION, PROJECT, _bearer_token, _session, is_mock, vertex_url,
+    LOCATION, PROJECT, DEFAULT_MODEL, _bearer_token, _session, is_mock, vertex_url,
 )
 
-# Candidate text models. Two by default: the probe is a matrix, so each extra id
-# multiplies the call count. Override with a comma-separated list.
+# Candidate text models. The probe is a matrix, so each extra id multiplies the
+# call count -- and it now runs on page load, so the default is exactly the model
+# the experiment is fixed to. Probing ids the experiment never runs answers nothing.
+# Override with a comma-separated list.
 PROBE_MODELS = [
     m.strip() for m in
-    os.environ.get("PROBE_MODELS", "gemini-3-flash-preview,gemini-2.5-flash").split(",")
+    os.environ.get("PROBE_MODELS", DEFAULT_MODEL).split(",")
     if m.strip()
 ]
 
@@ -672,11 +674,30 @@ def _conclude(targets: list[dict]) -> dict:
 # Entry point
 
 
+def _model_verdicts(targets: list) -> dict:
+    """Per-model interaction verdict, flattened out of the target matrix.
+
+    This is the only place the interaction arm's feasibility is known: the model
+    catalog advertises generateContent and createCachedContent, but never says a
+    word about Interactions. A model counts as supported the moment any target
+    served a non-streaming interaction for it.
+    """
+    verdicts: dict = {}
+    for t in targets:
+        for model, entry in (t.get("models") or {}).items():
+            v = (entry.get("interactions_nonstream") or {}).get("verdict", "error")
+            if verdicts.get(model) != "supported":
+                verdicts[model] = v
+    return verdicts
+
+
 def probe_interactions() -> dict:
     """Run the whole matrix. Safe to call with no credentials: every target
     reports why it was skipped rather than raising."""
     if is_mock():
-        return _mock()
+        out = _mock()
+        out.setdefault("models", _model_verdicts(out.get("targets") or []))
+        return out
 
     targets = [_probe_target(t) for t in _targets()]
     return {
@@ -685,5 +706,39 @@ def probe_interactions() -> dict:
                 "api_key": bool(API_KEY), "models": PROBE_MODELS,
                 "api_revision": API_REVISION, "region_probed": PROBE_REGION},
         "targets": targets,
+        "models": _model_verdicts(targets),
         "conclusion": _conclude(targets),
     }
+
+
+# --- cached probe ---------------------------------------------------------
+# The page probes on load, so an uncached probe would bill a matrix of live calls
+# on every refresh. Hold the last result for a while; the button forces a re-run.
+
+_CACHE: dict = {}
+
+
+def _cache_ttl() -> float:
+    return float(os.environ.get("PROBE_CACHE_TTL", "600"))
+
+
+def clear_cache() -> None:
+    _CACHE.clear()
+
+
+def probe_cached(force: bool = False) -> dict:
+    """The probe result, reusing the last one while it is still fresh."""
+    now = time.monotonic()
+    hit = _CACHE.get("result")
+    if hit and not force and (now - _CACHE["at"]) < _cache_ttl():
+        return {**hit, "cached": True, "age_seconds": int(now - _CACHE["at"])}
+    result = probe_interactions()
+    _CACHE["result"] = result
+    _CACHE["at"] = now
+    return {**result, "cached": False, "age_seconds": 0}
+
+
+def interaction_verdicts() -> dict:
+    """What the last probe said about each model. Empty until one has run -- an
+    unprobed model's interaction support is unknown, never assumed."""
+    return dict((_CACHE.get("result") or {}).get("models") or {})

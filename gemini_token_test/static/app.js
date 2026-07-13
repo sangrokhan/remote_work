@@ -160,26 +160,34 @@ function renderProbe(data) {
   document.getElementById("probeResult").hidden = false;
 }
 
-async function startProbe() {
+// force=false is the page-load probe: the server serves it from cache, so a
+// refresh costs nothing. The button forces a real re-run.
+async function startProbe(force = true) {
   const btn = document.getElementById("startProbe");
   const status = document.getElementById("probeStatus");
   btn.disabled = true;
-  status.textContent = "Probing… (a handful of live calls)";
-  document.getElementById("probeResult").hidden = true;
+  status.textContent = force ? "Probing… (a handful of live calls)" : "Probing…";
   try {
-    const resp = await fetch("/interaction/probe", { method: "POST" });
+    const resp = await fetch("/interaction/probe", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force }),
+    });
     const data = await resp.json();
     if (!resp.ok || data.error) {
       status.textContent = "Error: " + (data.error || resp.status);
       return;
     }
     renderProbe(data);
-    status.textContent = `Probe done → ${(data.conclusion || {}).next_step}`;
+    const age = data.cached ? ` (cached ${data.age_seconds}s ago)` : "";
+    status.textContent = `Probe done → ${(data.conclusion || {}).next_step}${age}`;
   } catch (e) {
     status.textContent = "Failed: " + e;
   } finally {
     btn.disabled = false;
   }
+  // The model list carries the probe's interaction verdicts, so it is only
+  // complete once the probe has answered.
+  await loadModels();
 }
 
 // --- Interaction API test (stateful, server-side history) --------------------
@@ -499,10 +507,14 @@ async function loadModels() {
 document.getElementById("model").addEventListener("change", toggleCustom);
 document.getElementById("modelFilter").addEventListener("input", e => renderModels(e.target.value));
 document.getElementById("modelRefresh").addEventListener("click", loadModels);
-document.getElementById("startProbe").addEventListener("click", startProbe);
+document.getElementById("startProbe").addEventListener("click", () => startProbe(true));
 document.getElementById("startInteraction").addEventListener("click", startInteraction);
 document.getElementById("startCompare").addEventListener("click", startCompare);
 document.getElementById("refresh").addEventListener("click", loadHistory);
 document.getElementById("inspect").addEventListener("click", inspect);
+
+// Probe on load (served from the server's cache on a refresh), then fill the model
+// list from it — startProbe reloads the models once the verdicts are in.
 loadModels();
+startProbe(false);
 loadHistory();

@@ -23,6 +23,10 @@
         <code>aistudio.google.com/apikey</code>), or export
         <code>GEMINI_MOCK=1</code> to explore the UI with synthetic data.</p>
     {% endif %}
+    {% if diag.reachable is false %}
+      <p class="badge warn">ROUTE BLOCKED — {{ diag.vip }} VIP ({{ diag.ips|join(", ") }})</p>
+      <p class="sub">{{ diag.explanation }}</p>
+    {% endif %}
     <p class="sub">host: {{ api_host }} · key: {{ "set" if key_set else "NOT SET" }} ·
       history store: {% if firestore %}Firestore + JSON{% else %}local JSON{% endif %}</p>
   </header>
@@ -45,8 +49,12 @@
       response carry <code>usage</code>, and does <code>system_instruction</code> survive
       <code>previous_interaction_id</code>. Nothing is saved. Each call sends "hi" and caps
       output at 16 tokens.</p>
+    <p class="sub">Runs once on page load and the result is cached, so a refresh costs
+      nothing; the button forces a fresh run. The model list below is filled from it —
+      the catalog never advertises Interactions support, so this is the only way to know
+      a model can serve the interaction arm.</p>
     <div class="insp-row">
-      <button id="startProbe" type="button">🔍 Probe Interactions API</button>
+      <button id="startProbe" type="button">🔍 Re-probe (force)</button>
       <a id="probeJson" class="pcap-link" hidden download>⬇ download JSON</a>
       <span class="sub" id="probeStatus"></span>
     </div>
