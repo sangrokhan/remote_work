@@ -256,8 +256,10 @@ def run_three_stage(model: str, request_name: str = "default",
 
 # --- Comparison across arms (the headline experiment) ----------------------
 
-DEFAULT_ARMS = ("stateless", "cached", "interaction", "interaction_inline")
-COMPARE_ARMS = ("stateless", "cached", "interaction", "interaction_inline", "nocontext")
+DEFAULT_ARMS = ("stateless", "cached", "interaction", "interaction_inline",
+                "interaction_stateless")
+COMPARE_ARMS = ("stateless", "cached", "interaction", "interaction_inline",
+                "interaction_stateless", "nocontext")
 
 
 def _common_from_call(res, arm: str, phase: str, turn: int, question: str) -> dict:
@@ -373,17 +375,21 @@ def _arm_cached(model, system, steps, transcript, on_progress=None) -> list:
 
 
 def _arm_interaction(model, request_name, turns, on_progress,
-                     arm: str = "interaction", inline_system: bool = False) -> list:
+                     arm: str = "interaction", inline_system: bool = False,
+                     client_history: bool = False) -> list:
     """Interactions API arm, mapped into the shared per-turn record.
 
     inline_system moves the system prompt out of system_instruction and into the
     first user turn, so the server-side history carries it and later turns send only
     their question. Same content reaches the model; a different party stores it.
+
+    client_history takes the server-side history away entirely: store:false, no
+    previous_interaction_id, and the whole conversation resent as steps every turn.
     """
     from interaction_client import run_interaction   # lazy: avoids import cycle
     out = run_interaction(model, request_name=request_name, turns=turns,
                           on_progress=on_progress, inline_system=inline_system,
-                          stage=arm)
+                          stage=arm, client_history=client_history)
     recs = []
     for r in out["interaction_records"]:
         recs.append({
@@ -437,6 +443,9 @@ def _run_arm(arm, model, system, steps, request_name, n, on_progress, transcript
     if arm == "interaction_inline":
         return _arm_interaction(model, request_name, n, on_progress,
                                 arm="interaction_inline", inline_system=True)
+    if arm == "interaction_stateless":
+        return _arm_interaction(model, request_name, n, on_progress,
+                                arm="interaction_stateless", client_history=True)
     return []
 
 

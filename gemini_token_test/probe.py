@@ -711,6 +711,55 @@ def probe_interactions() -> dict:
     }
 
 
+# --------------------------------------------------------------------------
+# Step-echo probe: can a client hand the server a history it already has?
+
+
+def _step_user(text: str) -> dict:
+    return {"type": "user_input", "content": [{"type": "text", "text": text}]}
+
+
+def _step_model(text: str) -> dict:
+    return {"type": "model_output", "content": [{"type": "text", "text": text}]}
+
+
+def probe_step_echo(model: str = "") -> dict:
+    """Does `input` accept a client-supplied history, `model_output` steps included?
+
+    The docs type `input` as Content | Content[] | Step[] | Turn[] | string and the
+    overview page says a stateless conversation resends the whole history as steps.
+    Neither claim has ever been tested here: the 2026-07-10 probe only ever *read*
+    model_output steps back out of a stored interaction with GET /interactions/{id}.
+
+    Sends a three-step history with store:false and no previous_interaction_id --
+    exactly the shape the interaction_stateless arm depends on. One live call.
+    """
+    model = model or (PROBE_MODELS[0] if PROBE_MODELS else DEFAULT_MODEL)
+    url = "https://generativelanguage.googleapis.com/v1beta/interactions"
+    if not API_KEY:
+        return {"url": url, "status": 0, "verdict": "environment",
+                "body": "GEMINI_API_KEY not set", "sent_steps": 0}
+
+    steps = [
+        _step_user("What is the capital of France?"),
+        _step_model("Paris."),
+        _step_user("And of Italy? Answer in one word."),
+    ]
+    body = {"model": model, "stream": False, "store": False, "input": steps,
+            "system_instruction": "You are a test fixture. Answer in one word.",
+            "generation_config": {"max_output_tokens": 16}}
+    try:
+        resp = _session().post(url, data=json.dumps(body),
+                               headers=_headers("apikey"), timeout=PROBE_TIMEOUT)
+        status, text = resp.status_code, resp.text
+    except Exception as exc:
+        return {"url": url, "status": 0, "verdict": "error", "body": str(exc),
+                "sent_steps": len(steps)}
+
+    return {"url": url, "status": status, "verdict": classify(status, text),
+            "body": text[:2000], "sent_steps": len(steps)}
+
+
 # --- cached probe ---------------------------------------------------------
 # The page probes on load, so an uncached probe would bill a matrix of live calls
 # on every refresh. Hold the last result for a while; the button forces a re-run.

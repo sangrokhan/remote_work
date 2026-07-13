@@ -123,6 +123,29 @@ model imitated it. The conditional design removes that confound.)
 
 ---
 
+## Measured: `input` accepts a client-supplied history (Step[] echo)
+
+Probe, 2026-07-13, `gemini-3.1-flash-lite`, `probe.probe_step_echo()`.
+
+`POST /v1beta/interactions` with `store: false`, no `previous_interaction_id`, and
+an `input` of three steps — `user_input` ("What is the capital of France?"),
+`model_output` ("Paris."), `user_input` ("And of Italy? Answer in one word.").
+
+- HTTP status: `200`
+- Verdict: `supported`
+- Answer: `Rome.`
+
+The model answered `Rome.` — it could only resolve "of Italy?" by reading the
+`model_output` step the client supplied, so the interaction_stateless arm's core
+mechanism (resending the whole conversation, including the model's own prior
+answers, as `Step[]`) is confirmed to work.
+
+This is the shape the `interaction_stateless` arm sends on every turn: the whole
+conversation, the model's own prior answers included, with the server storing
+nothing.
+
+---
+
 ## Consequence for the traffic experiment
 
 The `interaction` arm must re-upload `system_instruction` (the ~12K-char system

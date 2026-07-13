@@ -211,11 +211,28 @@ provisioning/queueing from the agent actually working.
 | no-context | `q_k` (turn 1: `S + q₁`) | none after turn 1 | flat, tiny |
 | stateful (cache) | `cachedContent` ref + `q_k` | full (server-side prefix) | flat, tiny |
 | interaction | `previous_interaction_id` + `q_k` | full (server-side history) | flat, tiny |
+| interaction_stateless | `S` + all prior Q&A + `q_k` (`store: false`, no `previous_interaction_id`) | full (client-resent, server keeps nothing) | grows ~O(k) per turn, tracks stateless |
 
-Coherent answers: stateless, stateful, interaction. Ambiguous: no-context.
-Small requests: no-context, stateful, interaction. So **stateful and interaction
-are the two ways to get "small request + coherent answer"** — one caches the
-prefix, the other keeps the whole conversation server-side.
+Coherent answers: stateless, stateful, interaction, interaction_stateless.
+Ambiguous: no-context. Small requests: no-context, stateful, interaction. So
+**stateful and interaction are the two ways to get "small request + coherent
+answer"** — one caches the prefix, the other keeps the whole conversation
+server-side. `interaction_stateless` fills the remaining cell of the endpoint
+× who-keeps-the-history matrix: the interactions endpoint, but the client
+keeps the history, like stateless. A live 3-turn run (2026-07-13,
+gemini-3.1-flash-lite) shows its `input_tokens` growing turn over turn
+(4459/4825/5337) rather than staying flat at the turn-1 value — the result
+you'd see if the server accepted the client-supplied `Step[]` and then
+ignored it, billing only `S + q_k` on every turn. Wire bytes alone can't
+catch that failure mode, since the client keeps sending the full history
+either way; only the growing token count proves the history is reaching the
+model. Against `interaction`, the wire gap (21701/23342/25600 vs 21700/21755/21722)
+is exactly what `previous_interaction_id` buys: ~3.9 KB by turn 3, widening
+every turn — a **bytes** saving, not a token one. `interaction`'s
+input_tokens (4459/4886/5465) grow at the same rate as every other arm's,
+because the server replays and bills the stored history; the ~2% residual
+against `interaction_stateless` (5337 vs 5465 at turn 3) is answer-length
+variance, not a saving the mechanism produces.
 
 ---
 

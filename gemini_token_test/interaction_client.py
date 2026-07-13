@@ -21,6 +21,16 @@ warmup, no tools.
          "system_instruction": "...",           # re-sent every turn
          "previous_interaction_id": "...",       # absent on turn 1
          "input": [{"type":"user_input","content":[{"type":"text","text":"..."}]}]}
+
+  With client_history (the interaction_stateless arm) the trade flips: store is
+  false, previous_interaction_id is gone, and `input` carries the whole
+  conversation as steps.
+
+  body: {"model": "...", "stream": False, "store": False,
+         "system_instruction": "...",           # still re-sent every turn
+         "input": [{"type":"user_input","content":[{"type":"text","text":"q1"}]},
+                   {"type":"model_output","content":[{"type":"text","text":"a1"}]},
+                   {"type":"user_input","content":[{"type":"text","text":"q2"}]}]}
 """
 
 from __future__ import annotations
@@ -41,24 +51,41 @@ def interactions_url() -> str:
     return f"{gc.api_base()}/interactions"
 
 
+def _step_user(text: str) -> dict:
+    return {"type": "user_input", "content": [{"type": "text", "text": text}]}
+
+
+def _step_model(text: str) -> dict:
+    return {"type": "model_output", "content": [{"type": "text", "text": text}]}
+
+
 def _input(text: str) -> list:
-    return [{"type": "user_input", "content": [{"type": "text", "text": text}]}]
+    return [_step_user(text)]
 
 
 def interaction_body(model: str, text: str, system_instruction: str,
-                     prev_id: str | None) -> dict:
-    """One interaction request body. system_instruction is sent on every turn
-    because the server does not keep it; previous_interaction_id carries the
-    history and is absent on the first turn."""
+                     prev_id: str | None, store: bool = True,
+                     history: list | None = None) -> dict:
+    """One interaction request body.
+
+    Two ways to give the server a conversation. Chained (the default): `input` is
+    the new question alone and `previous_interaction_id` points at the interaction
+    that holds everything before it. Client-side (`history`): `input` is the whole
+    conversation as a Step[] -- prior questions, prior model answers, new question
+    last -- and no previous_interaction_id is sent, because there is nothing stored
+    to point at.
+
+    system_instruction rides every turn either way: the server does not keep it.
+    """
     body: dict = {
         "model": model,
         "stream": False,
-        "store": True,
-        "input": _input(text),
+        "store": store,
+        "input": list(history) if history is not None else _input(text),
     }
     if system_instruction:
         body["system_instruction"] = system_instruction
-    if prev_id:
+    if prev_id and history is None:
         body["previous_interaction_id"] = prev_id
     return body
 
@@ -105,12 +132,23 @@ def _record(turn, question, text, iid, usage, wire_sent, wire_recv, elapsed_ms,
     }
 
 
-def _mock_interaction(turn: int, text: str, system: str, prev_id: str | None) -> dict:
+def _mock_interaction(turn: int, text: str, system: str, prev_id: str | None,
+                      store: bool = True, history: list | None = None) -> dict:
     iid = f"mock_interaction_{turn:03d}"
     ans = f"(mock interaction answer, turn {turn}, prev={prev_id or 'none'}) " + ("lorem ipsum " * 12)
-    body = interaction_body("mock-model", text, system, prev_id)
+    body = interaction_body("mock-model", text, system, prev_id, store=store,
+                            history=history)
     req = json.dumps(body)
-    inp = _text_tokens([{"parts": [{"text": (system if turn == 1 else '') + text}]}])
+    if history is not None:
+        # client_history arm: the payload is the system prompt (every turn,
+        # never stored) plus every text leaf actually carried in the Step[].
+        # This must grow with the conversation -- that growth is the whole
+        # point of the arm -- unlike the chained-arm estimate below, which is
+        # untouched.
+        history_text = "".join(_extract_text(step) for step in history)
+        inp = _text_tokens([{"parts": [{"text": system + history_text}]}])
+    else:
+        inp = _text_tokens([{"parts": [{"text": (system if turn == 1 else '') + text}]}])
     usage = {"input_tokens": inp, "cached_tokens": 0, "output_tokens": 40,
              "thought_tokens": 0, "total_tokens": inp + 40}
     resp = json.dumps({"id": iid, "status": "completed",
@@ -121,10 +159,12 @@ def _mock_interaction(turn: int, text: str, system: str, prev_id: str | None) ->
 
 
 def _call_interaction(model: str, text: str, system_instruction: str,
-                      prev_id: str | None, turn: int = 1) -> dict:
+                      prev_id: str | None, turn: int = 1,
+                      store: bool = True, history: list | None = None) -> dict:
     """One interaction request. Never raises; errors land in the record's error.
     Returns the common per-turn record."""
-    body = interaction_body(model, text, system_instruction, prev_id)
+    body = interaction_body(model, text, system_instruction, prev_id, store=store,
+                            history=history)
     req_raw = json.dumps(body)
     headers = {"Content-Type": "application/json", **gc.auth_headers()}
     t0 = time.monotonic()
@@ -160,7 +200,8 @@ def _call_interaction(model: str, text: str, system_instruction: str,
 
 def run_interaction(model: str, request_name: str = "perf",
                     turns: int | None = None, on_progress=None,
-                    inline_system: bool = False, stage: str = "interaction") -> dict:
+                    inline_system: bool = False, stage: str = "interaction",
+                    client_history: bool = False) -> dict:
     """Replay the scenario over the Interactions API.
 
     Default: turn 1 opens the interaction (system prompt + first question), and each
@@ -176,6 +217,13 @@ def run_interaction(model: str, request_name: str = "perf",
     way; what changes is who stores it, and whether the model still treats it with
     the weight a system instruction carries.
 
+    client_history=True: the server stores nothing (store:false) and there is no
+    previous_interaction_id. The client keeps the conversation and resends it whole
+    every turn as a Step[] in `input` -- its own prior questions and the model's own
+    prior answers. This is the stateless arm's bargain, made on the interactions
+    endpoint: what separates it from the chained arm is exactly what
+    previous_interaction_id buys.
+
     Returns {"params": {...}, "interaction_records": [...]}.
     """
     system, steps, source = load_request(request_name)
@@ -185,6 +233,7 @@ def run_interaction(model: str, request_name: str = "perf",
 
     records = []
     prev_id: str | None = None
+    history: list = []              # only used when client_history
     for k, q in enumerate(steps, start=1):
         if on_progress:
             on_progress({"stage": stage, "turn": k, "turns": n})
@@ -194,19 +243,34 @@ def run_interaction(model: str, request_name: str = "perf",
             sys_instruction = ""
         else:
             text, sys_instruction = q, system
-        if is_mock():
-            r = _mock_interaction(k, text, sys_instruction, prev_id)
+
+        if client_history:
+            history.append(_step_user(text))
+            sent_history, store = list(history), False
         else:
-            r = _call_interaction(model, text, sys_instruction, prev_id, turn=k)
+            sent_history, store = None, True
+
+        if is_mock():
+            r = _mock_interaction(k, text, sys_instruction, prev_id,
+                                  store=store, history=sent_history)
+        else:
+            r = _call_interaction(model, text, sys_instruction, prev_id, turn=k,
+                                  store=store, history=sent_history)
         r["turn"] = k
         r["question"] = q          # the step, never the prompt bolted onto it
-        if r.get("interaction_id"):
+        if client_history:
+            # The arm's own answer, not another arm's transcript. A history of a
+            # conversation that never happened measures nothing.
+            history.append(_step_model(r.get("response_text") or ""))
+        elif r.get("interaction_id"):
             prev_id = r["interaction_id"]     # chain the next turn onto this one
         records.append(r)
 
     return {
         "params": {"mode": stage, "turns": n, "model": model,
                    "stream": False, "endpoint": interactions_url(),
-                   "inline_system": inline_system, "request_source": source},
+                   "inline_system": inline_system,
+                   "client_history": client_history, "store": not client_history,
+                   "request_source": source},
         "interaction_records": records,
     }
