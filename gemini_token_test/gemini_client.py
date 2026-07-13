@@ -541,47 +541,85 @@ def delete_cache(name: str) -> None:
         pass
 
 
-# Curated fallback list (2026-06). gemini-2.0-* retired 2026-06-01; 2.5 GA until
-# 2026-10-16. Cheapest GA model first -> used as the default.
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
+
+# The catalog reports supportedGenerationMethods. Two of the three arms are
+# decidable from it; the third is not.
+#   stateless / nocontext -> generateContent
+#   cached                -> createCachedContent   (no method, no cache to build)
+#   interaction           -> not advertised at all. No interactions method ever
+#                            appears in the catalog, so the only way to know is to
+#                            call it -- that is what the probe is for.
+_GENERATE = "generateContent"
+_CACHE = "createCachedContent"
+
+
+def _model_entry(mid: str, methods: list) -> dict:
+    can_cache = _CACHE in methods
+    note = "all arms (cache supported)" if can_cache else "no cache arm — createCachedContent unsupported"
+    return {
+        "id": mid,
+        "label": f"{mid} — {note}",
+        "methods": sorted(methods),
+        "can_generate": _GENERATE in methods,
+        "can_cache": can_cache,
+        # Interaction support is unknowable here, so "ready" means the two arms the
+        # catalog *can* answer for. The probe covers the third.
+        "comparison_ready": _GENERATE in methods and can_cache,
+    }
+
+
+# Fallback when the catalog can't be reached (verified against the live Developer
+# API catalog on 2026-07-13). gemini-2.5-* is retired and 404s for new users, so it
+# is not offered: handing back a model that cannot run at all is worse than a short
+# list.
 STATIC_MODELS = [
-    {"id": "gemini-2.5-flash-lite", "label": "gemini-2.5-flash-lite (GA · cheapest)", "status": "GA"},
-    {"id": "gemini-2.5-flash", "label": "gemini-2.5-flash (GA)", "status": "GA"},
-    {"id": "gemini-2.5-pro", "label": "gemini-2.5-pro (GA)", "status": "GA"},
-    {"id": "gemini-3.1-flash-lite", "label": "gemini-3.1-flash-lite (preview)", "status": "preview"},
-    {"id": "gemini-3.1-pro", "label": "gemini-3.1-pro (preview)", "status": "preview"},
+    _model_entry("gemini-3.1-flash-lite", [_GENERATE, "countTokens", _CACHE]),
+    _model_entry("gemini-3.1-pro-preview", [_GENERATE, "countTokens", _CACHE]),
+    _model_entry("gemini-3.5-flash", [_GENERATE, "countTokens", _CACHE]),
+    _model_entry("gemini-3-pro-preview", [_GENERATE, "countTokens", _CACHE]),
 ]
 
 
 def list_models() -> dict:
-    """Available Gemini models for the dropdown.
+    """Models the Developer API catalog offers, tagged with the arms each can serve.
 
-    Live (real project + creds): query Vertex publisher models. Mock / no creds /
-    any failure: the curated STATIC_MODELS fallback. Always returns a usable list.
-    Returns {source, default, models:[{id,label,status}]}.
+    Every arm runs on generativelanguage with an API key, so this asks that catalog
+    -- a Vertex publisher list would describe a host the experiment never calls, and
+    would happily offer a model that cannot build a cache, silently gutting the
+    `cached` arm. Models that cannot generateContent at all (embeddings, bidi-only
+    live models) are dropped.
+
+    Returns {source, default, models:[{id,label,methods,can_cache,comparison_ready}]}.
     """
     fallback = {"source": "static", "default": DEFAULT_MODEL, "models": STATIC_MODELS}
-    if is_mock() or not PROJECT:
+    if is_mock() or not api_key():
         return fallback
     try:
-        token = _bearer_token()
-        url = f"https://{_vertex_host()}/v1beta1/publishers/google/models"
-        resp = _session().get(
-            url, headers={"Authorization": f"Bearer {token}"},
-            params={"pageSize": 200}, timeout=30,
-        )
-        if resp.status_code != 200:
-            return {**fallback, "source": f"static-fallback (http_{resp.status_code})"}
-        models = []
-        for m in resp.json().get("publisherModels", []):
-            mid = m.get("name", "").split("/")[-1]
-            if mid.startswith("gemini"):
-                stage = m.get("launchStage", "").replace("GA", "GA").replace("_", " ").lower()
-                models.append({"id": mid, "label": mid, "status": stage})
+        models, token = [], None
+        while True:
+            params = {"pageSize": 200}
+            if token:
+                params["pageToken"] = token
+            resp = _session().get(f"{api_base()}/models", headers=auth_headers(),
+                                  params=params, timeout=30)
+            if resp.status_code != 200:
+                return {**fallback, "source": f"static-fallback (http_{resp.status_code})"}
+            body = resp.json()
+            for m in body.get("models", []):
+                mid = m.get("name", "").split("/")[-1]
+                methods = m.get("supportedGenerationMethods", [])
+                if mid.startswith("gemini") and _GENERATE in methods:
+                    models.append(_model_entry(mid, methods))
+            token = body.get("nextPageToken")
+            if not token:
+                break
         if not models:
             return {**fallback, "source": "static-fallback (empty)"}
-        models.sort(key=lambda x: x["id"])
+        # Models that can run the whole comparison come first; the rest stay
+        # selectable, but the label says which arm they'd break.
+        models.sort(key=lambda m: (not m["comparison_ready"], m["id"]))
         default = DEFAULT_MODEL if any(m["id"] == DEFAULT_MODEL for m in models) else models[0]["id"]
-        return {"source": "vertex", "default": default, "models": models}
+        return {"source": "devapi", "default": default, "models": models}
     except Exception as exc:
         return {**fallback, "source": f"static-fallback ({type(exc).__name__})"}
