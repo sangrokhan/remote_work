@@ -1,108 +1,12 @@
-let tokenChart, byteChart;
 let compareWireChart, compareTokenChart;
 
 function fmtBytes(n) {
+  if (n == null) return "";
   if (n < 1024) return n + " B";
   if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
   return (n / 1048576).toFixed(2) + " MB";
 }
 
-function modeColor(mode) {
-  if (mode === "stateless") return "#ff6b6b";
-  if (mode === "stateful") return "#4dd4ac";
-  return "#5b8def";
-}
-
-// items: [{label, series, color}]. Plots cum_tokens + cum_wire_bytes.
-function plot(items) {
-  const maxLen = Math.max(0, ...items.map(i => (i.series.turns || []).length));
-  const labels = Array.from({ length: maxLen }, (_, i) => i + 1);
-  const mk = (key) => items.map(i => ({
-    label: i.label, data: i.series[key],
-    borderColor: i.color, backgroundColor: i.color + "22",
-    fill: items.length === 1, tension: .2,
-  }));
-  const opts = (title, yLabel) => ({
-    responsive: true,
-    plugins: { title: { display: true, text: title, color: "#e6e6e6" }, legend: { labels: { color: "#cbd5e0" } } },
-    scales: {
-      x: { title: { display: true, text: "turn", color: "#8b98a5" }, ticks: { color: "#8b98a5" }, grid: { color: "#2d3748" } },
-      y: { title: { display: true, text: yLabel, color: "#8b98a5" }, ticks: { color: "#8b98a5" }, grid: { color: "#2d3748" } },
-    },
-  });
-  if (tokenChart) tokenChart.destroy();
-  if (byteChart) byteChart.destroy();
-  tokenChart = new Chart(document.getElementById("tokenChart"),
-    { type: "line", data: { labels, datasets: mk("cum_tokens") }, options: opts("Cumulative tokens", "tokens") });
-  byteChart = new Chart(document.getElementById("byteChart"),
-    { type: "line", data: { labels, datasets: mk("cum_wire_bytes") }, options: opts("Cumulative wire bytes", "bytes") });
-}
-
-function renderSummary(totals, mock, dummy) {
-  const el = document.getElementById("summary");
-  el.hidden = false;
-  const badges = (dummy ? `<p class="badge warn">⚠ DUMMY DATA — placeholder, not a real run</p>` : "")
-    + (mock ? `<p class="badge mock">⚠ MOCK RESULT — synthetic data, no real traffic/cost</p>` : "");
-  el.innerHTML = `
-    <h2>Result — <span class="ok">${totals.mode}</span></h2>
-    ${badges}
-    <p><span class="big">${(totals.tokens || 0).toLocaleString()}</span> tokens ·
-       wire ${fmtBytes(totals.wire_bytes || 0)}</p>
-    <p><strong>Cost estimate</strong> (@ ${totals.price_per_token}/tok): $${totals.cost_usd}</p>
-    <p class="sub">Compare modes by running the other mode, then pick both in the history "Compare" box below.</p>
-  `;
-}
-
-function renderSummary3(t, mock, pcaps) {
-  const el = document.getElementById("summary");
-  el.hidden = false;
-  const badge = mock ? `<p class="badge mock">⚠ MOCK RESULT — synthetic data</p>` : "";
-  let pcapHtml = "";
-  const ok = pcaps && Object.entries(pcaps).filter(([k, v]) => v && v.download);
-  if (ok && ok.length) {
-    pcapHtml = "<p><strong>pcaps (per stage):</strong> " + ok.map(([k, v]) =>
-      `<a class="pcap-link" href="${v.download}" download>⬇ ${k} (${fmtBytes(v.bytes)})</a>`).join(" ") + "</p>";
-  } else if (pcaps && Object.keys(pcaps).length) {
-    pcapHtml = `<p class="sub">capture ran but produced no packets (mock has no real traffic, or no NET_RAW).</p>`;
-  }
-  el.innerHTML = `
-    <h2>Result — 3-stage caching (stateless → cache → stateful)</h2>
-    ${badge}
-    <p><strong>Traffic (wire bytes):</strong> stateless ${fmtBytes(t.stateless_wire)}
-       vs stateful <span class="ok">${fmtBytes(t.stateful_wire)}</span>
-       → <span class="big">${t.wire_ratio}×</span> less sent</p>
-    <p><strong>Content length (payload):</strong> stateless ${fmtBytes(t.stateless_content)}
-       vs stateful ${fmtBytes(t.stateful_content)} → ${t.content_ratio}×</p>
-    <p class="sub">caches used: ${t.caches_used} · cached tokens: ${(t.cached_tokens || 0).toLocaleString()}</p>
-    <p class="sub">stateful sends only the new question; the prefix is server-side in the cache.</p>
-    ${pcapHtml}
-  `;
-}
-
-// Render tcpdump capture stats (captured / received / dropped) per stage. `entries`
-// is a {label: captureResult} map — one entry for single mode, one per stage for 3-stage.
-function renderCaptureLog(entries) {
-  const box = document.getElementById("captureLog");
-  const rows = [];
-  Object.entries(entries || {}).forEach(([label, v]) => {
-    if (!v || !v.stats || !Object.keys(v.stats).length) return;
-    const d = v.dropped || 0;
-    const cls = d > 0 ? "caplog warn" : "caplog";
-    rows.push(`<div class="${cls}">${label}: `
-      + `${v.stats.captured ?? "?"} captured · `
-      + `${v.stats.received_by_filter ?? "?"} recv by filter · `
-      + `<strong>${d} dropped</strong> · snaplen ${v.snaplen ?? "?"}`
-      + (d > 0 ? ` — capture loss (expect “ACKed unseen segment” warnings)` : "")
-      + `</div>`);
-  });
-  if (!rows.length) { box.hidden = true; box.innerHTML = ""; return; }
-  box.hidden = false;
-  box.innerHTML = `<strong>Capture log (tcpdump)</strong>${rows.join("")}`;
-}
-
-// Replace a tbody with one row per entry of `rows` (each an array of cell values).
-// Cells are set via textContent, so model output can't break the layout or inject
-// HTML. `numeric` lists the column indexes to right-align.
 function fillTable(tbodySelector, rows, numeric = []) {
   const tb = document.querySelector(tbodySelector);
   tb.innerHTML = "";
@@ -118,40 +22,23 @@ function fillTable(tbodySelector, rows, numeric = []) {
   });
 }
 
-function renderDetail(series, mode) {
-  const rows = (series.turns || []).map((turn, i) => {
-    const prompt = series.per_turn_prompt_tokens[i];
-    const total = series.per_turn_tokens[i];
-    return [mode, turn, prompt, total - prompt, total, series.per_turn_wire_bytes[i], ""];
-  });
-  fillTable("#detail tbody", rows);
+// Attach a generated file to a download link, releasing the previous blob so a
+// long session doesn't leak one object URL per run.
+function attachDownload(linkId, payload, filename) {
+  const dl = document.getElementById(linkId);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);
+  const u = URL.createObjectURL(blob);
+  dl.href = u; dl.dataset.url = u; dl.download = filename;
+  dl.hidden = false;
 }
 
-// 3-stage side-by-side table: one row per step, columns query / stateless resp /
-// no-context resp / stateful resp.
-function renderCompare3(rows, execId) {
-  const sec = document.getElementById("compare3");
-  fillTable("#compareTable tbody",
-    (rows || []).map(r => [r.turn, r.query, r.stateless_response,
-                           r.nocontext_response, r.stateful_response]), [0]);
-  const csv = document.getElementById("compareCsv");
-  const has = !!(rows && rows.length);
-  if (has && execId) {
-    csv.href = "/download/compare/" + encodeURIComponent(execId);
-    csv.hidden = false;
-  } else {
-    csv.hidden = true;
-  }
-  sec.hidden = !has;
-}
-
-const STAGE_LABELS = {
+const ARM_LABELS = {
   stateless: "Stateless (full resend)",
+  cached: "Cached (build + reference)",
+  interaction: "Interaction API (server-side state)",
   nocontext: "Stateless — no context",
   cachebuild: "Building caches",
-  cached: "Cached (build + reference)",
-  stateful: "Stateful (cache + question)",
-  interaction: "Interaction API (server-side state)",
 };
 
 const ARM_COLORS = {
@@ -162,20 +49,18 @@ const ARM_COLORS = {
 };
 
 function progressText(p) {
-  if (p.stage === "provisioning") {
-    return `⏳ Provisioning agent sandbox — attempt ${p.attempt}, ${((p.at_ms || 0) / 1000).toFixed(0)}s…`;
-  }
-  if (p.stage === "pause") return `⏸ Pausing between stages — ${p.turn}s left (rate-limit spacing)…`;
-  const label = STAGE_LABELS[p.stage] || p.stage;
-  let s = `Running… ${label} — turn ${p.turn}/${p.turns}`;
+  if (p.stage === "pause") return `⏸ Pausing between arms — ${p.turn}s (rate-limit spacing)…`;
+  const label = ARM_LABELS[p.stage] || p.stage;
+  let s = `Running… ${label}`;
+  if (p.turns) s += ` — turn ${p.turn}/${p.turns}`;
   // Interaction turns report each SSE event, so a stall shows which stage owns it.
   if (p.event) s += ` · ${p.event} @ ${((p.at_ms || 0) / 1000).toFixed(1)}s`;
   return s;
 }
 
-// POST to the streaming endpoint and drain Server-Sent Events: forward each
-// per-turn progress event to onProgress, return the final result payload.
-async function runStreaming(body, onProgress, url = "/run/stream") {
+// POST to a streaming endpoint and drain Server-Sent Events: forward each
+// progress event to onProgress, return the final result payload.
+async function runStreaming(body, onProgress, url) {
   const resp = await fetch(url, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -204,6 +89,31 @@ async function runStreaming(body, onProgress, url = "/run/stream") {
     }
   }
   return result;
+}
+
+// Drives a streaming run button: disables it, hides stale output, streams progress
+// into the status line, and validates the final payload. Returns the result, or
+// null when the run errored (the status line already says why).
+async function streamedRun({ button, url, startText, hide, body, requires, missingMsg, statusId }) {
+  const btn = document.getElementById(button);
+  const status = document.getElementById(statusId);
+  btn.disabled = true;
+  status.textContent = startText;
+  try {
+    (hide || []).forEach(id => { document.getElementById(id).hidden = true; });
+    const data = await runStreaming(body(), (p) => { status.textContent = progressText(p); }, url);
+    const err = data && (data.__error || data.error);
+    if (!data || err || !data[requires]) {
+      status.textContent = "Error: " + (err || missingMsg);
+      return null;
+    }
+    return data;
+  } catch (e) {
+    status.textContent = "Failed: " + e;
+    return null;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // --- Interaction API capability probe ----------------------------------------
@@ -246,12 +156,7 @@ function renderProbe(data) {
     ? `system_instruction on ${sys[0]}: ${sys[1].verdict} — ${sys[1].meaning}`
     : "system_instruction: not probed (no model interaction succeeded).";
 
-  const dl = document.getElementById("probeJson");
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);
-  const u = URL.createObjectURL(blob);
-  dl.href = u; dl.dataset.url = u; dl.download = "interaction_probe.json";
-  dl.hidden = false;
+  attachDownload("probeJson", data, "interaction_probe.json");
   document.getElementById("probeResult").hidden = false;
 }
 
@@ -279,57 +184,18 @@ async function startProbe() {
 
 // --- Interaction API test (stateful, server-side history) --------------------
 function renderInteraction(data) {
-  const sec = document.getElementById("interactionResult");
   const secs = (ms) => (ms == null ? "" : (ms / 1000).toFixed(1));
   fillTable("#interactionTable tbody",
     (data.records || []).map(r => [r.turn, r.question, r.response_text,
       secs(r.elapsed_ms), secs(r.first_event_ms), r.interaction_id, r.error]),
     [0, 3, 4]);
   const p = data.params || {};
-  const w = p.warmup || {};
-  const target = p.target === "agent" ? `agent: ${p.agent}` : `model: ${p.model || "?"}`;
-  let warm;
-  if (p.target !== "agent") warm = "no sandbox (model mode)";
-  else if (w.skipped) warm = `env reused (${w.env_id})`;
-  else if (w.env_id) warm = `sandbox provisioned in ${(w.elapsed_ms / 1000).toFixed(1)}s (${w.attempts} attempt${w.attempts === 1 ? "" : "s"})`;
-  else warm = `warmup failed: ${w.error || "unknown"}`;
-  const tools = `tools: ${(p.tools || []).length ? (p.tools || []).map(t => t.type || "?").join(",") : "none"}`
-    + (p.tool_choice ? ` (tool_choice=${p.tool_choice})` : "");
   document.getElementById("interactionMeta").textContent =
-    `${data.mock ? "[MOCK] " : ""}${target} · background: ${p.background} · ${tools} · ${warm} · exec_id: ${data.exec_id || "?"}`;
-  const dl = document.getElementById("interactionChat");
-  const blob = new Blob([JSON.stringify(data.records || [], null, 2)], { type: "application/json" });
-  if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);
-  const u = URL.createObjectURL(blob);
-  dl.href = u; dl.dataset.url = u; dl.download = `interaction_${data.exec_id || "run"}.json`;
-  dl.hidden = false;
-  sec.hidden = false;
-}
-
-// Drives a streaming run button: disables it, hides stale output, streams progress
-// into the status line, and validates the final payload. Returns the result, or
-// null when the run errored (the status line already says why).
-async function streamedRun({ button, url, startText, hide, body, requires, missingMsg,
-                            statusId = "status" }) {
-  const btn = document.getElementById(button);
-  const status = document.getElementById(statusId);
-  btn.disabled = true;
-  status.textContent = startText;
-  try {
-    (hide || []).forEach(id => { document.getElementById(id).hidden = true; });
-    const data = await runStreaming(body(), (p) => { status.textContent = progressText(p); }, url);
-    const err = data && (data.__error || data.error);
-    if (!data || err || !data[requires]) {
-      status.textContent = "Error: " + (err || missingMsg);
-      return null;
-    }
-    return data;
-  } catch (e) {
-    status.textContent = "Failed: " + e;
-    return null;
-  } finally {
-    btn.disabled = false;
-  }
+    `${data.mock ? "[MOCK] " : ""}model: ${p.model || "?"} · turns: ${p.turns ?? "?"}`
+    + ` · exec_id: ${data.exec_id || "?"}`;
+  attachDownload("interactionChat", data.records || [],
+                 `interaction_${data.exec_id || "run"}.json`);
+  document.getElementById("interactionResult").hidden = false;
 }
 
 async function startInteraction() {
@@ -342,7 +208,7 @@ async function startInteraction() {
     requires: "records",
     missingMsg: "no result",
     body: () => ({
-      turns: +document.getElementById("turns").value,
+      turns: +document.getElementById("ixTurns").value,
       model: selectedModel(),
     }),
   });
@@ -356,10 +222,10 @@ async function startInteraction() {
   loadHistory();
 }
 
-// --- Stateless vs Cached vs Interaction comparison ---------------------------
+// --- Performance comparison --------------------------------------------------
 // Overlay each arm's cumulative wire bytes and input tokens on their own axes.
-// x is the steady turn index; setup cost is folded into the arm's starting point
-// (metrics offsets the cumulative series), so cached does not start free.
+// x is the steady turn index; the setup cost is folded into the arm's starting
+// point (metrics offsets the cumulative series), so cached does not start free.
 function plotCompare(summary) {
   const arms = summary.arms || [];
   const maxLen = Math.max(0, ...arms.map(a => (summary.series[a].turns || []).length));
@@ -393,7 +259,7 @@ function renderCompareArms(data) {
   const secs = (ms) => (ms == null ? "" : (ms / 1000).toFixed(1));
   fillTable("#compareArmsTable tbody",
     (s.arms || []).map(a => [
-      STAGE_LABELS[a] || a,
+      ARM_LABELS[a] || a,
       fmtBytes(t[a].setup_wire), fmtBytes(t[a].steady_wire), fmtBytes(t[a].total_wire),
       (t[a].total_input_tokens || 0).toLocaleString(),
       (t[a].cached_tokens || 0).toLocaleString(),
@@ -402,13 +268,7 @@ function renderCompareArms(data) {
     ]),
     [1, 2, 3, 4, 5, 6, 7, 8]);
   plotCompare(s);
-
-  const dl = document.getElementById("compareArmsJson");
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);
-  const u = URL.createObjectURL(blob);
-  dl.href = u; dl.dataset.url = u; dl.download = `comparison_${data.exec_id || "run"}.json`;
-  dl.hidden = false;
+  attachDownload("compareArmsJson", data, `comparison_${data.exec_id || "run"}.json`);
   document.getElementById("compareArmsResult").hidden = false;
 }
 
@@ -423,7 +283,8 @@ async function startCompare() {
     requires: "summary",
     missingMsg: "no result",
     body: () => ({
-      turns: +document.getElementById("turns").value,
+      turns: +document.getElementById("cmpTurns").value,
+      pause_seconds: +document.getElementById("cmpPause").value,
       model: selectedModel(),
       arms: arms.length ? arms : undefined,
     }),
@@ -431,99 +292,36 @@ async function startCompare() {
   if (!data) return;
 
   renderCompareArms(data);
+  const errs = Object.values(data.summary.totals).reduce((n, t) => n + (t.errors || 0), 0);
   document.getElementById("compareArmsStatus").textContent =
-    `${data.mock ? "[MOCK] " : ""}Comparison done. exec_id: ${data.exec_id}`;
-  loadHistory();
-}
-
-async function start() {
-  const data = await streamedRun({
-    button: "start",
-    url: "/run/stream",
-    startText: "Running…",
-    hide: ["pcapLink", "chatLink", "captureLog", "compare3"],
-    requires: "summary",
-    missingMsg: "stream ended early (server timeout or Vertex rate limit?)",
-    body: () => ({
-      mode: document.getElementById("mode").value,
-      turns: +document.getElementById("turns").value,
-      model: selectedModel(),
-      capture: document.getElementById("capture").checked,
-      pause_seconds: +document.getElementById("pauseSeconds").value,
-    }),
-  });
-  if (!data) return;
-
-  const s = data.summary;
-  if (s.mode === "caching-3stage") {
-    renderSummary3(s.totals, data.mock, data.pcaps);
-    renderCaptureLog(data.pcaps);
-    plot([
-      { label: "stateless (full resend)", series: s.stateless_series, color: "#ff6b6b" },
-      { label: "stateful (cache + question)", series: s.stateful_series, color: "#4dd4ac" },
-    ]);
-    renderCompare3(data.comparison, data.exec_id);
-    document.querySelector("#detail tbody").innerHTML = "";
-  } else {
-    renderSummary(s.totals, data.mock, false);
-    renderCaptureLog(data.capture ? { [s.mode]: data.capture } : {});
-    document.getElementById("compare3").hidden = true;
-    plot([{ label: s.mode, series: s.series, color: modeColor(s.mode) }]);
-    renderDetail(s.series, s.mode);
-  }
-
-  if (data.exec_id) {
-    const chatLink = document.getElementById("chatLink");
-    chatLink.href = "/download/chat/" + encodeURIComponent(data.exec_id);
-    chatLink.hidden = false;
-  }
-
-  const s2 = data.saved_to || {};
-  let msg = `${data.mock ? "[MOCK] " : ""}Done. exec_id: ${data.exec_id} | Firestore: ${s2.firestore || "off"}`;
-  const c = data.capture;
-  if (c) {
-    if (c.ok && c.download) {
-      const link = document.getElementById("pcapLink");
-      link.href = c.download; link.hidden = false;
-      msg += ` | pcap: ${fmtBytes(c.bytes)} (${c.host})`;
-      if (c.stats && Object.keys(c.stats).length) msg += ` | dropped: ${c.dropped || 0}`;
-    } else {
-      msg += ` | capture: ${c.error || c.note || "no packets"}`;
-    }
-  }
-  document.getElementById("status").textContent = msg;
+    `${data.mock ? "[MOCK] " : ""}Comparison done. exec_id: ${data.exec_id}`
+    + (errs ? ` | ${errs} call(s) errored` : "");
   loadHistory();
 }
 
 // --- Execution history viewer ------------------------------------------------
-let histRuns = [];
-
 async function loadHistory() {
   const resp = await fetch("/history");
   const data = await resp.json();
-  histRuns = data.runs || [];
+  const runs = data.runs || [];
   document.getElementById("histSource").textContent =
     `source: ${data.source}` + (data.dummy ? " — showing DUMMY data (no history found)" : "");
 
+  // A comparison run has no single headline number, so show the stateless arm as
+  // the reference and let "view" open the full per-arm breakdown.
+  const ref = (t) => (t && t.stateless) || {};
   const tb = document.querySelector("#histTable tbody");
   tb.innerHTML = "";
-  const cmpA = document.getElementById("cmpA");
-  const cmpB = document.getElementById("cmpB");
-  cmpA.length = 1; cmpB.length = 1;
-  for (const r of histRuns) {
+  for (const r of runs) {
     const flags = (r.dummy ? "DUMMY " : "") + (r.mock ? "MOCK" : "");
+    const t = ref(r.totals);
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${r.exec_id}</td><td>${r.mode || ""}</td><td>${r.timestamp || ""}</td>
-      <td>${(r.totals?.tokens ?? "").toLocaleString?.() ?? ""}</td>
-      <td>${r.totals?.wire_bytes != null ? fmtBytes(r.totals.wire_bytes) : ""}</td>
+      <td>${t.total_wire != null ? fmtBytes(t.total_wire) : (r.totals?.wire_bytes != null ? fmtBytes(r.totals.wire_bytes) : "")}</td>
+      <td>${t.total_input_tokens != null ? t.total_input_tokens.toLocaleString() : ""}</td>
       <td>${flags}</td><td><button data-id="${r.exec_id}" class="viewBtn">view</button>
       <button data-id="${r.exec_id}" class="delBtn"${r.dummy ? " disabled title='dummy row'" : ""}>🗑 delete</button></td>`;
     tb.appendChild(tr);
-    for (const sel of [cmpA, cmpB]) {
-      const o = document.createElement("option");
-      o.value = r.exec_id; o.textContent = `${r.mode || "?"} · ${r.exec_id}`;
-      sel.appendChild(o);
-    }
   }
   document.querySelectorAll(".viewBtn").forEach(b =>
     b.addEventListener("click", () => viewExec(b.dataset.id)));
@@ -546,46 +344,27 @@ async function deleteExec(execId) {
   loadHistory();
 }
 
-async function fetchExec(execId) {
-  const resp = await fetch("/history/" + encodeURIComponent(execId));
-  if (!resp.ok) return null;
-  return resp.json();
-}
-
 async function viewExec(execId) {
-  const doc = await fetchExec(execId);
-  if (!doc) return;
+  const resp = await fetch("/history/" + encodeURIComponent(execId));
+  if (!resp.ok) return;
+  const doc = await resp.json();
   document.getElementById("histDetailMeta").textContent =
-    `${doc.exec_id} · ${doc.mode} · ${doc.timestamp}` + (doc.dummy ? " · DUMMY" : "") + (doc.mock ? " · MOCK" : "");
+    `${doc.exec_id} · ${doc.mode} · ${doc.timestamp}`
+    + (doc.dummy ? " · DUMMY" : "") + (doc.mock ? " · MOCK" : "");
   const pre = document.getElementById("histDetail");
   pre.hidden = false;
   pre.textContent = JSON.stringify(doc, null, 2);
   const dl = document.getElementById("histDownload");
   dl.href = "/download/run/" + encodeURIComponent(execId);
   dl.hidden = false;
-  // plot this execution from stored series
+  // Replot a stored comparison so an old run can be re-read without re-running it.
   const sm = doc.summary || {};
-  if (sm.mode === "caching-3stage") {
-    plot([
-      { label: "stateless", series: sm.stateless_series, color: "#ff6b6b" },
-      { label: "stateful (cache+Q)", series: sm.stateful_series, color: "#4dd4ac" },
-    ]);
-  } else if (sm.series) {
-    plot([{ label: doc.mode, series: sm.series, color: modeColor(doc.mode) }]);
+  if (sm.mode === "comparison" && sm.series) {
+    renderCompareArms({ summary: sm, exec_id: doc.exec_id, mock: doc.mock });
   }
 }
 
-async function compare() {
-  const a = document.getElementById("cmpA").value;
-  const b = document.getElementById("cmpB").value;
-  if (!a || !b) return;
-  const [da, db] = await Promise.all([fetchExec(a), fetchExec(b)]);
-  const items = [];
-  if (da) items.push({ label: `A: ${da.mode}`, series: da.summary.series, color: "#ff6b6b" });
-  if (db) items.push({ label: `B: ${db.mode}`, series: db.summary.series, color: "#4dd4ac" });
-  if (items.length) plot(items);
-}
-
+// --- Endpoint inspector ------------------------------------------------------
 async function inspect() {
   const btn = document.getElementById("inspect");
   const status = document.getElementById("iStatus");
@@ -673,12 +452,10 @@ async function loadModels() {
 document.getElementById("model").addEventListener("change", toggleCustom);
 document.getElementById("modelFilter").addEventListener("input", e => renderModels(e.target.value));
 document.getElementById("modelRefresh").addEventListener("click", loadModels);
-document.getElementById("start").addEventListener("click", start);
 document.getElementById("startProbe").addEventListener("click", startProbe);
 document.getElementById("startInteraction").addEventListener("click", startInteraction);
 document.getElementById("startCompare").addEventListener("click", startCompare);
 document.getElementById("refresh").addEventListener("click", loadHistory);
-document.getElementById("compare").addEventListener("click", compare);
 document.getElementById("inspect").addEventListener("click", inspect);
 loadModels();
 loadHistory();

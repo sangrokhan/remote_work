@@ -543,7 +543,7 @@ def delete_cache(name: str) -> None:
 
 # Curated fallback list (2026-06). gemini-2.0-* retired 2026-06-01; 2.5 GA until
 # 2026-10-16. Cheapest GA model first -> used as the default.
-DEFAULT_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
 STATIC_MODELS = [
     {"id": "gemini-2.5-flash-lite", "label": "gemini-2.5-flash-lite (GA · cheapest)", "status": "GA"},
     {"id": "gemini-2.5-flash", "label": "gemini-2.5-flash (GA)", "status": "GA"},

@@ -68,6 +68,42 @@ def test_headline_arms_default_without_nocontext(monkeypatch):
     assert {"stateless", "cached", "interaction"} <= arms
 
 
+def _record_sleeps(monkeypatch):
+    """Capture what run_comparison would sleep, without actually sleeping."""
+    slept: list[float] = []
+    monkeypatch.setattr(experiment.time, "sleep", lambda s: slept.append(s))
+    return slept
+
+
+def test_pause_spaces_the_arms_apart(monkeypatch):
+    # Arms hit the same rate-limited project back to back, so the operator can ask
+    # for a gap between them. It goes *between* arms, never after the last one.
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    slept = _record_sleeps(monkeypatch)
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
+                              arms=["stateless", "cached", "interaction"],
+                              pause_seconds=5)
+    assert slept == [5, 5]
+
+
+def test_no_pause_by_default(monkeypatch):
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    slept = _record_sleeps(monkeypatch)
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
+                              arms=["stateless", "cached"])
+    assert slept == []
+
+
+def test_pause_is_reported_as_progress(monkeypatch):
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    _record_sleeps(monkeypatch)
+    events = []
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
+                              arms=["stateless", "cached"], pause_seconds=2,
+                              on_progress=events.append)
+    assert any(e["stage"] == "pause" for e in events)
+
+
 def test_thought_tokens_are_captured(monkeypatch):
     # generateContent arms must report thought tokens too, so the token axis is
     # comparable with the interaction arm which always reports them.

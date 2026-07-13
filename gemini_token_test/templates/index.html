@@ -10,27 +10,24 @@
 <body>
   <header>
     <h1>Gemini API Traffic Experiment</h1>
-    <p class="sub">Vertex AI · run one mode per execution (stateless = full resend, stateful = new turn only) · compare via history</p>
+    <p class="sub">Stateless vs explicit cache vs Interactions API — wire bytes, input
+      tokens, and latency for the same scenario.</p>
     {% if mock %}
-      <p class="badge mock">MOCK MODE (no quota used)</p>
+      <p class="badge mock">MOCK MODE (synthetic data, no quota used)</p>
     {% elif ready %}
-      <p class="badge live">LIVE Vertex · {{ project }} / {{ location }}</p>
+      <p class="badge live">LIVE Developer API · {{ api_host }}</p>
     {% else %}
       <p class="badge warn">Not ready — {{ reason }}</p>
+      <p class="sub">Every arm authenticates with an API key, not ADC. Set
+        <code>GEMINI_API_KEY</code> in the environment (a key from
+        <code>aistudio.google.com/apikey</code>), or export
+        <code>GEMINI_MOCK=1</code> to explore the UI with synthetic data.</p>
     {% endif %}
-    <p class="sub">endpoint: {{ endpoint }} · history store:
-      {% if firestore %}Firestore + JSON{% else %}local JSON{% endif %}</p>
+    <p class="sub">host: {{ api_host }} · key: {{ "set" if key_set else "NOT SET" }} ·
+      history store: {% if firestore %}Firestore + JSON{% else %}local JSON{% endif %}</p>
   </header>
 
   <section class="controls">
-    <label>Mode
-      <select id="mode">
-        {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>Turns <input id="turns" type="number" value="1" min="1" max="100" /></label>
-    <label title="Pause between 3-stage stages to stay under Vertex rate limits (0 = none)">Stage pause (s)
-      <input id="pauseSeconds" type="number" value="60" min="0" max="600" /></label>
     <label>Model
       <select id="model"><option value="{{ default_model }}">{{ default_model }}</option></select>
     </label>
@@ -39,33 +36,15 @@
     </label>
     <button id="modelRefresh" type="button" title="Reload model list">⟳</button>
     <input id="modelCustom" type="text" placeholder="custom model id" hidden />
-    <label class="cap" title="{{ capture_reason }}">
-      <input id="capture" type="checkbox" {% if not capture_ok %}disabled{% endif %} />
-      capture packets{% if not capture_ok %} (unavailable: {{ capture_reason }}){% endif %}
-    </label>
-    <button id="start">▶ Start experiment</button>
-    <a id="pcapLink" class="pcap-link" hidden download>⬇ download .pcap</a>
-    <a id="chatLink" class="pcap-link" hidden download>⬇ download chat JSON</a>
-  </section>
-
-  <p id="status"></p>
-
-  <div id="captureLog" class="capture-log" hidden></div>
-
-  <section class="summary" id="summary" hidden></section>
-
-  <section class="charts">
-    <div class="chart-box"><canvas id="tokenChart"></canvas></div>
-    <div class="chart-box"><canvas id="byteChart"></canvas></div>
   </section>
 
   <section>
     <h2>Interaction API capability probe</h2>
     <p class="sub">Small live calls that answer what the docs don't: does a plain Gemini
-      <code>model</code> interaction work on Vertex, is <code>stream:false</code> accepted,
-      is a regional path served, does the response carry <code>usage</code>, and does
-      <code>system_instruction</code> survive <code>previous_interaction_id</code>.
-      Nothing is saved. Each call sends "hi" and caps output at 16 tokens.</p>
+      <code>model</code> interaction work, is <code>stream:false</code> accepted, does the
+      response carry <code>usage</code>, and does <code>system_instruction</code> survive
+      <code>previous_interaction_id</code>. Nothing is saved. Each call sends "hi" and caps
+      output at 16 tokens.</p>
     <div class="insp-row">
       <button id="startProbe" type="button">🔍 Probe Interactions API</button>
       <a id="probeJson" class="pcap-link" hidden download>⬇ download JSON</a>
@@ -84,10 +63,11 @@
   </section>
 
   <section>
-    <h2>Interaction API (stateful, server-side history)</h2>
-    <p class="sub">Replays the scenario over the Interactions API — the server keeps the
-      history via <code>previous_interaction_id</code>. Uses the Turns and Model above.</p>
+    <h2>Interaction API test (stateful, server-side history)</h2>
+    <p class="sub">Replays the scenario over the Interactions API alone — the server keeps
+      the history via <code>previous_interaction_id</code>.</p>
     <div class="insp-row">
+      <label>Turns <input id="ixTurns" type="number" value="1" min="1" max="100" /></label>
       <button id="startInteraction" type="button">🧪 Test Interaction API</button>
       <a id="interactionChat" class="pcap-link" hidden download>⬇ download JSON</a>
       <span class="sub" id="interactionStatus"></span>
@@ -103,16 +83,22 @@
   </section>
 
   <section>
-    <h2>Stateless vs Cached vs Interaction — performance comparison</h2>
-    <p class="sub">Replays one scenario across arms and overlays cumulative <strong>wire
-      bytes</strong> (network) and <strong>input tokens</strong> (billing) on separate axes.
-      The cache-build upload is charged to the <code>cached</code> arm as setup, so a
-      front-loaded cache does not look free. Uses the Turns and Model above.</p>
+    <h2>Performance comparison</h2>
+    <p class="sub">Replays one scenario across the arms and overlays cumulative
+      <strong>wire bytes</strong> (network) against cumulative <strong>input tokens</strong>
+      (billing) — separate axes, because implicit caching discounts the token bill but not
+      the bytes. The cache-build upload is charged to <code>cached</code> as setup, so a
+      front-loaded cache does not look free.</p>
     <div class="insp-row">
-      <label><input type="checkbox" class="cmpArm" value="stateless" checked /> stateless</label>
-      <label><input type="checkbox" class="cmpArm" value="cached" checked /> cached</label>
-      <label><input type="checkbox" class="cmpArm" value="interaction" checked /> interaction</label>
-      <label><input type="checkbox" class="cmpArm" value="nocontext" /> nocontext</label>
+      <label>Turns <input id="cmpTurns" type="number" value="10" min="1" max="100" /></label>
+      <label title="Gap between arms, so they don't stack up against the same per-minute quota (0 = none)">Pause between arms (s)
+        <input id="cmpPause" type="number" value="60" min="0" max="600" /></label>
+    </div>
+    <div class="insp-row">
+      {% for a in arms %}
+      <label class="cap"><input type="checkbox" class="cmpArm" value="{{ a }}"
+        {% if a != "nocontext" %}checked{% endif %} /> {{ a }}</label>
+      {% endfor %}
     </div>
     <div class="insp-row">
       <button id="startCompare" type="button">📊 Run comparison</button>
@@ -134,37 +120,14 @@
     </div>
   </section>
 
-  <section id="compare3" hidden>
-    <h2>Per-step comparison
-      <a id="compareCsv" class="pcap-link" hidden download>⬇ download CSV</a>
-    </h2>
-    <div class="table-scroll">
-      <table id="compareTable" class="compare"><thead><tr>
-        <th>Turn</th><th>Query</th><th>Stateless response</th><th>Stateless — no context</th><th>Stateful response</th>
-      </tr></thead><tbody></tbody></table>
-    </div>
-  </section>
-
-  <section>
-    <h2>Per-turn detail</h2>
-    <table id="detail"><thead><tr>
-      <th>Mode</th><th>Turn</th><th>Prompt tok</th><th>Resp tok</th>
-      <th>Total tok</th><th>Wire bytes</th><th>Error</th>
-    </tr></thead><tbody></tbody></table>
-  </section>
-
   <section>
     <h2>Execution history (Firestore / JSON)</h2>
     <p class="sub" id="histSource"></p>
     <div class="insp-row">
       <button id="refresh" type="button">⟳ Refresh</button>
-      <span class="sub">Compare:</span>
-      <select id="cmpA"><option value="">— A —</option></select>
-      <select id="cmpB"><option value="">— B —</option></select>
-      <button id="compare" type="button">Plot A vs B</button>
     </div>
     <table id="histTable"><thead><tr>
-      <th>exec_id</th><th>mode</th><th>time</th><th>tokens</th><th>wire</th><th>flags</th><th></th>
+      <th>exec_id</th><th>mode</th><th>time</th><th>wire</th><th>input tok</th><th>flags</th><th></th>
     </tr></thead><tbody></tbody></table>
     <h3>Selected execution log</h3>
     <p class="sub" id="histDetailMeta"></p>

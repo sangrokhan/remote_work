@@ -375,13 +375,16 @@ def _arm_interaction(model, request_name, turns, on_progress) -> list:
 
 
 def run_comparison(model: str, request_name: str = "perf",
-                   turns: int | None = None, arms=None, on_progress=None) -> dict:
+                   turns: int | None = None, arms=None, on_progress=None,
+                   pause_seconds: float = 0) -> dict:
     """Replay one scenario across the arms and collect the shared per-turn record
     for each, so wire bytes, tokens, and latency are comparable. Headline arms are
     stateless, cached, and interaction; nocontext is a lower-bound diagnostic.
 
     Each arm resets the session first, so it opens a fresh TCP connection and its
-    traffic is attributable (and separately capturable). Returns {params, records}.
+    traffic is attributable (and separately capturable). Arms hit the same
+    rate-limited project back to back, so pause_seconds spaces them apart; the gap
+    goes between arms only, never after the last one. Returns {params, records}.
     """
     arms = list(arms) if arms else list(DEFAULT_ARMS)
     system, steps, source = load_request(request_name)
@@ -390,7 +393,11 @@ def run_comparison(model: str, request_name: str = "perf",
     n = len(steps)
 
     records: list[dict] = []
-    for arm in arms:
+    for i, arm in enumerate(arms):
+        if i and pause_seconds:
+            if on_progress:
+                on_progress({"stage": "pause", "turn": pause_seconds, "turns": n})
+            time.sleep(pause_seconds)
         reset_session()
         if on_progress:
             on_progress({"stage": arm, "turn": 0, "turns": n})
@@ -405,6 +412,7 @@ def run_comparison(model: str, request_name: str = "perf",
 
     return {
         "params": {"mode": "comparison", "turns": n, "model": model,
-                   "arms": arms, "endpoint": ENDPOINT, "request_source": source},
+                   "arms": arms, "endpoint": ENDPOINT, "request_source": source,
+                   "pause_seconds": pause_seconds},
         "records": records,
     }

@@ -14,7 +14,7 @@ import inspector
 import probe
 from experiment import run_experiment, run_three_stage, run_comparison, MODES, COMPARE_ARMS
 from gemini_client import (
-    ready, is_mock, ENDPOINT, PROJECT, LOCATION, DEFAULT_MODEL, list_models,
+    ready, is_mock, api_host, api_key, ENDPOINT, DEFAULT_MODEL, list_models,
 )
 from metrics import summarize, summarize_three_stage, summarize_comparison
 
@@ -26,21 +26,20 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
+    """The page reports Developer API readiness. Every arm of the comparison runs
+    on generativelanguage with an API key, so Vertex project/location would only
+    tell the operator to check the wrong thing when a call fails."""
     ok, reason = ready()
-    cap_ok, cap_reason = pcap.available()
     return render_template(
         "index.html",
         ready=ok,
         reason=reason,
         mock=is_mock(),
-        endpoint=ENDPOINT,
-        project=PROJECT or "(unset)",
-        location=LOCATION,
+        api_host=api_host(),
+        key_set=bool(api_key()),
         firestore=firestore_active(),
-        capture_ok=cap_ok,
-        capture_reason=cap_reason,
         default_model=DEFAULT_MODEL,
-        modes=(*MODES, THREE_STAGE),
+        arms=COMPARE_ARMS,
     )
 
 
@@ -166,11 +165,15 @@ def _execute_compare(data: dict, on_progress=None):
     model = (data.get("model") or DEFAULT_MODEL).strip()
     arms = data.get("arms") or list(COMPARE_ARMS)
     arms = [a for a in arms if a in COMPARE_ARMS] or list(COMPARE_ARMS)
+    # A mock run hits no quota, so spacing the arms apart would only waste the
+    # operator's time. Clamp to a sane range otherwise.
+    pause = 0.0 if is_mock() else max(0.0, min(float(data.get("pause_seconds") or 0), 600.0))
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
 
-    experiment = run_comparison(model, turns=turns, arms=arms, on_progress=on_progress)
+    experiment = run_comparison(model, turns=turns, arms=arms, on_progress=on_progress,
+                                pause_seconds=pause)
     experiment["params"]["mock"] = is_mock()
     summary = summarize_comparison(experiment)
     saved = save_run(exec_id, timestamp, experiment, summary)
