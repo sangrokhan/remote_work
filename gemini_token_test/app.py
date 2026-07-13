@@ -169,17 +169,28 @@ def _execute_compare(data: dict, on_progress=None):
     # operator's time. Clamp to a sane range otherwise.
     pause = 0.0 if is_mock() else max(0.0, min(float(data.get("pause_seconds") or 0), 600.0))
 
+    want_capture = bool(data.get("capture", False))
+    cap_ok, cap_reason = pcap.available() if want_capture else (True, "")
+
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
 
     experiment = run_comparison(model, turns=turns, arms=arms, on_progress=on_progress,
-                                pause_seconds=pause)
+                                pause_seconds=pause,
+                                want_capture=(want_capture and cap_ok),
+                                timestamp=timestamp)
     experiment["params"]["mock"] = is_mock()
     summary = summarize_comparison(experiment)
     saved = save_run(exec_id, timestamp, experiment, summary)
-    return {"exec_id": exec_id, "timestamp": timestamp, "saved_to": saved,
+
+    pcaps = {arm: {**c, "download": f"/download/pcap/{c['file']}"} if c.get("file") else c
+             for arm, c in (experiment.get("pcaps") or {}).items()}
+    resp = {"exec_id": exec_id, "timestamp": timestamp, "saved_to": saved,
             "mock": is_mock(), "mode": "comparison", "params": experiment["params"],
-            "records": experiment["records"], "summary": summary}, 200
+            "records": experiment["records"], "summary": summary, "pcaps": pcaps}
+    if want_capture and not cap_ok:
+        resp["capture_unavailable"] = cap_reason
+    return resp, 200
 
 
 def _sse_response(run):
@@ -350,14 +361,6 @@ def download_compare(exec_id):
         abort(404)
     rows = build_comparison(doc)
 
-    def _csv_safe(v):
-        # Neutralize CSV formula injection: a cell a spreadsheet would treat as a
-        # formula (leading = + - @ TAB CR) is prefixed with a quote so it stays text.
-        s = "" if v is None else str(v)
-        if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
-            s = "'" + s
-        return s
-
     buf = io.StringIO()
     buf.write("﻿")  # BOM: nudge Excel toward UTF-8
     writer = csv.writer(buf)
@@ -369,6 +372,77 @@ def download_compare(exec_id):
                          _csv_safe(r["nocontext_response"]),
                          _csv_safe(r["stateful_response"])])
     return _attachment(buf.getvalue(), "text/csv", f"compare_{exec_id}.csv")
+
+
+def _csv_safe(v):
+    # Neutralize CSV formula injection: a cell a spreadsheet would treat as a
+    # formula (leading = + - @ TAB CR) is prefixed with a quote so it stays text.
+    s = "" if v is None else str(v)
+    if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+        s = "'" + s
+    return s
+
+
+CASE_COLUMNS = ["arm", "phase", "turn", "wire_sent", "wire_recv", "elapsed_ms",
+                "input_tokens", "cached_tokens", "output_tokens", "thought_tokens",
+                "total_tokens", "error"]
+
+
+def build_comparison_cases(doc: dict) -> list[dict]:
+    """One entry per call the comparison made, with the raw bodies parsed back into
+    objects. This is what makes a run auditable: you can read what each arm actually
+    sent and what came back, and check the arms answered the same questions."""
+    return [{
+        "arm": r.get("arm"),
+        "phase": r.get("phase"),
+        "turn": r.get("turn"),
+        "question": r.get("question", ""),
+        "response_text": r.get("response_text", ""),
+        "wire_sent": r.get("wire_sent", 0),
+        "wire_recv": r.get("wire_recv", 0),
+        "elapsed_ms": r.get("elapsed_ms", 0),
+        "input_tokens": r.get("input_tokens", 0),
+        "cached_tokens": r.get("cached_tokens", 0),
+        "output_tokens": r.get("output_tokens", 0),
+        "request": _parse_json(r.get("request_raw", "")),
+        "response": _parse_json(r.get("response_raw", "")),
+        "error": r.get("error", ""),
+    } for r in doc.get("records") or []]
+
+
+@app.route("/download/comparison/<exec_id>.json")
+def download_comparison_json(exec_id):
+    """Every case of a comparison run: raw request, raw response, metrics."""
+    doc = get_run(exec_id)
+    if doc is None:
+        abort(404)
+    payload = {
+        "exec_id": doc.get("exec_id"),
+        "timestamp": doc.get("timestamp"),
+        "mock": doc.get("mock", False),
+        "params": doc.get("params", {}),
+        "summary": doc.get("summary", {}),
+        "cases": build_comparison_cases(doc),
+    }
+    return _json_attachment(payload, f"comparison_{exec_id}.json")
+
+
+@app.route("/download/comparison/<exec_id>.csv")
+def download_comparison_csv(exec_id):
+    """Flat metrics table: one row per call. For spreadsheets, not for reading raw
+    bodies -- those are in the JSON export."""
+    import csv
+    import io
+    doc = get_run(exec_id)
+    if doc is None:
+        abort(404)
+    buf = io.StringIO()
+    buf.write("﻿")  # BOM: nudge Excel toward UTF-8
+    writer = csv.writer(buf)
+    writer.writerow(CASE_COLUMNS)
+    for r in doc.get("records") or []:
+        writer.writerow([_csv_safe(r.get(c)) for c in CASE_COLUMNS])
+    return _attachment(buf.getvalue(), "text/csv", f"comparison_{exec_id}.csv")
 
 
 @app.route("/download/chat/<exec_id>")

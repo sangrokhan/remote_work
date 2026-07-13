@@ -101,16 +101,23 @@
       {% endfor %}
     </div>
     <div class="insp-row">
+      <label class="cap" title="One tcpdump per arm — the on-wire cross-check for the byte counter. Needs tcpdump + NET_RAW.">
+        <input id="cmpCapture" type="checkbox" /> capture packets (pcap per arm)</label>
+    </div>
+    <div class="insp-row">
       <button id="startCompare" type="button">📊 Run comparison</button>
-      <a id="compareArmsJson" class="pcap-link" hidden download>⬇ download JSON</a>
+      <a id="compareArmsJson" class="pcap-link" hidden>⬇ cases JSON (raw req/resp)</a>
+      <a id="compareArmsCsv" class="pcap-link" hidden>⬇ metrics CSV</a>
       <span class="sub" id="compareArmsStatus"></span>
     </div>
     <div id="compareArmsResult" hidden>
+      <div id="compareErrors" class="capture-log" hidden></div>
       <div class="table-scroll">
         <table id="compareArmsTable" class="compare"><thead><tr>
           <th>Arm</th><th>Setup wire</th><th>Steady wire</th><th>Total wire</th>
           <th>Total input tok</th><th>Cached tok</th><th>Output tok</th>
-          <th>Latency mean (s)</th><th>Errors</th>
+          <th>Latency mean (s)</th><th>Call time (s)</th><th>Wall time (s)</th>
+          <th>Errors</th><th>pcap</th>
         </tr></thead><tbody></tbody></table>
       </div>
       <div class="charts">

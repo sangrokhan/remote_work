@@ -253,10 +253,28 @@ function plotCompare(summary) {
     { type: "line", data: { labels, datasets: mk("cum_input_tokens") }, options: opts("Cumulative input tokens (incl. setup)", "tokens") });
 }
 
+// A run with a broken arm still returns numbers, and a number from a failed call
+// looks like a number from a good one. Name the failing cases above the table.
+function renderCompareErrors(failures, capUnavailable) {
+  const el = document.getElementById("compareErrors");
+  const lines = [];
+  if (capUnavailable) lines.push(`⚠ capture skipped — ${capUnavailable}`);
+  (failures || []).forEach(f =>
+    lines.push(`✗ ${f.arm} · ${f.phase} · turn ${f.turn} — ${f.error}`));
+  el.textContent = lines.join("\n");
+  el.hidden = !lines.length;
+}
+
 function renderCompareArms(data) {
   const s = data.summary;
   const t = s.totals;
+  const pcaps = data.pcaps || {};
   const secs = (ms) => (ms == null ? "" : (ms / 1000).toFixed(1));
+  const pcapCell = (a) => {
+    const c = pcaps[a];
+    if (!c) return "";
+    return c.download ? `${fmtBytes(c.bytes)}` : (c.error || c.note || "");
+  };
   fillTable("#compareArmsTable tbody",
     (s.arms || []).map(a => [
       ARM_LABELS[a] || a,
@@ -264,11 +282,39 @@ function renderCompareArms(data) {
       (t[a].total_input_tokens || 0).toLocaleString(),
       (t[a].cached_tokens || 0).toLocaleString(),
       (t[a].output_tokens || 0).toLocaleString(),
-      secs(t[a].latency.mean), t[a].errors,
+      secs(t[a].latency.mean), secs(t[a].call_ms), secs(t[a].wall_ms),
+      t[a].errors, pcapCell(a),
     ]),
-    [1, 2, 3, 4, 5, 6, 7, 8]);
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+  // pcap cells carry a download link, which fillTable (text-only, by design) won't
+  // render — so attach them after the fact.
+  document.querySelectorAll("#compareArmsTable tbody tr").forEach((tr, i) => {
+    const arm = (s.arms || [])[i];
+    const c = pcaps[arm];
+    if (!c || !c.download) return;
+    const td = tr.cells[11];
+    td.innerHTML = "";
+    const a = document.createElement("a");
+    a.href = c.download; a.className = "pcap-link"; a.download = "";
+    a.textContent = `⬇ ${fmtBytes(c.bytes)}`;
+    td.appendChild(a);
+  });
+
+  renderCompareErrors(s.failures, data.capture_unavailable);
   plotCompare(s);
-  attachDownload("compareArmsJson", data, `comparison_${data.exec_id || "run"}.json`);
+
+  // Raw request/response bodies live server-side: a run of ten turns across three
+  // arms is megabytes of JSON, too much to hold in a blob just to hand back.
+  if (data.exec_id) {
+    const id = encodeURIComponent(data.exec_id);
+    const json = document.getElementById("compareArmsJson");
+    json.href = `/download/comparison/${id}.json`;
+    json.hidden = false;
+    const csv = document.getElementById("compareArmsCsv");
+    csv.href = `/download/comparison/${id}.csv`;
+    csv.hidden = false;
+  }
   document.getElementById("compareArmsResult").hidden = false;
 }
 
@@ -279,12 +325,13 @@ async function startCompare() {
     url: "/compare/stream",
     startText: "Comparison…",
     statusId: "compareArmsStatus",
-    hide: ["compareArmsResult", "compareArmsJson"],
+    hide: ["compareArmsResult", "compareArmsJson", "compareArmsCsv"],
     requires: "summary",
     missingMsg: "no result",
     body: () => ({
       turns: +document.getElementById("cmpTurns").value,
       pause_seconds: +document.getElementById("cmpPause").value,
+      capture: document.getElementById("cmpCapture").checked,
       model: selectedModel(),
       arms: arms.length ? arms : undefined,
     }),
@@ -292,10 +339,10 @@ async function startCompare() {
   if (!data) return;
 
   renderCompareArms(data);
-  const errs = Object.values(data.summary.totals).reduce((n, t) => n + (t.errors || 0), 0);
+  const errs = (data.summary.failures || []).length;
   document.getElementById("compareArmsStatus").textContent =
     `${data.mock ? "[MOCK] " : ""}Comparison done. exec_id: ${data.exec_id}`
-    + (errs ? ` | ${errs} call(s) errored` : "");
+    + (errs ? ` | ${errs} call(s) errored — see the list above` : "");
   loadHistory();
 }
 

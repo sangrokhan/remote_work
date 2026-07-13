@@ -1,6 +1,6 @@
 """Packet capture around an experiment run, via tcpdump.
 
-Captures real on-wire packets to the Vertex host on tcp/443 while the experiment
+Captures real on-wire packets to the Gemini API host on tcp/443 while the experiment
 runs, writing a .pcap the user can download and open in Wireshark. The TLS payload
 is encrypted, but packet sizes + timing are exactly the "real traffic" proof.
 
@@ -22,7 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from gemini_client import _vertex_host, LOCATION  # endpoint host for the filter
+from gemini_client import api_host  # endpoint host for the filter
 
 PCAP_DIR = Path(os.environ.get("PCAP_DIR", "data/pcaps"))
 # Snaplen: bytes captured per packet. TLS payload is encrypted (unreadable), so we
@@ -34,7 +34,10 @@ PCAP_DIR = Path(os.environ.get("PCAP_DIR", "data/pcaps"))
 PCAP_SNAPLEN = int(os.environ.get("PCAP_SNAPLEN", "100"))
 # Filename = timestamp + a high-entropy token so concurrent runs never collide
 # and download URLs are unguessable across requests.
-_SAFE_NAME = re.compile(r"^capture_(stateless|stateful|cachebuild|nocontext)_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
+_SAFE_NAME = re.compile(r"^capture_[a-z0-9-]{1,32}_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
+# The label names the run being captured (an arm, a stage). Anything outside this
+# alphabet could escape the pcap directory once it lands in a filename.
+_SAFE_LABEL = re.compile(r"^[a-z0-9-]{1,32}$")
 # tcpdump prints capture stats to stderr on exit (SIGINT). Parse the drop counts so
 # the UI can surface capture loss instead of silently producing a lossy pcap.
 _STAT_RE = re.compile(
@@ -81,7 +84,7 @@ def _resolve_ips(host: str) -> list[str]:
 
 
 def _filter_expr(ips: list[str]) -> str:
-    """tcpdump filter: tcp/443 to the Vertex host IP(s), or all 443 if unresolved."""
+    """tcpdump filter: tcp/443 to the API host IP(s), or all 443 if unresolved."""
     if not ips:
         return "tcp port 443"
     hosts = " or ".join(f"host {ip}" for ip in ips)
@@ -104,9 +107,9 @@ class Capture:
     def __init__(self, timestamp: str, mode: str = "stateless",
                  interface: str | None = None):
         self.timestamp = timestamp
-        self.mode = mode if mode in ("stateless", "stateful", "cachebuild", "nocontext") else "stateless"
+        self.mode = mode if _SAFE_LABEL.match(mode or "") else "stateless"
         self.interface = interface or os.environ.get("PCAP_IFACE", "any")
-        self.host = _vertex_host()
+        self.host = api_host()
         self.ips: list[str] = []
         token = secrets.token_hex(8)  # 64-bit: unguessable + collision-proof
         ts = timestamp.replace(":", "-")
@@ -166,8 +169,7 @@ class Capture:
     def result(self) -> dict:
         """Summary for the API response."""
         if self.error:
-            return {"ok": False, "error": self.error, "host": self.host,
-                    "location": LOCATION}
+            return {"ok": False, "error": self.error, "host": self.host}
         size = self.path.stat().st_size if self.path.exists() else 0
         dropped = (self.stats.get("dropped_by_kernel", 0)
                    + self.stats.get("dropped_by_interface", 0))

@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import os
 import time
+
+import capture as pcap
 from pathlib import Path
 
 from gemini_client import (
@@ -129,7 +131,6 @@ def run_three_stage(model: str, request_name: str = "default",
             time.sleep(step)
             rem -= step
 
-    import capture as pcap  # lazy: avoids hard dependency when capture unused
     pcaps: dict = {}
 
     def _begin(stage_mode):
@@ -374,17 +375,37 @@ def _arm_interaction(model, request_name, turns, on_progress) -> list:
     return recs
 
 
+def _run_arm(arm, model, system, steps, request_name, n, on_progress) -> list:
+    if arm == "stateless":
+        return _arm_stateless(model, system, steps)
+    if arm == "cached":
+        return _arm_cached(model, system, steps)
+    if arm == "nocontext":
+        return _arm_nocontext(model, system, steps)
+    if arm == "interaction":
+        return _arm_interaction(model, request_name, n, on_progress)
+    return []
+
+
 def run_comparison(model: str, request_name: str = "perf",
                    turns: int | None = None, arms=None, on_progress=None,
-                   pause_seconds: float = 0) -> dict:
+                   pause_seconds: float = 0, want_capture: bool = False,
+                   timestamp: str = "") -> dict:
     """Replay one scenario across the arms and collect the shared per-turn record
     for each, so wire bytes, tokens, and latency are comparable. Headline arms are
     stateless, cached, and interaction; nocontext is a lower-bound diagnostic.
 
     Each arm resets the session first, so it opens a fresh TCP connection and its
-    traffic is attributable (and separately capturable). Arms hit the same
-    rate-limited project back to back, so pause_seconds spaces them apart; the gap
-    goes between arms only, never after the last one. Returns {params, records}.
+    traffic is attributable -- and, with want_capture, separately capturable: one
+    pcap per arm, which is what lets the socket-level wire counter be cross-checked
+    against what actually went out on the wire.
+
+    Arms hit the same rate-limited project back to back, so pause_seconds spaces
+    them apart; the gap goes between arms only, never after the last one.
+
+    Returns {params, records, pcaps, wall_ms}. wall_ms is the arm's start-to-finish
+    clock, which unlike the sum of call latencies also covers what an arm does
+    between calls (building caches, deleting them).
     """
     arms = list(arms) if arms else list(DEFAULT_ARMS)
     system, steps, source = load_request(request_name)
@@ -393,6 +414,8 @@ def run_comparison(model: str, request_name: str = "perf",
     n = len(steps)
 
     records: list[dict] = []
+    pcaps: dict = {}
+    wall_ms: dict = {}
     for i, arm in enumerate(arms):
         if i and pause_seconds:
             if on_progress:
@@ -401,18 +424,20 @@ def run_comparison(model: str, request_name: str = "perf",
         reset_session()
         if on_progress:
             on_progress({"stage": arm, "turn": 0, "turns": n})
-        if arm == "stateless":
-            records += _arm_stateless(model, system, steps)
-        elif arm == "cached":
-            records += _arm_cached(model, system, steps)
-        elif arm == "nocontext":
-            records += _arm_nocontext(model, system, steps)
-        elif arm == "interaction":
-            records += _arm_interaction(model, request_name, n, on_progress)
+        t0 = time.monotonic()
+        if want_capture:
+            with pcap.Capture(timestamp, arm) as cap:
+                records += _run_arm(arm, model, system, steps, request_name, n, on_progress)
+            pcaps[arm] = cap.result()
+        else:
+            records += _run_arm(arm, model, system, steps, request_name, n, on_progress)
+        wall_ms[arm] = int((time.monotonic() - t0) * 1000)
 
     return {
         "params": {"mode": "comparison", "turns": n, "model": model,
                    "arms": arms, "endpoint": ENDPOINT, "request_source": source,
-                   "pause_seconds": pause_seconds},
+                   "pause_seconds": pause_seconds, "capture": want_capture},
         "records": records,
+        "pcaps": pcaps,
+        "wall_ms": wall_ms,
     }

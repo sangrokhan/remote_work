@@ -84,6 +84,7 @@ def summarize_comparison(comparison: dict) -> dict:
     arms = comparison["params"].get("arms") or []
     if not arms:
         arms = list(dict.fromkeys(r["arm"] for r in records))
+    wall = comparison.get("wall_ms") or {}
 
     series: dict = {}
     totals: dict = {}
@@ -120,10 +121,22 @@ def summarize_comparison(comparison: dict) -> dict:
             "output_tokens": sum(r["output_tokens"] for r in steady),
             "thought_tokens": sum(r["thought_tokens"] for r in steady),
             "latency": _latency_stats([r["elapsed_ms"] for r in steady]),
+            # Two clocks: call_ms is time spent inside calls (setup included), while
+            # wall_ms is the arm's start-to-finish time, so it also covers what the
+            # arm does between calls -- building caches, deleting them.
+            "call_ms": sum(r["elapsed_ms"] for r in setup + steady),
+            "wall_ms": wall.get(arm, 0),
             "errors": sum(1 for r in setup + steady if r["error"]),
         }
 
-    return {"mode": "comparison", "arms": arms, "series": series, "totals": totals}
+    # A run with a broken arm still returns numbers, and numbers from a failed call
+    # look like numbers from a good one. Name the failing cases so they can't hide.
+    failures = [{"arm": r["arm"], "phase": r["phase"], "turn": r["turn"],
+                 "error": r["error"]}
+                for r in records if r.get("error")]
+
+    return {"mode": "comparison", "arms": arms, "series": series,
+            "totals": totals, "failures": failures}
 
 
 def summarize(experiment: dict) -> dict:
