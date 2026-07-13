@@ -342,12 +342,14 @@ function renderCompareArms(data) {
   // arms is megabytes of JSON, too much to hold in a blob just to hand back.
   if (data.exec_id) {
     const id = encodeURIComponent(data.exec_id);
-    const json = document.getElementById("compareArmsJson");
-    json.href = `/download/comparison/${id}.json`;
-    json.hidden = false;
-    const csv = document.getElementById("compareArmsCsv");
-    csv.href = `/download/comparison/${id}.csv`;
-    csv.hidden = false;
+    const link = (elId, path) => {
+      const a = document.getElementById(elId);
+      a.href = `/download/comparison/${id}${path}`;
+      a.hidden = false;
+    };
+    link("compareRespCsv", "-responses.csv");   // one row per step, one column per arm
+    link("compareArmsCsv", ".csv");             // metrics
+    link("compareArmsJson", ".json");           // raw request/response per case
   }
   document.getElementById("compareArmsResult").hidden = false;
 }
@@ -359,7 +361,7 @@ async function startCompare() {
     url: "/compare/stream",
     startText: "Comparison…",
     statusId: "compareArmsStatus",
-    hide: ["compareArmsResult", "compareArmsJson", "compareArmsCsv"],
+    hide: ["compareArmsResult", "compareArmsJson", "compareArmsCsv", "compareRespCsv"],
     requires: "summary",
     missingMsg: "no result",
     body: () => ({

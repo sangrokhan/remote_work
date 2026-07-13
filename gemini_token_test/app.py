@@ -462,6 +462,53 @@ def download_comparison_json(exec_id):
     return _json_attachment(payload, f"comparison_{exec_id}.json")
 
 
+def build_responses_table(doc: dict) -> tuple[list, list]:
+    """One row per step, one column per arm. Returns (header, rows).
+
+    The metrics CSV says what each arm spent; it cannot say whether the arms were
+    having the same conversation. An arm that quietly degraded -- a cache that never
+    hit, a history the server dropped -- still produces perfectly reasonable-looking
+    bytes, and the only way to catch it is to read the answers side by side.
+
+    cachegen rows are left out: the cache builds answer nothing, so a row for one
+    would be a step that never happened.
+    """
+    arms = [a for a in (doc.get("params") or {}).get("arms") or []]
+    steady = [r for r in doc.get("records") or [] if r.get("phase") == "steady"]
+    by_arm = {a: {r["turn"]: r for r in steady if r["arm"] == a} for a in arms}
+    turns = sorted({r["turn"] for r in steady})
+
+    header = (["turn", "question"]
+              + [f"{a}_response" for a in arms]
+              + [f"{a}_request" for a in arms])
+    rows = []
+    for t in turns:
+        present = [by_arm[a].get(t) for a in arms]
+        question = next((r["question"] for r in present if r and r.get("question")), "")
+        rows.append([t, question]
+                    + [(r or {}).get("response_text", "") for r in present]
+                    + [(r or {}).get("request_raw", "") for r in present])
+    return header, rows
+
+
+@app.route("/download/comparison/<exec_id>-responses.csv")
+def download_comparison_responses(exec_id):
+    """Answers side by side: one row per step, one column per arm."""
+    import csv
+    import io
+    doc = get_run(exec_id)
+    if doc is None:
+        abort(404)
+    header, rows = build_responses_table(doc)
+    buf = io.StringIO()
+    buf.write("﻿")  # BOM: nudge Excel toward UTF-8
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    for r in rows:
+        writer.writerow([_csv_safe(v) for v in r])
+    return _attachment(buf.getvalue(), "text/csv", f"responses_{exec_id}.csv")
+
+
 @app.route("/download/comparison/<exec_id>.csv")
 def download_comparison_csv(exec_id):
     """Flat metrics table: one row per call. For spreadsheets, not for reading raw
