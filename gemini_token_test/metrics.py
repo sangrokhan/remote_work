@@ -89,44 +89,45 @@ def summarize_comparison(comparison: dict) -> dict:
     series: dict = {}
     totals: dict = {}
     for arm in arms:
-        setup = [r for r in records if r["arm"] == arm and r["phase"] == "setup"]
+        # cachegen is preparation, not the thing being measured: the cached arm's
+        # caches are built off the stateless transcript before any measured turn
+        # runs. Counting those uploads would drown every other number -- each build
+        # re-sends the whole system prompt, so n turns cost O(n^2) -- and would
+        # compare an arm's setup against another arm's traffic. Reported separately
+        # below, never folded into the totals.
+        gen = [r for r in records if r["arm"] == arm and r["phase"] == "cachegen"]
         steady = sorted((r for r in records if r["arm"] == arm and r["phase"] == "steady"),
                         key=lambda r: r["turn"])
-        setup_wire = sum(r["wire_sent"] + r["wire_recv"] for r in setup)
-        setup_tokens = sum(r["input_tokens"] for r in setup)
 
         per_wire = [r["wire_sent"] + r["wire_recv"] for r in steady]
         per_in = [r["input_tokens"] for r in steady]
-        # Offset the cumulative series by the setup cost so it starts where the
-        # arm actually stands after paying to enable itself.
-        cum_wire = [v + setup_wire for v in _cumulative(per_wire)]
-        cum_in = [v + setup_tokens for v in _cumulative(per_in)]
 
         series[arm] = {
             "turns": [r["turn"] for r in steady],
             "per_turn_wire": per_wire,
             "per_turn_input_tokens": per_in,
-            "cum_wire": cum_wire,
-            "cum_input_tokens": cum_in,
+            "cum_wire": _cumulative(per_wire),
+            "cum_input_tokens": _cumulative(per_in),
         }
-        steady_wire = sum(per_wire)
         totals[arm] = {
-            "setup_wire": setup_wire,
-            "setup_tokens": setup_tokens,
-            "steady_wire": steady_wire,
+            "steady_wire": sum(per_wire),
             "steady_input_tokens": sum(per_in),
-            "total_wire": setup_wire + steady_wire,
-            "total_input_tokens": setup_tokens + sum(per_in),
+            "total_wire": sum(per_wire),
+            "total_input_tokens": sum(per_in),
             "cached_tokens": sum(r["cached_tokens"] for r in steady),
             "output_tokens": sum(r["output_tokens"] for r in steady),
             "thought_tokens": sum(r["thought_tokens"] for r in steady),
             "latency": _latency_stats([r["elapsed_ms"] for r in steady]),
-            # Two clocks: call_ms is time spent inside calls (setup included), while
-            # wall_ms is the arm's start-to-finish time, so it also covers what the
-            # arm does between calls -- building caches, deleting them.
-            "call_ms": sum(r["elapsed_ms"] for r in setup + steady),
+            # Excluded from the comparison, but not hidden: the build is real money.
+            "cachegen_wire": sum(r["wire_sent"] + r["wire_recv"] for r in gen),
+            "cachegen_tokens": sum(r["input_tokens"] for r in gen),
+            "cachegen_ms": sum(r["elapsed_ms"] for r in gen),
+            # Two clocks: call_ms is time spent inside measured calls, while wall_ms
+            # is the arm's start-to-finish time, so it also covers the cache builds
+            # and deletes that happen between them.
+            "call_ms": sum(r["elapsed_ms"] for r in steady),
             "wall_ms": wall.get(arm, 0),
-            "errors": sum(1 for r in setup + steady if r["error"]),
+            "errors": sum(1 for r in gen + steady if r["error"]),
         }
 
     # A run with a broken arm still returns numbers, and numbers from a failed call

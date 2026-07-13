@@ -40,12 +40,12 @@ def test_stateless_is_three_steady_turns(monkeypatch):
     assert [r["turn"] for r in steady] == [1, 2, 3]
 
 
-def test_cached_has_a_setup_bucket_and_steady_turns(monkeypatch):
+def test_cached_has_a_cachegen_bucket_and_steady_turns(monkeypatch):
     out = _run(monkeypatch, ["cached"])
-    setup = _by(out["records"], "cached", "setup")
+    gen = _by(out["records"], "cached", "cachegen")
     steady = _by(out["records"], "cached", "steady")
-    assert setup, "cachebuild calls must be recorded as setup"
-    assert all(r.get("cache_id") is not None or r.get("skipped") for r in setup)
+    assert gen, "cache builds must be recorded under the cachegen phase"
+    assert all(r.get("cache_id") is not None or r.get("skipped") for r in gen)
     assert [r["turn"] for r in steady] == [1, 2, 3]
 
 
@@ -169,7 +169,7 @@ def test_cached_arm_reports_the_cache_builds_and_the_steady_turns(monkeypatch):
     experiment.run_comparison("gemini-3.1-flash-lite", turns=2, arms=["cached"],
                               on_progress=events.append)
     assert _steps(events, "cached") == [
-        ("setup", 1), ("setup", 2), ("steady", 1), ("steady", 2),
+        ("cachegen", 1), ("cachegen", 2), ("steady", 1), ("steady", 2),
     ]
 
 

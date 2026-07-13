@@ -307,32 +307,39 @@ def _arm_nocontext(model, system, steps, on_progress=None) -> list:
     return recs
 
 
-def _arm_cached(model, system, steps, on_progress=None) -> list:
-    """Stage 2 (cachebuild, setup bucket) + stage 3 (cached, steady).
+def _arm_cached(model, system, steps, transcript, on_progress=None) -> list:
+    """Cache generation, then the measured turns.
 
-    Cache k holds the system prompt + the first k Q&A pairs; turn k>=2 references
-    cache_(k-1) and sends only the new question, so the prefix is not re-uploaded.
-    Turn 1 has no prior cache and sends system + question.
+    `transcript` is what the model actually answered in the stateless arm. The
+    caches are built from it, not from a placeholder: a cache of a conversation that
+    never happened measures nothing.
+
+    Cache k holds the system prompt plus the first k real Q&A pairs. Turn k >= 2
+    references cache_(k-1) and sends only the new question, so the prefix never goes
+    back over the wire; turn 1 has no prior cache and sends the system prompt with
+    its question, exactly as stateless would.
+
+    The generation calls are recorded under the `cachegen` phase and left out of the
+    comparison totals. They are preparation, not the thing being measured -- and
+    counting them would drown everything else, since each build re-uploads the whole
+    system prompt and n turns then cost O(n^2).
     """
     n = len(steps)
     off = 1 if system else 0
-    # Reconstruct the history the caches are built from by replaying stateless
-    # answers is unnecessary here; the cache prefix only needs the questions and a
-    # placeholder answer, but to stay faithful we cache system + user turns.
     history = [_user(system)] if system else []
-    for q in steps:
+    for q, a in zip(steps, transcript):
         history.append(_user(q))
-        history.append(_model("(cached-context placeholder answer)"))
+        history.append(_model(a))
 
     recs = []
     cache_set = []
     for k in range(1, n + 1):
-        _tick(on_progress, "cached", "setup", k, n)
+        _tick(on_progress, "cached", "cachegen", k, n)
         c = create_cache(model, history[:off + 2 * k], CACHE_TTL_SECONDS,
                          system_instruction="")
         cache_set.append(c)
-        rec = {
-            "arm": "cached", "phase": "setup", "turn": k,
+        recs.append({
+            "arm": "cached", "phase": "cachegen", "turn": k, "question": "",
             "wire_sent": c.get("wire_sent", 0), "wire_recv": c.get("wire_recv", 0),
             "elapsed_ms": c.get("elapsed_ms", 0),
             "input_tokens": c.get("cached_tokens", 0), "cached_tokens": c.get("cached_tokens", 0),
@@ -341,8 +348,7 @@ def _arm_cached(model, system, steps, on_progress=None) -> list:
             "request_raw": c.get("request_raw", ""), "response_raw": c.get("response_raw", ""),
             "response_text": "", "error": c.get("error", ""),
             "cache_id": c.get("name"), "skipped": c.get("name") is None,
-        }
-        recs.append(rec)
+        })
 
     for k, q in enumerate(steps, start=1):
         _tick(on_progress, "cached", "steady", k, n)
@@ -352,7 +358,7 @@ def _arm_cached(model, system, steps, on_progress=None) -> list:
         if cache_id:
             contents = [_user(q)]                                 # prefix server-side
         else:
-            contents = history[:off + 2 * (k - 1)] + [_user(q)]   # no cache -> send it
+            contents = ([_user(system)] if system else []) + [_user(q)]
         res = call_gemini(model, contents, mode="stateful", turn=k,
                           cached_content=cache_id, cached_tokens_hint=hint)
         rec = _common_from_call(res, "cached", "steady", k, q)
@@ -412,16 +418,25 @@ def _settle_seconds() -> float:
     return float(os.environ.get("PCAP_SETTLE_SECONDS", "1.0"))
 
 
-def _run_arm(arm, model, system, steps, request_name, n, on_progress) -> list:
+def _run_arm(arm, model, system, steps, request_name, n, on_progress, transcript=None) -> list:
     if arm == "stateless":
         return _arm_stateless(model, system, steps, on_progress)
     if arm == "cached":
-        return _arm_cached(model, system, steps, on_progress)
+        return _arm_cached(model, system, steps, transcript or [], on_progress)
     if arm == "nocontext":
         return _arm_nocontext(model, system, steps, on_progress)
     if arm == "interaction":
         return _arm_interaction(model, request_name, n, on_progress)
     return []
+
+
+def _order_arms(arms: list) -> list:
+    """stateless first when cached is asked for: the cached arm caches the answers
+    stateless got, so the transcript has to exist before the caches are built."""
+    arms = list(dict.fromkeys(arms))
+    if "cached" in arms and "stateless" not in arms:
+        arms.insert(0, "stateless")
+    return sorted(arms, key=lambda a: 0 if a == "stateless" else 1)
 
 
 def run_comparison(model: str, request_name: str = "perf",
@@ -444,7 +459,7 @@ def run_comparison(model: str, request_name: str = "perf",
     clock, which unlike the sum of call latencies also covers what an arm does
     between calls (building caches, deleting them).
     """
-    arms = list(arms) if arms else list(DEFAULT_ARMS)
+    arms = _order_arms(list(arms) if arms else list(DEFAULT_ARMS))
     system, steps, source = load_request(request_name)
     if turns:
         steps = steps[:max(1, min(turns, len(steps)))]
@@ -453,6 +468,7 @@ def run_comparison(model: str, request_name: str = "perf",
     records: list[dict] = []
     pcaps: dict = {}
     wall_ms: dict = {}
+    transcript: list[str] = []   # what stateless got back; the cached arm caches it
     # Drop anything left pooled by an earlier request (the probe, the model list):
     # its FIN would otherwise be the first thing the first arm's pcap records.
     reset_session()
@@ -472,12 +488,18 @@ def run_comparison(model: str, request_name: str = "perf",
         t0 = time.monotonic()
         if want_capture:
             with pcap.Capture(timestamp, arm) as cap:
-                records += _run_arm(arm, model, system, steps, request_name, n, on_progress)
+                arm_recs = _run_arm(arm, model, system, steps, request_name, n,
+                                    on_progress, transcript)
                 _close_connection(_settle_seconds())
             pcaps[arm] = cap.result()
         else:
-            records += _run_arm(arm, model, system, steps, request_name, n, on_progress)
+            arm_recs = _run_arm(arm, model, system, steps, request_name, n,
+                                on_progress, transcript)
             _close_connection()
+        records += arm_recs
+        if arm == "stateless":
+            transcript = [r["response_text"] for r in arm_recs
+                          if r["phase"] == "steady"]
         wall_ms[arm] = int((time.monotonic() - t0) * 1000)
 
     return {

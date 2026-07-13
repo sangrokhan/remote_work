@@ -95,8 +95,11 @@
     <p class="sub">Replays one scenario across the arms and overlays cumulative
       <strong>wire bytes</strong> (network) against cumulative <strong>input tokens</strong>
       (billing) — separate axes, because implicit caching discounts the token bill but not
-      the bytes. The cache-build upload is charged to <code>cached</code> as setup, so a
-      front-loaded cache does not look free.</p>
+      the bytes. <code>cached</code> runs after <code>stateless</code> and caches the answers
+      it actually got: cache <em>k</em> holds the system prompt plus the first <em>k</em> real
+      Q&amp;A pairs, and turn <em>k</em> then sends only its question against cache
+      <em>k−1</em>. Building those caches is preparation, so its traffic is reported but
+      kept out of the totals.</p>
     <div class="insp-row">
       <label>Turns <input id="cmpTurns" type="number" value="10" min="1" max="100" /></label>
       <label title="Gap between arms, so they don't stack up against the same per-minute quota (0 = none)">Pause between arms (s)
@@ -124,9 +127,10 @@
       <div id="compareErrors" class="capture-log" hidden></div>
       <div class="table-scroll">
         <table id="compareArmsTable" class="compare"><thead><tr>
-          <th>Arm</th><th>Setup wire</th><th>Steady wire</th><th>Total wire</th>
-          <th>Total input tok</th><th>Cached tok</th><th>Output tok</th>
+          <th>Arm</th><th>Wire</th>
+          <th>Input tok</th><th>Cached tok</th><th>Output tok</th>
           <th>Latency mean (s)</th><th>Call time (s)</th><th>Wall time (s)</th>
+          <th title="Building the caches off the stateless transcript. Real money, but not the traffic under comparison — so it is shown, not added in.">Cache gen</th>
           <th>Errors</th><th>pcap</th>
         </tr></thead><tbody></tbody></table>
       </div>

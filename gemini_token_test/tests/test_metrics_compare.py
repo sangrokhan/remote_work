@@ -33,19 +33,14 @@ def test_cumulative_wire_is_monotonic(monkeypatch):
     assert cw == sorted(cw)
 
 
-def test_cached_total_is_setup_plus_steady(monkeypatch):
+def test_cached_total_is_the_measured_turns_only(monkeypatch):
+    # The cache build runs off the stateless transcript before any measured turn.
+    # It is preparation, not traffic under test -- and folding it in would drown
+    # every other number, since each build re-uploads the whole system prompt.
     s = metrics.summarize_comparison(_out(monkeypatch, ["cached"]))
     t = s["totals"]["cached"]
-    assert t["total_wire"] == t["setup_wire"] + t["steady_wire"]
-    assert t["setup_wire"] > 0            # cache-build upload is counted
-
-
-def test_cached_cumulative_starts_above_setup_cost(monkeypatch):
-    # The cache-build cost is front-loaded, so cached's cumulative wire must begin
-    # at least at the setup cost, not at zero -- otherwise the chart flatters it.
-    s = metrics.summarize_comparison(_out(monkeypatch, ["cached"]))
-    setup = s["totals"]["cached"]["setup_wire"]
-    assert s["series"]["cached"]["cum_wire"][0] >= setup
+    assert t["total_wire"] == t["steady_wire"]
+    assert t["cachegen_wire"] > 0         # still reported, just not billed here
 
 
 def test_latency_stats_present(monkeypatch):

@@ -56,7 +56,7 @@ function progressText(p) {
   const label = ARM_LABELS[p.stage] || p.stage;
   // The cached arm builds a cache per turn before it answers anything — the
   // slowest stretch of the run, so say which of the two it is in.
-  const what = p.phase === "setup" ? "building cache" : "turn";
+  const what = p.phase === "cachegen" ? "building cache" : "turn";
   let s = `Running… ${label}`;
   if (p.turns) s += ` — ${what} ${p.turn}/${p.turns}`;
   // Interaction turns report each SSE event, so a stall shows which stage owns it.
@@ -308,14 +308,18 @@ function renderCompareArms(data) {
   fillTable("#compareArmsTable tbody",
     (s.arms || []).map(a => [
       ARM_LABELS[a] || a,
-      fmtBytes(t[a].setup_wire), fmtBytes(t[a].steady_wire), fmtBytes(t[a].total_wire),
+      fmtBytes(t[a].total_wire),
       (t[a].total_input_tokens || 0).toLocaleString(),
       (t[a].cached_tokens || 0).toLocaleString(),
       (t[a].output_tokens || 0).toLocaleString(),
       secs(t[a].latency.mean), secs(t[a].call_ms), secs(t[a].wall_ms),
+      // Cache generation runs off the stateless transcript before the measured
+      // turns. Shown because it is real money; not added in, because it is not the
+      // traffic under comparison.
+      t[a].cachegen_wire ? fmtBytes(t[a].cachegen_wire) + " (excl.)" : "—",
       t[a].errors, pcapCell(a),
     ]),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
   // pcap cells carry a download link, which fillTable (text-only, by design) won't
   // render — so attach them after the fact.
@@ -323,7 +327,7 @@ function renderCompareArms(data) {
     const arm = (s.arms || [])[i];
     const c = pcaps[arm];
     if (!c || !c.download) return;
-    const td = tr.cells[11];
+    const td = tr.cells[10];
     td.innerHTML = "";
     const a = document.createElement("a");
     a.href = c.download; a.className = "pcap-link"; a.download = "";
