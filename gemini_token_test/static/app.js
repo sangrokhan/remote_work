@@ -49,7 +49,10 @@ const ARM_COLORS = {
 };
 
 function progressText(p) {
-  if (p.stage === "pause") return `⏸ Pausing between arms — ${p.turn}s (rate-limit spacing)…`;
+  if (p.stage === "pause") {
+    const next = ARM_LABELS[p.next_arm] || p.next_arm;
+    return `⏸ Rate-limit spacing — ${p.remaining}s / ${p.pause_total}s until ${next}…`;
+  }
   const label = ARM_LABELS[p.stage] || p.stage;
   let s = `Running… ${label}`;
   if (p.turns) s += ` — turn ${p.turn}/${p.turns}`;

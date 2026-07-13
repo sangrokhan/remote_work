@@ -66,12 +66,36 @@ def tcpdump_path() -> str | None:
     return shutil.which("tcpdump")
 
 
+def can_raw_capture() -> bool:
+    """Whether this process could actually open a capture socket.
+
+    The binary existing proves nothing: capturing needs CAP_NET_RAW, and without it
+    tcpdump dies with "Operation not permitted". Opening the same kind of socket it
+    would open is the only honest way to find out ahead of time.
+    """
+    try:
+        s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, 0)
+    except (PermissionError, OSError, AttributeError):
+        # AttributeError: AF_PACKET is Linux-only.
+        return False
+    s.close()
+    return True
+
+
+_NO_CAP = ("tcpdump installed but this process lacks NET_RAW — every capture would "
+           "fail with 'Operation not permitted'. Grant it with: sudo setcap "
+           "cap_net_raw,cap_net_admin+eip $(which tcpdump), run as root, or start "
+           "the container with --cap-add=NET_RAW.")
+
+
 def available() -> tuple[bool, str]:
     """Whether a capture can run. Returns (ok, reason_if_not)."""
     if os.environ.get("PCAP_DISABLE") == "1":
         return False, "capture disabled (PCAP_DISABLE=1)"
     if tcpdump_path() is None:
         return False, "tcpdump not installed"
+    if not can_raw_capture():
+        return False, _NO_CAP
     return True, "ready"
 
 

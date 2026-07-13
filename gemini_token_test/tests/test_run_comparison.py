@@ -83,7 +83,7 @@ def test_pause_spaces_the_arms_apart(monkeypatch):
     experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
                               arms=["stateless", "cached", "interaction"],
                               pause_seconds=5)
-    assert slept == [5, 5]
+    assert sum(slept) == 10          # 5s in each of the two gaps
 
 
 def test_no_pause_by_default(monkeypatch):
@@ -94,14 +94,34 @@ def test_no_pause_by_default(monkeypatch):
     assert slept == []
 
 
-def test_pause_is_reported_as_progress(monkeypatch):
+def _pauses(events):
+    return [e for e in events if e["stage"] == "pause"]
+
+
+def test_pause_counts_down_second_by_second(monkeypatch):
+    # A single "pausing" event and then a minute of silence is indistinguishable
+    # from a hang. Tick, so the operator can see the gap draining.
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    slept = _record_sleeps(monkeypatch)
+    events = []
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
+                              arms=["stateless", "cached"], pause_seconds=3,
+                              on_progress=events.append)
+    assert [e["remaining"] for e in _pauses(events)] == [3, 2, 1]
+    assert slept == [1, 1, 1]
+
+
+def test_pause_event_carries_the_total_so_a_bar_can_be_drawn(monkeypatch):
     monkeypatch.setenv("GEMINI_MOCK", "1")
     _record_sleeps(monkeypatch)
     events = []
     experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
                               arms=["stateless", "cached"], pause_seconds=2,
                               on_progress=events.append)
-    assert any(e["stage"] == "pause" for e in events)
+    p = _pauses(events)
+    assert all(e["pause_total"] == 2 for e in p)
+    # And it names the arm the run is about to start, not the one just finished.
+    assert all(e["next_arm"] == "cached" for e in p)
 
 
 def test_thought_tokens_are_captured(monkeypatch):

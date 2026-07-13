@@ -34,6 +34,7 @@ def index():
     # A restricted-VIP route refuses every call with a 403 that reads like a bad
     # key. Say so up front rather than letting the operator rotate a working key.
     diag = netdiag.diagnose(api_host()) if not is_mock() else {"reachable": True}
+    cap_ok, cap_reason = pcap.available()
     return render_template(
         "index.html",
         ready=ok,
@@ -45,6 +46,8 @@ def index():
         default_model=DEFAULT_MODEL,
         arms=COMPARE_ARMS,
         diag=diag,
+        capture_ok=cap_ok,
+        capture_reason=cap_reason,
     )
 
 

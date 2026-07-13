@@ -418,9 +418,15 @@ def run_comparison(model: str, request_name: str = "perf",
     wall_ms: dict = {}
     for i, arm in enumerate(arms):
         if i and pause_seconds:
-            if on_progress:
-                on_progress({"stage": "pause", "turn": pause_seconds, "turns": n})
-            time.sleep(pause_seconds)
+            # Tick per second rather than sleeping the whole gap in one go: a single
+            # "pausing" event followed by a minute of silence is indistinguishable
+            # from a hang, and this pause is routinely a minute long.
+            for remaining in range(int(pause_seconds), 0, -1):
+                if on_progress:
+                    on_progress({"stage": "pause", "remaining": remaining,
+                                 "pause_total": int(pause_seconds),
+                                 "next_arm": arm, "turns": n})
+                time.sleep(1)
         reset_session()
         if on_progress:
             on_progress({"stage": arm, "turn": 0, "turns": n})

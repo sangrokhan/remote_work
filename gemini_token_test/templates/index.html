@@ -109,8 +109,10 @@
       {% endfor %}
     </div>
     <div class="insp-row">
-      <label class="cap" title="One tcpdump per arm — the on-wire cross-check for the byte counter. Needs tcpdump + NET_RAW.">
-        <input id="cmpCapture" type="checkbox" /> capture packets (pcap per arm)</label>
+      <label class="cap" title="One tcpdump per arm — the on-wire cross-check for the byte counter.">
+        <input id="cmpCapture" type="checkbox" {% if not capture_ok %}disabled{% endif %} />
+        capture packets (pcap per arm)</label>
+      {% if not capture_ok %}<span class="sub">unavailable — {{ capture_reason }}</span>{% endif %}
     </div>
     <div class="insp-row">
       <button id="startCompare" type="button">📊 Run comparison</button>
