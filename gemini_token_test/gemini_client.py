@@ -24,11 +24,12 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 
 import requests
-from urllib3.connection import HTTPSConnection
+from urllib3.connection import HTTPSConnection, HTTPConnection
 
 # Vertex config (overridable via env; project/creds come from ADC on Cloud Run).
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("VERTEX_PROJECT", "")
@@ -39,7 +40,55 @@ def _vertex_host() -> str:
     return "aiplatform.googleapis.com" if LOCATION == "global" else f"{LOCATION}-aiplatform.googleapis.com"
 
 
-ENDPOINT = f"{_vertex_host()}:443"
+# --- Developer API (generativelanguage) -----------------------------------
+# The comparison runs entirely on the Developer API: it is the only host that
+# serves plain-model Interactions, and keeping every arm on one host/auth/route
+# is what makes the latency numbers comparable. Auth is an API key, not ADC.
+# Env is read at call time (not import) so tests can monkeypatch without reload.
+
+def api_host() -> str:
+    """Host[:port]. GEMINI_API_HOST lets tests point at a local server."""
+    return os.environ.get("GEMINI_API_HOST", "generativelanguage.googleapis.com")
+
+
+def api_base() -> str:
+    # Scheme is overridable so tests can drive a local (TLS-less) server.
+    scheme = os.environ.get("GEMINI_API_SCHEME", "https")
+    return f"{scheme}://{api_host()}/v1beta"
+
+
+def api_key() -> str:
+    return os.environ.get("GEMINI_API_KEY", "")
+
+
+def auth_headers() -> dict:
+    return {"x-goog-api-key": api_key()}
+
+
+def generate_url(model: str) -> str:
+    return f"{api_base()}/models/{model}:generateContent"
+
+
+def cache_base_url() -> str:
+    return f"{api_base()}/cachedContents"
+
+
+def cache_create_body(model: str, contents: list, system_instruction: str,
+                      ttl_seconds: int) -> dict:
+    """CachedContent create body. The cache endpoint wants `models/{id}`, unlike
+    generateContent's path which carries the bare id; systemInstruction is a
+    Content object, not a bare string."""
+    body: dict = {
+        "model": f"models/{model}",
+        "contents": contents,
+        "ttl": f"{ttl_seconds}s",
+    }
+    if system_instruction:
+        body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+    return body
+
+
+ENDPOINT = f"{api_host()}:443"
 
 # Rough public estimate (USD per token). Clearly an estimate; override via env.
 PRICE_PER_TOKEN = float(os.environ.get("GEMINI_PRICE_PER_TOKEN", "0.0000001"))
@@ -204,21 +253,36 @@ class _CountingHTTPSConnection(HTTPSConnection):
         _active_counter["counter"] = counter
 
 
+class _CountingHTTPConnection(HTTPConnection):
+    """Plain-HTTP counterpart, so a local (TLS-less) test server is counted too."""
+
+    def connect(self):
+        super().connect()
+        counter = _CountingSocket(self.sock)
+        self.sock = counter
+        _active_counter["counter"] = counter
+
+
 def _build_session() -> requests.Session:
-    """Session whose https pool uses the counting connection class."""
+    """Session whose http(s) pools use the counting connection classes."""
     from requests.adapters import HTTPAdapter
     from urllib3.poolmanager import PoolManager
-    from urllib3.connectionpool import HTTPSConnectionPool
+    from urllib3.connectionpool import HTTPSConnectionPool, HTTPConnectionPool
 
-    class _CountingPool(HTTPSConnectionPool):
+    class _CountingHTTPSPool(HTTPSConnectionPool):
         ConnectionCls = _CountingHTTPSConnection
+
+    class _CountingHTTPPool(HTTPConnectionPool):
+        ConnectionCls = _CountingHTTPConnection
 
     class _CountingPoolManager(PoolManager):
         def _new_pool(self, scheme, host, port, request_context=None):
+            kw = self.connection_pool_kw.copy()
+            kw.pop("scheme", None)
             if scheme == "https":
-                kw = self.connection_pool_kw.copy()
-                kw.pop("scheme", None)
-                return _CountingPool(host, port, **kw)
+                return _CountingHTTPSPool(host, port, **kw)
+            if scheme == "http":
+                return _CountingHTTPPool(host, port, **kw)
             return super()._new_pool(scheme, host, port, request_context)
 
     class _CountingAdapter(HTTPAdapter):
@@ -228,7 +292,9 @@ def _build_session() -> requests.Session:
             )
 
     sess = requests.Session()
-    sess.mount("https://", _CountingAdapter())
+    adapter = _CountingAdapter()
+    sess.mount("https://", adapter)
+    sess.mount("http://", adapter)
     return sess
 
 
@@ -291,6 +357,14 @@ def ready() -> tuple[bool, str]:
     """Whether a real call can be made. Returns (ok, reason_if_not)."""
     if is_mock():
         return True, ""
+    if not api_key():
+        return False, "GEMINI_API_KEY not set (or run with GEMINI_MOCK=1)."
+    return True, ""
+
+
+def _ready_vertex_unused() -> tuple[bool, str]:
+    """Retained ADC readiness check, unused now that the comparison is on the
+    Developer API. Kept so the Vertex path can be revived without re-deriving it."""
     if not PROJECT:
         return False, "GOOGLE_CLOUD_PROJECT not set (or run with GEMINI_MOCK=1)."
     try:
@@ -355,36 +429,24 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
     body = json.dumps(payload)
     req_payload_bytes = len(body.encode("utf-8"))
 
+    headers = {"Content-Type": "application/json", **auth_headers()}
+    t0 = time.monotonic()
     try:
-        token = _bearer_token()
+        with wire_counter() as w:
+            resp = _session().post(generate_url(model), data=body,
+                                   headers=headers, timeout=120)
+            _ = resp.content            # force the body to be read inside the counter
     except Exception as exc:
         return CallResult(mode=mode, turn=turn, req_payload_bytes=req_payload_bytes,
-                          request_json=body, error=f"auth_failed: {exc}")
-
-    _active_counter["counter"] = None
-    try:
-        resp = _session().post(
-            vertex_url(model),
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {token}",
-            },
-            timeout=120,
-        )
-    except Exception as exc:
-        return CallResult(mode=mode, turn=turn, req_payload_bytes=req_payload_bytes,
-                          request_json=body, error=f"request_failed: {exc}")
-
-    counter = _active_counter["counter"]
-    wire_sent = counter.sent if counter else req_payload_bytes
-    wire_recv = counter.recv if counter else len(resp.content)
+                          request_json=body, error=f"request_failed: {exc}",
+                          elapsed_ms=int((time.monotonic() - t0) * 1000))
 
     result = CallResult(
         mode=mode, turn=turn,
-        wire_sent=wire_sent, wire_recv=wire_recv,
+        wire_sent=w.sent, wire_recv=w.recv,
         req_payload_bytes=req_payload_bytes,
         resp_payload_bytes=len(resp.content),
+        elapsed_ms=int((time.monotonic() - t0) * 1000),
         request_json=body,
         response_json=resp.text,  # raw response body exactly as received
     )
@@ -412,33 +474,37 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
     return result
 
 
-def _cache_base_url() -> str:
-    return (f"https://{_vertex_host()}/v1beta1/projects/{PROJECT}"
-            f"/locations/{LOCATION}/cachedContents")
+def _min_cache_tokens() -> int:
+    # Read at call time so tests can vary it. Gemini 3.x floor is 4096; the value
+    # for flash-lite is unpublished, so this is a guard, not an authority — a live
+    # create is what actually settles it.
+    return int(os.environ.get("MIN_CACHE_TOKENS", "2048"))
 
 
-def create_cache(model: str, contents: list, ttl_seconds: int = 1800) -> dict:
-    """Create a Vertex cachedContent of `contents`. Returns
-    {name, cached_tokens, error}. Skips (name=None) if below the min token size.
-    Mock mode returns a synthetic cache.
+def create_cache(model: str, contents: list, ttl_seconds: int = 1800,
+                 system_instruction: str = "") -> dict:
+    """Create a Developer API cachedContent holding `contents` (and optionally the
+    system prompt). Returns {name, cached_tokens, error}. Skips (name=None) below
+    the min token size. Mock mode returns a synthetic cache.
+
+    `name` comes back as `cachedContents/{id}` and is what generateContent's
+    `cachedContent` field references.
     """
-    approx = _text_tokens(contents)
-    if approx < MIN_CACHE_TOKENS:
+    approx = _text_tokens(contents) + (len(system_instruction) // 4)
+    floor = _min_cache_tokens()
+    if approx < floor:
         return {"name": None, "cached_tokens": 0,
-                "error": f"below_min ({approx} < {MIN_CACHE_TOKENS} tokens)"}
+                "error": f"below_min ({approx} < {floor} tokens)"}
     if is_mock():
-        return {"name": f"projects/mock/locations/{LOCATION}/cachedContents/"
-                        f"mock_{secrets.token_hex(4)}",
+        return {"name": f"cachedContents/mock_{secrets.token_hex(4)}",
                 "cached_tokens": approx, "error": ""}
     try:
-        token = _bearer_token()
-        full_model = (f"projects/{PROJECT}/locations/{LOCATION}"
-                      f"/publishers/google/models/{model}")
-        body = json.dumps({"model": full_model, "contents": contents,
-                           "ttl": f"{ttl_seconds}s"})
-        resp = _session().post(_cache_base_url(), data=body, headers={
-            "Content-Type": "application/json", "Authorization": f"Bearer {token}"},
-            timeout=120)
+        body = json.dumps(cache_create_body(model, contents, system_instruction,
+                                            ttl_seconds))
+        resp = _session().post(cache_base_url(), data=body,
+                               headers={"Content-Type": "application/json",
+                                        **auth_headers()},
+                               timeout=120)
         if resp.status_code not in (200, 201):
             return {"name": None, "cached_tokens": 0,
                     "error": f"http_{resp.status_code}: {resp.text[:200]}"}
@@ -450,13 +516,13 @@ def create_cache(model: str, contents: list, ttl_seconds: int = 1800) -> dict:
 
 
 def delete_cache(name: str) -> None:
-    """Best-effort delete of a cachedContent. No-op in mock / on error."""
-    if not name or is_mock() or name.startswith("projects/mock/"):
+    """Best-effort delete of a cachedContent. No-op in mock / on error.
+
+    `name` is `cachedContents/{id}`; the delete endpoint is /v1beta/{name}."""
+    if not name or is_mock() or "mock_" in name:
         return
     try:
-        token = _bearer_token()
-        _session().delete(f"https://{_vertex_host()}/v1beta1/{name}",
-                          headers={"Authorization": f"Bearer {token}"}, timeout=60)
+        _session().delete(f"{api_base()}/{name}", headers=auth_headers(), timeout=60)
     except Exception:
         pass
 
