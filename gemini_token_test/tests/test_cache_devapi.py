@@ -100,6 +100,27 @@ def test_delete_cache_targets_devapi_resource(monkeypatch):
         srv.shutdown()
 
 
+def test_create_cache_reports_wire_and_latency(monkeypatch):
+    # The cache-build upload is the whole cost of the setup bucket, so it must be
+    # measured, not invisible.
+    srv = _server()
+    host = f"127.0.0.1:{srv.server_address[1]}"
+    try:
+        _env(monkeypatch, host)
+        out = gc.create_cache(
+            "gemini-3.1-flash-lite",
+            contents=[{"role": "user", "parts": [{"text": "x" * 500}]}],
+            ttl_seconds=1800, system_instruction="sys")
+        assert out["error"] == ""
+        assert out["wire_sent"] > len(out["request_raw"])   # headers counted
+        assert out["wire_recv"] > 0
+        assert out["elapsed_ms"] >= 0
+        assert out["request_raw"]
+    finally:
+        gc.reset_session()
+        srv.shutdown()
+
+
 def test_create_cache_below_min_is_skipped_without_network(monkeypatch):
     # A tiny prefix must not even attempt a create.
     monkeypatch.delenv("GEMINI_MOCK", raising=False)

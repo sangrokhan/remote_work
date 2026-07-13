@@ -106,6 +106,7 @@ class CallResult:
     req_payload_bytes: int = 0
     resp_payload_bytes: int = 0
     cached_tokens: int = 0
+    thought_tokens: int = 0
     elapsed_ms: int = 0          # request start -> response fully read
     response_text: str = ""
     # Raw JSON bodies exactly as sent to / received from the server (no headers,
@@ -461,6 +462,7 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
         result.prompt_tokens = int(usage.get("promptTokenCount", 0))
         result.resp_tokens = int(usage.get("candidatesTokenCount", 0))
         result.cached_tokens = int(usage.get("cachedContentTokenCount", 0))
+        result.thought_tokens = int(usage.get("thoughtsTokenCount", 0))
         result.total_tokens = int(
             usage.get("totalTokenCount", result.prompt_tokens + result.resp_tokens)
         )
@@ -492,27 +494,39 @@ def create_cache(model: str, contents: list, ttl_seconds: int = 1800,
     """
     approx = _text_tokens(contents) + (len(system_instruction) // 4)
     floor = _min_cache_tokens()
+    body = json.dumps(cache_create_body(model, contents, system_instruction,
+                                        ttl_seconds))
+    zero_wire = {"wire_sent": 0, "wire_recv": 0, "elapsed_ms": 0,
+                 "request_raw": body, "response_raw": ""}
     if approx < floor:
         return {"name": None, "cached_tokens": 0,
-                "error": f"below_min ({approx} < {floor} tokens)"}
+                "error": f"below_min ({approx} < {floor} tokens)", **zero_wire}
     if is_mock():
         return {"name": f"cachedContents/mock_{secrets.token_hex(4)}",
-                "cached_tokens": approx, "error": ""}
+                "cached_tokens": approx, "error": "",
+                "wire_sent": len(body) + 200, "wire_recv": 200, "elapsed_ms": 0,
+                "request_raw": body, "response_raw": ""}
+    t0 = time.monotonic()
     try:
-        body = json.dumps(cache_create_body(model, contents, system_instruction,
-                                            ttl_seconds))
-        resp = _session().post(cache_base_url(), data=body,
-                               headers={"Content-Type": "application/json",
-                                        **auth_headers()},
-                               timeout=120)
-        if resp.status_code not in (200, 201):
-            return {"name": None, "cached_tokens": 0,
-                    "error": f"http_{resp.status_code}: {resp.text[:200]}"}
-        data = resp.json()
-        tok = int(data.get("usageMetadata", {}).get("totalTokenCount", approx))
-        return {"name": data.get("name"), "cached_tokens": tok, "error": ""}
+        with wire_counter() as w:
+            resp = _session().post(cache_base_url(), data=body,
+                                   headers={"Content-Type": "application/json",
+                                            **auth_headers()}, timeout=120)
+            _ = resp.content
     except Exception as exc:
-        return {"name": None, "cached_tokens": 0, "error": f"create_failed: {exc}"}
+        return {"name": None, "cached_tokens": 0, "error": f"create_failed: {exc}",
+                "wire_sent": 0, "wire_recv": 0,
+                "elapsed_ms": int((time.monotonic() - t0) * 1000),
+                "request_raw": body, "response_raw": ""}
+    elapsed = int((time.monotonic() - t0) * 1000)
+    wire = {"wire_sent": w.sent, "wire_recv": w.recv, "elapsed_ms": elapsed,
+            "request_raw": body, "response_raw": resp.text}
+    if resp.status_code not in (200, 201):
+        return {"name": None, "cached_tokens": 0,
+                "error": f"http_{resp.status_code}: {resp.text[:200]}", **wire}
+    data = resp.json()
+    tok = int(data.get("usageMetadata", {}).get("totalTokenCount", approx))
+    return {"name": data.get("name"), "cached_tokens": tok, "error": "", **wire}
 
 
 def delete_cache(name: str) -> None:

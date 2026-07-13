@@ -251,3 +251,160 @@ def run_three_stage(model: str, request_name: str = "default",
         "nocontext_records": nocontext_records,
         "stateful_records": stateful_records,
     }
+
+
+# --- Comparison across arms (the headline experiment) ----------------------
+
+DEFAULT_ARMS = ("stateless", "cached", "interaction")
+COMPARE_ARMS = ("stateless", "cached", "interaction", "nocontext")
+
+
+def _common_from_call(res, arm: str, phase: str, turn: int, question: str) -> dict:
+    """Map a CallResult (generateContent) to the shared per-turn record."""
+    return {
+        "arm": arm, "phase": phase, "turn": turn, "question": question,
+        "wire_sent": res.wire_sent, "wire_recv": res.wire_recv,
+        "elapsed_ms": res.elapsed_ms,
+        "input_tokens": res.prompt_tokens, "cached_tokens": res.cached_tokens,
+        "output_tokens": res.resp_tokens, "thought_tokens": res.thought_tokens,
+        "total_tokens": res.total_tokens,
+        "request_raw": res.request_json, "response_raw": res.response_json,
+        "response_text": res.response_text, "error": res.error,
+    }
+
+
+def _arm_stateless(model, system, steps) -> list:
+    """Full history every turn: system + q1..qk + a1..a(k-1)."""
+    recs = []
+    history = [_user(system)] if system else []
+    for k, q in enumerate(steps, start=1):
+        history.append(_user(q))
+        res = call_gemini(model, list(history), mode="stateless", turn=k)
+        history.append(_model(res.response_text or ""))
+        recs.append(_common_from_call(res, "stateless", "steady", k, q))
+    return recs
+
+
+def _arm_nocontext(model, system, steps) -> list:
+    """New question only; the system prompt rides the first turn alone."""
+    recs = []
+    for k, q in enumerate(steps, start=1):
+        contents = [_user(system), _user(q)] if (k == 1 and system) else [_user(q)]
+        res = call_gemini(model, contents, mode="stateless-nocontext", turn=k)
+        recs.append(_common_from_call(res, "nocontext", "steady", k, q))
+    return recs
+
+
+def _arm_cached(model, system, steps) -> list:
+    """Stage 2 (cachebuild, setup bucket) + stage 3 (cached, steady).
+
+    Cache k holds the system prompt + the first k Q&A pairs; turn k>=2 references
+    cache_(k-1) and sends only the new question, so the prefix is not re-uploaded.
+    Turn 1 has no prior cache and sends system + question.
+    """
+    n = len(steps)
+    off = 1 if system else 0
+    # Reconstruct the history the caches are built from by replaying stateless
+    # answers is unnecessary here; the cache prefix only needs the questions and a
+    # placeholder answer, but to stay faithful we cache system + user turns.
+    history = [_user(system)] if system else []
+    for q in steps:
+        history.append(_user(q))
+        history.append(_model("(cached-context placeholder answer)"))
+
+    recs = []
+    cache_set = []
+    for k in range(1, n + 1):
+        c = create_cache(model, history[:off + 2 * k], CACHE_TTL_SECONDS,
+                         system_instruction="")
+        cache_set.append(c)
+        rec = {
+            "arm": "cached", "phase": "setup", "turn": k,
+            "wire_sent": c.get("wire_sent", 0), "wire_recv": c.get("wire_recv", 0),
+            "elapsed_ms": c.get("elapsed_ms", 0),
+            "input_tokens": c.get("cached_tokens", 0), "cached_tokens": c.get("cached_tokens", 0),
+            "output_tokens": 0, "thought_tokens": 0,
+            "total_tokens": c.get("cached_tokens", 0),
+            "request_raw": c.get("request_raw", ""), "response_raw": c.get("response_raw", ""),
+            "response_text": "", "error": c.get("error", ""),
+            "cache_id": c.get("name"), "skipped": c.get("name") is None,
+        }
+        recs.append(rec)
+
+    for k, q in enumerate(steps, start=1):
+        cache = cache_set[k - 2] if k >= 2 else None
+        cache_id = cache["name"] if cache else None
+        hint = cache["cached_tokens"] if cache else 0
+        if cache_id:
+            contents = [_user(q)]                                 # prefix server-side
+        else:
+            contents = history[:off + 2 * (k - 1)] + [_user(q)]   # no cache -> send it
+        res = call_gemini(model, contents, mode="stateful", turn=k,
+                          cached_content=cache_id, cached_tokens_hint=hint)
+        rec = _common_from_call(res, "cached", "steady", k, q)
+        rec["cache_id"] = cache_id
+        recs.append(rec)
+
+    if os.environ.get("KEEP_CACHE") != "1":
+        for c in cache_set:
+            if c.get("name"):
+                delete_cache(c["name"])
+    return recs
+
+
+def _arm_interaction(model, request_name, turns, on_progress) -> list:
+    """Interactions API arm, mapped into the shared per-turn record."""
+    from interaction_client import run_interaction   # lazy: avoids import cycle
+    out = run_interaction(model, request_name=request_name, turns=turns,
+                          on_progress=on_progress)
+    recs = []
+    for r in out["interaction_records"]:
+        recs.append({
+            "arm": "interaction", "phase": "steady", "turn": r["turn"],
+            "question": r.get("question", ""),
+            "wire_sent": r["wire_sent"], "wire_recv": r["wire_recv"],
+            "elapsed_ms": r["elapsed_ms"],
+            "input_tokens": r["input_tokens"], "cached_tokens": r["cached_tokens"],
+            "output_tokens": r["output_tokens"], "thought_tokens": r["thought_tokens"],
+            "total_tokens": r["total_tokens"],
+            "request_raw": r["request_raw"], "response_raw": r["response_raw"],
+            "response_text": r.get("response_text", ""), "error": r.get("error", ""),
+            "interaction_id": r.get("interaction_id"),
+        })
+    return recs
+
+
+def run_comparison(model: str, request_name: str = "perf",
+                   turns: int | None = None, arms=None, on_progress=None) -> dict:
+    """Replay one scenario across the arms and collect the shared per-turn record
+    for each, so wire bytes, tokens, and latency are comparable. Headline arms are
+    stateless, cached, and interaction; nocontext is a lower-bound diagnostic.
+
+    Each arm resets the session first, so it opens a fresh TCP connection and its
+    traffic is attributable (and separately capturable). Returns {params, records}.
+    """
+    arms = list(arms) if arms else list(DEFAULT_ARMS)
+    system, steps, source = load_request(request_name)
+    if turns:
+        steps = steps[:max(1, min(turns, len(steps)))]
+    n = len(steps)
+
+    records: list[dict] = []
+    for arm in arms:
+        reset_session()
+        if on_progress:
+            on_progress({"stage": arm, "turn": 0, "turns": n})
+        if arm == "stateless":
+            records += _arm_stateless(model, system, steps)
+        elif arm == "cached":
+            records += _arm_cached(model, system, steps)
+        elif arm == "nocontext":
+            records += _arm_nocontext(model, system, steps)
+        elif arm == "interaction":
+            records += _arm_interaction(model, request_name, n, on_progress)
+
+    return {
+        "params": {"mode": "comparison", "turns": n, "model": model,
+                   "arms": arms, "endpoint": ENDPOINT, "request_source": source},
+        "records": records,
+    }
