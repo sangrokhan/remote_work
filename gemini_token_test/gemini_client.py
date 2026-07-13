@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 
 import requests
@@ -56,6 +57,7 @@ class CallResult:
     req_payload_bytes: int = 0
     resp_payload_bytes: int = 0
     cached_tokens: int = 0
+    elapsed_ms: int = 0          # request start -> response fully read
     response_text: str = ""
     # Raw JSON bodies exactly as sent to / received from the server (no headers,
     # so no bearer token). Lets the log show the full wire payload per step.
@@ -73,6 +75,40 @@ CACHED_DISCOUNT = 0.10
 MIN_CACHE_TOKENS = int(os.environ.get("MIN_CACHE_TOKENS", "2048"))
 
 
+# Module-global byte tally. Every counting socket and reader adds to it, so the
+# count survives connection pooling: a keep-alive socket keeps feeding the tally
+# whether or not connect() fired for this request. wire_counter() reads it by
+# difference. The experiment loop is single-threaded, so one request is ever in
+# flight and the difference is exact.
+_wire_tally = {"sent": 0, "recv": 0}
+
+
+class _WireDelta:
+    """Bytes sent/received during one wire_counter() block."""
+    __slots__ = ("sent", "recv")
+
+    def __init__(self):
+        self.sent = 0
+        self.recv = 0
+
+
+@contextmanager
+def wire_counter():
+    """Count HTTP bytes on the socket for the enclosed request(s), headers and
+    content-encoding included, regardless of keep-alive reuse.
+
+    Yields a _WireDelta whose .sent/.recv are populated when the block exits.
+    """
+    before_sent = _wire_tally["sent"]
+    before_recv = _wire_tally["recv"]
+    delta = _WireDelta()
+    try:
+        yield delta
+    finally:
+        delta.sent = _wire_tally["sent"] - before_sent
+        delta.recv = _wire_tally["recv"] - before_recv
+
+
 class _CountingReader:
     """Wraps the file object returned by socket.makefile(), counting bytes read.
 
@@ -87,21 +123,25 @@ class _CountingReader:
     def read(self, *a, **k):
         b = self._fp.read(*a, **k)
         self._c.recv += len(b)
+        _wire_tally["recv"] += len(b)
         return b
 
     def read1(self, *a, **k):
         b = self._fp.read1(*a, **k)
         self._c.recv += len(b)
+        _wire_tally["recv"] += len(b)
         return b
 
     def readline(self, *a, **k):
         b = self._fp.readline(*a, **k)
         self._c.recv += len(b)
+        _wire_tally["recv"] += len(b)
         return b
 
     def readinto(self, buf):
         n = self._fp.readinto(buf)
         self._c.recv += n or 0
+        _wire_tally["recv"] += n or 0
         return n
 
     def __getattr__(self, name):
@@ -118,21 +158,25 @@ class _CountingSocket:
 
     def sendall(self, data, *args, **kwargs):
         self.sent += len(data)
+        _wire_tally["sent"] += len(data)
         return self._sock.sendall(data, *args, **kwargs)
 
     def send(self, data, *args, **kwargs):
         n = self._sock.send(data, *args, **kwargs)
         self.sent += n
+        _wire_tally["sent"] += n
         return n
 
     def recv(self, bufsize, *args, **kwargs):
         chunk = self._sock.recv(bufsize, *args, **kwargs)
         self.recv += len(chunk)
+        _wire_tally["recv"] += len(chunk)
         return chunk
 
     def recv_into(self, buf, *args, **kwargs):
         n = self._sock.recv_into(buf, *args, **kwargs)
         self.recv += n
+        _wire_tally["recv"] += n
         return n
 
     def makefile(self, mode="r", *args, **kwargs):

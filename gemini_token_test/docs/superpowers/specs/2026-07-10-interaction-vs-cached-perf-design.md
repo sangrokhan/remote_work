@@ -5,16 +5,51 @@ Status: host and model fixed by probe; arm implementation pending
 
 ## Goal
 
-Measure how much **network traffic** and **wall-clock latency** each
-conversation-state strategy costs for the same 10-turn scenario, on one host with
-one set of credentials:
+For the same 10-turn conversation, measure how much **network traffic** (wire
+bytes), how many **tokens**, and how much **latency** each way of carrying context
+costs — and keep the raw request/response of every call. One host, one key.
 
-1. `stateless` — resend the whole history every turn.
-2. `cached` — `cachedContents` holds the prefix; each turn sends `cached_content` + the new question.
-3. `interaction` — the Interactions API holds the history server-side; each turn sends `previous_interaction_id` + the new question.
-4. `nocontext` — send only the new question. Lower bound; answer quality is irrelevant here.
+Four stages; the headline comparison is **1 vs 3 vs 4**:
 
-Optional 5th arm, off by default: `cached-sysonly` (see "Cache shape").
+1. **`stateless`** — resend the whole history (system prompt + all prior turns) every turn. **compared**
+2. **`cachebuild`** — the `cachedContents` create/refresh calls that make stage 3 possible. Not a way of chatting; it is the *setup cost* of stage 3, measured and attributed to it. **setup bucket**
+3. **`cached`** — stateless API + `cachedContent`: the prefix lives in an explicit cache, each turn sends only `cachedContent` + the new question. **compared** (its cost = stage 2 setup + its own per-turn)
+4. **`interaction`** — Interactions API: history is held server-side via `previous_interaction_id`; the system prompt is re-sent every turn (it is not held). Each turn sends system prompt + new question. **compared**
+
+`nocontext` (new question only) stays available as a lower-bound diagnostic but is
+out of the headline comparison.
+
+There is no fifth arm. "Interaction + explicit cache" was floated earlier; the
+Interactions API supports only **implicit** caching, so it cannot reference a
+`cachedContents` object. The `cached-sysonly` idea is likewise dropped.
+
+## What each strategy actually saves (the whole point)
+
+Three mechanisms, and they reduce different things. Conflating them is the mistake
+the whole design guards against.
+
+| Mechanism | History re-sent? | System prompt re-sent? | Wire bytes | Token bill |
+|-----------|------------------|------------------------|-----------|------------|
+| **implicit caching** (server-side KV, automatic on 2.5+) | **yes, every turn** | yes, every turn | **not reduced** | repeated prefix discounted |
+| **explicit cache** (`cachedContents`) | uploaded **once** | uploaded once | **reduced** | cached tokens billed cheaper |
+| **interaction** (`previous_interaction_id`) | **no** — server holds it | **yes, every turn** | history bytes saved only | implicit discount applies |
+
+Consequences that shape the expected result:
+
+- **Implicit caching does not cut wire traffic.** You still upload every token; the
+  server just discounts the repeated prefix on the *bill*. So putting the system
+  prompt inline in a `stateless` call and putting it in `interaction`'s
+  `system_instruction` cost the **same bytes**. The only wire difference between
+  `stateless` and `interaction` is the conversation **history**.
+- **Only explicit caching cuts wire bytes** — upload the prefix once, then reference
+  it by name. That saving is real but front-loaded: stage 2's one-time upload is the
+  price, so `cached`'s true cost is stage 2 + its per-turn calls.
+- Expected per-turn wire ranking: `stateless` (system + full history + q) >
+  `interaction` (system + q) > `cached` (cache-ref + q) — with `cached` carrying the
+  stage-2 upload as setup.
+
+This is why the report keeps **wire bytes** and **tokens** on separate axes and
+never collapses them into one "traffic = cost" number.
 
 ## Fixed by the probe
 
@@ -99,48 +134,48 @@ times. The docs are right.
 
 ### What that costs
 
-The scenario's system prompt is ~12,000 characters (~3,000 tokens). The
-`interaction` arm uploads it on all 10 turns. Its byte savings over `stateless` come
-from the conversation history alone — never from the system prompt.
-
-This is the single fact that most changes the expected result, and it is why
-`cached` may beat `interaction` on bytes: a cache can hold the system prompt, and
-`previous_interaction_id` cannot.
+The `interaction` arm uploads the system prompt on all 10 turns. Its byte savings
+over `stateless` come from the conversation history alone — never from the system
+prompt. That is why `cached` can beat `interaction` on bytes: an explicit cache holds
+the system prompt, and `previous_interaction_id` does not.
 
 ## The two axes must stay separate
 
 A stateful API moves bytes off the wire but does not necessarily move tokens off the
-bill: the server still feeds the whole history to the model. The report carries two
+bill: the server still feeds the whole history to the model, and implicit caching
+discounts the token bill without touching the wire. The report carries two
 independent series and never collapses them:
 
 - **wire bytes** — what crosses the socket, request and response, headers included.
 - **input tokens** — what the model was fed (`total_input_tokens`), of which
-  `total_cached_tokens` was served from cache.
+  `total_cached_tokens` was served from cache (implicit or explicit).
 
-`PROJECT_GOAL.md`'s implicit "traffic = cost" identity holds for `stateless` vs
-`nocontext` and breaks for `cached` and `interaction`.
+`PROJECT_GOAL.md`'s implicit "traffic = cost" identity breaks for every arm that
+caches, in either direction.
 
-## Cache shape — why `cached` may not save bytes
+## The `cachebuild` stage (stage 2) and its cost
 
-`run_three_stage` builds a **cumulative prefix cache per turn**: before turn k it
-POSTs the full prefix (system + turns 1..k-1) to `cachedContents`. That upload is
-real traffic. Summed over 10 turns it is the same O(N²) upload volume as `stateless`,
-moved to a different endpoint.
+Stage 3 (`cached`) can only reference a cache that stage 2 created. Stage 2's
+`cachedContents` create/refresh calls upload the prefix, and that upload is real
+traffic — for a cumulative-prefix cache, summed over the turns, it approaches the
+same O(N²) upload volume as `stateless`, just moved to a different endpoint and paid
+up front.
 
-So the `cached` arm gets an explicit **setup bucket** counting every `cachedContents`
-create call — bytes, tokens, milliseconds. Hiding those would make the arm look free.
-
-`cached-sysonly` (optional) caches only the 12K system prompt, once, and resends the
-history in `contents` each turn. It is the only cache usage that actually reduces
-upload bytes. Default off.
+So stage 2 is measured as `cached`'s **setup bucket** — every create/refresh call's
+bytes, tokens, and milliseconds. `cached`'s reported cost is *stage 2 setup + its own
+per-turn calls*. Hiding stage 2 would make `cached` look free when its savings are
+merely front-loaded.
 
 ## Scenario fixture
 
 New file `requests/perf.json`:
 
-- **system prompt**: 10,000–15,000 characters (target 12,000), padded with a
-  deterministic filler block so runs reproduce. ~3,000 tokens, above the explicit-cache
-  minimum, so the `cached` arm's cache is valid from turn 1.
+- **system prompt + persona**: ≥ 4,096 tokens. Gemini 3.x models require **4096**
+  input tokens before caching engages (implicit *and* explicit); below that a
+  `cachedContents` create is rejected and implicit caching never fires, so the whole
+  comparison would be caching-free and pointless. Target **~5,000 tokens (~20,000
+  characters)** for margin — a real, coherent system prompt and persona, padded with
+  a deterministic block so runs reproduce.
 - **steps**: 10 turns, 500 characters each.
 
 `requests/default.json` is untouched.
@@ -187,16 +222,18 @@ Every arm emits the same per-turn dict:
 
 ```python
 {
-  "arm": str,             # stateless | cached | interaction | nocontext | cached-sysonly
+  "arm": str,             # stateless | cachebuild | cached | interaction | nocontext
   "turn": int,
   "wire_sent": int,       # HTTP request bytes on the socket, headers included
   "wire_recv": int,       # HTTP response bytes on the socket
   "elapsed_ms": int,      # request start -> last byte
   "input_tokens": int,
-  "cached_tokens": int,
+  "cached_tokens": int,   # implicit or explicit; nonzero even on stateless is expected
   "output_tokens": int,
   "thought_tokens": int,
   "total_tokens": int,
+  "request_raw": str,     # exact request body sent (no auth headers)
+  "response_raw": str,    # exact response body received
   "error": str,
 }
 ```
@@ -223,7 +260,7 @@ which is why no `generateContent` latency exists to compare against.
 ## Setup vs steady state
 
 - **setup** — one-off costs charged before or during turn 1:
-  - `cached`: every `cachedContents` create call, plus the delete.
+  - `cached`: the stage-2 `cachebuild` calls (create/refresh) plus the final delete.
   - `interaction`: turn 1, which opens the interaction.
   - `stateless`, `nocontext`: empty.
 - **steady** — turns 2..N. Mean, median, min, max per arm.
@@ -264,26 +301,27 @@ Mock mode (`GEMINI_MOCK=1`) covers the wiring; no live calls in CI.
 - `tests/test_wire_counter.py` — two sequential requests on one keep-alive connection
   each report nonzero, distinct, header-inclusive byte counts. This test fails against
   today's code, which is the point.
-- `tests/test_compare_schema.py` — all four arms emit the common record schema.
-- `tests/test_metrics_compare.py` — setup/steady bucketing; `cached`'s create calls
-  land in `setup` rather than vanishing.
+- `tests/test_compare_schema.py` — every arm emits the common record schema, including
+  `request_raw` / `response_raw`.
+- `tests/test_metrics_compare.py` — setup/steady bucketing; stage-2 `cachebuild` calls
+  land in `cached`'s setup rather than vanishing.
 - `tests/test_probe.py` — already shipped.
 
 ## Still open
 
-- **Explicit-cache minimum token count on the Developer API for
-  `gemini-3.1-flash-lite`.** `gemini_client.MIN_CACHE_TOKENS = 2048` is a Vertex-era
-  constant. The 12K system prompt (~3,000 tokens) should clear any of the published
-  minimums, but the number is unverified for this host and model.
-- **Whether `interactions` accepts `cached_content`.** The Developer API reference
-  lists the field on the create-interaction body; the overview page says explicit
-  caching is not yet available on this API. The two contradict each other. Not needed
-  for the four arms, but it would enable a fifth (`interaction` + explicit cache) that
-  is the theoretically cheapest of all.
-- **Latency baseline for the host.** Everything now runs against
-  `generativelanguage.googleapis.com` from wherever the app runs. No Vertex comparison
-  remains, so no cross-host correction is needed — but the absolute numbers are
-  specific to that route.
+- **Explicit-cache minimum token count for `gemini-3.1-flash-lite`.** The published
+  table lists 4096 for Gemini 3.x (3.5 Flash, 3.1 Pro) and 2048 for 2.5, but
+  **flash-lite is not listed**. `gemini_client.MIN_CACHE_TOKENS = 2048` is a stale
+  Vertex constant. Verify with one live create before trusting the `cached` arm: if
+  flash-lite's floor is 4096, the ~5,000-token fixture clears it, but a create must
+  confirm rather than assume. If a create returns below-min, the fixture's system
+  prompt is enlarged, not silently fallen back.
+- **Interactions accepts only implicit caching.** Settled: the caching guide states
+  explicit caching is unavailable on the Interactions API, so there is no
+  `interaction` + `cachedContents` arm. The `cached_content` field in the reference is
+  a `generateContent` construct, not an interactions one.
+- **Latency baseline for the host.** Everything runs against
+  `generativelanguage.googleapis.com`; absolute numbers are specific to that route.
 
 ## Build order
 
