@@ -115,6 +115,7 @@ def test_each_arms_fin_lands_in_its_own_pcap(monkeypatch):
         "reset",                                  # drop anything pooled earlier
         "reset", "open:stateless", "reset", "close:stateless",
         "reset", "open:cached", "reset", "close:cached",
+        "reset",                                  # cached teardown closes its own DELETEs
     ]
 
 
@@ -125,7 +126,9 @@ def test_arms_still_get_a_fresh_connection_without_capture(monkeypatch):
     log = _install_ordered(monkeypatch)
     experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
                               arms=["stateless", "cached"])
-    assert log.count("reset") == 5   # once before the loop, twice per arm
+    # Once before the loop, twice per arm, plus one more for the cached arm's
+    # teardown closing the connection its own DELETEs left open.
+    assert log.count("reset") == 6
 
 
 # --- the pcap must name the arm it captured -------------------------------
@@ -264,6 +267,71 @@ def test_cachegen_records_and_steady_shape_are_unchanged(monkeypatch):
     assert [r["turn"] for r in steady] == [1, 2]
     assert steady[0]["cache_id"] is None
     assert steady[1]["cache_id"] == gen[0]["cache_id"]
+
+
+def test_pre_capture_close_is_settled_when_a_capture_is_about_to_open(monkeypatch):
+    # tcpdump starts within ~1ms of the capture's `with` block; the peer's FIN/ACK
+    # for the pre-capture close takes a round trip to arrive. With no settle it
+    # lands inside the steady pcap -- the exact "teardown from the previous stage"
+    # pollution this restructuring exists to remove, just moved earlier (prep's
+    # close instead of the old inter-arm close). Pin that the settle actually runs.
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    monkeypatch.setattr(experiment.pcap, "Capture", _FakeCapture)
+    _FakeCapture.started = []
+
+    slept: list = []
+    monkeypatch.setattr(experiment.time, "sleep", lambda s: slept.append(s))
+
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
+                              arms=["stateless"],
+                              want_capture=True, timestamp="2026-07-13T00:00:00")
+
+    settle = experiment._settle_seconds()
+    # One settled close before the capture opens, one after it closes.
+    assert slept.count(settle) == 2
+
+
+def test_pre_capture_settle_does_not_count_toward_wall_ms(monkeypatch):
+    # The settle happens before t0 is taken; if it leaked after t0 it would
+    # silently inflate every arm's measured wall clock.
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    monkeypatch.setattr(experiment.pcap, "Capture", _FakeCapture)
+    _FakeCapture.started = []
+
+    clock = {"t": 0.0}
+
+    def fake_monotonic():
+        return clock["t"]
+
+    def fake_sleep(seconds):
+        clock["t"] += seconds
+
+    monkeypatch.setattr(experiment.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(experiment.time, "sleep", fake_sleep)
+
+    out = experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
+                                    arms=["stateless"],
+                                    want_capture=True, timestamp="2026-07-13T00:00:00")
+
+    settle = experiment._settle_seconds()
+    # Two settled sleeps happen: one before t0 (pre-capture) and one after
+    # (post-capture, inside the window -- that one is meant to count). Only the
+    # post-capture settle should show up in wall_ms; if the pre-capture one leaked
+    # across t0 too, wall_ms would be roughly double a single settle.
+    assert out["wall_ms"]["stateless"] < int(settle * 1500)
+
+
+def test_no_capture_pays_no_settle(monkeypatch):
+    # want_capture=False: nothing is being kept clean, so the pre-capture close
+    # must not spend a multi-second settle on every ordinary run.
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    slept: list = []
+    monkeypatch.setattr(experiment.time, "sleep", lambda s: slept.append(s))
+
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
+                              arms=["stateless"], want_capture=False)
+
+    assert slept == []
 
 
 def test_other_arms_pcap_and_wall_ms_are_unaffected(monkeypatch):

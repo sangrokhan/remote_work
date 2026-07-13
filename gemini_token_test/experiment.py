@@ -390,6 +390,12 @@ def _arm_cached_teardown(cache_set) -> None:
     for c in cache_set or []:
         if c.get("name"):
             delete_cache(c["name"])
+    # The DELETEs above ran on a freshly-opened session and would otherwise leave
+    # it open for the *next* arm's pre-capture close to tear down with no settle --
+    # putting this arm's teardown FIN/ACK in the next arm's pcap, the same leak
+    # _close_connection exists to prevent. Close it here, at no settle: nothing is
+    # capturing right now, so there is nothing for the FIN to land in.
+    _close_connection()
 
 
 def _arm_interaction(model, request_name, turns, on_progress,
@@ -548,7 +554,15 @@ def run_comparison(model: str, request_name: str = "perf",
         # FIN could land inside the steady pcap. Close it now, before the window
         # opens, so the steady stage always starts from a fresh connection -- same
         # hazard _close_connection's own docstring is about, one arm earlier.
-        _close_connection()
+        #
+        # This close needs the same settle as the post-capture one when a capture
+        # is about to open: tcpdump starts within ~1ms of the `with` block below,
+        # but the peer's FIN/ACK for *this* close takes a round trip to arrive, so
+        # with no settle it lands inside the steady pcap anyway -- the exact
+        # pollution this restructuring exists to remove, just moved earlier. With
+        # no capture running there is nothing to keep clean, so no settle is spent.
+        # Runs before t0 so it must never count toward wall_ms.
+        _close_connection(_settle_seconds() if want_capture else 0.0)
 
         t0 = time.monotonic()
         if want_capture:
