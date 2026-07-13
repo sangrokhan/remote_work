@@ -244,16 +244,32 @@ function plotCompare(summary) {
   const arms = summary.arms || [];
   const maxLen = Math.max(0, ...arms.map(a => (summary.series[a].turns || []).length));
   const labels = Array.from({ length: maxLen }, (_, i) => i + 1);
+  // stateless and interaction land almost exactly on top of each other on the
+  // token axis — the interaction arm re-sends system_instruction every turn and the
+  // server replays the whole history, so it bills what stateless bills. That is a
+  // finding, not a glitch, but a solid line drawn over a solid line reads as one
+  // arm missing. Give each its own dash pattern and marker so both stay legible
+  // where they coincide.
+  const ARM_DASH = { stateless: [], cached: [], interaction: [7, 4], nocontext: [2, 3] };
+  const ARM_POINT = { stateless: "circle", cached: "rect", interaction: "triangle", nocontext: "cross" };
   const mk = (key) => arms.map(a => {
     const c = ARM_COLORS[a] || "#9aa5b1";
     return {
       label: a, data: summary.series[a][key],
       borderColor: c, backgroundColor: c + "22", fill: false, tension: .2,
+      borderDash: ARM_DASH[a] || [], pointStyle: ARM_POINT[a] || "circle",
+      pointRadius: 4, borderWidth: 2,
     };
   });
   const opts = (title, yLabel) => ({
     responsive: true,
-    plugins: { title: { display: true, text: title, color: "#e6e6e6" }, legend: { labels: { color: "#cbd5e0" } } },
+    plugins: {
+      title: { display: true, text: title, color: "#e6e6e6" },
+      legend: { labels: { color: "#cbd5e0", usePointStyle: true } },
+      // Overlapping lines are unreadable on hover unless every series at that x is
+      // shown at once — which is also how you *see* that two arms coincide.
+      tooltip: { mode: "index", intersect: false },
+    },
     scales: {
       x: { title: { display: true, text: "steady turn", color: "#8b98a5" }, ticks: { color: "#8b98a5" }, grid: { color: "#2d3748" } },
       y: { title: { display: true, text: yLabel, color: "#8b98a5" }, ticks: { color: "#8b98a5" }, grid: { color: "#2d3748" } },

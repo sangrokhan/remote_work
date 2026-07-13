@@ -388,6 +388,30 @@ def _arm_interaction(model, request_name, turns, on_progress) -> list:
     return recs
 
 
+def _close_connection(settle: float = 0.0) -> None:
+    """Close the arm's sockets while its capture is still running.
+
+    keep-alive means an arm's TCP connection outlives its last call. Closing it at
+    the *start* of the next arm — which is what reset_session() used to do — puts
+    this arm's FIN, and the peer's FIN/ACK, into the *next* arm's pcap: a stray
+    teardown from "the previous test". Close it here instead, so each pcap is one
+    self-contained SYN..FIN conversation and the next arm starts from a fresh
+    connection either way.
+
+    The teardown is a round trip (our FIN, their FIN/ACK) and tcpdump still has to
+    flush, so a capture needs a beat before it is torn down or the FIN is simply
+    missing from the file — intermittently, which is worse than always. With no
+    capture running there is nothing to wait for, so settle is 0.
+    """
+    reset_session()
+    if settle:
+        time.sleep(settle)
+
+
+def _settle_seconds() -> float:
+    return float(os.environ.get("PCAP_SETTLE_SECONDS", "1.0"))
+
+
 def _run_arm(arm, model, system, steps, request_name, n, on_progress) -> list:
     if arm == "stateless":
         return _arm_stateless(model, system, steps, on_progress)
@@ -429,6 +453,9 @@ def run_comparison(model: str, request_name: str = "perf",
     records: list[dict] = []
     pcaps: dict = {}
     wall_ms: dict = {}
+    # Drop anything left pooled by an earlier request (the probe, the model list):
+    # its FIN would otherwise be the first thing the first arm's pcap records.
+    reset_session()
     for i, arm in enumerate(arms):
         if i and pause_seconds:
             # Tick per second rather than sleeping the whole gap in one go: a single
@@ -440,16 +467,17 @@ def run_comparison(model: str, request_name: str = "perf",
                                  "pause_total": int(pause_seconds),
                                  "next_arm": arm, "turns": n})
                 time.sleep(1)
-        reset_session()
         if on_progress:
             on_progress({"stage": arm, "turn": 0, "turns": n})
         t0 = time.monotonic()
         if want_capture:
             with pcap.Capture(timestamp, arm) as cap:
                 records += _run_arm(arm, model, system, steps, request_name, n, on_progress)
+                _close_connection(_settle_seconds())
             pcaps[arm] = cap.result()
         else:
             records += _run_arm(arm, model, system, steps, request_name, n, on_progress)
+            _close_connection()
         wall_ms[arm] = int((time.monotonic() - t0) * 1000)
 
     return {

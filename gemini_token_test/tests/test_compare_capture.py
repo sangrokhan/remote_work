@@ -69,3 +69,54 @@ def test_capture_targets_the_developer_api_host():
 def test_capture_accepts_every_arm_name():
     for arm in ("stateless", "cached", "interaction", "nocontext"):
         assert capture.Capture("2026-07-13T00:00:00", mode=arm).mode == arm
+
+
+# --- each pcap must be a self-contained conversation -----------------------
+
+class _OrderedCapture(_FakeCapture):
+    """Records capture open/close against the session resets, so the ordering can
+    be asserted."""
+
+    log: list = []
+
+    def __enter__(self):
+        _OrderedCapture.log.append(f"open:{self.mode}")
+        return self
+
+    def __exit__(self, *a):
+        _OrderedCapture.log.append(f"close:{self.mode}")
+        return False
+
+
+def _install_ordered(monkeypatch):
+    _OrderedCapture.log = []
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    monkeypatch.setattr(experiment.pcap, "Capture", _OrderedCapture)
+    monkeypatch.setattr(experiment, "reset_session",
+                        lambda: _OrderedCapture.log.append("reset"))
+    monkeypatch.setattr(experiment.time, "sleep", lambda s: None)
+    return _OrderedCapture.log
+
+
+def test_each_arms_fin_lands_in_its_own_pcap(monkeypatch):
+    # The session must be closed *inside* the arm's capture window. Closing it at
+    # the start of the next arm instead puts this arm's FIN in the next arm's pcap,
+    # which is exactly what a stray FIN from "the previous test" is.
+    log = _install_ordered(monkeypatch)
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
+                              arms=["stateless", "cached"],
+                              want_capture=True, timestamp="2026-07-13T00:00:00")
+    assert log == [
+        "reset",                                  # drop anything pooled earlier
+        "open:stateless", "reset", "close:stateless",
+        "open:cached", "reset", "close:cached",
+    ]
+
+
+def test_arms_still_get_a_fresh_connection_without_capture(monkeypatch):
+    # No capture, but each arm must still open its own TCP connection, or its wire
+    # bytes are not attributable to it.
+    log = _install_ordered(monkeypatch)
+    experiment.run_comparison("gemini-3.1-flash-lite", turns=1,
+                              arms=["stateless", "cached"])
+    assert log.count("reset") == 3   # once before the loop, once after each arm

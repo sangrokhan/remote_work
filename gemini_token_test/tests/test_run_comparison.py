@@ -69,9 +69,14 @@ def test_headline_arms_default_without_nocontext(monkeypatch):
 
 
 def _record_sleeps(monkeypatch):
-    """Capture what run_comparison would sleep, without actually sleeping."""
+    """The pause ticks run_comparison would sleep, without actually sleeping.
+
+    Only the 1-second pause ticks are of interest; the sub-second settle after each
+    arm (which lets the connection teardown land in that arm's pcap) is not a pause.
+    """
     slept: list[float] = []
-    monkeypatch.setattr(experiment.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(experiment.time, "sleep",
+                        lambda s: slept.append(s) if s >= 1 else None)
     return slept
 
 
