@@ -12,6 +12,7 @@ runs normally.
 
 from __future__ import annotations
 
+import getpass
 import os
 import re
 import secrets
@@ -19,12 +20,45 @@ import shutil
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
 from gemini_client import api_host  # endpoint host for the filter
 
-PCAP_DIR = Path(os.environ.get("PCAP_DIR", "data/pcaps"))
+def apparmor_blocks(path: str) -> bool:
+    """Whether Ubuntu's tcpdump AppArmor profile forbids writing here.
+
+    The profile permits any *.pcap path, but it also carries
+
+        audit deny @{HOME}/.*  mrwkl
+        audit deny @{HOME}/.*/** mrwkl
+
+    to keep tcpdump out of dotfiles -- and in AppArmor deny beats allow. So a
+    project checked out under, say, ~/.openclaw/ cannot host the pcap directory at
+    all: tcpdump gets NET_RAW, opens the socket, and then dies on the output file
+    with a bare "Permission denied" that looks like the capability never took.
+    """
+    home = Path.home()
+    try:
+        rel = Path(path).resolve().relative_to(home)
+    except ValueError:
+        return False          # not under $HOME; the deny rules do not apply
+    return bool(rel.parts) and rel.parts[0].startswith(".")
+
+
+def _default_pcap_dir() -> Path:
+    """data/pcaps next to the code, unless AppArmor would refuse it -- which it
+    does whenever the checkout lives under a dot-directory in $HOME. Fall back to
+    a temp dir, which the profile allows, rather than shipping a default that
+    silently produces empty captures."""
+    local = Path("data/pcaps")
+    if apparmor_blocks(str(local.resolve())):
+        return Path(tempfile.gettempdir()) / "gemini_pcaps"
+    return local
+
+
+PCAP_DIR = Path(os.environ["PCAP_DIR"]) if os.environ.get("PCAP_DIR") else _default_pcap_dir()
 # Snaplen: bytes captured per packet. TLS payload is encrypted (unreadable), so we
 # only need L2-L4 headers + TLS record header for sizes/timing. Truncating to ~100
 # bytes slashes disk I/O per packet, which is the main cause of kernel drops (the
@@ -66,24 +100,66 @@ def tcpdump_path() -> str | None:
     return shutil.which("tcpdump")
 
 
-def can_raw_capture() -> bool:
-    """Whether this process could actually open a capture socket.
+# A filter no packet can match, so the probe capture stays idle and costs nothing.
+_NEVER_MATCHES = "ether proto 0x9999"
+_CAP_CACHE: dict = {}
 
-    The binary existing proves nothing: capturing needs CAP_NET_RAW, and without it
-    tcpdump dies with "Operation not permitted". Opening the same kind of socket it
-    would open is the only honest way to find out ahead of time.
-    """
+
+def _keep_uid() -> list[str]:
+    """A setcap'd tcpdump drops privileges to the unprivileged `tcpdump` user as
+    soon as it has the socket. That user cannot write into our pcap directory, so
+    the capture dies on the output file with "Permission denied" despite having had
+    NET_RAW all along. Pin it to the uid that owns the directory."""
+    return ["-Z", getpass.getuser()]
+
+
+def reset_capability_cache() -> None:
+    _CAP_CACHE.clear()
+
+
+def _probe_tcpdump(path: str) -> bool:
+    """Start the capture we would start, and see whether it survives."""
     try:
-        s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, 0)
-    except (PermissionError, OSError, AttributeError):
-        # AttributeError: AF_PACKET is Linux-only.
+        proc = subprocess.Popen(
+            [path, "-i", os.environ.get("PCAP_IFACE", "any"), "-w", os.devnull,
+             "-c", "1", *_keep_uid(), _NEVER_MATCHES],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+    except Exception:
         return False
-    s.close()
-    return True
+    time.sleep(0.4)  # give it long enough to die on a permission error
+    alive = proc.poll() is None
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        proc.kill()
+    return alive
 
 
-_NO_CAP = ("tcpdump installed but this process lacks NET_RAW — every capture would "
-           "fail with 'Operation not permitted'. Grant it with: sudo setcap "
+def can_raw_capture() -> bool:
+    """Whether *tcpdump* can capture — not whether this process can.
+
+    setcap grants CAP_NET_RAW to the tcpdump binary, not to us: once it is granted,
+    tcpdump captures happily while a Python AF_PACKET socket here is still refused.
+    So probing our own socket would report "unavailable" forever no matter what the
+    operator does. Ask tcpdump instead, and cache the answer — the probe spawns a
+    process, and this is called on every page render.
+    """
+    path = tcpdump_path()
+    if path is None:
+        return False
+    ttl = float(os.environ.get("CAPTURE_PROBE_TTL", "30"))
+    now = time.monotonic()
+    if "ok" in _CAP_CACHE and (now - _CAP_CACHE["at"]) < ttl:
+        return _CAP_CACHE["ok"]
+    ok = _probe_tcpdump(path)
+    _CAP_CACHE.update(ok=ok, at=now)
+    return ok
+
+
+_NO_CAP = ("tcpdump installed but it lacks NET_RAW — every capture would fail with "
+           "'Operation not permitted'. Grant it with: sudo setcap "
            "cap_net_raw,cap_net_admin+eip $(which tcpdump), run as root, or start "
            "the container with --cap-add=NET_RAW.")
 
@@ -96,6 +172,12 @@ def available() -> tuple[bool, str]:
         return False, "tcpdump not installed"
     if not can_raw_capture():
         return False, _NO_CAP
+    if apparmor_blocks(str(PCAP_DIR.resolve())):
+        return False, (
+            f"AppArmor forbids tcpdump writing to {PCAP_DIR} — its profile denies "
+            f"@{{HOME}}/.*/** outright, and this path sits under a dot-directory in "
+            f"$HOME. Point PCAP_DIR at a path outside it (e.g. PCAP_DIR=/tmp/pcaps)."
+        )
     return True, "ready"
 
 
@@ -155,7 +237,8 @@ class Capture:
         self.ips = _resolve_ips(self.host)
         cmd = [
             tcpdump_path(), "-i", self.interface, "-w", str(self.path),
-            "-s", str(self.snaplen), "-U", "-n", _filter_expr(self.ips),
+            "-s", str(self.snaplen), "-U", "-n", *_keep_uid(),
+            _filter_expr(self.ips),
         ]
         try:
             self.proc = subprocess.Popen(
