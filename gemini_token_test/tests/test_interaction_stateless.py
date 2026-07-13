@@ -127,3 +127,24 @@ def test_the_arm_resends_a_growing_history_through_the_comparison(monkeypatch):
                   key=lambda r: r["turn"])
     sizes = [len(json.loads(r["request_raw"])["input"]) for r in recs]
     assert sizes == [1, 3, 5]
+
+
+# --- mock input_tokens must reflect what the payload actually carries ------
+
+def test_mock_input_tokens_grow_turn_over_turn(monkeypatch):
+    """The arm's whole point is a superlinear input-token curve, like `stateless`.
+    A flat curve in mock mode means the estimate is ignoring `history` -- the
+    exact bug this test exists to catch."""
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    out = ic.run_interaction("gemini-3.1-flash-lite", turns=4, client_history=True)
+    in_tok = [r["input_tokens"] for r in out["interaction_records"]]
+    assert all(b > a for a, b in zip(in_tok, in_tok[1:])), in_tok
+
+
+def test_mock_input_tokens_unchanged_for_the_chained_arm(monkeypatch):
+    """This fix must only touch the client_history path. The chained arm's mock
+    input_tokens are pinned to their pre-existing values."""
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    out = ic.run_interaction("gemini-3.1-flash-lite", turns=4)
+    in_tok = [r["input_tokens"] for r in out["interaction_records"]]
+    assert in_tok == [5292, 116, 107, 98]

@@ -139,7 +139,16 @@ def _mock_interaction(turn: int, text: str, system: str, prev_id: str | None,
     body = interaction_body("mock-model", text, system, prev_id, store=store,
                             history=history)
     req = json.dumps(body)
-    inp = _text_tokens([{"parts": [{"text": (system if turn == 1 else '') + text}]}])
+    if history is not None:
+        # client_history arm: the payload is the system prompt (every turn,
+        # never stored) plus every text leaf actually carried in the Step[].
+        # This must grow with the conversation -- that growth is the whole
+        # point of the arm -- unlike the chained-arm estimate below, which is
+        # untouched.
+        history_text = "".join(_extract_text(step) for step in history)
+        inp = _text_tokens([{"parts": [{"text": system + history_text}]}])
+    else:
+        inp = _text_tokens([{"parts": [{"text": (system if turn == 1 else '') + text}]}])
     usage = {"input_tokens": inp, "cached_tokens": 0, "output_tokens": 40,
              "thought_tokens": 0, "total_tokens": inp + 40}
     resp = json.dumps({"id": iid, "status": "completed",

@@ -48,7 +48,7 @@ const ARM_COLORS = {
   cached: "#4dd4ac",
   interaction: "#5b8def",
   interaction_inline: "#c58af9",
-  interaction_stateless: "#f78c6b",
+  interaction_stateless: "#e05d9c",
   nocontext: "#f6c453",
 };
 
