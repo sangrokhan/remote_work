@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import os
 
-# gpt-5.4-nano list price, USD per million tokens. Override for another model.
-PRICE_INPUT = float(os.environ.get("PRICE_INPUT", "0.20"))
-PRICE_CACHED_INPUT = float(os.environ.get("PRICE_CACHED_INPUT", "0.02"))
-PRICE_OUTPUT = float(os.environ.get("PRICE_OUTPUT", "1.25"))
+import env  # noqa: F401  — loads .env before the os.environ reads below
+
+# gpt-4.1-nano list price, USD per million tokens. Override for another model.
+PRICE_INPUT = float(os.environ.get("PRICE_INPUT", "0.10"))
+PRICE_CACHED_INPUT = float(os.environ.get("PRICE_CACHED_INPUT", "0.025"))
+PRICE_OUTPUT = float(os.environ.get("PRICE_OUTPUT", "0.40"))
 
 _FIELDS = ("req_payload_bytes", "resp_payload_bytes", "wire_sent", "wire_recv",
            "input_tokens", "cached_tokens", "billed_uncached_tokens",

@@ -37,13 +37,16 @@ import os
 import time
 from dataclasses import dataclass, asdict, field
 
+import env  # noqa: F401  — loads .env before the os.environ reads below
 from wire import session, wire_counter
 
 ARMS = ("chat_stateless", "responses_stateless", "responses_stateful")
 
-DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4-nano")
+DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-nano")
 DEFAULT_MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "400"))
-DEFAULT_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "none")
+# Empty for a non-reasoning model: the parameter must not be sent at all, or the
+# call 400s. Only a reasoning model that accepts "none" should set this.
+DEFAULT_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "")
 TIMEOUT = int(os.environ.get("OPENAI_TIMEOUT", "180"))
 
 
