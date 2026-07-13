@@ -68,6 +68,55 @@ def test_500_is_error():
     assert probe.classify(500, "internal") == "error"
 
 
+# --- in-stream errors ------------------------------------------------------
+# A streamed interaction sends 200 headers before it knows whether it will
+# succeed, then reports failure as an `error` event in the body. Judging on the
+# HTTP status alone scored a depleted-billing failure as "supported" -- i.e. as
+# evidence that the API runs a model it never ran.
+
+_DEPLETED = {"event_type": "error",
+             "error": {"code": "too_many_requests",
+                       "message": "Your prepayment credits are depleted."}}
+
+
+def test_error_event_is_found_in_the_stream():
+    events = [{"event_type": "interaction.created"},
+              {"event_type": "interaction.status_update"}, _DEPLETED]
+    assert probe._stream_error(events)["code"] == "too_many_requests"
+
+
+def test_a_clean_stream_has_no_error():
+    assert probe._stream_error([{"event_type": "interaction.completed"}]) == {}
+
+
+def test_depleted_credits_is_environment_not_supported():
+    assert probe.classify_stream_error(_DEPLETED["error"]) == "environment"
+
+
+def test_in_stream_invalid_argument_is_the_schema_signal():
+    assert probe.classify_stream_error(
+        {"code": "invalid_argument", "message": "Invalid value at 'model'"}) == "unsupported"
+
+
+def test_in_stream_allowlist_message_is_unavailable():
+    assert probe.classify_stream_error(
+        {"code": "permission_denied",
+         "message": "not allowed to access this agent"}) == "unavailable"
+
+
+def test_usage_is_read_from_metadata_total_usage_too():
+    # GEAP puts token counts on interaction.usage; the Developer API's streaming
+    # docs describe metadata.total_usage. Read either.
+    events = [{"event_type": "interaction.completed",
+               "metadata": {"total_usage": {"total_tokens": 42}}}]
+    assert probe._usage_from_events(events)["total_tokens"] == 42
+
+
+def test_interaction_usage_still_wins_when_present():
+    events = [{"interaction": {"usage": {"total_tokens": 7}}}]
+    assert probe._usage_from_events(events)["total_tokens"] == 7
+
+
 # --- _blank_id -------------------------------------------------------------
 
 def test_identical_rejections_compare_equal_once_ids_are_blanked():
@@ -82,6 +131,81 @@ def test_different_rejections_do_not_compare_equal():
     b = 'Invalid value at "model": definitely-not-a-real-model'
     assert probe._blank_id(a, "gemini-3-flash-preview") != \
            probe._blank_id(b, probe.BOGUS_MODEL)
+
+
+# --- system_instruction persistence ----------------------------------------
+# The rule must be conditional and untriggered on turn 1. A model that merely
+# copies the format of its own previous answer would otherwise be scored as
+# "the server kept the system prompt" -- which is how the first version of this
+# probe reported `persisted` for an API whose docs, and whose actual behaviour,
+# say the opposite.
+
+def _fake_calls(monkeypatch, texts):
+    """Feed _call a scripted list of response texts, in order."""
+    seq = list(texts)
+
+    def fake(url, auth, body):
+        t = seq.pop(0)
+        return {"verdict": "supported", "status": 200, "text": t,
+                "interaction_id": "i1", "usage": {}, "error": ""}
+
+    monkeypatch.setattr(probe, "_call", fake)
+
+
+def _sys(monkeypatch, texts):
+    _fake_calls(monkeypatch, texts)
+    return probe._probe_system_instruction("u", "apikey", "m")
+
+
+def test_marker_on_turn_two_without_the_instruction_means_persisted(monkeypatch):
+    # control fires, turn 1 is clean, turn 2 fires anyway -> nothing in the
+    # history could have taught it the rule.
+    r = _sys(monkeypatch, [probe.MARKER, "Hello!", probe.MARKER])
+    assert r["verdict"] == "persisted"
+
+
+def test_no_marker_on_turn_two_means_per_turn(monkeypatch):
+    r = _sys(monkeypatch, [probe.MARKER, "Hello!", "BANANA! how fun"])
+    assert r["verdict"] == "per_turn"
+
+
+def test_a_model_that_ignores_the_rule_yields_no_verdict(monkeypatch):
+    # Control didn't emit the marker: the rule was never obeyed, so turn 2's
+    # silence would prove nothing.
+    r = _sys(monkeypatch, ["I am a banana"])
+    assert r["verdict"] == "inconclusive"
+
+
+def test_a_marker_leaked_on_turn_one_yields_no_verdict(monkeypatch):
+    # Turn 1 put the marker into the history, so turn 2 could just imitate it.
+    r = _sys(monkeypatch, [probe.MARKER, f"Hello! {probe.MARKER}", probe.MARKER])
+    assert r["verdict"] == "inconclusive"
+    assert "imitate" in r["reason"]
+
+
+# --- _target_verdict -------------------------------------------------------
+
+def _models(stream, nonstream):
+    return {"gemini-2.5-flash": {"interactions_stream": {"verdict": stream},
+                                 "interactions_nonstream": {"verdict": nonstream}}}
+
+
+def test_a_target_whose_calls_all_failed_on_billing_is_not_unsupported():
+    # Every call died on depleted credits. The API never judged the body.
+    assert probe._target_verdict(_models("environment", "environment"), None) == "environment"
+
+
+def test_a_genuine_refusal_outranks_an_environment_failure():
+    assert probe._target_verdict(_models("unsupported", "environment"), None) == "unsupported"
+
+
+def test_allowlist_beats_environment_but_not_a_refusal():
+    assert probe._target_verdict(_models("unavailable", "environment"), None) == "unavailable"
+
+
+def test_any_success_makes_the_target_supported():
+    assert probe._target_verdict(_models("supported", "environment"),
+                                 "gemini-2.5-flash") == "supported"
 
 
 # --- _conclude -------------------------------------------------------------

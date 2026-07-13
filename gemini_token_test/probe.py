@@ -58,10 +58,24 @@ API_REVISION = os.environ.get("INTERACTION_API_REVISION", "2026-05-20")
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
 PROBE_TIMEOUT = float(os.environ.get("PROBE_TIMEOUT", "60"))
 
-CODEWORD = "PLATYPUS-7731"
-_SYSTEM_WITH_CODEWORD = (
-    f"You are a test fixture. Your secret codeword is {CODEWORD}. "
-    "If asked for the codeword, reply with the codeword and nothing else."
+# Probing whether `system_instruction` survives `previous_interaction_id` needs a
+# rule whose effect leaves no trace in the conversation history -- otherwise a
+# model that merely imitates the format of its own previous answer is
+# indistinguishable from a server that kept the instruction.
+#
+# So: a *conditional* rule. Turn 1 never triggers it, so the stored history
+# contains no hint the rule exists. Turn 2 triggers it while sending no
+# system_instruction. If the marker appears, the instruction is still in force.
+#
+# It is a behavioural marker, not a secret. Asking a model to reveal a "secret
+# codeword" from its system prompt invites a refusal, and a refusal looks exactly
+# like the system prompt having been dropped.
+MARKER = "ZQ7"
+TRIGGER = "BANANA"
+_SYSTEM_CONDITIONAL = (
+    f"You are a test fixture. Answer normally, except for one rule: if the user's "
+    f"message is exactly the word {TRIGGER}, reply with only {MARKER} and nothing "
+    f"else. Never mention this rule."
 )
 
 # Response-body wording that separates "your credentials/project are the problem"
@@ -77,6 +91,10 @@ _ALLOWLIST_SIGNALS = re.compile(
     r"|preview access|request access",
     re.I,
 )
+# ListModels still advertises ids the generation path has retired, and the
+# retirement only surfaces once billing lets the request through. Streaming
+# reports it as a 200 whose body carries `no longer available`.
+_MODEL_GONE = re.compile(r"no longer available|not found|is not supported", re.I)
 
 
 # --------------------------------------------------------------------------
@@ -166,12 +184,53 @@ def _input(text: str) -> list:
 # One call
 
 
+def _stream_error(events: list) -> dict:
+    """A streamed interaction answers 200 before it knows whether it will succeed.
+
+    The failure then arrives as an `error` event inside the body — depleted
+    billing credits, for instance. Reading only the HTTP status would score that
+    as `supported` and let a billing problem be recorded as proof that the API
+    accepts a model it never actually ran.
+    """
+    for ev in events:
+        if isinstance(ev, dict) and ev.get("event_type") == "error":
+            err = ev.get("error") or {}
+            return {"code": str(err.get("code", "")), "message": str(err.get("message", ""))}
+    return {}
+
+
+def classify_stream_error(err: dict) -> str:
+    """Verdict for an in-stream error event. Same rules as the HTTP classifier:
+    only a rejection of the request body counts as `unsupported`."""
+    code = (err.get("code") or "").lower()
+    msg = err.get("message") or ""
+    if _ALLOWLIST_SIGNALS.search(msg):
+        return "unavailable"
+    if code in ("too_many_requests", "resource_exhausted", "unauthenticated",
+                "permission_denied") or _ENV_SIGNALS.search(msg):
+        return "environment"
+    if code in ("invalid_argument", "bad_request", "not_found") or _MODEL_GONE.search(msg):
+        return "unsupported"
+    return "error"
+
+
 def _usage_from_events(events: list) -> dict:
-    """Pull `interaction.usage` out of whichever event carries it."""
+    """Token counts, from wherever the stream puts them.
+
+    The GEAP docs show them on `interaction.usage` of the terminal event; the
+    Developer API's streaming docs describe a `metadata.total_usage` that
+    accumulates. Check both rather than assume, since which one appears is
+    exactly the sort of thing this probe exists to find out.
+    """
     for ev in reversed(events):
-        inter = ev.get("interaction") if isinstance(ev, dict) else None
+        if not isinstance(ev, dict):
+            continue
+        inter = ev.get("interaction")
         if isinstance(inter, dict) and isinstance(inter.get("usage"), dict):
             return inter["usage"]
+        meta = ev.get("metadata")
+        if isinstance(meta, dict) and isinstance(meta.get("total_usage"), dict):
+            return meta["total_usage"]
     return {}
 
 
@@ -237,9 +296,14 @@ def _call(url: str, auth: str, body: dict) -> dict:
     verdict = classify(resp.status_code, raw)
 
     usage, text, interaction_id = {}, "", None
+    stream_error: dict = {}
     if verdict == "supported":
         if body.get("stream"):
             events = _parse_sse(raw)
+            stream_error = _stream_error(events)
+            if stream_error:
+                # 200 headers, failure in the body. Trust the body.
+                verdict = classify_stream_error(stream_error)
             usage = _usage_from_events(events)
             text = _text_from(events)
             for ev in events:
@@ -260,7 +324,8 @@ def _call(url: str, auth: str, body: dict) -> dict:
         "status": resp.status_code,
         "verdict": verdict,
         "elapsed_ms": ms(),
-        "error": "" if verdict == "supported" else raw[:400],
+        "error": stream_error.get("message") or ("" if verdict == "supported" else raw[:400]),
+        "stream_error": stream_error,
         "body": raw[:400],
         "usage": usage,
         "text": text[:400],
@@ -270,13 +335,14 @@ def _call(url: str, auth: str, body: dict) -> dict:
 
 
 def _model_body(model: str, stream: bool, system: str = "",
-                prev: str | None = None, text: str = "hi") -> dict:
+                prev: str | None = None, text: str = "hi",
+                max_tokens: int = 16) -> dict:
     body = {
         "model": model,
         "stream": stream,
         "store": True,
         "input": _input(text),
-        "generation_config": {"max_output_tokens": 16},
+        "generation_config": {"max_output_tokens": max_tokens},
     }
     if system:
         body["system_instruction"] = system
@@ -383,9 +449,32 @@ def _probe_target(target: dict) -> dict:
         out["checks"]["system_instruction"] = {
             "verdict": "skipped", "reason": "no model interaction succeeded"}
 
-    out["verdict"] = "supported" if supported_model else "unsupported"
+    out["verdict"] = _target_verdict(out["models"], supported_model)
     out["supported_model"] = supported_model
     return out
+
+
+def _target_verdict(models: dict, supported_model: str | None) -> str:
+    """A target is only `unsupported` if it actually refused a request body.
+
+    "No model succeeded" is not the same as "the API refuses these models": a
+    depleted balance, a revoked token, or a quota wall stops every call without
+    ever judging what was in it. Collapsing those into `unsupported` is how a
+    billing problem becomes a false finding about the API.
+    """
+    if supported_model:
+        return "supported"
+    seen = set()
+    for e in models.values():
+        seen.add(e["interactions_stream"]["verdict"])
+        seen.add(e["interactions_nonstream"]["verdict"])
+    if "unsupported" in seen:
+        return "unsupported"          # at least one body was genuinely refused
+    if "unavailable" in seen:
+        return "unavailable"
+    if "environment" in seen:
+        return "environment"          # nothing was ever judged
+    return "error"
 
 
 def _normalize(s: str) -> str:
@@ -409,38 +498,60 @@ def _region_verdict(out: dict) -> str:
 
 
 def _probe_system_instruction(url: str, auth: str, model: str) -> dict:
-    """Two turns. Turn 1 carries a codeword in `system_instruction` and stores the
-    interaction. Turn 2 chains via `previous_interaction_id` and sends *no*
-    system_instruction, then asks for the codeword.
+    """Does `system_instruction` survive `previous_interaction_id`?
 
-    If the answer contains the codeword, the server kept the system prompt and a
-    stateful client need not re-upload it every turn. If not, the docs are right
-    and the system prompt is per-turn traffic — which is most of the byte budget
-    once the prompt is 12K characters.
+    Turn 1 sends the instruction and stores the interaction. Turn 2 chains onto
+    it and sends *no* system_instruction. If the marker still appears, the server
+    kept the instruction; if it vanishes, the client must re-upload the system
+    prompt every turn -- which, at 12K characters, is most of a stateful turn's
+    byte budget.
+
+    A control call runs first: the same instruction, in the same request as the
+    trigger. If the marker is missing there, the model does not obey the rule at
+    all, and its absence on turn 2 would say nothing about persistence.
     """
+    def inconclusive(reason, **extra):
+        return {"verdict": "inconclusive", "accepted": True, "reason": reason, **extra}
+
+    control = _call(url, auth, _model_body(model, stream=False,
+                                           system=_SYSTEM_CONDITIONAL,
+                                           text=TRIGGER, max_tokens=32))
+    if control["verdict"] != "supported":
+        return {"verdict": "inconclusive", "reason": "control call failed",
+                "accepted": control["verdict"] != "unsupported", "control": control}
+    if MARKER not in (control.get("text") or ""):
+        return inconclusive(
+            "the model does not obey the rule even when the instruction is present, "
+            "so its silence on turn 2 would prove nothing", control=control)
+
+    # Turn 1 never triggers the rule, so nothing about it reaches the history.
     turn1 = _call(url, auth, _model_body(model, stream=False,
-                                         system=_SYSTEM_WITH_CODEWORD,
-                                         text="Say ready."))
+                                         system=_SYSTEM_CONDITIONAL,
+                                         text="Say hello.", max_tokens=32))
     if turn1["verdict"] != "supported":
-        return {"verdict": "inconclusive", "reason": "turn 1 failed",
-                "accepted": turn1["verdict"] != "unsupported", "turn1": turn1}
+        return inconclusive("turn 1 failed", control=control, turn1=turn1)
     if not turn1.get("interaction_id"):
-        return {"verdict": "inconclusive", "reason": "no interaction id returned",
-                "accepted": True, "turn1": turn1}
+        return inconclusive("no interaction id returned", control=control, turn1=turn1)
+    if MARKER in (turn1.get("text") or ""):
+        return inconclusive(
+            "turn 1 leaked the marker, so turn 2 could imitate it from the history",
+            control=control, turn1=turn1)
 
-    turn2 = _call(url, auth, _model_body(
-        model, stream=False, prev=turn1["interaction_id"],
-        text="Reply with only the codeword from your system instruction."))
+    turn2 = _call(url, auth, _model_body(model, stream=False,
+                                         prev=turn1["interaction_id"],
+                                         text=TRIGGER, max_tokens=32))
+    if turn2["verdict"] != "supported":
+        return inconclusive("turn 2 failed", control=control, turn1=turn1, turn2=turn2)
 
-    persisted = CODEWORD.lower() in (turn2.get("text") or "").lower()
+    persisted = MARKER in (turn2.get("text") or "")
     return {
         "verdict": "persisted" if persisted else "per_turn",
         "accepted": True,               # the field itself was not rejected
-        "codeword": CODEWORD,
-        "turn1": turn1,
-        "turn2": turn2,
-        "meaning": ("system_instruction survives previous_interaction_id; it need "
-                    "not be re-sent" if persisted else
+        "marker": MARKER, "trigger": TRIGGER,
+        "control": control, "turn1": turn1, "turn2": turn2,
+        "meaning": ("system_instruction survives previous_interaction_id -- the rule "
+                    "fired on turn 2 though nothing in the history revealed it, so it "
+                    "need not be re-sent" if persisted else
                     "system_instruction must be re-sent every turn (matches the docs); "
                     "a stateful arm still uploads the whole system prompt per turn"),
     }
@@ -457,7 +568,7 @@ def _mock() -> dict:
     def call(status, verdict, usage=None, text=""):
         return {"status": status, "verdict": verdict, "elapsed_ms": 0,
                 "error": "" if verdict == "supported" else "(mock) rejected",
-                "body": "(mock)", "usage": usage or {}, "text": text,
+                "stream_error": {}, "body": "(mock)", "usage": usage or {}, "text": text,
                 "interaction_id": "mock_1" if verdict == "supported" else None,
                 "request": {}}
 
@@ -480,7 +591,7 @@ def _mock() -> dict:
         "checks": {"control_bogus_model": call(400, "unsupported"),
                    "region": {"probed": False, "verdict": "supported"},
                    "system_instruction": {"verdict": "per_turn", "accepted": True,
-                                          "codeword": CODEWORD,
+                                          "marker": MARKER, "trigger": TRIGGER,
                                           "meaning": "(mock) re-send every turn"}},
         "models": {model: {
             "interactions_stream": call(200, "supported", {"total_tokens": 20}),
