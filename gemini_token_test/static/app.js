@@ -36,7 +36,8 @@ function attachDownload(linkId, payload, filename) {
 const ARM_LABELS = {
   stateless: "Stateless (full resend)",
   cached: "Cached (build + reference)",
-  interaction: "Interaction API (server-side state)",
+  interaction: "Interaction (system_instruction each turn)",
+  interaction_inline: "Interaction (system prompt in 1st user turn)",
   nocontext: "Stateless — no context",
   cachebuild: "Building caches",
 };
@@ -45,6 +46,7 @@ const ARM_COLORS = {
   stateless: "#ff6b6b",
   cached: "#4dd4ac",
   interaction: "#5b8def",
+  interaction_inline: "#c58af9",
   nocontext: "#f6c453",
 };
 
@@ -250,8 +252,10 @@ function plotCompare(summary) {
   // finding, not a glitch, but a solid line drawn over a solid line reads as one
   // arm missing. Give each its own dash pattern and marker so both stay legible
   // where they coincide.
-  const ARM_DASH = { stateless: [], cached: [], interaction: [7, 4], nocontext: [2, 3] };
-  const ARM_POINT = { stateless: "circle", cached: "rect", interaction: "triangle", nocontext: "cross" };
+  const ARM_DASH = { stateless: [], cached: [], interaction: [7, 4],
+                     interaction_inline: [3, 3], nocontext: [2, 3] };
+  const ARM_POINT = { stateless: "circle", cached: "rect", interaction: "triangle",
+                      interaction_inline: "star", nocontext: "cross" };
   const mk = (key) => arms.map(a => {
     const c = ARM_COLORS[a] || "#9aa5b1";
     return {

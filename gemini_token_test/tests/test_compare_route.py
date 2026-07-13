@@ -31,8 +31,8 @@ def test_compare_rejects_unknown_arms_falls_back(monkeypatch):
     r = c.post("/compare", json={"turns": 1, "arms": ["bogus"]})
     assert r.status_code == 200
     # Unknown arms are dropped; the full default set runs instead.
-    assert set(r.get_json()["summary"]["series"]) == set(
-        ["stateless", "cached", "interaction", "nocontext"])
+    import experiment
+    assert set(r.get_json()["summary"]["series"]) == set(experiment.COMPARE_ARMS)
 
 
 def test_compare_no_dollar_cost(monkeypatch):

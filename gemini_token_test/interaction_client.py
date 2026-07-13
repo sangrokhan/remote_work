@@ -159,11 +159,25 @@ def _call_interaction(model: str, text: str, system_instruction: str,
 
 
 def run_interaction(model: str, request_name: str = "perf",
-                    turns: int | None = None, on_progress=None) -> dict:
-    """Replay the scenario over the Interactions API. Turn 1 opens the interaction
-    (system prompt + first question); each later turn sends the system prompt again
-    plus the new question with previous_interaction_id, so the server keeps the
-    history. Returns {"params": {...}, "interaction_records": [...]}."""
+                    turns: int | None = None, on_progress=None,
+                    inline_system: bool = False, stage: str = "interaction") -> dict:
+    """Replay the scenario over the Interactions API.
+
+    Default: turn 1 opens the interaction (system prompt + first question), and each
+    later turn sends the system prompt *again* plus the new question with
+    previous_interaction_id. The server keeps the conversation, but not the
+    system_instruction -- that field is interaction-scoped -- so a 20 KB system
+    prompt is re-uploaded on every single turn and the arm saves almost nothing on
+    the wire.
+
+    inline_system=True: no system_instruction at all. The system prompt rides in the
+    first user message, which makes it part of the server-side history, so every turn
+    after the first sends only its question. Same content reaches the model either
+    way; what changes is who stores it, and whether the model still treats it with
+    the weight a system instruction carries.
+
+    Returns {"params": {...}, "interaction_records": [...]}.
+    """
     system, steps, source = load_request(request_name)
     if turns:
         steps = steps[:max(1, min(turns, len(steps)))]
@@ -173,19 +187,26 @@ def run_interaction(model: str, request_name: str = "perf",
     prev_id: str | None = None
     for k, q in enumerate(steps, start=1):
         if on_progress:
-            on_progress({"stage": "interaction", "turn": k, "turns": n})
-        if is_mock():
-            r = _mock_interaction(k, q, system, prev_id)
+            on_progress({"stage": stage, "turn": k, "turns": n})
+        if inline_system:
+            # The prompt goes in the user turn, once, and the server holds it after.
+            text = f"{system}\n\n{q}" if (k == 1 and system) else q
+            sys_instruction = ""
         else:
-            r = _call_interaction(model, q, system, prev_id, turn=k)
+            text, sys_instruction = q, system
+        if is_mock():
+            r = _mock_interaction(k, text, sys_instruction, prev_id)
+        else:
+            r = _call_interaction(model, text, sys_instruction, prev_id, turn=k)
         r["turn"] = k
+        r["question"] = q          # the step, never the prompt bolted onto it
         if r.get("interaction_id"):
             prev_id = r["interaction_id"]     # chain the next turn onto this one
         records.append(r)
 
     return {
-        "params": {"mode": "interaction", "turns": n, "model": model,
+        "params": {"mode": stage, "turns": n, "model": model,
                    "stream": False, "endpoint": interactions_url(),
-                   "request_source": source},
+                   "inline_system": inline_system, "request_source": source},
         "interaction_records": records,
     }

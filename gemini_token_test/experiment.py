@@ -256,8 +256,8 @@ def run_three_stage(model: str, request_name: str = "default",
 
 # --- Comparison across arms (the headline experiment) ----------------------
 
-DEFAULT_ARMS = ("stateless", "cached", "interaction")
-COMPARE_ARMS = ("stateless", "cached", "interaction", "nocontext")
+DEFAULT_ARMS = ("stateless", "cached", "interaction", "interaction_inline")
+COMPARE_ARMS = ("stateless", "cached", "interaction", "interaction_inline", "nocontext")
 
 
 def _common_from_call(res, arm: str, phase: str, turn: int, question: str) -> dict:
@@ -372,15 +372,22 @@ def _arm_cached(model, system, steps, transcript, on_progress=None) -> list:
     return recs
 
 
-def _arm_interaction(model, request_name, turns, on_progress) -> list:
-    """Interactions API arm, mapped into the shared per-turn record."""
+def _arm_interaction(model, request_name, turns, on_progress,
+                     arm: str = "interaction", inline_system: bool = False) -> list:
+    """Interactions API arm, mapped into the shared per-turn record.
+
+    inline_system moves the system prompt out of system_instruction and into the
+    first user turn, so the server-side history carries it and later turns send only
+    their question. Same content reaches the model; a different party stores it.
+    """
     from interaction_client import run_interaction   # lazy: avoids import cycle
     out = run_interaction(model, request_name=request_name, turns=turns,
-                          on_progress=on_progress)
+                          on_progress=on_progress, inline_system=inline_system,
+                          stage=arm)
     recs = []
     for r in out["interaction_records"]:
         recs.append({
-            "arm": "interaction", "phase": "steady", "turn": r["turn"],
+            "arm": arm, "phase": "steady", "turn": r["turn"],
             "question": r.get("question", ""),
             "wire_sent": r["wire_sent"], "wire_recv": r["wire_recv"],
             "elapsed_ms": r["elapsed_ms"],
@@ -427,6 +434,9 @@ def _run_arm(arm, model, system, steps, request_name, n, on_progress, transcript
         return _arm_nocontext(model, system, steps, on_progress)
     if arm == "interaction":
         return _arm_interaction(model, request_name, n, on_progress)
+    if arm == "interaction_inline":
+        return _arm_interaction(model, request_name, n, on_progress,
+                                arm="interaction_inline", inline_system=True)
     return []
 
 
