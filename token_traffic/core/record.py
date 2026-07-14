@@ -29,6 +29,20 @@ from __future__ import annotations
 SCHEMA_VERSION = 1
 
 
+def _store_tail(exchange) -> int:
+    """The wait after the last answer token, or 0 when nothing measured that moment.
+
+    A blocking pass has no `ttlt`: it never saw a last token, only a finished body. So
+    `turn_end - ttlt` is not the tail there, it is the whole call -- and a `bytes` run
+    reported plain generateContent as carrying a 2.2-second store tail, which is a
+    property of stored interactions and not a thing that arm does at all. A mark nobody
+    took must read as absent, not as zero-and-therefore-subtractable.
+    """
+    if exchange.ttlt_ms <= 0:
+        return 0
+    return max(0, exchange.turn_end_ms - exchange.ttlt_ms)
+
+
 def turn_record(provider: str, arm: str, phase: str, turn: int, question: str,
                 measure: str, exchange, usage: dict, extra: dict | None = None) -> dict:
     """One row.
@@ -61,7 +75,7 @@ def turn_record(provider: str, arm: str, phase: str, turn: int, question: str,
         "ttft_ms": exchange.ttft_ms,
         "ttlt_ms": exchange.ttlt_ms,
         "turn_end_ms": exchange.turn_end_ms,
-        "store_tail_ms": max(0, exchange.turn_end_ms - exchange.ttlt_ms),
+        "store_tail_ms": _store_tail(exchange),
 
         "input_tokens": input_tokens,
         "cached_tokens": int(usage.get("cached_tokens", 0) or 0),

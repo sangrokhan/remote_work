@@ -67,6 +67,18 @@ def test_store_tail_is_the_wait_after_the_last_token():
     assert rec["store_tail_ms"] == 1800
 
 
+def test_a_blocking_pass_reports_no_tail_at_all():
+    # A `bytes` pass never saw a last token -- only a finished body -- so `ttlt` is
+    # unset. Subtracting it from turn_end turns the whole call into a "tail": a live run
+    # once reported plain generateContent as carrying a 2.2-second store tail, which is
+    # a property of stored interactions and not something that arm can even do.
+    rec = _record(measure="bytes",
+                  exchange=_exchange(ttfb_ms=0, ttft_ms=0, ttlt_ms=0,
+                                     turn_end_ms=2249))
+    assert rec["store_tail_ms"] == 0
+    assert rec["turn_end_ms"] == 2249      # the call still took what it took
+
+
 def test_store_tail_never_goes_negative():
     # A failed turn has its marks pinned to when it ended, and a pinned ttlt can land on
     # or past turn_end. A negative wait is not a thing that happens; report no tail.

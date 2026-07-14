@@ -1,4 +1,0 @@
-requests>=2.32
-matplotlib>=3.8
-flask>=3.0
-pytest>=8.0
