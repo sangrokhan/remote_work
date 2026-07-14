@@ -60,6 +60,7 @@ def test_csv_export_has_one_row_per_case(monkeypatch):
     text = r.get_data(as_text=True)
     header = text.splitlines()[0].lstrip("﻿")
     assert header.split(",") == ["arm", "phase", "turn", "wire_sent", "wire_recv",
+                                 "ttft_ms", "ttlt_ms", "turn_end_ms", "store_tail_ms",
                                  "elapsed_ms", "input_tokens", "cached_tokens",
                                  "output_tokens", "thought_tokens", "total_tokens",
                                  "error"]

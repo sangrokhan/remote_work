@@ -450,9 +450,22 @@ def download_compare(exec_id):
     return _csv_attachment(COMPARE_COLUMNS, rows, f"compare_{exec_id}.csv")
 
 
-CASE_COLUMNS = ["arm", "phase", "turn", "wire_sent", "wire_recv", "elapsed_ms",
+# Three timings per call, not one. ttft/ttlt bracket the answer; turn_end is when the
+# server let go. store_tail_ms = turn_end - ttlt: zero on the generateContent arms
+# (nothing happens after the last token) and ~1.8 s on a stored interaction, where
+# the write lands after the answer is already out. A single "elapsed" column would
+# charge the interaction arms for a wait no streaming user ever does.
+CASE_COLUMNS = ["arm", "phase", "turn", "wire_sent", "wire_recv",
+                "ttft_ms", "ttlt_ms", "turn_end_ms", "store_tail_ms", "elapsed_ms",
                 "input_tokens", "cached_tokens", "output_tokens", "thought_tokens",
                 "total_tokens", "error"]
+
+
+def _case_row(rec: dict) -> list:
+    end = rec.get("turn_end_ms", rec.get("elapsed_ms", 0)) or 0
+    ttlt = rec.get("ttlt_ms", end) or 0
+    values = {**rec, "turn_end_ms": end, "store_tail_ms": max(0, end - ttlt)}
+    return [values.get(c) for c in CASE_COLUMNS]
 
 
 def build_comparison_cases(doc: dict) -> list[dict]:
@@ -540,7 +553,7 @@ def download_comparison_csv(exec_id):
     doc = get_run(exec_id)
     if doc is None:
         abort(404)
-    rows = [[r.get(c) for c in CASE_COLUMNS] for r in doc.get("records") or []]
+    rows = [_case_row(r) for r in doc.get("records") or []]
     return _csv_attachment(CASE_COLUMNS, rows, f"comparison_{exec_id}.csv")
 
 

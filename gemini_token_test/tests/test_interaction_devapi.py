@@ -1,8 +1,11 @@
 """interaction_client, rebuilt for the Developer API plain-model path.
 
-stream:false (single JSON, top-level usage), system_instruction re-sent every turn
-(it is interaction-scoped and the server does not keep it), previous_interaction_id
-chains turns. No agent, no environment, no background, no warmup, no tools.
+stream:true (SSE; the events reassemble into the body a blocking call would return),
+system_instruction re-sent every turn (it is interaction-scoped and the server does
+not keep it), previous_interaction_id chains turns. Streaming is not cosmetic: the
+store cost lands ~1.8 s after the last token, and only a streamed read can tell the
+answer's arrival apart from the server letting go. No agent, no environment, no
+background, no warmup, no tools.
 
 Body/usage are pure and tested directly; the call and the chaining are exercised
 against a localhost server, so there is no live API in CI.
@@ -25,7 +28,7 @@ import interaction_client as ic
 def test_turn_one_body_has_system_and_no_previous_id():
     b = ic.interaction_body("gemini-3.1-flash-lite", "hi", "SYSTEM PROMPT", None)
     assert b["model"] == "gemini-3.1-flash-lite"
-    assert b["stream"] is False
+    assert b["stream"] is True
     assert b["store"] is True
     assert b["system_instruction"] == "SYSTEM PROMPT"
     assert b["input"] == [{"type": "user_input",
@@ -79,17 +82,27 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         _SEEN["path"] = self.path
         _SEEN["api_key"] = self.headers.get("x-goog-api-key")
         idx = len(_SEEN["bodies"])
-        out = json.dumps({
-            "id": f"int_{idx}",
-            "status": "completed",
-            "steps": [{"type": "model_output",
-                       "content": [{"type": "text", "text": f"answer {idx}"}]}],
-            "usage": {"total_input_tokens": 4200, "total_cached_tokens": 4000,
-                      "total_output_tokens": 12, "total_thought_tokens": 5,
-                      "total_tokens": 4217},
-        }).encode("utf-8")
+        # The real endpoint streams, and its completed event carries the usage but
+        # not the steps -- those exist only as the deltas that went past.
+        events = [
+            {"event_type": "interaction.created",
+             "interaction": {"id": f"int_{idx}", "status": "in_progress"}},
+            {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
+            {"event_type": "step.delta", "index": 0,
+             "delta": {"text": f"answer {idx}", "type": "text"}},
+            {"event_type": "step.stop", "index": 0},
+            {"event_type": "interaction.completed",
+             "interaction": {"id": f"int_{idx}", "status": "completed",
+                             "usage": {"total_input_tokens": 4200,
+                                       "total_cached_tokens": 4000,
+                                       "total_output_tokens": 12,
+                                       "total_thought_tokens": 5,
+                                       "total_tokens": 4217}}},
+        ]
+        out = ("".join(f"data: {json.dumps(e)}\n\n" for e in events)
+               + "data: [DONE]\n\n").encode("utf-8")
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         self.wfile.write(out)

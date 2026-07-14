@@ -1,10 +1,12 @@
 """call_gemini, ported to the Developer API, exercised against a local server.
 
-No live API: a localhost HTTP server mimics generateContent. The test asserts the
-ported call (a) targets the DevAPI models path with an x-goog-api-key header,
-(b) parses usageMetadata, (c) reports wire bytes from the socket counter (headers
-included, so more than the JSON payload) rather than the old payload fallback, and
-(d) records a non-negative elapsed_ms.
+No live API: a localhost HTTP server mimics streamGenerateContent. The test asserts
+the ported call (a) targets the DevAPI streaming path with an x-goog-api-key header,
+(b) parses usageMetadata out of the chunks, (c) reports wire bytes from the socket
+counter (headers included, so more than the JSON payload) rather than the old payload
+fallback, and (d) records the three timings a streamed turn carries.
+
+The call streams because TTFT cannot be measured any other way -- see streaming.py.
 """
 
 import http.server
@@ -28,14 +30,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         _SEEN["path"] = self.path
         _SEEN["api_key"] = self.headers.get("x-goog-api-key")
         _SEEN["body"] = self.rfile.read(n).decode("utf-8")
-        payload = json.dumps({
-            "candidates": [{"content": {"role": "model",
-                                        "parts": [{"text": "hello from stub"}]}}],
-            "usageMetadata": {"promptTokenCount": 11, "candidatesTokenCount": 7,
-                              "cachedContentTokenCount": 5, "totalTokenCount": 23},
-        }).encode("utf-8")
+        chunks = [
+            {"candidates": [{"content": {"role": "model",
+                                         "parts": [{"text": "hello "}]}}]},
+            {"candidates": [{"content": {"role": "model",
+                                         "parts": [{"text": "from stub"}]}}],
+             "usageMetadata": {"promptTokenCount": 11, "candidatesTokenCount": 7,
+                               "cachedContentTokenCount": 5, "totalTokenCount": 23}},
+        ]
+        payload = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks).encode("utf-8")
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -74,8 +79,12 @@ def test_call_gemini_hits_devapi_and_reports_real_metrics(monkeypatch):
         assert r.wire_sent > r.req_payload_bytes
         assert r.wire_recv > 0
         assert r.elapsed_ms >= 0
+        # Three clocks, in order. generateContent has nothing to do after the last
+        # token, so the turn ends when the answer does.
+        assert r.ttft_ms <= r.ttlt_ms <= r.turn_end_ms
         # The request went where and how the DevAPI expects.
-        assert _SEEN["path"] == "/v1beta/models/gemini-3.1-flash-lite:generateContent"
+        assert _SEEN["path"] == (
+            "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse")
         assert _SEEN["api_key"] == "test-key-xyz"
     finally:
         gc.reset_session()

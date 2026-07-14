@@ -31,6 +31,8 @@ from dataclasses import dataclass, asdict
 import requests
 from urllib3.connection import HTTPSConnection, HTTPConnection
 
+import streaming
+
 # Vertex config (overridable via env; project/creds come from ADC on Cloud Run).
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("VERTEX_PROJECT", "")
 LOCATION = os.environ.get("VERTEX_LOCATION", "us-central1")
@@ -67,6 +69,13 @@ def auth_headers() -> dict:
 
 def generate_url(model: str) -> str:
     return f"{api_base()}/models/{model}:generateContent"
+
+
+def stream_generate_url(model: str) -> str:
+    """Every arm streams, because TTFT cannot be measured any other way -- and
+    without TTFT the interaction arms are charged for a write their user never waits
+    for (see streaming.py)."""
+    return f"{api_base()}/models/{model}:streamGenerateContent?alt=sse"
 
 
 def cache_base_url() -> str:
@@ -108,6 +117,13 @@ class CallResult:
     cached_tokens: int = 0
     thought_tokens: int = 0
     elapsed_ms: int = 0          # request start -> response fully read
+    # The three timings every streamed turn carries. ttft/ttlt bracket the answer;
+    # turn_end_ms is when the server finally let go. On generateContent they coincide
+    # -- nothing happens after the last token -- which is exactly what makes them
+    # worth reporting next to the interaction arms, where they do not.
+    ttft_ms: int = 0             # -> first event carrying answer text
+    ttlt_ms: int = 0             # -> last event carrying answer text
+    turn_end_ms: int = 0         # -> stream closed
     response_text: str = ""
     # Raw JSON bodies exactly as sent to / received from the server (no headers,
     # so no bearer token). Lets the log show the full wire payload per step.
@@ -364,6 +380,12 @@ def _text_tokens(contents: list) -> int:
     return max(1, text_len // 4)
 
 
+# Mock timings. Fixed, so a mock run's latency chart is stable; shaped like the real
+# thing, so the arms that pay a tail can be told apart from the arms that do not.
+MOCK_TTFT_MS = 300
+MOCK_TTLT_MS = 800
+
+
 def _mock_signature(turn: int) -> str:
     """Stand-in for the opaque base64 thought signature a real response carries.
     Roughly the real length: most of what echoing a model turn costs is this blob."""
@@ -396,6 +418,8 @@ def _mock_call(mode: str, turn: int, contents: list, cached_tokens: int) -> Call
                           "cachedContentTokenCount": cached_tokens,
                           "totalTokenCount": prompt_tokens + resp_tokens + cached_tokens},
     })
+    # Synthetic timings with the shape the real thing has: the answer streams, and on
+    # generateContent nothing happens after its last token -- turn_end lands on ttlt.
     return CallResult(
         mode=mode, turn=turn,
         prompt_tokens=prompt_tokens, resp_tokens=resp_tokens,
@@ -403,6 +427,8 @@ def _mock_call(mode: str, turn: int, contents: list, cached_tokens: int) -> Call
         cached_tokens=cached_tokens, response_text=resp_text,
         wire_sent=req_bytes + 200, wire_recv=resp_bytes + 200,
         req_payload_bytes=req_bytes, resp_payload_bytes=resp_bytes,
+        ttft_ms=MOCK_TTFT_MS, ttlt_ms=MOCK_TTLT_MS,
+        turn_end_ms=MOCK_TTLT_MS, elapsed_ms=MOCK_TTLT_MS,
         request_json=body, response_json=resp_json,
     )
 
@@ -428,38 +454,56 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
     t0 = time.monotonic()
     try:
         with wire_counter() as w:
-            resp = _session().post(generate_url(model), data=body,
-                                   headers=headers, timeout=120)
-            _ = resp.content            # force the body to be read inside the counter
+            with _session().post(stream_generate_url(model), data=body,
+                                 headers=headers, timeout=120, stream=True) as resp:
+                if resp.status_code != 200:
+                    err_body = resp.text
+                    stream = None
+                else:
+                    # Read inside both the response and the counter: the bytes are
+                    # only on the socket while the stream is open.
+                    stream = streaming.read_stream(resp, streaming.gen_text, t0)
     except Exception as exc:
         return CallResult(mode=mode, turn=turn, req_payload_bytes=req_payload_bytes,
                           request_json=body, error=f"request_failed: {exc}",
                           elapsed_ms=int((time.monotonic() - t0) * 1000))
 
-    result = CallResult(
-        mode=mode, turn=turn,
-        wire_sent=w.sent, wire_recv=w.recv,
-        req_payload_bytes=req_payload_bytes,
-        resp_payload_bytes=len(resp.content),
-        elapsed_ms=int((time.monotonic() - t0) * 1000),
-        request_json=body,
-        response_json=resp.text,  # raw response body exactly as received
-    )
-
-    if resp.status_code != 200:
-        result.error = f"http_{resp.status_code}: {resp.text[:200]}"
+    elapsed = int((time.monotonic() - t0) * 1000)
+    if stream is None:
+        result = CallResult(mode=mode, turn=turn, wire_sent=w.sent, wire_recv=w.recv,
+                            req_payload_bytes=req_payload_bytes,
+                            resp_payload_bytes=len(err_body),
+                            elapsed_ms=elapsed, turn_end_ms=elapsed,
+                            ttft_ms=elapsed, ttlt_ms=elapsed,
+                            request_json=body, response_json=err_body)
+        result.error = f"http_{resp.status_code}: {err_body[:200]}"
         # A restricted-VIP refusal is a 403 that reads like a rejected key. Name it,
         # or the operator spends the afternoon rotating a key that works fine.
         if resp.status_code == 403:
             import netdiag
-            if netdiag.is_vip_block(resp.text):
+            if netdiag.is_vip_block(err_body):
                 result.error += (" — NOT a key problem: this VPC routes "
                                  "googleapis.com to a restricted VIP that does not "
                                  "carry the Gemini Developer API. See /diagnose.")
         return result
 
+    # The chunks, reassembled into the body a non-streaming call would have returned.
+    # That is what the history echo and the audit trail both want; the SSE framing
+    # itself is not information about the conversation.
+    data = streaming.gen_response(stream.events)
+    result = CallResult(
+        mode=mode, turn=turn,
+        wire_sent=w.sent, wire_recv=w.recv,
+        req_payload_bytes=req_payload_bytes,
+        resp_payload_bytes=len(stream.raw),
+        elapsed_ms=elapsed,
+        ttft_ms=stream.ttft_ms, ttlt_ms=stream.ttlt_ms,
+        turn_end_ms=stream.turn_end_ms,
+        request_json=body,
+        response_json=json.dumps(data),
+    )
+
     try:
-        data = resp.json()
         usage = data.get("usageMetadata", {})
         result.prompt_tokens = int(usage.get("promptTokenCount", 0))
         result.resp_tokens = int(usage.get("candidatesTokenCount", 0))
@@ -468,10 +512,9 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
         result.total_tokens = int(
             usage.get("totalTokenCount", result.prompt_tokens + result.resp_tokens)
         )
-        cands = data.get("candidates", [])
-        if cands:
-            parts = cands[0].get("content", {}).get("parts", [])
-            result.response_text = "".join(p.get("text", "") for p in parts)
+        # The answer as it streamed: thought parts excluded, so a reasoning summary
+        # never ends up in the transcript (or in a cache built from it).
+        result.response_text = stream.text
     except Exception as exc:
         result.error = f"parse_failed: {exc}"
 

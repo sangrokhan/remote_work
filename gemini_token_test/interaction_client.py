@@ -40,6 +40,7 @@ import os
 import time
 
 import gemini_client as gc
+import streaming
 from gemini_client import is_mock, wire_counter, _text_tokens
 from experiment import load_request
 from payloads import (
@@ -48,6 +49,11 @@ from payloads import (
 )
 
 INTERACTION_TIMEOUT = float(os.environ.get("INTERACTION_TIMEOUT", "180"))
+
+# What `store:true` adds to a mock turn, after the answer is already out. The real
+# thing measured ~1.8 s (docs/interactions-api-fields.md); the mock keeps the shape
+# so a mock run cannot pretend the stored arms are free.
+MOCK_STORE_TAIL_MS = 1800
 
 
 def interactions_url() -> str:
@@ -70,7 +76,10 @@ def interaction_body(model: str, text: str, system_instruction: str,
     """
     body: dict = {
         "model": model,
-        "stream": False,
+        # Every arm streams. TTFT cannot be measured any other way, and without it
+        # this arm is charged for the ~1.8 s write that lands *after* its last token
+        # -- a wait no streaming client ever does (see streaming.py).
+        "stream": True,
         "store": store,
         "input": list(history) if history is not None else single_step_input(text),
     }
@@ -94,7 +103,11 @@ def _usage_common(usage: dict) -> dict:
 
 
 def _record(turn, question, text, iid, usage, wire_sent, wire_recv, elapsed_ms,
-            req_raw, resp_raw, error, steps=None) -> dict:
+            req_raw, resp_raw, error, steps=None, ttft_ms=None, ttlt_ms=None,
+            turn_end_ms=None) -> dict:
+    # An arm with no timings of its own (an error, a dead connection) still ended;
+    # zeros there would read as "instant". Fall back to the one number that exists.
+    end = elapsed_ms if turn_end_ms is None else turn_end_ms
     return {
         "turn": turn, "question": question,
         "response_text": text, "interaction_id": iid,
@@ -103,6 +116,12 @@ def _record(turn, question, text, iid, usage, wire_sent, wire_recv, elapsed_ms,
         # would drop the thought step, which no real client does.
         "response_steps": list(steps or []),
         "wire_sent": wire_sent, "wire_recv": wire_recv, "elapsed_ms": elapsed_ms,
+        # ttlt is when the answer finished; turn_end is when the server let go. On a
+        # stored interaction the gap between them is the write -- ~1.8 s, measured --
+        # and it is the whole reason both numbers are reported.
+        "ttft_ms": end if ttft_ms is None else ttft_ms,
+        "ttlt_ms": end if ttlt_ms is None else ttlt_ms,
+        "turn_end_ms": end,
         **usage,
         "request_raw": req_raw, "response_raw": resp_raw,
         "error": error,
@@ -139,15 +158,19 @@ def _mock_interaction(turn: int, text: str, system: str, prev_id: str | None,
     steps = [{"signature": _mock_signature(turn), "type": "thought"},
              {"content": [{"text": ans, "type": "text"}], "type": "model_output"}]
     resp = json.dumps({"id": iid, "status": "completed", "steps": steps})
+    # Mock timings shaped like the real ones: the answer lands at ttlt, and a stored
+    # interaction then holds the stream open for the write. store:false does not.
+    end = gc.MOCK_TTLT_MS + (MOCK_STORE_TAIL_MS if store else 0)
     return _record(turn, text, ans, iid, usage,
-                   len(req) + 200, len(resp) + 200, 0, req, resp, "", steps=steps)
+                   len(req) + 200, len(resp) + 200, end, req, resp, "", steps=steps,
+                   ttft_ms=gc.MOCK_TTFT_MS, ttlt_ms=gc.MOCK_TTLT_MS, turn_end_ms=end)
 
 
 def _call_interaction(model: str, text: str, system_instruction: str,
                       prev_id: str | None, turn: int = 1,
                       store: bool = True, history: list | None = None) -> dict:
-    """One interaction request. Never raises; errors land in the record's error.
-    Returns the common per-turn record."""
+    """One streamed interaction request. Never raises; errors land in the record's
+    error. Returns the common per-turn record, timings included."""
     body = interaction_body(model, text, system_instruction, prev_id, store=store,
                             history=history)
     req_raw = json.dumps(body)
@@ -155,35 +178,38 @@ def _call_interaction(model: str, text: str, system_instruction: str,
     t0 = time.monotonic()
     try:
         with wire_counter() as w:
-            resp = gc._session().post(interactions_url(), data=req_raw,
-                                      headers=headers, timeout=INTERACTION_TIMEOUT)
-            _ = resp.content
+            with gc._session().post(interactions_url(), data=req_raw,
+                                    headers=headers, timeout=INTERACTION_TIMEOUT,
+                                    stream=True) as resp:
+                if resp.status_code not in (200, 201):
+                    err_body, stream = resp.text, None
+                else:
+                    stream = streaming.read_stream(
+                        resp, streaming.interaction_text, t0)
     except Exception as exc:
         return _record(turn, text, "", None, _usage_common({}), 0, 0,
                        int((time.monotonic() - t0) * 1000), req_raw, "",
                        f"request_failed: {exc}")
 
     elapsed = int((time.monotonic() - t0) * 1000)
-    resp_raw = resp.text
-    if resp.status_code not in (200, 201):
+    if stream is None:
         return _record(turn, text, "", None, _usage_common({}),
-                       w.sent, w.recv, elapsed, req_raw, resp_raw,
-                       f"http_{resp.status_code}: {resp_raw[:200]}")
-    try:
-        data = resp.json()
-    except Exception as exc:
-        return _record(turn, text, "", None, _usage_common({}),
-                       w.sent, w.recv, elapsed, req_raw, resp_raw,
-                       f"parse_failed: {exc}")
+                       w.sent, w.recv, elapsed, req_raw, err_body,
+                       f"http_{resp.status_code}: {err_body[:200]}")
 
-    iid = data.get("id")
+    # The events, reassembled into the body a stream:false call would have returned.
+    # The completed event carries the usage but *not* the steps (measured), so this
+    # is where the model's turn -- thought step, signature and all -- comes back.
+    data = streaming.interaction_response(stream.events)
     steps = model_steps_from_response(data)
     # The answer is the model_output steps, never the thought step: with
     # thinking_summaries on, a thought step carries text of its own.
-    text_out = answer_text(steps) or extract_text(data.get("steps", data))
+    text_out = answer_text(steps) or stream.text
     usage = _usage_common(data.get("usage") or {})
-    return _record(turn, text, text_out, iid, usage,
-                   w.sent, w.recv, elapsed, req_raw, resp_raw, "", steps=steps)
+    return _record(turn, text, text_out, data.get("id"), usage,
+                   w.sent, w.recv, elapsed, req_raw, json.dumps(data), "",
+                   steps=steps, ttft_ms=stream.ttft_ms, ttlt_ms=stream.ttlt_ms,
+                   turn_end_ms=stream.turn_end_ms)
 
 
 def run_interaction(model: str, request_name: str = "perf",

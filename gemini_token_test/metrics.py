@@ -121,6 +121,10 @@ def summarize_comparison(comparison: dict) -> dict:
             "per_turn_input_tokens": per_in,
             "cum_wire": _cumulative(per_wire),
             "cum_input_tokens": _cumulative(per_in),
+            "per_turn_ttft_ms": [r.get("ttft_ms", 0) for r in steady],
+            "per_turn_ttlt_ms": [r.get("ttlt_ms", 0) for r in steady],
+            "per_turn_turn_end_ms": [r.get("turn_end_ms", r["elapsed_ms"])
+                                     for r in steady],
         }
         totals[arm] = {
             "steady_wire": sum(per_wire),
@@ -131,6 +135,20 @@ def summarize_comparison(comparison: dict) -> dict:
             "output_tokens": sum(r["output_tokens"] for r in steady),
             "thought_tokens": sum(r["thought_tokens"] for r in steady),
             "latency": _latency_stats([r["elapsed_ms"] for r in steady]),
+            # Three clocks per turn, averaged over the arm's steady turns:
+            #   ttft     the answer starts
+            #   ttlt     the answer ends           <- what a streaming user waits for
+            #   turn_end the server lets go        <- what a blocking client waits for
+            # On the generateContent arms ttlt and turn_end are the same number. On a
+            # stored interaction they are not: the write lands after the last token,
+            # and `store_tail_ms` below is that gap -- the wait no streaming user does.
+            "ttft": _latency_stats([r.get("ttft_ms", 0) for r in steady]),
+            "ttlt": _latency_stats([r.get("ttlt_ms", 0) for r in steady]),
+            "turn_end": _latency_stats([r.get("turn_end_ms", r["elapsed_ms"])
+                                        for r in steady]),
+            "store_tail_ms": _latency_stats(
+                [r.get("turn_end_ms", r["elapsed_ms"]) - r.get("ttlt_ms", 0)
+                 for r in steady]),
             # Excluded from the comparison, but not hidden: the build is real money.
             "cachegen_wire": sum(r["wire_sent"] + r["wire_recv"] for r in gen),
             "cachegen_tokens": sum(r["input_tokens"] for r in gen),
