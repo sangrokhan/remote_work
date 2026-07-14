@@ -20,12 +20,20 @@ Three rules the arms depend on and cannot enforce themselves:
 
   wall_ms covers the measured stage only. It is the same window the pcap covers, so
   the two can be read against each other.
+
+  A cold prefix per arm. Every arm sends the same system prompt, and both vendors cache
+  on the prefix, so the arm that runs second reads the cache the first one left warm --
+  measured: a stateful arm billed 4224 cached tokens on its own turn 1. core.cachebust
+  puts a per-(run, provider, arm) marker on the front of the prompt, and this is where
+  it is applied, because the arms cannot see each other and cannot know they are being
+  compared.
 """
 
 from __future__ import annotations
 
 import time
 
+from core import cachebust
 from core import capture as pcap
 from core import wire
 from providers import base
@@ -81,11 +89,16 @@ def warnings_for(pairs: list[tuple[str, str]], measure: str) -> list[str]:
 def run(providers: dict | None = None, *, system: str, steps: list[str],
         measure: str = "bytes", models: dict | None = None,
         want_capture: bool = False, pause_seconds: float = 0,
-        timestamp: str = "", on_progress=None) -> dict:
+        timestamp: str = "", cache_bust: bool | None = None,
+        on_progress=None) -> dict:
     """Replay `steps` across every (provider, arm) pair and return the run document.
 
     Returns {params, records, pcaps, wall_ms}. Records carry provider and arm, so one
     run holds both vendors and a reader can group either way.
+
+    `cache_bust=None` defers to TRAFFIC_CACHE_BUST (on unless set to 0). False makes
+    every arm send the byte-identical system prompt again, which is what the vendors'
+    implicit prefix caches feed on -- worth doing deliberately, never by accident.
     """
     if measure not in MEASURES:
         raise ValueError(f"measure must be one of {MEASURES}, not {measure!r}")
@@ -93,6 +106,16 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
     pairs = plan(providers)
     warnings = warnings_for(pairs, measure)
     models = dict(models or {})
+
+    # Before the first arm: every tag a prompt or a cache key will carry is derived from
+    # this timestamp, and the openai adapter reads its own tag out of here rather than
+    # being handed one, so the run has to be open before any arm runs.
+    cachebust.begin(timestamp, cache_bust)
+    if not cachebust.enabled():
+        warnings.append(
+            "cache-bust off: every arm sends the same system prompt, so an arm can be "
+            "billed for -- and answered from -- the prefix cache a previous arm or a "
+            "previous run left warm. Its cached_tokens and TTFT are not its own.")
 
     # Ask once, before the first arm. A capture that cannot start must not stop the
     # run -- the byte counts come from the socket and stand on their own -- but the
@@ -136,7 +159,9 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
         window = _Window(provider, arm, mod.api_host(), timestamp or "0",
                          want_capture, on_progress)
         try:
-            arm_records = mod.run_arm(arm, model, system, steps, measure, window.tick)
+            arm_records = mod.run_arm(arm, model,
+                                      cachebust.apply(system, provider, arm),
+                                      steps, measure, window.tick)
         finally:
             window.close()
 
@@ -155,6 +180,10 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
                        for p, _ in pairs},
             "turns": len(steps),
             "capture": bool(want_capture),
+            # The tags, not just the flag: a run whose arms came back suspiciously warm
+            # can only be explained if the prefixes it actually sent are recoverable.
+            "cache_bust": {"enabled": cachebust.enabled(),
+                           "tags": cachebust.tags(pairs)},
             "warnings": warnings,
         },
         "records": records,

@@ -97,6 +97,19 @@ def test_the_pcap_is_named_for_the_provider_and_the_arm():
     assert capture._SAFE_NAME.match(c.path.name)
 
 
+def test_the_name_capture_writes_is_a_name_the_download_route_accepts():
+    """A run stamps its arms with `datetime.now(timezone.utc).isoformat()`, which carries
+    a dot and a plus (2026-07-14T09:46:57.837905+00:00). Only the colons used to be
+    replaced, so both survived into the filename and _SAFE_NAME then refused to match the
+    file capture had just written: tcpdump wrote a good pcap, the run recorded it, and
+    every download of it 404'd. The two must agree, so they are tested together.
+    """
+    c = capture.Capture("2026-07-14T09:46:57.837905+00:00", "gemini", "stateless",
+                        "generativelanguage.googleapis.com")
+    assert c.error == ""
+    assert capture._SAFE_NAME.match(c.path.name), c.path.name
+
+
 def test_two_arms_of_two_providers_do_not_collide():
     names = {
         capture.Capture("2026-07-14T00:00:00", p, a, "h").path.name

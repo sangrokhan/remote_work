@@ -188,6 +188,7 @@ function selectionPayload() {
     turns: turns === '' ? null : Number(turns),
     fixture: $('fixture').value,
     capture: $('capture').checked,
+    cache_bust: $('cacheBust').checked,
     pause_seconds: Number($('pause').value || 0),
   };
 }
@@ -201,7 +202,7 @@ function invalidatePreflight() {
   $('runBtn').classList.remove('billable');
   $('preflightOut').hidden = true;
 }
-for (const id of ['measure', 'turns', 'fixture', 'capture', 'pause']) {
+for (const id of ['measure', 'turns', 'fixture', 'capture', 'cacheBust', 'pause']) {
   // listener attached after DOM parse; ids exist because the script is at body end
   $(id).addEventListener('change', invalidatePreflight);
 }

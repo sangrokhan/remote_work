@@ -104,6 +104,11 @@ def _selection(payload: dict) -> tuple[dict, dict]:
         "pause_seconds": float(payload.get("pause_seconds") or 0),
         "fixture": payload.get("fixture") or scenario.DEFAULT,
         "turns": payload.get("turns"),
+        # Absent means "whatever TRAFFIC_CACHE_BUST says", which is not the same as
+        # False -- an older UI that sends no such field must not silently turn the
+        # arms' cache isolation off.
+        "cache_bust": (None if payload.get("cache_bust") is None
+                       else bool(payload["cache_bust"])),
     }
     if opts["measure"] not in runner.MEASURES:
         raise ValueError(f"measure must be one of {', '.join(runner.MEASURES)}")
@@ -150,6 +155,7 @@ def _execute(providers: dict | None, opts: dict, on_progress=None) -> dict:
         want_capture=opts["want_capture"],
         pause_seconds=opts["pause_seconds"],
         timestamp=timestamp,
+        cache_bust=opts["cache_bust"],
         on_progress=on_progress,
     )
     run["timestamp"] = timestamp

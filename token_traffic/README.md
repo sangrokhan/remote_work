@@ -78,17 +78,30 @@ Two rules the Gemini arms keep, and why:
 | `responses_stateless` | `POST /v1/responses`, `store: false`, `input = [system, u1, a1, …, uk]` | the control: the same payload as `chat_stateless` on a different endpoint, so any byte gap against `responses_stateful` is about server-side state and not about which endpoint the bytes went through |
 | `responses_stateful` | `POST /v1/conversations` once (seeded with the system prompt), then `POST /v1/responses` with `conversation=conv_…`, `input = [uk]` | the finding: the uploaded bytes collapse to O(N) while `usage.input_tokens` does not. OpenAI bills every previous input token in the chain. The bytes can already be saved; the billing does not follow |
 
-Two measurement choices that are not incidental:
+Three measurement choices that are not incidental:
 
 - The `requests` library, never the official SDK. The SDK rides on httpx, and the socket
   counter is an http.client/urllib3 subclass that cannot attach to it.
-- The system prompt is byte-identical on every turn and `prompt_cache_key` is pinned per
-  arm. OpenAI's prompt cache matches on an exact prefix, so a timestamp anywhere in the
-  system prompt would miss the cache every turn and turn `cached_tokens` into noise; and
-  unkeyed, whether an identical prefix hits depends on which node the call lands on
-  (measured live: 2/5 unkeyed, 4/5 keyed). The key is distinct per arm so that whichever
-  arm runs first cannot warm the cache for the next one and make it look cheaper for no
-  reason but its position.
+- **A cold prefix per arm.** Both vendors cache on an exact token prefix, implicitly,
+  with no "don't cache" flag on either API — so the identical system prompt that makes
+  the arms comparable is also what lets them read each other's cache. Measured, before
+  this was fixed: `openai:responses_stateful` was billed **4224 cached tokens on its own
+  turn 1**, off a prefix `responses_stateless` had left warm three arms earlier; and
+  `chat_stateless`'s first-turn TTFT moved **1801 ms → 662 ms** between two runs for no
+  reason but cache state. `prompt_cache_key` does not prevent this — it biases routing,
+  it does not namespace the cache. So `core.cachebust` prepends a per-(run, provider,
+  arm) marker to the system prompt: distinct between arms and between runs, constant
+  *within* an arm (turn 2 must still hit what turn 1 left warm — that is a real client's
+  behaviour, and it is the thing being measured), and a fixed-width digest rather than
+  the arm's name, so no arm's `input_tokens` carries the length of its own label. Every
+  tag is recorded in `params.cache_bust`. Turn it off with `--no-cache-bust` /
+  `TRAFFIC_CACHE_BUST=0` when the warm case is what you want to measure.
+- The system prompt is byte-identical on every turn **of an arm**. OpenAI's prompt cache
+  matches on an exact prefix, so a timestamp that moved *between turns* would miss the
+  cache every turn and turn `cached_tokens` into noise. `prompt_cache_key` is pinned per
+  arm and per run: unkeyed, whether an identical prefix hits depends on which node the
+  call lands on (measured live: 2/5 unkeyed, 4/5 keyed), so the key keeps an arm's own
+  turns landing on the node that holds its own cache.
 
 ## The two rules that keep the numbers honest
 

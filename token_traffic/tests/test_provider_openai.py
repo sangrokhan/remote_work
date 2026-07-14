@@ -182,3 +182,61 @@ def test_latency_marks_only_exist_on_a_timed_pass():
     timed = _steady(_run("chat_stateless", turns=2, measure="latency"))
     for r in timed:
         assert 0 < r["ttfb_ms"] <= r["ttft_ms"] <= r["ttlt_ms"] <= r["turn_end_ms"]
+
+
+def _live_calls(monkeypatch, arm, measure):
+    """(url, measure) per call the arm would have put on the wire.
+
+    Mock mode short-circuits core.call, and the bug this covers lives in what core.call
+    is asked to do -- so the mock has to be off and `send` is what gets spied on.
+    """
+    # Both switches: conftest pins TRAFFIC_MOCK *and* OPENAI_MOCK, and either one alone
+    # keeps _send on the synthetic path. `send` is stubbed, so nothing reaches a socket.
+    monkeypatch.delenv("TRAFFIC_MOCK", raising=False)
+    monkeypatch.delenv("OPENAI_MOCK", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    calls = []
+
+    def spy(url, headers, body, *, measure, text_of, stream_body=None, rebuild=None,
+            timeout=180):
+        calls.append((url, measure))
+        return p.Exchange(status=200, response={"id": "conv_1", "output": [],
+                                                "usage": {}})
+
+    monkeypatch.setattr(p, "send", spy)
+    p.run_arm(arm, "gpt-4.1-nano", SYSTEM, STEPS[:2], measure)
+    return calls
+
+
+@pytest.mark.parametrize("measure", ["bytes", "latency", "both"])
+def test_the_conversation_create_is_never_streamed(monkeypatch, measure):
+    """/v1/conversations has no stream to open, and it rejects the parameter outright:
+
+        400 invalid_request_error: Unknown parameter: 'stream'.
+
+    The create used to be handed the run's `measure`, so every `latency` and `both` run
+    of this arm died on its prep call -- before its first question, with no conversation
+    id to chain the turns onto. Prep is not a turn: it is blocking whatever the run is.
+    """
+    calls = _live_calls(monkeypatch, "responses_stateful", measure)
+    create = [(url, m) for url, m in calls if url.endswith("/conversations")]
+    assert create == [(create[0][0], "bytes")]
+    # And the turns still get the pass the operator asked for.
+    assert all(m == measure for url, m in calls if url.endswith("/responses"))
+
+
+def test_the_prompt_cache_key_rotates_with_the_run():
+    """The key is a routing hint, not a namespace -- prefix isolation is core.cachebust's
+    job. But an un-rotated key routes this run's calls at the node holding *last* run's
+    prefix, which is a node with nothing of ours on it."""
+    from core import cachebust
+
+    cachebust.begin("2026-07-14T09:52:30+00:00")
+    first = p._cache_key("chat_stateless")
+    assert first != p._cache_key("responses_stateless")
+
+    cachebust.begin("2026-07-14T10:11:00+00:00")
+    assert p._cache_key("chat_stateless") != first
+
+    cachebust.begin("2026-07-14T10:11:00+00:00", enabled=False)
+    assert p._cache_key("chat_stateless") == "tt-openai-chat_stateless"

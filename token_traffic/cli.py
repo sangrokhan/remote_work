@@ -72,6 +72,10 @@ def main(argv=None) -> int:
     ap.add_argument("--fixture", default=scenario.DEFAULT, choices=scenario.names())
     ap.add_argument("--turns", type=int, help="truncate the thread")
     ap.add_argument("--capture", action="store_true", help="pcap per arm (needs tcpdump)")
+    ap.add_argument("--no-cache-bust", dest="cache_bust", action="store_false",
+                    default=None,
+                    help="let the arms share a prefix, so each one can be answered "
+                         "from the cache the last one left warm (default: off)")
     ap.add_argument("--pause", type=float, default=0, metavar="SEC",
                     help="wait between arms, to stay under a rate limit")
     ap.add_argument("--go", action="store_true",
@@ -118,7 +122,7 @@ def main(argv=None) -> int:
     run = runner.run(providers, system=fixture["system"], steps=fixture["steps"],
                      measure=args.measure, want_capture=args.capture,
                      pause_seconds=args.pause, timestamp=timestamp,
-                     on_progress=_progress)
+                     cache_bust=args.cache_bust, on_progress=_progress)
     run["timestamp"] = timestamp
     run["mock"] = mock
     run["params"]["fixture"] = fixture["name"]

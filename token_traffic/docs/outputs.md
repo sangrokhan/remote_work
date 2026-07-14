@@ -23,7 +23,8 @@ random bytes.
 | `schema_version` | currently `1`. A run written under an older layout has to be identifiable as such, not silently charted next to a current one whose columns mean something else |
 | `timestamp` | when the run started, UTC ISO-8601 |
 | `mock` | `true` if the run made no network call. Every consumer keys off this |
-| `params` | `mode`, `measure`, `pairs` (`["gemini:cached", "openai:responses_stateful", …]`), `providers`, `models`, `turns`, `fixture`, `capture`, and `warnings` — everything the operator was told before the calls went out, kept with the numbers they produced |
+| `params` | `mode`, `measure`, `pairs` (`["gemini:cached", "openai:responses_stateful", …]`), `providers`, `models`, `turns`, `fixture`, `capture`, `cache_bust`, and `warnings` — everything the operator was told before the calls went out, kept with the numbers they produced |
+| `params.cache_bust` | `{enabled, tags}`. `tags` is `{"gemini:stateless": "3f9a1c2e7b40d5a6", …}`: the marker each arm's system prompt actually carried. Recorded rather than merely flagged, because a run that came back suspiciously warm can only be explained if the prefixes it sent are recoverable. `enabled: false` means the arms shared a prefix and an arm's `cached_tokens` and TTFT may belong to the arm before it — the run says so in `warnings` too |
 | `records` | one row per (provider, arm, turn, pass), including prep. See below |
 | `summary` | `core.metrics.summarize()`, computed once, at save time, and stored |
 | `pcaps` | keyed `provider:arm`; what each capture actually got |
@@ -128,10 +129,16 @@ One per (provider, arm), written to `TRAFFIC_PCAP_DIR`, downloadable at
 `GET /api/pcaps/<name>`:
 
 ```
-capture_gemini_interaction_inline_2026-07-14T10-15-30+00-00_9f8e7d6c5b4a3f21.pcap
+capture_gemini_interaction_inline_2026-07-14T10-15-30-837905-00-00_9f8e7d6c5b4a3f21.pcap
 ```
 
-The label is `provider_arm`; the timestamp is the run's; the trailing 64-bit token means
+The label is `provider_arm`; the timestamp is the run's, with every non-alphanumeric
+character squeezed to a dash — the run stamps itself with `datetime.isoformat()`, which
+carries a `.` and a `+`, and a filename holding either of them is a filename the download
+route's own validator rejects. It used to: tcpdump wrote a good pcap, the run recorded it,
+and `GET /api/pcaps/<name>` answered 404 for a file sitting on disk. The authoritative
+timestamp is in the run document, next to the pcap's entry; the one in the name is a
+label. The trailing 64-bit token means
 two concurrent arms cannot collide and a download URL is not guessable from another one. A
 label that cannot be spelled safely in a filename is **refused**, not substituted — the
 predecessor renamed unspellable labels to a default, which is how an arm once shipped a

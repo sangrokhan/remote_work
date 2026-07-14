@@ -25,15 +25,19 @@ Measurement choices that are not incidental:
   - the `requests` library, never the official SDK. The SDK rides on httpx, and
     core.wire's socket counter is an http.client/urllib3 subclass that cannot
     attach to it. Going through core.call keeps every byte on a counted socket.
-  - the system prompt is byte-identical on every turn. OpenAI's prompt cache
-    matches on an exact prefix, so a timestamp or a turn counter anywhere in the
-    system prompt misses the cache on every turn and turns cached_tokens — and
-    every number derived from it — into noise.
-  - `prompt_cache_key` is pinned per arm. Unkeyed, whether an identical prefix
-    hits the cache depends on which node the call lands on; measured live, an
-    identical prefix hit 2/5 times unkeyed and 4/5 keyed. The key is distinct per
-    arm so that whichever arm runs first cannot warm the cache for the next one
-    and make it look cheaper for no reason but its position.
+  - the system prompt is byte-identical on every turn *of an arm*. OpenAI's prompt
+    cache matches on an exact prefix, so a timestamp or a turn counter that moved
+    between turns would miss on every turn and turn cached_tokens — and every
+    number derived from it — into noise. Between *arms* the prompt is deliberately
+    not identical: core.cachebust puts a per-(run, arm) marker in front of it, so
+    an arm cannot be answered from the prefix its neighbour left warm.
+  - `prompt_cache_key` is pinned per arm and per run. It is a routing hint, not a
+    namespace: unkeyed, whether an identical prefix hits depends on which node the
+    call lands on (measured live: 2/5 unkeyed, 4/5 keyed), but a distinct key never
+    stopped one arm from reading another's cache — `responses_stateful` was billed
+    4224 cached tokens on its own turn 1, off `responses_stateless`'s prefix, with
+    the keys already distinct. Isolation comes from the prefix (core.cachebust);
+    the key only keeps a run's own turns landing on the node holding their cache.
 """
 
 from __future__ import annotations
@@ -42,7 +46,7 @@ import json
 import os
 from typing import TYPE_CHECKING
 
-from core import config
+from core import cachebust, config
 from core.call import Exchange, send
 from core.record import turn_record
 from providers import base
@@ -106,7 +110,15 @@ def _headers() -> dict:
 
 
 def _cache_key(arm: str) -> str:
-    return f"tt-{NAME}-{arm}"
+    """Distinct per arm, and per run when cache-busting is on.
+
+    Rotating it with the run matters even though the prefix already differs: an
+    un-rotated key routes this run's calls at the node holding *last* run's prefix,
+    which is a node with nothing of ours on it. Keeping the key with the prefix keeps
+    an arm's own turns landing where its own turn 1 left its cache.
+    """
+    tag = cachebust.tag(NAME, arm)
+    return f"tt-{tag}-{arm}" if tag else f"tt-{NAME}-{arm}"
 
 
 # ---------------------------------------------------------------- request bodies
@@ -364,10 +376,21 @@ def _create_conversation(system: str, measure: str) -> tuple[dict, str]:
     Counted and reported as a prep record rather than pretended free: this arm buys
     its flat per-turn upload with an upload here, and a comparison that hid it would
     be arguing with itself.
+
+    Sent blocking whatever the run's `measure` is, and `measure` is not passed on. This
+    is not a turn: nothing streams out of /v1/conversations, there is no first token to
+    time, and the endpoint rejects the parameter outright --
+
+        400 invalid_request_error: Unknown parameter: 'stream'.
+
+    -- which is how every `latency` and `both` run of this arm died before its first
+    question, with no conversation id to chain the turns onto. The run's `measure` is
+    still what the record is filed under: it says which pass the *turns* were measured
+    by, and a reader comparing prep bytes across runs has to see it.
     """
     url = f"{base_url()}/conversations"
     body = {"items": [{"type": "message", "role": "system", "content": system}]}
-    x = _send(url, body, measure=measure, text_of=lambda _e: "", rebuild=lambda _e: {})
+    x = _send(url, body, measure="bytes", text_of=lambda _e: "", rebuild=lambda _e: {})
     rec = turn_record(
         provider=NAME, arm="responses_stateful", phase="setup", turn=0,
         question="", measure=measure, exchange=x,

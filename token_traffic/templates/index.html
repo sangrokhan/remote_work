@@ -60,6 +60,7 @@
       <input id="pause" type="number" min="0" step="1" value="0">
     </label>
     <label class="cap"><input id="capture" type="checkbox"> capture pcap</label>
+    <label class="cap" title="Prepend a per-run, per-arm marker to the system prompt so no arm is answered from the prefix cache another arm — or another run — left warm."><input id="cacheBust" type="checkbox" checked> cold prefix per arm</label>
     <span class="spacer"></span>
     <button id="preflightBtn">Preflight</button>
     <button id="runBtn" class="go" disabled>Run</button>

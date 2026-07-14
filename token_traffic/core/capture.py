@@ -84,7 +84,24 @@ def pcap_dir() -> Path:
 PCAP_SNAPLEN = int(os.environ.get("TRAFFIC_PCAP_SNAPLEN", "100"))
 # Filename = label + timestamp + a high-entropy token, so concurrent arms never
 # collide and a download URL is not guessable from another one.
-_SAFE_NAME = re.compile(r"^capture_[a-z0-9_-]{1,64}_[0-9T\-]+_[0-9a-f]{16}\.pcap$")
+#
+# The timestamp is an ISO-8601 string, and it arrives carrying `:`, `.` and `+`
+# (2026-07-14T09:46:57.837905+00:00). Only the colons used to be replaced, so the dot
+# and the plus survived into the filename -- and this pattern, which every download goes
+# through, then refused to match the name capture had just written. tcpdump wrote a
+# perfectly good pcap, the run recorded it, and /api/pcaps/<name> answered 404 for a file
+# sitting on disk. So the timestamp is squeezed through `_stamp` on the way in, and this
+# accepts what `_stamp` can emit -- the two must be read together or the bug comes back.
+_SAFE_NAME = re.compile(r"^capture_[a-z0-9_-]{1,64}_[0-9A-Za-z\-]{1,64}_[0-9a-f]{16}\.pcap$")
+
+# Anything not alphanumeric becomes a dash, runs collapse, edges are trimmed. Lossy on
+# purpose: the filename is a label, and the authoritative timestamp is in the run
+# document next to the pcap's entry.
+_UNSAFE_STAMP = re.compile(r"[^0-9A-Za-z]+")
+
+
+def _stamp(timestamp: str) -> str:
+    return _UNSAFE_STAMP.sub("-", timestamp or "").strip("-")[:64] or "0"
 # The label is provider_arm. Anything outside this alphabet could escape the pcap
 # directory once it lands in a filename. Underscores belong here: arm names carry
 # them (interaction_inline, responses_stateful), and an earlier version that left
@@ -262,8 +279,7 @@ class Capture:
             self.path = pcap_dir() / "invalid.pcap"
             return
         token = secrets.token_hex(8)  # 64-bit: unguessable and collision-proof
-        ts = (timestamp or "").replace(":", "-")
-        self.path = pcap_dir() / f"capture_{self.label}_{ts}_{token}.pcap"
+        self.path = pcap_dir() / f"capture_{self.label}_{_stamp(timestamp)}_{token}.pcap"
 
     def __enter__(self) -> "Capture":
         if self.error:          # rejected label; never touch the filesystem

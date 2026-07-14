@@ -23,6 +23,10 @@ def _run(**kw):
     return runner.run(system=FIXTURE["system"], steps=FIXTURE["steps"], **kw)
 
 
+# Captured once, before any test can monkeypatch the module attribute.
+_GEMINI_RUN_ARM = base.get("gemini").run_arm
+
+
 class _NullCapture:
     """A capture that starts and stops and records nothing: the runner's window logic
     is what is under test, not tcpdump."""
@@ -129,6 +133,58 @@ class TestRecords:
         # The other provider's arm still ran and still produced numbers.
         assert any(r["provider"] == "gemini" and not r.get("error")
                    for r in run["records"])
+
+
+class TestPrefixIsolation:
+    """The socket is not the only thing an arm can inherit from the one before it.
+
+    Both vendors cache on the token prefix, and every arm sends the same system prompt.
+    Measured before core.cachebust: responses_stateful was billed 4224 cached tokens on
+    its own turn 1, off a prefix responses_stateless had left warm three arms earlier.
+    """
+
+    def _systems_seen(self, monkeypatch, **kw):
+        seen = {}
+        mod = base.get("gemini")
+
+        def spy(arm, model, system, steps, measure, on_progress=None):
+            seen[arm] = system
+            # _GEMINI_RUN_ARM, not the module attribute: called twice in one test, a spy
+            # that re-reads the attribute wraps the *previous* spy, and the first call's
+            # `seen` gets overwritten with the second call's prompts. The dicts then
+            # compare equal and the test passes while measuring nothing.
+            return _GEMINI_RUN_ARM(arm, model, system, steps, measure, on_progress)
+
+        monkeypatch.setattr(mod, "run_arm", spy)
+        _run(providers={"gemini": ["stateless", "nocontext"]}, **kw)
+        return seen
+
+    def test_two_arms_are_handed_different_system_prompts(self, monkeypatch):
+        seen = self._systems_seen(monkeypatch, timestamp="2026-07-14T09:52:30+00:00")
+        assert seen["stateless"] != seen["nocontext"]
+        assert seen["stateless"].endswith(FIXTURE["system"])
+
+    def test_the_same_arm_gets_a_different_prompt_in_the_next_run(self, monkeypatch):
+        first = self._systems_seen(monkeypatch, timestamp="2026-07-14T09:52:30+00:00")
+        second = self._systems_seen(monkeypatch, timestamp="2026-07-14T10:11:00+00:00")
+        assert first["stateless"] != second["stateless"]
+
+    def test_the_tags_a_run_sent_are_recorded(self):
+        run = _run(providers={"gemini": ["stateless"]},
+                   timestamp="2026-07-14T09:52:30+00:00")
+        cb = run["params"]["cache_bust"]
+        assert cb["enabled"] is True
+        # Recorded, not just flagged: a run that came back suspiciously warm can only be
+        # explained if the prefixes it actually sent are recoverable from the document.
+        assert cb["tags"]["gemini:stateless"]
+
+    def test_turning_it_off_warns_that_the_numbers_are_not_the_arms_own(
+            self, monkeypatch):
+        run = _run(providers={"gemini": ["stateless"]}, cache_bust=False)
+        assert run["params"]["cache_bust"] == {"enabled": False, "tags": {}}
+        assert any("cache-bust off" in w for w in run["params"]["warnings"])
+        seen = self._systems_seen(monkeypatch, cache_bust=False)
+        assert seen["stateless"] == FIXTURE["system"]
 
 
 class TestIsolation:
