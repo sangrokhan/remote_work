@@ -59,7 +59,17 @@ def _report(run: dict) -> None:
               f"{marks['store_tail_ms']['median']:>8}")
     for key, p in (summary.get("prep") or {}).items():
         print(f"  prep {key}: {p['calls']} call(s), {p['wire_sent']} B up "
-              f"({', '.join(p['phases'])}) — excluded from the totals above")
+              f"— excluded from the totals above")
+        # One line per kind. A prep phase is not one kind of call, and a single rolled-up
+        # row invites a reader to add an inference call's input tokens to a cache's size.
+        for b in p.get("by_kind") or []:
+            cost = (f"{b['input_tokens']} in tok billed" if b.get("billed")
+                    else "0 tok billed")
+            size = f", cache {b['cache_tokens']} tok" if b.get("cache_tokens") else ""
+            print(f"      {b['kind']:<20} {b['calls']} call(s), "
+                  f"{b['wire_sent']} B up, {cost}{size}")
+            if b.get("note"):
+                print(f"      {'':<20} └ {b['note']}")
     for f in summary["failures"]:
         print(f"  ! {f['key']} turn {f['turn']}: {f['error']}")
 

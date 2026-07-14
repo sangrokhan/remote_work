@@ -44,10 +44,16 @@ from providers import base
 # is never a default.
 MEASURES = ("bytes", "latency", "both")
 
-# The one arm where `both` is not merely expensive but wrong: every pass carries the
-# conversation id, and OpenAI appends each pass to the server-side history, so the
-# second call of turn k makes turn k+1's input_tokens count turn k twice.
-_BOTH_IS_UNSAFE = {("openai", "responses_stateful")}
+# The arms where `both` is not merely expensive but wrong: every pass carries the
+# conversation id, and OpenAI appends each pass to the shared conversation object, so
+# the second call of turn k makes turn k+1's input_tokens count turn k twice.
+#
+# `responses_chained` is deliberately absent. It carries previous_response_id, not a
+# conversation: the two passes branch from the same parent rather than appending to one
+# object, and the chain follows the blocking pass. The streamed pass is an orphan branch
+# -- it costs money and corrupts nothing.
+_BOTH_IS_UNSAFE = {("openai", "responses_stateful"),
+                   ("openai", "responses_stateful_inline")}
 
 # Between arms, not after the last one: the gap exists to keep a rate-limited project
 # from refusing the next arm, and a pause at the end delays nothing but the operator.

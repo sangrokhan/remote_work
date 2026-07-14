@@ -78,6 +78,9 @@ comparable. They ride at the front, before any number.
 | `provider` | `gemini` or `openai`. A run holds both vendors, and `stateless` alone names nothing |
 | `arm` | which strategy. Unique only together with `provider` |
 | `phase` | `steady` for the turns that count; `cachegen` (a Gemini cache build or transcript replay) or `setup` (an OpenAI conversation create) for prep. A cache build is not a turn, and `core.metrics` never folds one into a total |
+| `kind` | on a prep record only: `transcript`, `cache_create`, or `conversation_create`. A phase is **not** a kind — `cachegen` holds transcript calls *and* cache builds, and they do not measure the same thing. Summing their token columns produced 19071 for `gemini:cached`: two real input counts (4479 + 4762) added to two cache sizes (4659 + 5171). A number describing nothing |
+| `billed` | on a prep record only. `true` means the token columns are tokens billed for an answer; `false` means nothing was billed and a `0` in those columns means **not billed**, not *not sent*. `POST /v1/conversations` returns no usage object at all, and the 21 KB prompt it stores is billed as input on **every turn** — the zeros are honest and the note beside them is what says what they mean |
+| `cache_tokens` | on a `cache_create` record: the **size** of the prefix now held in the cache. A size, not a bill, which is why it is not in `input_tokens` |
 | `turn` | 1-based within the arm; `0` on a prep record that belongs to no turn |
 | `measure` | `bytes`, `latency`, or `both`. Bytes off a streamed pass are framed (and, on OpenAI, obfuscation-padded); bytes off a blocking pass are not. They are different measurements wearing the same column name, and averaging them is the mistake this column exists to prevent |
 | `wire_sent`, `wire_recv` | socket bytes, headers and content-encoding included. `wire_sent` is the axis the arms differ on |

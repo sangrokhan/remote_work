@@ -1,24 +1,55 @@
-"""OpenAI: three arms over one conversation, and the gap between bytes and billing.
+"""OpenAI: five ways to keep one conversation going, and the gap between bytes and
+billing.
 
-  chat_stateless       POST /v1/chat/completions
-                       messages = [system, u1, a1, ..., uk]   -> uploads O(N^2)
+  chat_stateless        POST /v1/chat/completions
+                        messages = [system, u1, a1, ..., uk]   -> uploads O(N^2)
 
-  responses_stateless  POST /v1/responses, store=false
-                       input    = [system, u1, a1, ..., uk]   -> uploads O(N^2)
-                       The control arm: the same payload as chat_stateless on a
-                       different endpoint, so any byte gap against
-                       responses_stateful is about server-side state and not about
-                       which endpoint the bytes went through.
+  responses_stateless   POST /v1/responses, store=false
+                        input    = [system, u1, a1, ..., uk]   -> uploads O(N^2)
+                        The control arm: the same payload as chat_stateless on a
+                        different endpoint, so any byte gap against the stateful
+                        arms is about server-side state and not about which
+                        endpoint the bytes went through.
 
-  responses_stateful   POST /v1/conversations once, seeded with the system prompt
-                       POST /v1/responses, conversation=conv_..., input = [uk]
-                       -> uploads O(N). The server holds the history.
+  responses_chained     POST /v1/responses, store=true, previous_response_id=...
+                        instructions = system   (every turn)
+                        input        = [uk]
+                        -> uploads O(1) per turn, but a *big* O(1): the history
+                        lives on the server and the system prompt does not.
+                        `instructions` is top-level and is not stored, so it must
+                        be resent with every request (OpenAI, migrate-to-responses).
 
-What the experiment is about: on the stateful arm the uploaded bytes collapse
-while `usage.input_tokens` does not. OpenAI's own documentation says why — all
-previous input tokens for responses in the chain are billed as input tokens. The
-bytes can already be saved; the billing does not follow. That gap is the finding,
-and a mock run must not be able to pretend it away.
+  responses_stateful_inline
+                        POST /v1/conversations, no items       (~200 B)
+                        POST /v1/responses, conversation=conv_..., store=true
+                        turn 1: input = [system, u1]           <- the prompt is
+                        turn k: input = [uk]                      stored here
+                        -> uploads O(1), and a small one. Same content reaches the
+                        model as `responses_chained`; a different party stores it.
+
+  responses_stateful    POST /v1/conversations once, seeded with the system prompt
+                        POST /v1/responses, conversation=conv_..., input = [uk]
+                        -> the same thing as responses_stateful_inline, with the
+                        system prompt uploaded out-of-band instead of inside turn 1.
+                        A diagnostic, not a headline arm: it exists to show that
+                        *where* the prompt is uploaded changes the bytes' phase and
+                        nothing else. Its 21 KB prep upload is real and is reported,
+                        but it lands outside the measured window, which makes the
+                        arm look cheaper than the identical inline one.
+
+These map onto the Gemini arms one for one, which is the point -- `responses_chained`
+is `interaction` (server holds the history, the system prompt goes up every turn),
+`responses_stateful_inline` is `interaction_inline` (the system prompt is stored with
+the history), `responses_stateless` is `interaction_stateless`. A finding that holds
+on one vendor and not the other is only visible if the arms line up.
+
+What the experiment is about: on every stateful arm the uploaded bytes collapse while
+`usage.input_tokens` does not. OpenAI's own documentation says why — all previous input
+tokens for responses in the chain are billed as input tokens. Measured: the stateful arm
+uploaded 1176 B on turn 1 against chat_stateless's 21866 B, and both were billed 4338
+input tokens. Exactly the same. There are three ways to stop uploading the history and
+none of them stops paying for it. That gap is the finding, and a mock run must not be
+able to pretend it away.
 
 Measurement choices that are not incidental:
 
@@ -65,8 +96,15 @@ if TYPE_CHECKING:
 NAME = "openai"
 DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-nano")
 
-ARMS = ("chat_stateless", "responses_stateless", "responses_stateful")
-HEADLINE_ARMS = ARMS
+ARMS = ("chat_stateless", "responses_stateless", "responses_chained",
+        "responses_stateful_inline", "responses_stateful")
+# `responses_stateful` is out of the headline: it measures the same strategy as
+# `responses_stateful_inline` and differs only in where the system prompt's bytes are
+# uploaded -- out-of-band, into a prep call that sits outside the measured window. That
+# makes it look cheaper than the arm it is identical to, which is a good reason to be
+# able to run it deliberately and a bad reason to bill for it by default.
+HEADLINE_ARMS = ("chat_stateless", "responses_stateless", "responses_chained",
+                 "responses_stateful_inline")
 
 MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "400"))
 # Empty for a non-reasoning model: the parameter must not be sent at all, or the
@@ -155,7 +193,19 @@ def _chat_body(model: str, system: str, history: list[dict], question: str,
 
 
 def _responses_body(model: str, items: list[dict], arm: str, *, store: bool,
-                    conversation: str | None = None, stream: bool = False) -> dict:
+                    conversation: str | None = None, previous: str | None = None,
+                    instructions: str = "", stream: bool = False) -> dict:
+    """One /v1/responses request.
+
+    `instructions` is the top-level system prompt, and it is a different thing from a
+    system message in `input`: an input item is appended to the server-side history and
+    is therefore stored once, while `instructions` is not stored at all and has to be
+    resent with every request (OpenAI, migrate-to-responses). That distinction is the
+    whole difference between `responses_chained` and `responses_stateful_inline`, so the
+    two must not be reachable through the same field -- a system message sent as `input`
+    on every turn of a chained arm would be appended on every turn, and turn k's
+    input_tokens would count k copies of the system prompt.
+    """
     body: dict = {
         "model": model,
         "input": items,
@@ -166,8 +216,12 @@ def _responses_body(model: str, items: list[dict], arm: str, *, store: bool,
     }
     if stream:
         body["stream_options"] = dict(_RESP_STREAM_OPTS)
+    if instructions:
+        body["instructions"] = instructions
     if conversation:
         body["conversation"] = conversation
+    if previous:
+        body["previous_response_id"] = previous
     if REASONING_EFFORT:
         body["reasoning"] = {"effort": REASONING_EFFORT}
     return body
@@ -297,16 +351,23 @@ def run_arm(arm, model, system, steps, measure, on_progress=None) -> list[dict]:
     `steps` are the questions. `on_progress(record)` is called with each finished
     record; everything a caller could want to print is already in it.
 
-    The stateful arm's conversation create is a prep record with phase "setup": its
-    bytes are counted and reported, not hidden, but core.metrics keeps prep out of
-    the totals because it is setup, not traffic.
+    A conversation create is a prep record with phase "setup": its bytes are counted
+    and reported, not hidden, but core.metrics keeps prep out of the totals because it
+    is setup, not traffic. The two conversation arms differ in what that create carries
+    -- `responses_stateful` seeds it with the system prompt (21 KB outside the measured
+    window), `responses_stateful_inline` creates it empty (~200 B) and lets the prompt
+    ride turn 1. Same content, same server, same billing; the only thing that moves is
+    which side of the window the bytes land on. That is why the inline one is the
+    headline arm: its cost is where a reader can see it.
 
-    One caveat this arm cannot design away: `measure="both"` sends the turn twice,
-    and on responses_stateful both passes carry `conversation=`, which OpenAI
-    appends to (store=false is not allowed alongside a conversation). So `both`
-    writes each turn into the server-side history twice and inflates input_tokens
-    from the next turn on. Use `bytes` or `latency` on that arm, or read its token
-    series knowing it is doubled.
+    One caveat the conversation arms cannot design away: `measure="both"` sends the turn
+    twice, and both passes carry `conversation=`, which OpenAI appends to (store=false is
+    not allowed alongside a conversation). So `both` writes each turn into the server-side
+    history twice and inflates input_tokens from the next turn on. core.runner refuses it.
+    `responses_chained` is safe with `both`: each pass branches from the same
+    previous_response_id rather than appending to a shared object, and the chain follows
+    the blocking pass -- the streamed pass is an orphan branch that costs money and
+    corrupts nothing.
     """
     if arm not in ARMS:
         raise ValueError(f"unknown arm: {arm}")
@@ -314,43 +375,64 @@ def run_arm(arm, model, system, steps, measure, on_progress=None) -> list[dict]:
     records: list[dict] = []
     history: list[dict] = []
     conversation = ""
+    previous = ""
 
     n = len(steps)
-    if arm == "responses_stateful":
+    if arm in ("responses_stateful", "responses_stateful_inline"):
         base.progress(on_progress, NAME, arm, "setup", 1, n)
-        rec, conversation = _create_conversation(system, measure)
+        # Inline: no items. `items` is optional on POST /v1/conversations, so the create
+        # is a bare container and the system prompt is uploaded once, inside turn 1,
+        # where the measurement can see it.
+        seed = "" if arm == "responses_stateful_inline" else system
+        rec, conversation = _create_conversation(seed, arm)
         records.append(rec)
 
     for k, question in enumerate(steps, start=1):
         base.progress(on_progress, NAME, arm, "steady", k, n)
+        url = f"{base_url()}/responses"
 
         if arm == "chat_stateless":
             url = f"{base_url()}/chat/completions"
             body = _chat_body(model, system, history, question, arm)
-            text_of, rebuild = _chat_text_of, _rebuild_chat
         elif arm == "responses_stateless":
-            url = f"{base_url()}/responses"
             items = ([{"role": "system", "content": system}]
                      + history
                      + [{"role": "user", "content": question}])
             body = _responses_body(model, items, arm, store=False)
-            text_of, rebuild = _responses_text_of, _rebuild_responses
-        else:
-            url = f"{base_url()}/responses"
+        elif arm == "responses_chained":
+            # The server holds the history; it does not hold the system prompt.
+            # `instructions` is not stored, so it goes up again on every single turn --
+            # the same bill Gemini's `interaction` arm pays for the same reason.
+            body = _responses_body(model, [{"role": "user", "content": question}],
+                                   arm, store=True, previous=previous or None,
+                                   instructions=system)
+        elif arm == "responses_stateful_inline":
+            # Turn 1 carries the system prompt as an input *item*, so the server stores
+            # it with the history and no later turn resends it. Not `instructions`:
+            # that would not be stored, and this arm would silently become the chained
+            # one.
+            items = ([{"role": "system", "content": system}] if k == 1 else [])
+            items += [{"role": "user", "content": question}]
+            body = _responses_body(model, items, arm, store=True,
+                                   conversation=conversation)
+        else:   # responses_stateful
             # Only the new question. The system prompt and every prior turn already
             # live on the server; resending them is the thing this arm exists not to do.
             body = _responses_body(model, [{"role": "user", "content": question}],
                                    arm, store=True, conversation=conversation)
-            text_of, rebuild = _responses_text_of, _rebuild_responses
+
+        chat = arm == "chat_stateless"
+        text_of = _chat_text_of if chat else _responses_text_of
+        rebuild = _rebuild_chat if chat else _rebuild_responses
 
         x = _send(url, body, measure=measure, text_of=text_of, rebuild=rebuild)
-        chat = arm == "chat_stateless"
         usage = _usage(x.response, chat=chat)
 
         rec = turn_record(
             provider=NAME, arm=arm, phase="steady", turn=k, question=question,
             measure=measure, exchange=x, usage=usage,
-            extra={"conversation": conversation, "url": url},
+            extra={"conversation": conversation, "previous_response_id": previous,
+                   "url": url},
         )
         records.append(rec)
 
@@ -365,38 +447,56 @@ def run_arm(arm, model, system, steps, measure, on_progress=None) -> list[dict]:
             # history client-side rather than a flattering reconstruction of it.
             history.append({"role": "user", "content": question})
             history.extend(_echo_items(x.response))
-        # The stateful arm keeps no history: the server appended both messages for it.
+        elif arm == "responses_chained":
+            previous = (x.response or {}).get("id") or previous
+        # The conversation arms keep no history: the server appended both messages.
 
     return records
 
 
-def _create_conversation(system: str, measure: str) -> tuple[dict, str]:
-    """The stateful arm's one-time upload of the system prompt.
+def _create_conversation(seed: str, arm: str) -> tuple[dict, str]:
+    """Open a server-side conversation. `seed` is the system prompt, or "" for an empty
+    container.
 
-    Counted and reported as a prep record rather than pretended free: this arm buys
-    its flat per-turn upload with an upload here, and a comparison that hid it would
-    be arguing with itself.
+    `items` is optional on POST /v1/conversations, so an empty create is a legal ~200-byte
+    call. That is what `responses_stateful_inline` uses: the system prompt then rides
+    turn 1 and its bytes are inside the measured window, where a reader can see them.
+    Seeding here instead (`responses_stateful`) uploads the same prompt out-of-band and
+    the arm looks 21 KB cheaper than the one it is otherwise identical to.
 
-    Sent blocking whatever the run's `measure` is, and `measure` is not passed on. This
-    is not a turn: nothing streams out of /v1/conversations, there is no first token to
-    time, and the endpoint rejects the parameter outright --
+    Nothing is billed here either way, and the zeros in this record are measured, not
+    assumed: the endpoint runs no inference and its response carries no usage object at
+    all --
+
+        {"id": "conv_...", "object": "conversation", "created_at": ..., "metadata": {}}
+
+    -- so 0 tokens is the honest number and `kind` is what says it means "not billed"
+    rather than "not sent". The prompt is not free: the server re-reads it from the
+    stored conversation and bills it as input on every turn. Measured, 2 turns: 21 KB
+    uploaded once, and input_tokens identical to the arm that uploaded 21 KB every turn.
+
+    Sent blocking whatever the run's `measure` is. This is not a turn: nothing streams
+    out of /v1/conversations, there is no first token to time, and the endpoint rejects
+    the parameter outright --
 
         400 invalid_request_error: Unknown parameter: 'stream'.
 
     -- which is how every `latency` and `both` run of this arm died before its first
-    question, with no conversation id to chain the turns onto. The run's `measure` is
-    still what the record is filed under: it says which pass the *turns* were measured
-    by, and a reader comparing prep bytes across runs has to see it.
+    question, with no conversation id to chain the turns onto.
     """
     url = f"{base_url()}/conversations"
-    body = {"items": [{"type": "message", "role": "system", "content": system}]}
+    body: dict = {}
+    if seed:
+        body["items"] = [{"type": "message", "role": "system", "content": seed}]
     x = _send(url, body, measure="bytes", text_of=lambda _e: "", rebuild=lambda _e: {})
     rec = turn_record(
-        provider=NAME, arm="responses_stateful", phase="setup", turn=0,
-        question="", measure=measure, exchange=x,
+        provider=NAME, arm=arm, phase="setup", turn=0,
+        question="", measure="bytes", exchange=x,
         usage={"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0,
                "reasoning_tokens": 0, "total_tokens": 0},
-        extra={"conversation": x.response.get("id", ""), "url": url},
+        extra={"kind": "conversation_create",
+               "billed": False,
+               "conversation": x.response.get("id", ""), "url": url},
     )
     return rec, x.response.get("id", "")
 
@@ -416,15 +516,21 @@ _MOCK_REPLY = "ack"
 _MOCK_REQ_OVERHEAD = 280
 _MOCK_RESP_OVERHEAD = 210
 
-# The server-side conversations, and what each of them holds. This is the whole
-# reason mock mode cannot flatter the stateful arm: the client stops uploading the
-# history, but the server keeps it, and keeps billing for it.
+# The server-side state, and what each piece of it holds. This is the whole reason mock
+# mode cannot flatter the stateful arms: the client stops uploading the history, but the
+# server keeps it, and keeps billing for it.
+#   _MOCK_CONVERSATIONS  conversation id -> chars stored in it
+#   _MOCK_CHAINS         response id     -> chars of history behind it
+# Two structures because they are two mechanisms: a conversation is a shared container
+# that every turn appends to, a chain is a linked list that every turn branches from.
 _MOCK_CONVERSATIONS: dict[str, int] = {}
+_MOCK_CHAINS: dict[str, int] = {}
 _MOCK_SEQ = {"conv": 0, "resp": 0}
 
 
 def reset_mock() -> None:
     _MOCK_CONVERSATIONS.clear()
+    _MOCK_CHAINS.clear()
     _MOCK_SEQ.update(conv=0, resp=0)
 
 
@@ -446,8 +552,14 @@ def _mock_respond(url: str, body: dict) -> dict:
         return {"id": conv_id, "object": "conversation"}
 
     _MOCK_SEQ["resp"] += 1
+    resp_id = f"resp_{_MOCK_SEQ['resp']}"
     uploaded = body.get("input") or body.get("messages") or []
-    chars = _mock_chars(uploaded)
+    # `instructions` is billed on the turn that sends it and is never stored: it rides
+    # up again next turn because the server did not keep it. Adding it to the stored
+    # history instead would make the chained arm's input_tokens grow by a system prompt
+    # per turn -- a curve the real API does not produce.
+    instructions = body.get("instructions") or ""
+    chars = _mock_chars(uploaded) + len(instructions)
 
     conv_id = body.get("conversation")
     if conv_id:
@@ -455,9 +567,17 @@ def _mock_respond(url: str, body: dict) -> dict:
         # bills every prior input token in the chain anyway. input_tokens is
         # computed from the FULL server-side history, never from what came up the
         # wire — a mock that billed the upload would erase the result.
-        _MOCK_CONVERSATIONS[conv_id] += chars
-        chars = _MOCK_CONVERSATIONS[conv_id]
+        _MOCK_CONVERSATIONS[conv_id] += _mock_chars(uploaded)
+        chars = _MOCK_CONVERSATIONS[conv_id] + len(instructions)
         _MOCK_CONVERSATIONS[conv_id] += len(_MOCK_REPLY)
+    elif body.get("store"):
+        # The chain. Turn k branches off turn k-1's stored response, so what it is
+        # billed for is everything behind that response plus what it uploaded now --
+        # the same total the conversation arms pay, reached down a different road.
+        behind = _MOCK_CHAINS.get(body.get("previous_response_id") or "", 0)
+        stored = behind + _mock_chars(uploaded)
+        chars = stored + len(instructions)
+        _MOCK_CHAINS[resp_id] = stored + len(_MOCK_REPLY)
 
     in_tokens = max(chars // 4, 1)
     reasoning = 24 if body.get("reasoning") or body.get("reasoning_effort") else 0
@@ -484,7 +604,7 @@ def _mock_respond(url: str, body: dict) -> dict:
     output.append({"type": "message", "role": "assistant", "status": "completed",
                    "content": [{"type": "output_text", "text": _MOCK_REPLY}]})
     return {
-        "id": f"resp_{_MOCK_SEQ['resp']}",
+        "id": resp_id,
         "output": output,
         "usage": {
             "input_tokens": in_tokens,

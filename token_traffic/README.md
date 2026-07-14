@@ -75,8 +75,21 @@ Two rules the Gemini arms keep, and why:
 | arm | what each turn sends | what it is evidence of |
 |---|---|---|
 | `chat_stateless` | `POST /v1/chat/completions`, `messages = [system, u1, a1, …, uk]` | the classic chat loop: O(N²) upload |
-| `responses_stateless` | `POST /v1/responses`, `store: false`, `input = [system, u1, a1, …, uk]` | the control: the same payload as `chat_stateless` on a different endpoint, so any byte gap against `responses_stateful` is about server-side state and not about which endpoint the bytes went through |
-| `responses_stateful` | `POST /v1/conversations` once (seeded with the system prompt), then `POST /v1/responses` with `conversation=conv_…`, `input = [uk]` | the finding: the uploaded bytes collapse to O(N) while `usage.input_tokens` does not. OpenAI bills every previous input token in the chain. The bytes can already be saved; the billing does not follow |
+| `responses_stateless` | `POST /v1/responses`, `store: false`, `input = [system, u1, a1, …, uk]` | the control: the same payload as `chat_stateless` on a different endpoint, so any byte gap against the stateful arms is about server-side state and not about which endpoint the bytes went through |
+| `responses_chained` | `POST /v1/responses`, `store: true`, `previous_response_id=resp_…`, `instructions = system` **every turn**, `input = [uk]` | what server-side history buys when the system prompt is *not* part of it. `instructions` is top-level and is not stored, so it must be resent with every request. Uplink goes flat — and flat at roughly the size of the prompt |
+| `responses_stateful_inline` | `POST /v1/conversations` with **no items** (~200 B), then `POST /v1/responses` with `conversation=conv_…`; turn 1 `input = [system, u1]`, turn k `input = [uk]` | the same strategy with the prompt stored too. The gap against `responses_chained` *is* the system prompt: same endpoint, same stored history, same question |
+| `responses_stateful` | `POST /v1/conversations` once **seeded with the system prompt** (21 KB), then `POST /v1/responses`, `input = [uk]` | a diagnostic, not a headline arm. Identical to `responses_stateful_inline` in what reaches the model and what is billed; the only difference is that its 21 KB lands in a prep call *outside* the measured window, which makes it look cheaper than the arm it is identical to |
+
+These map onto the Gemini arms one for one, which is the point — `responses_chained` is
+`interaction`, `responses_stateful_inline` is `interaction_inline`, `responses_stateless`
+is `interaction_stateless`. A finding that holds on one vendor and not the other is only
+visible if the arms line up.
+
+**The finding, measured live over 2 turns:** `chat_stateless` uploaded 21866 B on turn 1
+and was billed **4338** input tokens. `responses_stateful` uploaded **1176 B** — and was
+billed **4338**. Identical. There are three ways to stop uploading the history and none of
+them stops paying for it. OpenAI's own docs say why: all previous input tokens for
+responses in the chain are billed as input tokens.
 
 Three measurement choices that are not incidental:
 
@@ -127,13 +140,19 @@ So `measure` says what a turn pays for:
 | `latency` | 1, streamed | the five marks and tokens; the bytes are the streamed framing, and are not the same quantity |
 | `both` | 2 | bytes and body from the blocking pass, marks from the streamed pass. The streamed pass's byte counts are dropped, not added: their sum is a number no client ever pays |
 
-`both` doubles the API bill, so it is never a default. And on **`openai:responses_stateful`
-it is not merely expensive but wrong**: every pass carries the conversation id, OpenAI
-appends each of them to the server-side history (`store: false` is not allowed alongside
-a conversation), so the second call of turn *k* makes turn *k+1*'s `input_tokens` count
-turn *k* twice. `core.runner.warnings_for()` refuses to let that go out unannounced — the
-CLI prints the warning before the dry run ends, and `POST /api/preflight` returns it.
-Run that arm with `bytes` or `latency`.
+`both` doubles the API bill, so it is never a default. And on the two **conversation**
+arms — `openai:responses_stateful` and `openai:responses_stateful_inline` — it is not
+merely expensive but wrong: every pass carries the conversation id, OpenAI appends each of
+them to the server-side history (`store: false` is not allowed alongside a conversation),
+so the second call of turn *k* makes turn *k+1*'s `input_tokens` count turn *k* twice.
+`core.runner.warnings_for()` refuses to let that go out unannounced — the CLI prints the
+warning before the dry run ends, and `POST /api/preflight` returns it. Run those arms with
+`bytes` or `latency`.
+
+`responses_chained` is safe with `both`: it carries `previous_response_id`, not a
+conversation, so the two passes branch from the same parent rather than appending to one
+shared object, and the chain follows the blocking pass. The streamed pass is an orphan
+branch — it costs money and corrupts nothing.
 
 ### 2. The measurement window
 

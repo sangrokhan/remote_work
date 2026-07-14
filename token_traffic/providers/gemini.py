@@ -494,10 +494,19 @@ def _rec(arm, phase, turn, question, measure, exchange, usage, extra=None) -> di
 
 
 def _cache_usage(cache: dict) -> dict:
-    """A cache build reports its size and nothing else: no answer came out of it."""
-    tokens = cache.get("cached_tokens", 0)
-    return {"input_tokens": tokens, "cached_tokens": tokens, "output_tokens": 0,
-            "reasoning_tokens": 0, "total_tokens": tokens}
+    """A cache build is billed no input tokens: no answer came out of it.
+
+    It used to report its size as `input_tokens`, which put a *size* in the column that
+    everywhere else means *tokens billed as input for an answer*. core.metrics then
+    summed the arm's prep rows and produced 19071 -- two transcript calls' real input
+    tokens (4479 + 4762) added to two caches' sizes (4659 + 5171). A number describing
+    nothing, in a column a reader is entitled to trust.
+
+    So the billed columns are zero, which is true, and the size goes in the record's
+    `cache_tokens` extra, which is where a size belongs.
+    """
+    return {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0,
+            "reasoning_tokens": 0, "total_tokens": 0}
 
 
 def _arm_stateless(model, system, steps, measure, on_progress) -> list[dict]:
@@ -558,8 +567,12 @@ def _arm_cached(model, system, steps, measure, on_progress) -> list[dict]:
         ex = _generate(model, list(history), "bytes", k)
         history.append(model_content_from_response(ex.response, ex.text))
         transcript.append(ex.text)
+        # A real generateContent call: real inference, real input tokens, real money.
+        # `billed` is what keeps it from being summed together with the cache builds
+        # beside it, whose token columns are zeros and whose size is a size.
         recs.append(_rec("cached", "cachegen", k, q, measure, ex,
-                         _usage_gen(ex.response), {"kind": "transcript"}))
+                         _usage_gen(ex.response),
+                         {"kind": "transcript", "billed": True}))
 
     off = 1 if system else 0
     caches = []
@@ -569,7 +582,9 @@ def _arm_cached(model, system, steps, measure, on_progress) -> list[dict]:
         caches.append(cache)
         recs.append(_rec("cached", "cachegen", k, "", measure, ex,
                          _cache_usage(cache),
-                         {"kind": "cache_create", "cache_id": cache["name"],
+                         {"kind": "cache_create", "billed": False,
+                          "cache_tokens": cache["cached_tokens"],
+                          "cache_id": cache["name"],
                           "skipped": cache["name"] is None}))
 
     # Prep left a keep-alive connection open. The steady turns are what the pcap is

@@ -89,6 +89,105 @@ def test_the_conversation_create_is_a_setup_record():
     assert setup["turn"] == 0
     assert setup["req_payload_bytes"] > 0, "the setup upload is counted, not hidden"
     assert SYSTEM in setup["request_raw"], "setup is where the system prompt is uploaded"
+    # 0 tokens here is measured, not assumed: the endpoint runs no inference and returns
+    # no usage object. `kind` and `billed` are what say so, and keep core.metrics from
+    # adding this row's zeros to a Gemini transcript call's real input tokens.
+    assert setup["kind"] == "conversation_create"
+    assert setup["billed"] is False
+    assert setup["input_tokens"] == 0
+
+
+# --------------------------------------------- the two arms that store it differently
+
+def test_the_inline_arm_creates_an_empty_conversation():
+    """`items` is optional on POST /v1/conversations, so the create is a bare container.
+
+    The system prompt then rides turn 1, inside the measured window, instead of being
+    uploaded out-of-band where it makes the arm look 21 KB cheaper than the identical one.
+    """
+    records = _run("responses_stateful_inline", turns=3)
+    setup = records[0]
+    assert setup["phase"] == "setup"
+    assert SYSTEM not in setup["request_raw"], "the prompt does not go up here"
+    assert json.loads(setup["request_raw"]) == {}
+
+    seeded = _run("responses_stateful")[0]
+    assert setup["req_payload_bytes"] < seeded["req_payload_bytes"] / 50
+
+
+def test_the_inline_arm_uploads_the_system_prompt_once_on_turn_one():
+    bodies = _bodies(_run("responses_stateful_inline", turns=3))
+    first, rest = bodies[0], bodies[1:]
+
+    roles = [it["role"] for it in first["input"]]
+    assert roles == ["system", "user"], "turn 1 carries the prompt as a stored item"
+    # An input item, never `instructions`: `instructions` is not stored, and this arm
+    # would silently become the chained one.
+    assert "instructions" not in first
+
+    for body in rest:
+        assert [it["role"] for it in body["input"]] == ["user"]
+        assert SYSTEM not in json.dumps(body), "the server kept it; nobody resends it"
+
+
+def test_the_chained_arm_resends_the_system_prompt_every_turn():
+    """The OpenAI-side twin of gemini's `interaction`: the server holds the history and
+    does not hold the system prompt. `instructions` is top-level and is not stored, so it
+    must be resent with every request (OpenAI, migrate-to-responses)."""
+    bodies = _bodies(_run("responses_chained", turns=3))
+    for body in bodies:
+        assert body["instructions"] == SYSTEM
+        assert [it["role"] for it in body["input"]] == ["user"]
+        assert body["store"] is True
+        assert "conversation" not in body
+
+
+def test_the_chain_is_linked_turn_to_turn():
+    records = _steady(_run("responses_chained", turns=3))
+    bodies = [json.loads(r["request_raw"]) for r in records]
+    ids = [json.loads(r["response_raw"])["id"] for r in records]
+
+    assert "previous_response_id" not in bodies[0], "turn 1 has nothing to chain onto"
+    assert bodies[1]["previous_response_id"] == ids[0]
+    assert bodies[2]["previous_response_id"] == ids[1]
+
+
+def test_the_chained_arms_upload_is_flat_but_not_small():
+    """It stops resending the *history* and keeps resending the *system prompt*, so its
+    uplink is flat -- and flat at roughly the size of the prompt. That is the whole point
+    of having it: `responses_stateful_inline` shows what the other half buys."""
+    chained = [r["req_payload_bytes"] for r in _steady(_run("responses_chained", turns=4))]
+    p.reset_mock()
+    inline = [r["req_payload_bytes"]
+              for r in _steady(_run("responses_stateful_inline", turns=4))]
+
+    spread = max(chained) - min(chained)
+    assert spread < 0.2 * min(chained), "flat: it is not accumulating a history"
+    assert min(chained) > len(SYSTEM), "but it carries the system prompt every turn"
+    # The gap between the two arms *is* the system prompt: same endpoint, same stored
+    # history, same question -- the only thing chained still uploads and inline does not.
+    # Asserted as a difference rather than a ratio, so the test does not quietly depend
+    # on how big the fixture's prompt happens to be.
+    assert chained[-1] - inline[-1] > 0.9 * len(SYSTEM)
+
+
+def test_storing_the_prompt_server_side_does_not_stop_it_being_billed():
+    """Three ways to stop uploading the history. None of them stops paying for it.
+
+    Measured live, 2 turns: chat_stateless uploaded 21866 B on turn 1 and was billed 4338
+    input tokens; responses_stateful uploaded 1176 B and was billed 4338. Identical. A
+    mock that let any stateful arm look cheaper in *tokens* would erase the finding.
+    """
+    per_arm = {}
+    for arm in ("chat_stateless", "responses_chained", "responses_stateful_inline",
+                "responses_stateful"):
+        p.reset_mock()
+        per_arm[arm] = [r["input_tokens"] for r in _steady(_run(arm, turns=4))]
+
+    for arm, tokens in per_arm.items():
+        assert tokens == sorted(tokens), f"{arm}: input tokens must grow with the history"
+        assert tokens[0] > len(SYSTEM) // 8, \
+            f"{arm}: turn 1 is billed for the system prompt however it got there"
 
 
 def test_the_conversation_id_is_carried_from_turn_one():

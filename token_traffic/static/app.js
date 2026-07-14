@@ -605,25 +605,35 @@ function renderMarks(s, keys) {
   table($('marksTable'), ['arm', ...MARKS], rows);
 }
 
+// One row per (arm, kind), never one per arm. A prep phase mixes calls that do not
+// measure the same thing -- a Gemini transcript call is real inference with real input
+// tokens, a cache build's only number is a size, a conversation create runs no inference
+// and is billed nothing. Rolled into one row, their token columns got added together and
+// produced a number describing nothing. So an unbilled kind shows no token count at all
+// and says why in its own words: a zero there reads as "free", and it is not.
 function renderPrep(s, keys) {
   const prep = s.prep || {};
-  const rows = Object.keys(prep).map((k) => {
+  const rows = [];
+  for (const k of Object.keys(prep)) {
     const p = prep[k];
-    return [
-      {text: k, color: colorOf(keys, k)},
-      (p.phases || []).join(','),
-      fmtInt(p.calls),
-      fmtBytes(p.wire_sent),
-      fmtBytes(p.wire_recv),
-      fmtBytes(p.wire),
-      fmtInt(p.input_tokens),
-      fmtInt(p.output_tokens),
-      fmtInt(p.elapsed_ms),
-    ];
-  });
+    for (const b of p.by_kind || []) {
+      rows.push([
+        {text: k, color: colorOf(keys, k)},
+        b.kind,
+        fmtInt(b.calls),
+        fmtBytes(b.wire_sent),
+        fmtBytes(b.wire_recv),
+        b.billed ? fmtInt(b.input_tokens) : '—',
+        b.billed ? fmtInt(b.output_tokens) : '—',
+        b.cache_tokens ? fmtInt(b.cache_tokens) : '—',
+        fmtInt(b.elapsed_ms),
+        b.note || '',
+      ]);
+    }
+  }
   table($('prepTable'),
-    ['arm', 'phases', 'calls', 'uplink', 'downlink', 'total wire', 'input tok',
-     'output tok', 'elapsed ms'],
+    ['arm', 'kind', 'calls', 'uplink', 'downlink', 'input tok billed',
+     'output tok billed', 'cache size tok', 'elapsed ms', 'what it is'],
     rows);
 }
 

@@ -84,6 +84,59 @@ def _mark(rec: dict, name: str) -> int:
     return int(rec.get(name) or 0)
 
 
+# What a prep call of each kind actually costs, in one line a reader can trust. The note
+# is the whole point: `0` in a token column means "not billed" for one kind and "not
+# measured" for another, and only the kind can tell them apart.
+_PREP_NOTES = {
+    "transcript": "real inference: these input/output tokens were billed",
+    "cache_create": ("no inference, no tokens billed for an answer; `cache_tokens` is "
+                     "the size of the prefix now held in the cache"),
+    "conversation_create": ("no inference, nothing billed; the endpoint returns no usage "
+                           "object at all. The prompt it stores is billed as input on "
+                           "every turn below"),
+}
+
+
+def _by_kind(prepped: list[dict]) -> list[dict]:
+    """One row per kind of prep call, in the order the kinds first appear.
+
+    A kind is not a phase. `cachegen` holds transcript calls *and* cache builds, and they
+    do not measure the same thing -- see the comment where this is called.
+    """
+    order: list[str] = []
+    groups: dict[str, list[dict]] = {}
+    for r in prepped:
+        kind = r.get("kind") or r.get("phase") or "prep"
+        if kind not in groups:
+            order.append(kind)
+            groups[kind] = []
+        groups[kind].append(r)
+
+    out = []
+    for kind in order:
+        rows = groups[kind]
+        billed = bool(rows[0].get("billed"))
+        row = {
+            "kind": kind,
+            "billed": billed,
+            "calls": len(rows),
+            "wire_sent": sum(int(r.get("wire_sent") or 0) for r in rows),
+            "wire_recv": sum(int(r.get("wire_recv") or 0) for r in rows),
+            "elapsed_ms": sum(_elapsed(r) for r in rows),
+            "note": _PREP_NOTES.get(kind, ""),
+        }
+        # Token columns only where they mean tokens. An unbilled kind carries no token
+        # fields at all rather than a row of zeros: a zero invites the reading "this was
+        # free", and the whole reason this breakdown exists is that it was not.
+        if billed:
+            row.update({t: sum(int(r.get(t) or 0) for r in rows) for t in _TOKENS})
+        size = sum(int(r.get("cache_tokens") or 0) for r in rows)
+        if size:
+            row["cache_tokens"] = size
+        out.append(row)
+    return out
+
+
 def summarize(run: dict) -> dict:
     """Per-(provider, arm) series, totals, prep cost and failures for one run.
 
@@ -172,6 +225,15 @@ def summarize(run: dict) -> dict:
             # Excluded from the totals, but not hidden: the build is real money and
             # real bytes, and an arm whose steady traffic is cheap because it paid
             # up front should be seen to have paid up front.
+            #
+            # Broken out by *kind*, not rolled into one row. A prep phase holds calls
+            # that are not the same kind of thing: a Gemini `transcript` call is real
+            # inference with real input tokens, a `cache_create` is a build whose only
+            # number is a size, a `conversation_create` runs no inference and is billed
+            # nothing at all. Summing their token columns produced 19071 for gemini:cached
+            # -- two real input counts added to two cache sizes -- a number that describes
+            # nothing. Bytes are the one thing that does add up across kinds, because a
+            # byte is a byte whatever call sent it, so those stay at the top level.
             prep[k] = {
                 "provider": provider,
                 "arm": arm,
@@ -181,8 +243,13 @@ def summarize(run: dict) -> dict:
                 "wire_recv": sum(int(r.get("wire_recv") or 0) for r in prepped),
                 "wire": sum(int(r.get("wire_sent") or 0)
                             + int(r.get("wire_recv") or 0) for r in prepped),
-                **{t: sum(int(r.get(t) or 0) for r in prepped) for t in _TOKENS},
                 "elapsed_ms": sum(_elapsed(r) for r in prepped),
+                # Only the calls that were actually billed for an answer. This is the
+                # number a cost model wants, and it is now the only place tokens are
+                # summed -- across one kind, where the sum means something.
+                **{t: sum(int(r.get(t) or 0) for r in prepped if r.get("billed"))
+                   for t in _TOKENS},
+                "by_kind": _by_kind(prepped),
             }
 
     # A run with a broken arm still produces plausible numbers, and a number from a

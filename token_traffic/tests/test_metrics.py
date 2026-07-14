@@ -8,10 +8,10 @@ from core.metrics import key_of, summarize
 
 def rec(provider, arm, turn, *, phase="steady", measure="both", sent=1000,
         recv=500, tokens=(100, 0, 20, 0), marks=(10, 100, 200, 900, 2700),
-        error=""):
+        error="", kind="", billed=None, cache_tokens=0):
     req_sent_ms, ttfb, ttft, ttlt, turn_end = marks
     input_t, cached_t, output_t, reasoning_t = tokens
-    return {
+    out = {
         "schema_version": 1,
         "provider": provider, "arm": arm, "phase": phase, "turn": turn,
         "measure": measure,
@@ -24,6 +24,14 @@ def rec(provider, arm, turn, *, phase="steady", measure="both", sent=1000,
         "output_tokens": output_t, "reasoning_tokens": reasoning_t,
         "error": error,
     }
+    # A prep record says what kind of call it was and whether anything was billed for it.
+    # A steady turn is always a billed inference call and carries neither.
+    if kind:
+        out["kind"] = kind
+        out["billed"] = bool(billed)
+    if cache_tokens:
+        out["cache_tokens"] = cache_tokens
+    return out
 
 
 def run_of(records, measure="both", **params):
@@ -143,7 +151,7 @@ def test_prep_phases_are_kept_out_of_the_totals():
 def test_prep_is_reported_separately_rather_than_hidden():
     s = summarize(run_of([
         rec("gemini", "cached", 0, phase="cachegen", sent=90000, recv=200,
-            tokens=(9000, 0, 0, 0)),
+            tokens=(9000, 0, 0, 0), kind="transcript", billed=True),
         rec("gemini", "cached", 1),
     ]))
     p = s["prep"]["gemini:cached"]
@@ -153,6 +161,63 @@ def test_prep_is_reported_separately_rather_than_hidden():
     assert p["wire"] == 90200
     assert p["input_tokens"] == 9000
     assert p["provider"] == "gemini" and p["arm"] == "cached"
+
+
+def test_prep_never_adds_an_inference_calls_tokens_to_a_cache_size():
+    """The cachegen phase holds two kinds of call, and they are not the same thing.
+
+    A transcript call is real inference with real billed input tokens. A cache build runs
+    no inference; its only number is the size of the prefix it now holds. Summed together
+    -- which is what a single rolled-up prep row did -- gemini:cached reported
+    input_tokens 19071: 4479 + 4762 real, plus 4659 + 5171 of cache size. A number
+    describing nothing, in a column a reader is entitled to trust.
+    """
+    s = summarize(run_of([
+        rec("gemini", "cached", 1, phase="cachegen", sent=21688, tokens=(4479, 0, 0, 0),
+            kind="transcript", billed=True),
+        rec("gemini", "cached", 2, phase="cachegen", sent=22991, tokens=(4762, 0, 0, 0),
+            kind="transcript", billed=True),
+        rec("gemini", "cached", 1, phase="cachegen", sent=22506, tokens=(0, 0, 0, 0),
+            kind="cache_create", billed=False, cache_tokens=4659),
+        rec("gemini", "cached", 2, phase="cachegen", sent=24644, tokens=(0, 0, 0, 0),
+            kind="cache_create", billed=False, cache_tokens=5171),
+        rec("gemini", "cached", 1),
+    ]))
+    p = s["prep"]["gemini:cached"]
+
+    # Bytes add up across kinds -- a byte is a byte whatever call sent it.
+    assert p["wire_sent"] == 21688 + 22991 + 22506 + 24644
+    # Tokens do not. Only the billed kind is summed.
+    assert p["input_tokens"] == 4479 + 4762
+
+    transcript, cache_create = p["by_kind"]
+    assert transcript["kind"] == "transcript" and transcript["billed"] is True
+    assert transcript["input_tokens"] == 4479 + 4762
+    assert cache_create["kind"] == "cache_create" and cache_create["billed"] is False
+    # An unbilled kind carries no token count at all. A zero there reads as "free", and
+    # the whole reason this breakdown exists is that it is not.
+    assert "input_tokens" not in cache_create
+    assert cache_create["cache_tokens"] == 4659 + 5171
+    assert cache_create["note"]
+
+
+def test_a_conversation_create_reports_no_tokens_and_says_why():
+    """0 in a token column means "not billed" here and "not measured" elsewhere. Only the
+    kind can tell them apart, so the kind has to be in the summary."""
+    s = summarize(run_of([
+        rec("openai", "responses_stateful", 0, phase="setup", sent=21201,
+            tokens=(0, 0, 0, 0), kind="conversation_create", billed=False),
+        rec("openai", "responses_stateful", 1),
+    ]))
+    p = s["prep"]["openai:responses_stateful"]
+    assert p["input_tokens"] == 0
+    (create,) = p["by_kind"]
+    assert create["kind"] == "conversation_create"
+    assert create["wire_sent"] == 21201
+    assert "input_tokens" not in create
+    # The prompt is not free: it is billed as input on every turn. The note is the only
+    # place the run document says so.
+    assert "every turn" in create["note"]
 
 
 def test_any_phase_that_is_not_steady_counts_as_prep():
