@@ -21,6 +21,7 @@ from gemini_client import (
     call_gemini, create_cache, delete_cache, reset_session, ENDPOINT,
 )
 from payloads import user_content as _user, model_content as _model
+from payloads import model_content_from_response
 
 MODES = ("stateless", "stateful")
 REQUESTS_DIR = Path(__file__).resolve().parent / "requests"
@@ -163,7 +164,7 @@ def run_three_stage(model: str, request_name: str = "default",
         history.append(_user(q))
         res = call_gemini(model, list(history), mode="stateless", turn=k)
         ans = res.response_text or ""
-        history.append(_model(ans))
+        history.append(_model_turn(res))
         scenario.append({
             "turn": k, "question": q, "answer": ans,
             "req_bytes": res.req_payload_bytes, "resp_bytes": res.resp_payload_bytes,
@@ -255,6 +256,22 @@ COMPARE_ARMS = ("stateless", "cached", "interaction", "interaction_inline",
                 "interaction_stateless", "nocontext")
 
 
+def _model_turn(res) -> dict:
+    """The model's turn as generateContent sent it, for a client that keeps history.
+
+    The candidate's parts carry `thoughtSignature` alongside the text. Rebuilding the
+    turn from `response_text` throws the signature away, which is not what a real
+    client does -- and it hides ~1 KB of upload per turn from the arm that is
+    supposed to be paying for its own history. Falls back to the text when the call
+    errored and there is no candidate to echo.
+    """
+    try:
+        data = json.loads(res.response_json or "{}")
+    except Exception:
+        data = {}
+    return model_content_from_response(data, fallback_text=res.response_text or "")
+
+
 def _common_from_call(res, arm: str, phase: str, turn: int, question: str) -> dict:
     """Map a CallResult (generateContent) to the shared per-turn record."""
     return {
@@ -285,7 +302,7 @@ def _arm_stateless(model, system, steps, on_progress=None) -> list:
         _tick(on_progress, "stateless", "steady", k, n)
         history.append(_user(q))
         res = call_gemini(model, list(history), mode="stateless", turn=k)
-        history.append(_model(res.response_text or ""))
+        history.append(_model_turn(res))
         recs.append(_common_from_call(res, "stateless", "steady", k, q))
     return recs
 

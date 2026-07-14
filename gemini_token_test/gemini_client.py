@@ -364,6 +364,12 @@ def _text_tokens(contents: list) -> int:
     return max(1, text_len // 4)
 
 
+def _mock_signature(turn: int) -> str:
+    """Stand-in for the opaque base64 thought signature a real response carries.
+    Roughly the real length: most of what echoing a model turn costs is this blob."""
+    return f"MOCKSIG{turn:03d}" + ("A" * 60)
+
+
 def _mock_call(mode: str, turn: int, contents: list, cached_tokens: int) -> CallResult:
     body = json.dumps({"contents": contents})
     req_bytes = len(body.encode("utf-8"))
@@ -377,10 +383,14 @@ def _mock_call(mode: str, turn: int, contents: list, cached_tokens: int) -> Call
             break
     resp_text = f"(mock answer to: {last_q}) " + ("lorem ipsum " * 20)
     resp_bytes = len(resp_text.encode("utf-8")) + 120
-    # Synthetic response body mirroring the real generateContent shape.
+    # Synthetic response body mirroring the real generateContent shape -- including
+    # the thoughtSignature every Gemini 3 part comes back with, so a client-side
+    # history that echoes the model's turn is exercised (and billed for its bytes)
+    # in mock mode too.
     resp_json = json.dumps({
         "candidates": [{"content": {"role": "model",
-                                    "parts": [{"text": resp_text}]}}],
+                                    "parts": [{"text": resp_text,
+                                               "thoughtSignature": _mock_signature(turn)}]}}],
         "usageMetadata": {"promptTokenCount": prompt_tokens,
                           "candidatesTokenCount": resp_tokens,
                           "cachedContentTokenCount": cached_tokens,

@@ -42,7 +42,10 @@ import time
 import gemini_client as gc
 from gemini_client import is_mock, wire_counter, _text_tokens
 from experiment import load_request
-from payloads import extract_text, model_step, single_step_input, user_step
+from payloads import (
+    answer_text, extract_text, model_steps_from_response,
+    single_step_input, user_step,
+)
 
 INTERACTION_TIMEOUT = float(os.environ.get("INTERACTION_TIMEOUT", "180"))
 
@@ -91,15 +94,27 @@ def _usage_common(usage: dict) -> dict:
 
 
 def _record(turn, question, text, iid, usage, wire_sent, wire_recv, elapsed_ms,
-            req_raw, resp_raw, error) -> dict:
+            req_raw, resp_raw, error, steps=None) -> dict:
     return {
         "turn": turn, "question": question,
         "response_text": text, "interaction_id": iid,
+        # The model's turn as the server sent it -- thought step, signature and all.
+        # A client-side history echoes this; rebuilding the turn from response_text
+        # would drop the thought step, which no real client does.
+        "response_steps": list(steps or []),
         "wire_sent": wire_sent, "wire_recv": wire_recv, "elapsed_ms": elapsed_ms,
         **usage,
         "request_raw": req_raw, "response_raw": resp_raw,
         "error": error,
     }
+
+
+# A real thought signature is an opaque base64 blob of roughly this length. The mock
+# carries one of its own so that a client-side history echoing the response is
+# exercised offline, byte cost included -- the signature is most of what the echo
+# adds to the upload.
+def _mock_signature(turn: int) -> str:
+    return f"MOCKSIG{turn:03d}" + ("A" * 60)
 
 
 def _mock_interaction(turn: int, text: str, system: str, prev_id: str | None,
@@ -121,11 +136,11 @@ def _mock_interaction(turn: int, text: str, system: str, prev_id: str | None,
         inp = _text_tokens([{"parts": [{"text": (system if turn == 1 else '') + text}]}])
     usage = {"input_tokens": inp, "cached_tokens": 0, "output_tokens": 40,
              "thought_tokens": 0, "total_tokens": inp + 40}
-    resp = json.dumps({"id": iid, "status": "completed",
-                       "steps": [{"type": "model_output",
-                                  "content": [{"type": "text", "text": ans}]}]})
+    steps = [{"signature": _mock_signature(turn), "type": "thought"},
+             {"content": [{"text": ans, "type": "text"}], "type": "model_output"}]
+    resp = json.dumps({"id": iid, "status": "completed", "steps": steps})
     return _record(turn, text, ans, iid, usage,
-                   len(req) + 200, len(resp) + 200, 0, req, resp, "")
+                   len(req) + 200, len(resp) + 200, 0, req, resp, "", steps=steps)
 
 
 def _call_interaction(model: str, text: str, system_instruction: str,
@@ -162,10 +177,13 @@ def _call_interaction(model: str, text: str, system_instruction: str,
                        f"parse_failed: {exc}")
 
     iid = data.get("id")
-    text_out = extract_text(data.get("steps", data))
+    steps = model_steps_from_response(data)
+    # The answer is the model_output steps, never the thought step: with
+    # thinking_summaries on, a thought step carries text of its own.
+    text_out = answer_text(steps) or extract_text(data.get("steps", data))
     usage = _usage_common(data.get("usage") or {})
     return _record(turn, text, text_out, iid, usage,
-                   w.sent, w.recv, elapsed, req_raw, resp_raw, "")
+                   w.sent, w.recv, elapsed, req_raw, resp_raw, "", steps=steps)
 
 
 def run_interaction(model: str, request_name: str = "perf",
@@ -229,9 +247,13 @@ def run_interaction(model: str, request_name: str = "perf",
         r["turn"] = k
         r["question"] = q          # the step, never the prompt bolted onto it
         if client_history:
-            # The arm's own answer, not another arm's transcript. A history of a
-            # conversation that never happened measures nothing.
-            history.append(model_step(r.get("response_text") or ""))
+            # The arm's own answer, as the server sent it -- thought step included.
+            # Not another arm's transcript (a history of a conversation that never
+            # happened measures nothing), and not a step rebuilt from the text (that
+            # drops the signature and under-reports what a real client uploads).
+            history.extend(model_steps_from_response(
+                {"steps": r.get("response_steps")},
+                fallback_text=r.get("response_text") or ""))
         elif r.get("interaction_id"):
             prev_id = r["interaction_id"]     # chain the next turn onto this one
         records.append(r)

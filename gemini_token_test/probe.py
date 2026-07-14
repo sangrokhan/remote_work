@@ -732,6 +732,264 @@ def probe_step_echo(model: str = "") -> dict:
             "body": text[:2000], "sent_steps": len(steps)}
 
 
+# --------------------------------------------------------------------------
+# Signature-echo probe: what happens to the model's own thought step when the
+# client rebuilds the history instead of echoing it back?
+#
+# Every real response carries two steps, not one:
+#
+#   {"type": "thought", "signature": "EjQKMg..."}          <- encrypted reasoning
+#   {"type": "model_output", "content": [{"type": "text", ...}]}
+#
+# The client-history arms rebuild the model turn from `response_text` alone, so the
+# thought step -- and its signature -- never goes back. The chained arm keeps it
+# (the server stores the steps). That asymmetry has to be measured before it can be
+# called a bug: does the API even *accept* an echoed thought step, does it *reject*
+# a history without one, and does the signature reach the model (does it cost input
+# tokens)?
+
+INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
+
+# Two turns whose second answer depends on reasoning the first answer never spelled
+# out. If the signature carries anything, this is where it would show.
+_SIG_SYSTEM = "You are a test fixture. Think before answering. Be terse."
+_SIG_Q1 = ("Silently work out how many minutes are in 3 days, then how many "
+           "seconds that is. Do not show the numbers. Reply with exactly: READY")
+_SIG_Q2 = "Now state the seconds figure you worked out. Digits only."
+
+# A signature is only worth echoing if there is thinking behind it. On a model
+# whose thought_tokens come back 0, the step is an empty envelope and the probe
+# would be measuring nothing. Force the thinking on.
+_SIG_THINKING = os.environ.get("PROBE_THINKING_LEVEL", "high")
+
+
+def _sig_config() -> dict:
+    return {"max_output_tokens": 256, "thinking_level": _SIG_THINKING}
+
+
+def _sig_usage(data: dict) -> dict:
+    u = data.get("usage") or {}
+    return {"input_tokens": int(u.get("total_input_tokens", 0)),
+            "output_tokens": int(u.get("total_output_tokens", 0)),
+            "thought_tokens": int(u.get("total_thought_tokens", 0))}
+
+
+def _sig_post(body: dict) -> tuple[int, str]:
+    resp = _session().post(INTERACTIONS_URL, data=json.dumps(body),
+                           headers=_headers("apikey"), timeout=PROBE_TIMEOUT)
+    return resp.status_code, resp.text
+
+
+def _sig_turn2(steps: list, label: str) -> dict:
+    """Turn 2 of the probe, with whatever history `steps` carries."""
+    body = {"model": _SIG_MODEL[0], "stream": False, "store": False,
+            "system_instruction": _SIG_SYSTEM, "input": steps,
+            "generation_config": _sig_config()}
+    req_raw = json.dumps(body)
+    try:
+        status, text = _sig_post(body)
+    except Exception as exc:
+        return {"arm": label, "status": 0, "verdict": "error", "body": str(exc)}
+    out = {"arm": label, "status": status, "verdict": classify(status, text),
+           "sent_steps": [s.get("type") for s in steps],
+           "sent_signatures": sum(1 for s in steps if s.get("signature")),
+           "request_bytes": len(req_raw), "body": text[:600]}
+    if status in (200, 201):
+        data = json.loads(text)
+        out["answer"] = extract_text(data.get("steps", data))
+        out.update(_sig_usage(data))
+    return out
+
+
+_SIG_MODEL = [DEFAULT_MODEL]     # set by probe_signature_echo, read by _sig_turn2
+
+
+def probe_signature_echo(model: str = "") -> dict:
+    """Does echoing the model's own `thought` step back change anything?
+
+    Three live calls. Turn 1 opens the conversation (store:false, no chaining) and
+    its response is kept whole. Turn 2 is then sent twice with the same question and
+    the same visible history, differing only in the model turn:
+
+      echo — the response's steps verbatim: the thought step (signature and all)
+             followed by the model_output step.
+      drop — what the code does today: one model_output step rebuilt from the
+             response text. The thought step is gone.
+
+    Verdicts:
+      echo.status 400            -> echoing is *rejected*; today's code is right.
+      drop.status 400            -> the signature is *required*; today's code is broken.
+      both 200, input_tokens differ -> the signature reaches the model and is billed:
+                                    the two arms are not the same conversation.
+      both 200, input_tokens equal   -> the server ignores the echoed thought step.
+    """
+    _SIG_MODEL[0] = model or (PROBE_MODELS[0] if PROBE_MODELS else DEFAULT_MODEL)
+    if not API_KEY:
+        return {"url": INTERACTIONS_URL, "verdict": "environment",
+                "error": "GEMINI_API_KEY not set"}
+
+    body1 = {"model": _SIG_MODEL[0], "stream": False, "store": False,
+             "system_instruction": _SIG_SYSTEM,
+             "input": single_step_input(_SIG_Q1),
+             "generation_config": _sig_config()}
+    try:
+        status1, text1 = _sig_post(body1)
+    except Exception as exc:
+        return {"url": INTERACTIONS_URL, "verdict": "error", "error": str(exc)}
+    if status1 not in (200, 201):
+        return {"url": INTERACTIONS_URL, "verdict": classify(status1, text1),
+                "error": f"turn1 http_{status1}", "body": text1[:600]}
+
+    data1 = json.loads(text1)
+    resp_steps = data1.get("steps") or []
+    answer1 = extract_text(resp_steps)
+
+    turn1 = {"status": status1,
+             "response_step_types": [s.get("type") for s in resp_steps],
+             "signature_steps": sum(1 for s in resp_steps if s.get("signature")),
+             "answer": answer1, **_sig_usage(data1)}
+
+    echo_history = [user_step(_SIG_Q1), *resp_steps, user_step(_SIG_Q2)]
+    drop_history = [user_step(_SIG_Q1), model_step(answer1), user_step(_SIG_Q2)]
+
+    echo = _sig_turn2(echo_history, "echo")
+    drop = _sig_turn2(drop_history, "drop")
+
+    # The third arm is the one the experiment compares against: the server holds the
+    # history, thought step included, and the client sends only the new question. If
+    # its input_tokens land on the same number as echo and drop, then no arm is
+    # paying for the reasoning and the three are the same conversation to the model.
+    chained = _sig_chained(_SIG_Q1, _SIG_Q2)
+
+    verdict = "inconclusive"
+    if echo["status"] == 400:
+        verdict = "echo_rejected"
+    elif drop["status"] == 400:
+        verdict = "signature_required"
+    elif echo["status"] in (200, 201) and drop["status"] in (200, 201):
+        delta = echo.get("input_tokens", 0) - drop.get("input_tokens", 0)
+        verdict = "echo_reaches_model" if delta else "echo_ignored"
+
+    return {"url": INTERACTIONS_URL, "model": _SIG_MODEL[0], "verdict": verdict,
+            "turn1": turn1, "echo": echo, "drop": drop, "chained": chained,
+            "input_token_delta": echo.get("input_tokens", 0) - drop.get("input_tokens", 0),
+            "answers_match": echo.get("answer") == drop.get("answer")}
+
+
+def _sig_chained(q1: str, q2: str) -> dict:
+    """The same two turns over `previous_interaction_id`: two more live calls.
+
+    Turn 1 is re-sent with store:true (an interaction is only chainable if it was
+    stored), then turn 2 sends the question alone. What the model sees of turn 1 is
+    whatever the server kept — which, per GET /interactions/{id}, is the steps,
+    thought step included.
+    """
+    body1 = {"model": _SIG_MODEL[0], "stream": False, "store": True,
+             "system_instruction": _SIG_SYSTEM, "input": single_step_input(q1),
+             "generation_config": _sig_config()}
+    try:
+        s1, t1 = _sig_post(body1)
+        if s1 not in (200, 201):
+            return {"arm": "chained", "status": s1, "verdict": classify(s1, t1),
+                    "body": t1[:400]}
+        iid = json.loads(t1).get("id")
+        body2 = {"model": _SIG_MODEL[0], "stream": False, "store": True,
+                 "system_instruction": _SIG_SYSTEM,
+                 "previous_interaction_id": iid,
+                 "input": single_step_input(q2),
+                 "generation_config": _sig_config()}
+        req_raw = json.dumps(body2)
+        s2, t2 = _sig_post(body2)
+    except Exception as exc:
+        return {"arm": "chained", "status": 0, "verdict": "error", "body": str(exc)}
+
+    out = {"arm": "chained", "status": s2, "verdict": classify(s2, t2),
+           "previous_interaction_id": iid, "request_bytes": len(req_raw),
+           "body": t2[:400]}
+    if s2 in (200, 201):
+        d2 = json.loads(t2)
+        out["answer"] = extract_text(d2.get("steps", d2))
+        out.update(_sig_usage(d2))
+    return out
+
+
+# --------------------------------------------------------------------------
+# Hidden-state probe: does the signature carry reasoning the text never showed?
+#
+# The token counts say the echoed thought step costs nothing. That is not the same
+# as saying it *does* nothing. This probe asks the sharper question: can the model
+# recover a fact it decided in turn 1 and never wrote down?
+#
+# Turn 1 hides a number. Turn 2 asks for it. Then turn 2 is repeated:
+#
+#   echo x2  -- if the signature restores turn 1's reasoning, both runs must name
+#               the same number (they are replaying the same thought).
+#   drop x2  -- with the thought gone, the visible history says only "READY", so the
+#               model has nothing to recall and must invent. Two runs, two numbers.
+#
+# Agreement within echo and disagreement within drop is the only outcome that shows
+# the signature carrying state. Agreement in both means the number was never hidden
+# (the model is anchoring on something in the prompt) and the probe proves nothing.
+
+_HID_Q1 = ("Pick a random 6-digit number and remember it. Do not write it, do not "
+           "hint at it. Reply with exactly: READY")
+_HID_Q2 = "State the 6-digit number you picked. Digits only, nothing else."
+_DIGITS = re.compile(r"\d{4,}")
+
+
+def _hid_number(answer: str) -> str:
+    m = _DIGITS.search(answer or "")
+    return m.group(0) if m else ""
+
+
+def probe_hidden_state(model: str = "", repeats: int = 2) -> dict:
+    """Five live calls (1 + 2 x repeats). See the module comment above."""
+    _SIG_MODEL[0] = model or (PROBE_MODELS[0] if PROBE_MODELS else DEFAULT_MODEL)
+    if not API_KEY:
+        return {"verdict": "environment", "error": "GEMINI_API_KEY not set"}
+
+    body1 = {"model": _SIG_MODEL[0], "stream": False, "store": False,
+             "system_instruction": _SIG_SYSTEM,
+             "input": single_step_input(_HID_Q1),
+             "generation_config": _sig_config()}
+    try:
+        s1, t1 = _sig_post(body1)
+    except Exception as exc:
+        return {"verdict": "error", "error": str(exc)}
+    if s1 not in (200, 201):
+        return {"verdict": classify(s1, t1), "error": f"turn1 http_{s1}",
+                "body": t1[:400]}
+    d1 = json.loads(t1)
+    resp_steps = d1.get("steps") or []
+    answer1 = extract_text(resp_steps)
+
+    echo_history = [user_step(_HID_Q1), *resp_steps, user_step(_HID_Q2)]
+    drop_history = [user_step(_HID_Q1), model_step(answer1), user_step(_HID_Q2)]
+
+    echo_runs = [_sig_turn2(echo_history, f"echo{i}") for i in range(repeats)]
+    drop_runs = [_sig_turn2(drop_history, f"drop{i}") for i in range(repeats)]
+    echo_nums = [_hid_number(r.get("answer", "")) for r in echo_runs]
+    drop_nums = [_hid_number(r.get("answer", "")) for r in drop_runs]
+
+    echo_same = len(set(echo_nums)) == 1 and all(echo_nums)
+    drop_same = len(set(drop_nums)) == 1 and all(drop_nums)
+    if echo_same and not drop_same:
+        verdict = "signature_carries_state"
+    elif echo_same and drop_same:
+        verdict = "inconclusive_both_stable"     # nothing was actually hidden
+    elif not echo_same and not drop_same:
+        verdict = "signature_carries_nothing"    # echo remembers no better than drop
+    else:
+        verdict = "inconclusive"
+
+    return {"model": _SIG_MODEL[0], "verdict": verdict,
+            "turn1": {"answer": answer1,
+                      "thought_tokens": _sig_usage(d1)["thought_tokens"],
+                      "signature_steps": sum(1 for s in resp_steps if s.get("signature"))},
+            "echo_numbers": echo_nums, "drop_numbers": drop_nums,
+            "echo_consistent": echo_same, "drop_consistent": drop_same}
+
+
 # --- cached probe ---------------------------------------------------------
 # The page probes on load, so an uncached probe would bill a matrix of live calls
 # on every refresh. Hold the last result for a while; the button forces a re-run.

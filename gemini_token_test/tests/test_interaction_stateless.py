@@ -43,15 +43,17 @@ def test_it_sends_the_system_prompt_every_turn(monkeypatch):
 
 
 def test_the_history_grows_by_a_question_and_an_answer_each_turn(monkeypatch):
+    """A model turn is what the server sent back: a thought step *and* a
+    model_output step. So each round adds three steps, not two."""
     bodies = _bodies(monkeypatch, client_history=True, turns=4)
-    assert [len(b["input"]) for b in bodies] == [1, 3, 5, 7]
+    assert [len(b["input"]) for b in bodies] == [1, 4, 7, 10]
 
 
 def test_the_steps_alternate_user_then_model(monkeypatch):
     steps = _bodies(monkeypatch, client_history=True, turns=3)[-1]["input"]
     kinds = [s["type"] for s in steps]
-    assert kinds == ["user_input", "model_output", "user_input",
-                     "model_output", "user_input"]
+    assert kinds == ["user_input", "thought", "model_output",
+                     "user_input", "thought", "model_output", "user_input"]
 
 
 def test_the_history_carries_this_arms_own_answers(monkeypatch):
@@ -60,7 +62,8 @@ def test_the_history_carries_this_arms_own_answers(monkeypatch):
     recs = out["interaction_records"]
     sent = json.loads(recs[1]["request_raw"])["input"]
     answered = recs[0]["response_text"]
-    assert sent[1]["content"][0]["text"] == answered
+    model_out = [s for s in sent if s["type"] == "model_output"]
+    assert model_out[0]["content"][0]["text"] == answered
 
 
 def test_the_questions_go_in_in_order(monkeypatch):
@@ -126,7 +129,7 @@ def test_the_arm_resends_a_growing_history_through_the_comparison(monkeypatch):
     recs = sorted((r for r in out["records"] if r["arm"] == "interaction_stateless"),
                   key=lambda r: r["turn"])
     sizes = [len(json.loads(r["request_raw"])["input"]) for r in recs]
-    assert sizes == [1, 3, 5]
+    assert sizes == [1, 4, 7]      # +user, +thought, +model_output each round
 
 
 # --- mock input_tokens must reflect what the payload actually carries ------

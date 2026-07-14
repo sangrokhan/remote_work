@@ -43,7 +43,63 @@ def single_step_input(text: str) -> list:
     return [user_step(text)]
 
 
+# --- Echoing the model's turn back -------------------------------------------
+#
+# A client that keeps the history has to put the model's turn back on the wire, and
+# the only faithful version of that turn is the one the server sent. Rebuilding it
+# from the answer text drops whatever the text never carried -- above all the
+# `thought` step and its signature, which every Gemini 3 response returns:
+#
+#     {"type": "thought", "signature": "EjQKMg..."}
+#     {"type": "model_output", "content": [{"type": "text", "text": "..."}]}
+#
+# Measured (probe.probe_signature_echo, 2026-07-14): echoing the thought step is
+# accepted and adds 0 input tokens; dropping it is accepted too, on a text-only
+# conversation. What the echo costs is upload -- roughly 1 KB a turn -- and that is
+# precisely the number this experiment exists to report honestly. A history that
+# quietly omits what a real client sends measures a client nobody runs.
+
+def model_steps_from_response(data: dict, fallback_text: str = "") -> list:
+    """The model's turn, exactly as the interactions endpoint returned it.
+
+    Falls back to a rebuilt model_output step when there are no steps to echo --
+    an errored call, or a response shape we have never seen.
+    """
+    steps = (data or {}).get("steps")
+    if isinstance(steps, list) and steps:
+        return steps
+    return [model_step(fallback_text)] if fallback_text else []
+
+
+def model_content_from_response(data: dict, fallback_text: str = "") -> dict:
+    """The model's turn, exactly as generateContent returned it.
+
+    The candidate's `content` already is a Content: role `model`, parts carrying
+    `text` and `thoughtSignature`. Echo it whole rather than keeping the text.
+    """
+    cands = (data or {}).get("candidates") or []
+    content = cands[0].get("content") if cands else None
+    if isinstance(content, dict) and content.get("parts"):
+        return {"role": content.get("role", "model"), "parts": content["parts"]}
+    return model_content(fallback_text)
+
+
 # --- Reading text back out --------------------------------------------------
+
+def answer_text(steps) -> str:
+    """The answer, and only the answer: the text of the `model_output` steps.
+
+    `extract_text` collects every text leaf in whatever it is handed, which is right
+    for a payload whose shape is unknown but wrong for a response -- with
+    `thinking_summaries` on, a thought step carries text too, and stapling it to the
+    answer would put the model's reasoning into the conversation history.
+    """
+    out = []
+    for s in steps if isinstance(steps, list) else []:
+        if isinstance(s, dict) and s.get("type") == "model_output":
+            out.append(extract_text(s.get("content")))
+    return "".join(out)
+
 
 def extract_text(obj) -> str:
     """Collect every {"type": "text", "text": ...} leaf in a payload.

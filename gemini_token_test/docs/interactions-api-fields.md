@@ -146,6 +146,55 @@ nothing.
 
 ---
 
+---
+
+## Measured: the response is two steps, and the client-history arm must echo both
+
+Probe, 2026-07-14, `gemini-3.1-flash-lite`, `probe.probe_signature_echo()` /
+`probe.probe_hidden_state()`.
+
+Every response carries the model's turn as **two** steps, not one:
+
+```json
+"steps": [
+  {"type": "thought", "signature": "EjQKMgERTTIP1hnlbTd+QFmOBnGHkU+32Mpg…"},
+  {"type": "model_output", "content": [{"type": "text", "text": "259200"}]}
+]
+```
+
+The same thing on generateContent: the candidate's parts come back as
+`{"text": …, "thoughtSignature": …}`.
+
+A client that keeps the history has to put that turn back on the wire. Rebuilding it
+from the answer text alone — which is what the arms did until 2026-07-14 — drops the
+thought step on every turn. What that costs, measured, with a two-turn conversation
+whose second turn was sent three ways:
+
+| turn 2 sent as | HTTP | `input_tokens` | request bytes | answer |
+|---|---|---|---|---|
+| **echo** — the response's steps verbatim, signature included | 200 | 62 | 1,634 | `259200` |
+| **drop** — one rebuilt `model_output` step, no thought step | 200 | 62 | 632 | `259200` |
+| **chained** — `previous_interaction_id`, server holds the steps | 200 | 62 | 457 | `259200` |
+
+What that says, in order:
+
+- Echoing the thought step is **accepted** (not a 400), and omitting it is **also**
+  accepted — for a text-only conversation. (With `tools` in play the signature is
+  documented as mandatory; this project sends no tools, so it never sees that 400.)
+- All three arms are billed **the same 62 input tokens**. The signature is not
+  tokenised, and the server does not re-inject the stored thought as input either.
+- `probe_hidden_state()` — turn 1 picks a 6-digit number and never writes it down,
+  turn 2 asks for it, three repeats per arm — returned `signature_carries_nothing`:
+  echo answered `482915 / 482915 / 492851`, drop answered `492817 / 837291 / 482915`.
+  The signature did not restore reasoning the text had not already carried.
+
+So the echo does not change the token bill or the answer. What it changes is the
+**upload**: roughly 1 KB per turn of signature. That is the whole reason to send it —
+a real client (any SDK-shaped one) sends it, and an arm that quietly omits it reports
+a smaller upload than the client it claims to be measuring.
+
+---
+
 ## Consequence for the traffic experiment
 
 The `interaction` arm must re-upload `system_instruction` (the ~12K-char system
