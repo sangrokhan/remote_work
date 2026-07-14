@@ -5,11 +5,11 @@
 preflight:
 	./preflight.sh
 
-# Unit tests only (fast, no docker).
+# Unit tests only (fast, no docker, no API key -- the suite runs in mock mode).
 test:
 	python3 -m venv .venv-preflight
-	./.venv-preflight/bin/pip -q install flask requests urllib3
-	./.venv-preflight/bin/python -m unittest discover -s tests
+	./.venv-preflight/bin/pip -q install flask requests urllib3 pytest
+	./.venv-preflight/bin/python -m pytest tests -q
 
 # Build the image only.
 build:

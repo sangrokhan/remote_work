@@ -1,250 +1,361 @@
-# Implementation & call flow
+# Call flow
 
-How the app drives Gemini four different ways, and what actually goes on the wire
-each turn. `N` = number of turns; `q_k` = the k-th question; `S` = the large system
-prompt (~9 KB, ~1.7k–2.3k tokens).
+One host, one auth, one network path: every arm in this project talks to the
+**Gemini Developer API** at `generativelanguage.googleapis.com` over HTTPS with an
+`x-goog-api-key` header. There is no Vertex endpoint, no ADC, no agent sandbox, no
+warmup call, no background execution and no tool declarations anywhere in the code —
+if the arms sat on different hosts or different auth stacks, the latency numbers
+would compare nothing.
 
-The point of the demo: **the same N questions, four transports, wildly different
-bytes sent and answer quality.**
+The headline experiment is `experiment.run_comparison()`. It takes one scenario —
+the system prompt and question list in `requests/perf.json` — and replays it across
+six arms, each on its own fresh TCP connection and, optionally, into its own pcap.
 
----
+The scenario's system prompt is **20,653 characters** (≈4.4k input tokens): a persona
+plus a detailed tool description, large enough to be worth caching and large enough
+that resending it every turn is visible on the wire. `perf.json` carries 10 steps; a
+run uses the first `turns` of them.
+
+The six arms:
+
+| Arm | Who holds the conversation | Endpoint |
+|---|---|---|
+| `stateless` | the client, resending everything | `:streamGenerateContent?alt=sse` |
+| `nocontext` | nobody (lower-bound diagnostic) | `:streamGenerateContent?alt=sse` |
+| `cached` | an explicit `cachedContents` object | `:streamGenerateContent?alt=sse` + `cachedContent` |
+| `interaction` | the server, chained by `previous_interaction_id` | `/interactions` |
+| `interaction_inline` | the server, system prompt inlined into turn 1 | `/interactions` |
+| `interaction_stateless` | the client, resending everything as `Step[]` | `/interactions` |
+
+**Every arm streams.** `generateContent` is called as
+`:streamGenerateContent?alt=sse`; the interactions arms send `"stream": true`. That
+is not an aesthetic choice: TTFT cannot be measured any other way, and without TTFT
+the stored-interaction arms get charged for the ~1.8 s write that lands *after* their
+last token — a wait no streaming user ever does.
 
 ## 1. Components
 
 ```mermaid
 flowchart LR
-  UI["Browser<br/>static/app.js"]
-  APP["Flask<br/>app.py"]
-  EXP["experiment.py<br/>run_three_stage()"]
-  GC["gemini_client.py<br/>call_gemini / create_cache"]
-  IC["interaction_client.py<br/>run_interaction()"]
-  CAP["capture.py<br/>tcpdump -s 100"]
-  ST["store.py<br/>JSON + Firestore"]
-
-  V["Vertex generateContent<br/>{loc}-aiplatform.googleapis.com"]
-  C["Vertex cachedContents"]
-  I["Interactions API<br/>aiplatform.googleapis.com<br/>locations/global"]
-
-  UI -- "POST /run/stream (SSE)" --> APP
-  UI -- "POST /interaction/test (SSE)" --> APP
-  APP --> EXP
-  APP --> IC
-  EXP --> GC
-  EXP --> CAP
-  GC --> V
-  GC --> C
-  IC --> I
-  APP --> ST
-  APP -- "progress / done events" --> UI
-```
-
-All Google calls use the same **ADC bearer token** (service account / `gcloud`).
-No Gemini API key anywhere.
-
----
-
-## 2. The 3-stage run (`/run/stream`)
-
-`run_three_stage()` executes four stages in order, each with its own pcap, and
-pauses between them so a burst of turns doesn't trip Vertex per-minute quotas.
-
-```mermaid
-flowchart TD
-  A["Stage 1: stateless<br/>resend S + full history each turn"] --> P1["pause<br/>STAGE_PAUSE_SECONDS (60s)"]
-  P1 --> B["Stage 2: cachebuild<br/>create N cachedContents"]
-  B --> P2["pause"]
-  P2 --> C["Stage 3: stateful<br/>cache_(k-1) + q_k"]
-  C --> P3["pause"]
-  P3 --> D["Stage 4: nocontext<br/>S+q_1, then bare q_k"]
-  D --> E["delete caches · summarize · save_run"]
-```
-
-Each stage: `reset_session()` → start tcpdump → warmup 2s → turns → close socket →
-drain 1s → stop tcpdump. The fresh socket makes every pcap start on a clean TCP
-handshake.
-
----
-
-### 2a. Stateless — full resend
-
-Client keeps the transcript and replays all of it every turn. Bytes grow
-quadratically; answers are coherent.
-
-```mermaid
-sequenceDiagram
-  participant C as client
-  participant V as generateContent
-  Note over C: history = [S]
-  C->>V: POST contents = [S, q₁]
-  V-->>C: a₁
-  Note over C: history += q₁, a₁
-  C->>V: POST contents = [S, q₁, a₁, q₂]
-  V-->>C: a₂
-  C->>V: POST contents = [S, q₁, a₁, q₂, a₂, q₃]
-  V-->>C: a₃
-  Note over C,V: turn k sends S + all prior Q&A + q_k
-```
-
-### 2b. No-context — pure question
-
-System prompt rides the **first** query only; every later turn sends the bare
-question. The server is stateless, so turns 2..N have no context at all —
-pronoun/ellipsis questions ("bring it back", "that same check") go ambiguous.
-This is the control case.
-
-```mermaid
-sequenceDiagram
-  participant C as client
-  participant V as generateContent
-  C->>V: POST contents = [S, q₁]
-  V-->>C: a₁
-  C->>V: POST contents = [q₂]
-  V-->>C: a₂ (ambiguous — no history)
-  C->>V: POST contents = [q₃]
-  V-->>C: a₃ (ambiguous)
-```
-
-### 2c. Cache-based stateful
-
-Two phases. First build one cache per prefix, then answer each turn with
-`cachedContent` + the new question only. The prefix lives server-side; cached
-input tokens bill at ~10%.
-
-```mermaid
-sequenceDiagram
-  participant C as client
-  participant K as cachedContents
-  participant V as generateContent
-
-  rect rgb(240,240,240)
-  Note over C,K: Stage 2 — cachebuild
-  C->>K: POST create(contents = S + [q₁,a₁])
-  K-->>C: cache₁ (+cached_tokens)
-  C->>K: POST create(contents = S + [q₁,a₁,q₂,a₂])
-  K-->>C: cache₂
-  end
-
-  rect rgb(240,240,240)
-  Note over C,V: Stage 3 — stateful replay
-  C->>V: POST contents = [q₁] (no cache yet → sends S)
-  V-->>C: a₁
-  C->>V: POST cachedContent = cache₁, contents = [q₂]
-  V-->>C: a₂
-  C->>V: POST cachedContent = cache₂, contents = [q₃]
-  V-->>C: a₃
-  end
-  Note over C: caches deleted unless KEEP_CACHE=1
-```
-
-Turn `k` uses `cache_(k-1)`; turn 1 has no cache and falls back to sending the
-prefix. A prefix below `MIN_CACHE_TOKENS` (2048) is skipped by the API, and that
-turn falls back too.
-
----
-
-## 3. Interaction API (`/interaction/test`)
-
-Genuinely stateful: the **server** stores the conversation. The client sends only
-the new question plus `previous_interaction_id`.
-
-Two targets, chosen by `INTERACTION_AGENT`:
-
-| | `model` mode (default) | `agent` mode (`INTERACTION_AGENT` set) |
-|---|---|---|
-| body field | `model: gemini-2.5-flash` | `agent: antigravity-preview-05-2026` |
-| sandbox | none | remote container, provisioned on demand |
-| `background` | `false` (foreground stream) | **`true` — required**; the service rejects `false` |
-| warmup | not needed | yes, before turn 1 |
-| speed | fast | slow (container + agent work) |
-
-`agent` is only required when `model` is absent. Model mode skips the sandbox
-entirely, which is why it's much faster.
-
-The warmup below applies to **agent mode only**: the container is provisioned on
-demand, so we warm it up *before* asking anything, otherwise turn 1 pays for (or
-fails on) provisioning.
-
-```mermaid
-sequenceDiagram
-  participant C as client
-  participant I as Interactions API
-
-  rect rgb(240,240,240)
-  Note over C,I: init stage — warmup_environment() [agent mode only]
-  loop until env_id, or WARMUP_TIMEOUT
-    C->>I: POST environment={type:remote}, input="ready"
-    alt sandbox still provisioning
-      I-->>C: 400 "resource setup has just started"
-      Note over C: sleep WARMUP_INTERVAL, retry
-    else ready
-      I-->>C: SSE … interaction.complete {environment_id}
+    subgraph client["This project (Flask, single process)"]
+        app["app.py<br/>routes: / /compare /compare/stream<br/>/models /diagnose /interaction/probe /download/*"]
+        exp["experiment.py<br/>run_comparison()<br/>_arm_prep / _arm_steady / _arm_teardown"]
+        gc["gemini_client.py<br/>call_gemini, create_cache, delete_cache<br/>counting socket: wire_sent / wire_recv<br/>+ the req_sent and ttfb marks"]
+        ic["interaction_client.py<br/>run_interaction(), interaction_body()"]
+        st["streaming.py<br/>read_stream(): ttft / ttlt / turn_end<br/>gen_response() / interaction_response()"]
+        pl["payloads.py<br/>Content vs Step shapes<br/>model_*_from_response(): the verbatim echo"]
+        cap["capture.py<br/>tcpdump, one pcap per arm"]
+        met["metrics.py<br/>per-arm summary"]
+        store["store.py<br/>data/runs/*.json"]
+        probe["probe.py / netdiag.py<br/>reachability, 403 diagnosis"]
     end
-  end
-  Note over C: env_id captured (warmup turn NOT chained)
-  end
 
-  rect rgb(240,240,240)
-  Note over C,I: scenario turns (model mode: no environment field)
-  C->>I: POST model=…, store=true, input=[S, q₁]
-  I-->>C: SSE stream → a₁, interaction.id = id₁
-  C->>I: POST model=…, previous_interaction_id=id₁, input=[q₂]
-  I-->>C: SSE → a₂ (server recalled the history)
-  C->>I: POST model=…, previous_interaction_id=id₂, input=[q₃]
-  I-->>C: SSE → a₃
-  end
+    api["generativelanguage.googleapis.com:443<br/>x-goog-api-key"]
+
+    app --> exp
+    app --> met
+    app --> store
+    app --> probe
+    app --> cap
+    exp --> gc
+    exp --> ic
+    exp --> cap
+    gc --> st
+    ic --> st
+    gc --> pl
+    ic --> pl
+    exp --> pl
+    ic --> gc
+    gc -- "TLS, counting socket" --> api
+    ic -- "TLS, counting socket" --> api
+    cap -. "tcpdump on tcp/443 to the resolved IPs" .-> api
 ```
 
-Set `INTERACTION_ENV_ID` to skip warmup entirely and reuse a sandbox (TTL 7 days,
-reset on each interaction).
+`interaction_client` borrows `gemini_client`'s session, `wire_counter()` and auth, so
+both wire vocabularies are counted by the same socket and timed by the same clock.
 
-Each response is an **SSE event stream**; events are parsed as they arrive and
-timestamped, so `first_event_ms` (time to the server's first event) separates
-provisioning/queueing from the agent actually working.
+## 2. The `run_comparison` stage machine
 
----
+Arms are ordered by `_order_arms()`: `stateless` runs first whenever `cached` is asked
+for, because the caches are built from the answers `stateless` actually got — a cache
+of a conversation that never happened measures nothing.
 
-## 4. What goes on the wire, per turn
+Each arm then runs five stages. Only the **steady** stage is measured: it is what the
+pcap window covers and what `wall_ms[arm]` counts.
 
-| Case | Sent on turn k | Context the model has | Sent bytes |
-|---|---|---|---|
-| stateless | `S` + all prior Q&A + `q_k` | full | grows ~O(k) per turn, O(N²) total |
-| no-context | `q_k` (turn 1: `S + q₁`) | none after turn 1 | flat, tiny |
-| stateful (cache) | `cachedContent` ref + `q_k` | full (server-side prefix) | flat, tiny |
-| interaction | `previous_interaction_id` + `q_k` | full (server-side history) | flat, tiny |
-| interaction_stateless | `S` + all prior Q&A + `q_k` (`store: false`, no `previous_interaction_id`) | full (client-resent, server keeps nothing) | grows ~O(k) per turn, tracks stateless |
+```mermaid
+stateDiagram-v2
+    [*] --> ResetPool
+    ResetPool: reset_session() once, before the first arm — drop anything the probe or the model list left pooled
 
-Coherent answers: stateless, stateful, interaction, interaction_stateless.
-Ambiguous: no-context. Small requests: no-context, stateful, interaction. So
-**stateful and interaction are the two ways to get "small request + coherent
-answer"** — one caches the prefix, the other keeps the whole conversation
-server-side. `interaction_stateless` fills the remaining cell of the endpoint
-× who-keeps-the-history matrix: the interactions endpoint, but the client
-keeps the history, like stateless. A live 3-turn run (2026-07-13,
-gemini-3.1-flash-lite) shows its `input_tokens` growing turn over turn
-(4459/4825/5337) rather than staying flat at the turn-1 value — the result
-you'd see if the server accepted the client-supplied `Step[]` and then
-ignored it, billing only `S + q_k` on every turn. Wire bytes alone can't
-catch that failure mode, since the client keeps sending the full history
-either way; only the growing token count proves the history is reaching the
-model. Against `interaction`, the wire gap (21701/23342/25600 vs 21700/21755/21722)
-is exactly what `previous_interaction_id` buys: ~3.9 KB by turn 3, widening
-every turn — a **bytes** saving, not a token one. `interaction`'s
-input_tokens (4459/4886/5465) grow at the same rate as every other arm's,
-because the server replays and bills the stored history; the ~2% residual
-against `interaction_stateless` (5337 vs 5465 at turn 3) is answer-length
-variance, not a saving the mechanism produces.
+    ResetPool --> Arm
 
----
+    state Arm {
+        [*] --> Prep
+        Prep: _arm_prep() — a no-op for every arm except `cached`, which builds one cachedContents per turn from the stateless transcript (phase=cachegen, excluded from totals)
 
-## 5. Progress & evidence
+        Prep --> CloseBefore
+        CloseBefore: _close_connection(settle) — drop the keep-alive socket prep left open. settle = PCAP_SETTLE_SECONDS when capturing, so prep's FIN/ACK never lands inside the steady pcap
 
-- **SSE progress** — both endpoints emit `{stage, turn, turns}` per turn (plus
-  `{stage:"pause", turn:secs_left}` and `{stage:"provisioning", attempt}`), with a
-  `: keepalive` heartbeat so long runs don't idle out through a proxy.
-- **Per-stage pcap** — `tcpdump -i any -s 100 -U` filtered to tcp/443. Snaplen 100
-  keeps headers and the true packet length while cutting the disk I/O that causes
-  kernel drops; the drop counters are parsed from tcpdump's stderr and shown in the
-  UI.
-- **Exports** — chat JSON (question, answer, raw request/response per turn) and a
-  comparison CSV (`turn, query, stateless_response, nocontext_response,
-  stateful_response`).
+        CloseBefore --> Steady
+        Steady: t0 = monotonic(); Capture(timestamp, arm) opens. _arm_steady() runs turns 1..n on a FRESH connection — one SYN..FIN conversation, one pcap
+
+        Steady --> CloseAfter
+        CloseAfter: _close_connection(settle) INSIDE the capture window, so the pcap ends with a complete teardown
+
+        CloseAfter --> Wall
+        Wall: capture stops; wall_ms[arm] = now - t0
+
+        Wall --> Teardown
+        Teardown: _arm_teardown() — `cached` DELETEs its caches (unless KEEP_CACHE=1), then closes the socket at zero settle: nothing is capturing, so there is nothing for the FIN to pollute
+
+        Teardown --> [*]
+    }
+
+    Arm --> Pause: more arms left
+    Pause: pause_seconds, ticked once a second so a long gap is distinguishable from a hang. Between arms only, never after the last one.
+    Pause --> Arm
+
+    Arm --> [*]: last arm, no trailing pause
+```
+
+Three properties fall out of this and are worth stating plainly:
+
+- **A fresh connection per arm.** The `requests` session pools TLS connections; left
+  alone, one socket would carry every arm and every pcap would open mid-conversation
+  with no SYN. `_close_connection()` runs at the *end* of each arm's window rather than
+  the start of the next, so an arm's FIN never shows up in the next arm's capture.
+- **Prep and teardown sit outside the measurement.** Each cache build re-uploads the
+  whole prefix, so counting them would make the `cached` arm O(n²) and drown everything
+  the experiment is trying to show. They are recorded under the `cachegen` phase,
+  reported separately, and excluded from the arm's totals. The cache DELETEs are not
+  recorded at all.
+- **`wall_ms` and the pcap cover the same window.** Both bracket the steady stage only.
+
+## 3. What goes on the wire, per arm
+
+`sys` is the 20,653-char system prompt; `qk` is turn k's question; `ak` is the model's
+answer to it.
+
+### `stateless` — the client resends everything
+
+```mermaid
+sequenceDiagram
+    participant C as client
+    participant G as generativelanguage
+    Note over C: history = [sys, q1, MODEL_TURN_1, q2, MODEL_TURN_2, ...]
+    C->>G: POST /v1beta/models/{model}:streamGenerateContent?alt=sse
+    Note right of C: {"contents": [user(sys), user(q1), MODEL_TURN_1, ..., user(qk)]}
+    Note right of C: MODEL_TURN_j is the candidate's own content, echoed VERBATIM —
+    Note right of C: parts carrying text AND thoughtSignature
+    G-->>C: data: {candidates:[{content:{parts:[{text:"..."}]}}]}
+    G-->>C: data: ...  (thoughtSignature arrives as its own part, text empty)
+    G-->>C: data: {usageMetadata:{...}}   then the stream closes
+    Note over C: streaming.gen_response() reassembles the parts;
+    Note over C: payloads.model_content_from_response() keeps them whole
+```
+
+The echo matters. Rebuilding the model's turn from `response_text` would throw away the
+`thoughtSignature` — roughly 1 KB of upload per turn that a real client does pay, and
+that this arm must therefore pay too.
+
+### `nocontext` — nobody keeps anything
+
+```mermaid
+sequenceDiagram
+    participant C as client
+    participant G as generativelanguage
+    C->>G: turn 1 — {"contents": [user(sys), user(q1)]}
+    G-->>C: SSE: a1
+    C->>G: turn k>=2 — {"contents": [user(qk)]}   no sys, no history
+    G-->>C: SSE: ak
+```
+
+A lower bound, not a usable client: the model answers turn k with no idea what turn
+k-1 was.
+
+### `cached` — the prefix lives server-side, in an explicit cache
+
+```mermaid
+sequenceDiagram
+    participant C as client
+    participant G as generativelanguage
+    Note over C,G: PREP — phase=cachegen, outside the capture window, excluded from totals
+    loop k = 1..n
+        C->>G: POST /v1beta/cachedContents
+        Note right of C: {model, contents: sys + the first k REAL question/answer pairs, ttl}
+        G-->>C: {name: "cachedContents/...", usageMetadata:{totalTokenCount}}
+    end
+    Note over C,G: STEADY — measured, fresh connection, inside the pcap
+    C->>G: turn 1 — {"contents": [user(sys), user(q1)]}   no prior cache yet
+    G-->>C: SSE: a1
+    C->>G: turn k>=2 — {"contents": [user(qk)], "cachedContent": "cachedContents/{k-1}"}
+    G-->>C: SSE: ak + usageMetadata.cachedContentTokenCount
+    Note over C,G: TEARDOWN — after wall_ms, after the capture closes
+    C->>G: DELETE /v1beta/cachedContents/{id}  x n   (unless KEEP_CACHE=1)
+```
+
+Turn 1 has no prior cache and so behaves exactly like `stateless` turn 1; from turn 2
+the prefix never goes back up the wire. A cache below `MIN_CACHE_TOKENS` (default 2048)
+is skipped rather than created, and that turn falls back to sending `sys` inline.
+
+### `interaction` — the server chains the history
+
+```mermaid
+sequenceDiagram
+    participant C as client
+    participant G as generativelanguage
+    C->>G: POST /v1beta/interactions
+    Note right of C: {model, stream:true, store:true, system_instruction: sys,<br/>input: [user_input(q1)]}
+    G-->>C: step.start / step.delta ... interaction.completed {id: i1, usage}
+    C->>G: POST /v1beta/interactions
+    Note right of C: {stream:true, store:true, system_instruction: sys,  <-- re-sent EVERY turn<br/>previous_interaction_id: i1, input: [user_input(q2)]}
+    G-->>C: step.start / step.delta ... interaction.completed {id: i2, usage}
+```
+
+`system_instruction` is **interaction-scoped**: the server keeps the conversation but
+not the instruction context, so the 20 KB system prompt is re-uploaded on every single
+turn. That is why this arm's upload barely falls below `stateless`, and why an explicit
+cache can beat `previous_interaction_id` on bytes — a cache can hold the system prompt;
+`previous_interaction_id` cannot.
+
+`store:true` is not optional here: `store:false` together with `previous_interaction_id`
+is rejected with `400 "store must be true when previous_interaction_id is set."`
+`previous_interaction_id` itself costs ~14 ms; `store:true` holds the SSE stream open
+~1.8 s after the last token while the server persists the interaction (measured — see
+[`interactions-api-fields.md`](interactions-api-fields.md)). That tail is
+`turn_end - ttlt`, reported as `store_tail_ms`.
+
+### `interaction_inline` — same chain, but the prompt rides the first user turn
+
+```mermaid
+sequenceDiagram
+    participant C as client
+    participant G as generativelanguage
+    C->>G: POST /v1beta/interactions
+    Note right of C: {stream:true, store:true, input: [user_input(sys + "\n\n" + q1)]}<br/>NO system_instruction at all
+    G-->>C: ... interaction.completed {id: i1}
+    C->>G: POST /v1beta/interactions
+    Note right of C: {stream:true, store:true, previous_interaction_id: i1,<br/>input: [user_input(q2)]}   <-- q2 alone; sys is in the stored history
+    G-->>C: ... interaction.completed {id: i2}
+```
+
+Identical content reaches the model; what changes is who stores the system prompt — and
+whether the model still gives it the weight a system instruction carries. By moving it
+into the first user turn it becomes part of the server-side history, so every turn after
+the first sends only its question.
+
+### `interaction_stateless` — the interactions endpoint, taking the stateless bargain
+
+```mermaid
+sequenceDiagram
+    participant C as client
+    participant G as generativelanguage
+    Note over C: store:false, no previous_interaction_id — the client keeps everything
+    C->>G: POST /v1beta/interactions
+    Note right of C: {stream:true, store:false, system_instruction: sys,  <-- still every turn<br/>input: [user_input(q1), THOUGHT_1, model_output(a1),<br/>        user_input(q2), THOUGHT_2, model_output(a2),<br/>        user_input(qk)]}
+    G-->>C: step.start {type: thought} / step.delta {signature}
+    G-->>C: step.start {type: model_output} / step.delta {text: "..."}
+    G-->>C: interaction.completed {usage}   -- carries usage but NOT the steps
+    Note over C: streaming.interaction_response() rebuilds the steps from the deltas,
+    Note over C: by index; the client history echoes them VERBATIM —
+    Note over C: thought step and its signature included
+```
+
+This is the one arm where the streaming reader is load-bearing for correctness and not
+merely for timing: **`interaction.completed` carries the usage but not the steps**. The
+model's turn exists only as the deltas that streamed past, so `streaming.py` reassembles
+it (`step.start` declares the type, `step.delta` appends a signature or a text block) and
+`payloads.model_steps_from_response()` hands it back whole for the echo. Rebuilding the
+turn from the answer text alone would drop the thought step and under-report what a real
+client uploads.
+
+The gap between this arm and `interaction` is exactly what `previous_interaction_id`
+buys. `store:false` also means there is no persist tail to pay.
+
+## 4. What each arm sends on turn k, and what it costs
+
+Send shape:
+
+| Arm | Uploaded on turn k | Held server-side |
+|---|---|---|
+| `stateless` | `sys` + q1..qk + the model's own turns a1..a(k-1), text **and** `thoughtSignature` | nothing |
+| `nocontext` | qk alone (`sys` rides turn 1 only) | nothing |
+| `cached` | qk + a `cachedContent` reference (turn 1: `sys` + q1) | `sys` + Q&A 1..k-1, in cache k-1 |
+| `interaction` | `sys` + qk + `previous_interaction_id` | Q&A 1..k-1 — never `sys` |
+| `interaction_inline` | qk + `previous_interaction_id` (turn 1: `sys` + q1) | `sys` + Q&A 1..k-1 |
+| `interaction_stateless` | `sys` + the whole conversation as `Step[]`, thought steps and signatures included | nothing |
+
+Cost, from a **live 3-turn run** on `requests/perf.json`, recorded in commit `60d54e1c`.
+Bytes are the arm's **steady total** across the three turns; the five marks are **means
+per turn, in milliseconds**. This is one run on one network path — it is here to show the
+shape of the differences, not as a benchmark:
+
+| arm | up B | down B | req_sent | ttfb | ttft | ttlt | turn_end | store tail |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `stateless` | 71,112 | 22,380 | 37 | 791 | 792 | 1847 | 1900 | 53 |
+| `cached` | 23,555 | 31,041 | 52 | 758 | 759 | 2028 | 2077 | 49 |
+| `interaction` | 65,174 | 17,690 | 54 | 595 | 963 | 2391 | 4359 | 1969 |
+| `interaction_inline` | 23,686 | 15,383 | 51 | 559 | 924 | 2011 | 4101 | 2090 |
+| `interaction_stateless` | 71,433 | 14,578 | 52 | 1045 | 1049 | 3214 | 3380 | 165 |
+| `nocontext` | 23,403 | 33,448 | 56 | 698 | 699 | 2535 | 2582 | 47 |
+
+The five marks, each measured from the instant the request started going out:
+
+| Mark | Meaning | Where it comes from |
+|---|---|---|
+| `req_sent_ms` | request fully written to the socket — what resending a history actually costs in upload time | the last `sendall`/`send` on the counting socket |
+| `ttfb_ms` | first response byte back — the server started talking | the first `recv`/`read` on the counting socket |
+| `ttft_ms` | first SSE event carrying **answer** text; a `thought` part never starts this clock | `streaming.read_stream` |
+| `ttlt_ms` | last SSE event carrying answer text — what a streaming user waits for | `streaming.read_stream` |
+| `turn_end_ms` | the stream closed — what a blocking client waits for | `streaming.read_stream` |
+
+`store_tail_ms = turn_end - ttlt`. It is ~50 ms on the `generateContent` arms, where
+nothing happens after the last token, and ~2 s on the two `store:true` interaction arms.
+That column is the server-side write, and it is why a single "elapsed" number was never
+enough: it cannot tell a history still going up the wire apart from a model thinking
+apart from a server persisting.
+
+Reading the table: `cached` and `interaction_inline` upload about a third of what
+`stateless` does; `interaction` uploads nearly as much as `stateless`, because it
+re-sends the system prompt every turn; `interaction_stateless` uploads slightly *more*
+than `stateless`, paying for `Step[]` framing on top of the same content. Per-turn token
+counts (`input_tokens`, `cached_tokens`, `output_tokens`, `thought_tokens`) come from
+`usageMetadata` on the generateContent arms and from the interaction's top-level `usage`,
+and are exported per turn by `/download/compare/<exec_id>`.
+
+## 5. Where the evidence comes from
+
+Three layers, deliberately overlapping so they can be cross-checked:
+
+```mermaid
+flowchart TB
+    L1["<b>1. Counting socket</b> — gemini_client.py<br/>_CountingSocket / _CountingReader wrap send, recv and makefile(),<br/>so wire_sent / wire_recv cover HTTP headers plus the content-encoded body:<br/>post-decryption framing, NOT TLS ciphertext.<br/>Survives keep-alive reuse: a module-global tally, read by difference.<br/>Also stamps req_sent (last write) and ttfb (first read)."]
+
+    L2["<b>2. SSE marks</b> — streaming.py<br/>read_stream() walks the data: lines and times the first and last<br/>event carrying ANSWER text: ttft, ttlt, turn_end.<br/>Also the only place the interaction steps exist at all,<br/>since interaction.completed does not carry them."]
+
+    L3["<b>3. pcap</b> — capture.py<br/>tcpdump -i any -s 100 -U, filtered to tcp/443 and the resolved IPs<br/>of generativelanguage.googleapis.com.<br/>One file per arm, one SYN..FIN conversation per file.<br/>Snaplen 100: the TLS payload is encrypted anyway, sizes and timing are<br/>what matter, and the original frame length is still recorded.<br/>Kernel/interface drop counts are parsed from tcpdump's exit summary<br/>and surfaced, so a lossy capture is never silently trusted."]
+
+    REC["Per-turn record<br/>experiment._common_from_call / interaction_client._record<br/>(+ request_raw / response_raw, kept verbatim)"]
+
+    OUT["metrics.py summary, data/runs/*.json, CSV export"]
+    PCAP["data/pcaps/capture_ARM_TIMESTAMP_TOKEN.pcap"]
+    UI["Flask UI and /download/*"]
+
+    L1 --> REC
+    L2 --> REC
+    REC --> OUT
+    L3 --> PCAP
+    OUT --> UI
+    PCAP --> UI
+```
+
+The pcap exists to check the socket counter, not to replace it: the counter reports HTTP
+bytes after TLS decryption, the pcap reports frames on the wire. The two should track
+each other with a roughly constant TLS/TCP overhead, and if they diverge one of them is
+lying. Every raw request and response body is kept verbatim on the per-turn record, so
+any number in the table above can be traced back to the bytes it came from.
+
+Capture is optional and degrades honestly: with no `tcpdump`, no `NET_RAW`, or an
+AppArmor profile that forbids the output directory, `capture.available()` says exactly
+which of those it is and the experiment runs without it.
