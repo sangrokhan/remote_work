@@ -59,6 +59,12 @@ async function loadConfig() {
     $('mockBanner').hidden = false;
     document.body.classList.add('is-mock');
     document.title = '[MOCK] ' + document.title;
+  } else {
+    // Out of the DOM, not merely hidden: a banner that survives a live run as an
+    // invisible node is one CSS rule away from being visible in every run, which is
+    // exactly what happened -- `display: flex` on the class beat the [hidden]
+    // attribute, and every live run wore a MOCK banner until somebody noticed.
+    $('mockBanner').remove();
   }
 
   renderConfig(cfg);

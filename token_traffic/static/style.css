@@ -48,6 +48,10 @@ h3 { margin: 1.1rem 0 .4rem; font-size: .85rem; color: var(--fg);
   color: var(--mock); font-weight: 600; font-size: .9rem;
   display: flex; gap: .8rem; align-items: center; flex-wrap: wrap;
 }
+/* An author `display: flex` beats the browser's own [hidden] { display: none },
+   whatever the specificity -- so without this rule the banner is on in every run,
+   including the live ones, and a warning that is always on is a warning nobody reads. */
+.mock-banner[hidden] { display: none; }
 .mock-banner-tag {
   background: var(--mock); color: #241d00; padding: .15rem .55rem;
   border-radius: 3px; font-family: var(--mono); letter-spacing: .1em;
