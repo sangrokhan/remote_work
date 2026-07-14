@@ -14,16 +14,17 @@ from flask import (
 )
 
 import capture as pcap
-import inspector
 import netdiag
 import probe
-from experiment import run_experiment, run_three_stage, run_comparison, MODES, COMPARE_ARMS
+from experiment import run_comparison, COMPARE_ARMS
 from gemini_client import (
     ready, is_mock, api_host, api_key, DEFAULT_MODEL, list_models,
 )
-from metrics import summarize, summarize_three_stage, summarize_comparison
-from store import save_run, list_runs, get_run, firestore_active, delete_run
+from metrics import summarize_comparison
+from store import save_run, list_runs, get_run, delete_run
 
+# History holds runs from an older 3-stage pipeline. Nothing produces them any
+# more, but the chat and compare exports still have to be able to read one.
 THREE_STAGE = "caching-3stage"
 # A run of 100 turns on the stateless arm already sends the system prompt 100 times;
 # anything past that is a bill, not an experiment.
@@ -46,15 +47,15 @@ def _model(data: dict) -> str:
     return (data.get("model") or DEFAULT_MODEL).strip()
 
 
-def _pause_seconds(data: dict, default: float = 0.0) -> float:
+def _pause_seconds(data: dict) -> float:
     """A mock run hits no quota, so spacing the calls apart would only waste the
     operator's time. Clamp to a sane range otherwise."""
     if is_mock():
         return 0.0
     raw = data.get("pause_seconds")
-    # An absent field means "use the default"; an empty one is the UI sending a
-    # blank box, which is not a number and must not blow up the run either.
-    value = default if raw is None or raw == "" else float(raw)
+    # An absent field means no pause; an empty one is the UI sending a blank box,
+    # which is not a number and must not blow up the run either.
+    value = 0.0 if raw is None or raw == "" else float(raw)
     return max(0.0, min(value, MAX_PAUSE_SECONDS))
 
 
@@ -81,7 +82,6 @@ def index():
         mock=is_mock(),
         api_host=api_host(),
         key_set=bool(api_key()),
-        firestore=firestore_active(),
         default_model=DEFAULT_MODEL,
         arms=COMPARE_ARMS,
         diag=diag,
@@ -121,91 +121,10 @@ def diagnose():
     return jsonify(netdiag.diagnose(api_host()))
 
 
-def _execute_three_stage(data: dict, model: str, turns: int, want_capture: bool,
-                         timestamp: str, exec_id: str, on_progress=None):
-    """The 3-stage caching pipeline: stateless scenario -> caches -> stateful replay."""
-    cap_ok, cap_reason = pcap.available() if want_capture else (True, "")
-    # Pause between stages to stay under the API's per-minute quotas; the UI value wins
-    # over the STAGE_PAUSE_SECONDS default.
-    pause = _pause_seconds(data, float(os.environ.get("STAGE_PAUSE_SECONDS", "60")))
-
-    experiment = run_three_stage(model, turns=turns, timestamp=timestamp,
-                                 want_capture=(want_capture and cap_ok),
-                                 on_progress=on_progress, stage_pause_seconds=pause)
-    experiment["params"]["mock"] = is_mock()
-    summary = summarize_three_stage(experiment)
-    saved = save_run(exec_id, timestamp, experiment, summary)
-
-    resp = {"exec_id": exec_id, "timestamp": timestamp, "saved_to": saved,
-            "mock": is_mock(), "mode": THREE_STAGE, "params": experiment["params"],
-            "summary": summary, "pcaps": experiment.get("pcaps") or {},
-            "comparison": build_comparison(experiment)}
-    if want_capture and not cap_ok:
-        resp["capture_unavailable"] = cap_reason
-    return resp, 200
-
-
-def _execute_run(data: dict, on_progress=None):
-    """Run one experiment and build the response dict. on_progress(event) is
-    called per turn (event: {stage, turn, turns}) so callers can stream progress.
-    Returns (resp_dict, status_code)."""
-    ok, reason = ready()
-    if not ok:
-        return {"error": reason}, 400
-
-    mode = data.get("mode", "stateless")
-    if mode != THREE_STAGE and mode not in MODES:
-        mode = "stateless"
-    turns, model = _turns(data), _model(data)
-    want_capture = bool(data.get("capture", False))
-    timestamp, exec_id = _new_exec()
-
-    if mode == THREE_STAGE:
-        return _execute_three_stage(data, model, turns, want_capture,
-                                    timestamp, exec_id, on_progress)
-
-    def run():
-        return run_experiment(mode, model, turns=turns, on_progress=on_progress)
-
-    capture_info = None
-    if want_capture:
-        cap_ok, cap_reason = pcap.available()
-        if not cap_ok:
-            capture_info = {"ok": False, "error": cap_reason}
-            experiment = run()
-        else:
-            with pcap.Capture(timestamp, mode) as cap:
-                experiment = run()
-            capture_info = cap.result()
-    else:
-        experiment = run()
-
-    # Mark synthetic runs so the result (and saved history) can't be mistaken
-    # for real traffic.
-    experiment["params"]["mock"] = is_mock()
-    summary = summarize(experiment)
-    saved = save_run(exec_id, timestamp, experiment, summary)
-
-    resp = {"exec_id": exec_id, "timestamp": timestamp, "saved_to": saved,
-            "mock": is_mock(), "mode": mode,
-            "params": experiment["params"], "summary": summary}
-    if capture_info is not None:
-        if capture_info.get("ok") and capture_info.get("file"):
-            capture_info["download"] = f"/download/pcap/{capture_info['file']}"
-        resp["capture"] = capture_info
-    return resp, 200
-
-
-@app.route("/run", methods=["POST"])
-def run():
-    data = request.get_json(force=True, silent=True) or {}
-    resp, code = _execute_run(data)
-    return jsonify(resp), code
-
-
 def _execute_interaction(data: dict, on_progress=None):
-    """Replay the scenario over the stateful Interactions API. Same contract as
-    _execute_run: returns (resp_dict, status_code)."""
+    """Replay the scenario over the stateful Interactions API. Returns
+    (resp_dict, status_code), the contract every _execute_* helper follows so
+    _sse_response can drive any of them."""
     ok, reason = ready()
     if not ok:
         return {"error": reason}, 400
@@ -225,7 +144,7 @@ def _execute_interaction(data: dict, on_progress=None):
 def _execute_compare(data: dict, on_progress=None):
     """Replay one scenario across the comparison arms (stateless / cached /
     interaction, plus optional nocontext) and summarize per-arm wire bytes,
-    input tokens, and latency. Same (resp, code) contract as _execute_run."""
+    input tokens, and latency. Returns (resp_dict, status_code)."""
     ok, reason = ready()
     if not ok:
         return {"error": reason}, 400
@@ -294,13 +213,6 @@ def _sse_response(run):
 
     return Response(gen(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@app.route("/run/stream", methods=["POST"])
-def run_stream():
-    """Same as /run but streams per-turn progress, then a final 'done' event."""
-    data = request.get_json(force=True, silent=True) or {}
-    return _sse_response(lambda emit: _execute_run(data, on_progress=emit))
 
 
 @app.route("/compare", methods=["POST"])
@@ -579,39 +491,6 @@ def download_pcap(name):
         abort(404)
     return send_file(path, as_attachment=True,
                      download_name=name, mimetype="application/vnd.tcpdump.pcap")
-
-
-@app.route("/inspect", methods=["POST"])
-def inspect_endpoint():
-    data = request.get_json(force=True, silent=True) or {}
-    url = (data.get("url") or "").strip()
-    if not url:
-        return jsonify({"ok": False, "error": "url required"}), 400
-
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    record = inspector.inspect(
-        method=data.get("method", "GET"),
-        url=url,
-        headers_raw=data.get("headers", ""),
-        body=data.get("body", ""),
-        include_bodies=bool(data.get("include_bodies", False)),
-        allow_private=bool(data.get("allow_private", False)),
-        timestamp=timestamp,
-    )
-    name = inspector.save_transcript(timestamp, record)
-    if name:
-        record["download"] = f"/download/transcript/{name}"
-    status = 200 if record.get("ok") else 400
-    return jsonify(record), status
-
-
-@app.route("/download/transcript/<path:name>")
-def download_transcript(name):
-    path = inspector.safe_transcript_path(name)
-    if path is None:
-        abort(404)
-    return send_file(path, as_attachment=True,
-                     download_name=name, mimetype="application/json")
 
 
 @app.route("/history")

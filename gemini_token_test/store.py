@@ -1,12 +1,9 @@
-"""Persist executions to BOTH local JSON and Firestore, keyed by exec_id.
+"""Persist executions as local JSON files under data/runs/<exec_id>.json.
 
-- Always writes a local JSON file under data/runs/<exec_id>.json.
-- Also writes a Firestore document (doc id = exec_id) when Firestore is available.
-- Reads prefer Firestore (cluster-wide, survives Cloud Run recycles), else local
-  JSON. If neither has any execution, a clearly-marked DUMMY dataset is returned so
-  the UI/graph still has something to show.
-
-Firestore auth is ADC — separate from the API calls, which use a Developer API key.
+One file per execution, named by exec_id, holding the params, the summary and
+whatever per-arm payload the experiment produced. Reads come from the same
+directory. If no execution has been stored yet, a clearly-marked DUMMY dataset is
+returned so the UI/graph still has something to show.
 """
 
 from __future__ import annotations
@@ -21,36 +18,10 @@ from metrics import _cumulative
 DATA_DIR = Path(os.environ.get("GEMINI_DATA_DIR", "data/runs"))
 # exec_id format: exec_<ts>_<8hex>  or  dummy_<word>. Guards path traversal.
 _SAFE_EXEC = re.compile(r"^(exec_[0-9T\-]+_[0-9a-f]{8}|dummy_[a-z]+)$")
-COLLECTION = os.environ.get("FIRESTORE_COLLECTION", "gemini_runs")
-DATABASE = os.environ.get("FIRESTORE_DATABASE", "(default)")
-
-_fs_client = None
-_fs_checked = False
 
 
 def _ensure_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _firestore():
-    global _fs_client, _fs_checked
-    if _fs_checked:
-        return _fs_client
-    _fs_checked = True
-    if os.environ.get("FIRESTORE_DISABLE") == "1":
-        return None
-    try:
-        from google.cloud import firestore
-        project = os.environ.get("GOOGLE_CLOUD_PROJECT") or None
-        kwargs = {"database": DATABASE} if DATABASE and DATABASE != "(default)" else {}
-        _fs_client = firestore.Client(project=project, **kwargs)
-    except Exception:
-        _fs_client = None
-    return _fs_client
-
-
-def firestore_active() -> bool:
-    return _firestore() is not None
 
 
 def _list_item(doc: dict) -> dict:
@@ -65,7 +36,7 @@ def _list_item(doc: dict) -> dict:
 
 
 def save_run(exec_id: str, timestamp: str, experiment: dict, summary: dict) -> dict:
-    """Write one execution (doc id = exec_id) to JSON and Firestore."""
+    """Write one execution (file name = exec_id) as JSON."""
     doc = {
         "exec_id": exec_id,
         "timestamp": timestamp,
@@ -79,58 +50,25 @@ def save_run(exec_id: str, timestamp: str, experiment: dict, summary: dict) -> d
     for k, v in experiment.items():
         if k != "params":
             doc[k] = v
-    result = {"json": None, "firestore": None, "exec_id": exec_id}
 
     _ensure_dir()
     path = DATA_DIR / f"{exec_id}.json"
     path.write_text(json.dumps(doc, indent=2))
-    result["json"] = str(path)
-
-    fs = _firestore()
-    if fs is not None:
-        try:
-            fs.collection(COLLECTION).document(exec_id).set(doc)
-            result["firestore"] = f"{COLLECTION}/{exec_id}"
-        except Exception as exc:
-            result["firestore"] = f"error: {exc}"
-    return result
+    return {"json": str(path), "exec_id": exec_id}
 
 
 def delete_run(exec_id: str) -> dict:
-    """Delete one stored execution from local JSON and Firestore. Rejects bad ids
-    and the synthetic dummy rows."""
+    """Delete one stored execution. Rejects bad ids and the synthetic dummy rows."""
     if not _SAFE_EXEC.match(exec_id or "") or exec_id.startswith("dummy_"):
         return {"ok": False, "exec_id": exec_id, "error": "invalid or non-deletable exec_id"}
-    json_deleted = False
     p = DATA_DIR / f"{exec_id}.json"
     try:
-        if p.exists():
-            p.unlink()
-            json_deleted = True
+        if not p.exists():
+            return {"ok": False, "exec_id": exec_id, "json_deleted": False, "error": "not_found"}
+        p.unlink()
     except Exception as exc:
         return {"ok": False, "exec_id": exec_id, "error": f"json_delete_failed: {exc}"}
-    fs_deleted = None
-    fs = _firestore()
-    if fs is not None:
-        try:
-            fs.collection(COLLECTION).document(exec_id).delete()
-            fs_deleted = True
-        except Exception as exc:
-            fs_deleted = f"error: {exc}"
-    ok = json_deleted or fs_deleted is True
-    return {"ok": ok, "exec_id": exec_id, "json_deleted": json_deleted,
-            "firestore_deleted": fs_deleted, "error": "" if ok else "not_found"}
-
-
-def _doc_from_firestore(exec_id: str) -> dict | None:
-    fs = _firestore()
-    if fs is None:
-        return None
-    try:
-        snap = fs.collection(COLLECTION).document(exec_id).get()
-        return snap.to_dict() if snap.exists else None
-    except Exception:
-        return None
+    return {"ok": True, "exec_id": exec_id, "json_deleted": True, "error": ""}
 
 
 def _doc_from_json(exec_id: str) -> dict | None:
@@ -150,19 +88,7 @@ def get_run(exec_id: str) -> dict | None:
     for d in DUMMY_RUNS():
         if d["exec_id"] == exec_id:
             return d
-    return _doc_from_firestore(exec_id) or _doc_from_json(exec_id)
-
-
-def _runs_from_firestore() -> list[dict] | None:
-    fs = _firestore()
-    if fs is None:
-        return None
-    try:
-        runs = [_list_item(s.to_dict() or {}) for s in fs.collection(COLLECTION).stream()]
-        runs.sort(key=lambda r: r.get("timestamp") or "")
-        return runs
-    except Exception:
-        return None
+    return _doc_from_json(exec_id)
 
 
 def _runs_from_json() -> list[dict]:
@@ -178,17 +104,11 @@ def _runs_from_json() -> list[dict]:
 
 def list_runs() -> dict:
     """Executions for the history viewer. Falls back to DUMMY when none found."""
-    fs_runs = _runs_from_firestore()
-    if fs_runs is not None:
-        source = "firestore"
-        runs = fs_runs
-    else:
-        source = "local_json"
-        runs = _runs_from_json()
+    runs = _runs_from_json()
     if not runs:
-        return {"source": f"{source} (empty → dummy)", "dummy": True,
+        return {"source": "local_json (empty → dummy)", "dummy": True,
                 "runs": [_list_item(d) for d in DUMMY_RUNS()]}
-    return {"source": source, "dummy": False, "runs": runs}
+    return {"source": "local_json", "dummy": False, "runs": runs}
 
 
 # --- Dummy backup dataset ----------------------------------------------------
@@ -211,8 +131,7 @@ def _dummy_doc(exec_id, mode, growth):
                    "endpoint": "dummy", "request_source": "dummy"},
         "summary": {"mode": mode, "series": series,
                     "totals": {"mode": mode, "tokens": series["cum_tokens"][-1],
-                               "wire_bytes": series["cum_wire_bytes"][-1],
-                               "cost_usd": 0.0, "price_per_token": 0.0}},
+                               "wire_bytes": series["cum_wire_bytes"][-1]}},
     }
 
 

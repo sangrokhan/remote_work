@@ -1,5 +1,4 @@
 flask>=3.0
 requests>=2.31
 urllib3>=2.0
-google-cloud-firestore>=2.16
 gunicorn>=21.2

@@ -18,15 +18,8 @@ services:
     environment:
       # The one host: Gemini Developer API, API key auth.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      # Firestore history (ADC; unrelated to the API calls). FIRESTORE_DISABLE=1 to skip.
-      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
-      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
-      - FIRESTORE_COLLECTION=${FIRESTORE_COLLECTION:-gemini_runs}
-      - FIRESTORE_DATABASE=${FIRESTORE_DATABASE:-(default)}
-      # Set to 1 to run without GCP creds (synthetic data, no quota).
+      # Set to 1 to run without an API key (synthetic data, no quota).
       - GEMINI_MOCK=${GEMINI_MOCK:-0}
-      - GEMINI_PRICE_PER_TOKEN=${GEMINI_PRICE_PER_TOKEN:-0.0000001}
     volumes:
+      # Run history: one JSON file per execution under data/runs.
       - ./data:/app/data
-      # Mount your local gcloud creds for non-mock local runs (optional):
-      # - ~/.config/gcloud:/root/.config/gcloud:ro

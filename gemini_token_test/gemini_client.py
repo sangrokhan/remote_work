@@ -91,9 +91,6 @@ def cache_create_body(model: str, contents: list, system_instruction: str,
 
 ENDPOINT = f"{api_host()}:443"
 
-# Rough public estimate (USD per token). Clearly an estimate; override via env.
-PRICE_PER_TOKEN = float(os.environ.get("GEMINI_PRICE_PER_TOKEN", "0.0000001"))
-
 
 @dataclass
 class CallResult:

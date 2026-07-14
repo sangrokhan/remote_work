@@ -1,11 +1,15 @@
-"""Run an N-turn conversation in ONE mode and collect per-turn metrics.
+"""Replay one N-turn conversation across the arms and collect what each turn cost.
 
-stateless: turn k sends the full history (steps 1..k)  -> O(N^2) tokens
-stateful : turn k sends only step k (client-side delta) -> O(N) tokens
+The arms are the ways of keeping a conversation going: the client resends the whole
+history (stateless), the server keeps it (interaction, interaction_inline), the
+prefix lives in an explicit cache (cached), or nothing is kept at all (nocontext,
+the lower bound). The scenario -- one system prompt and a fixed list of questions --
+is the same for all of them, so the only thing that varies is who stores the context.
 
-Request texts are fixed, loaded from a JSON request file, so the request is
-constant even when the response size varies. Only one mode runs per execution;
-compare modes by loading two executions from history.
+Every turn produces the same record: wire bytes sent and received, tokens in and
+out, and five clocks (req_sent, ttfb, ttft, ttlt, turn_end), because one latency
+number cannot separate a history still going up the wire from a model thinking from
+a server persisting the turn.
 """
 
 from __future__ import annotations
@@ -23,14 +27,8 @@ from gemini_client import (
 from payloads import user_content as _user, model_content as _model
 from payloads import model_content_from_response
 
-MODES = ("stateless", "stateful")
 REQUESTS_DIR = Path(__file__).resolve().parent / "requests"
 CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "1800"))
-# Per-stage capture pacing: settle time after tcpdump starts before the first
-# request (clean handshake), and drain time after the socket closes before
-# tcpdump stops (clean teardown). Both configurable via env.
-CAPTURE_WARMUP_SECONDS = float(os.environ.get("CAPTURE_WARMUP_SECONDS", "2"))
-CAPTURE_DRAIN_SECONDS = float(os.environ.get("CAPTURE_DRAIN_SECONDS", "1"))
 
 
 def load_request(name: str = "default") -> tuple[str, list[str], str]:
@@ -53,199 +51,6 @@ def load_request(name: str = "default") -> tuple[str, list[str], str]:
         pass
     steps = [f"Turn {k}. " + ("the quick brown fox. " * 8) for k in range(1, 9)]
     return "", steps, "synthetic"
-
-
-def run_experiment(mode: str, model: str, request_name: str = "default",
-                   turns: int | None = None, on_progress=None) -> dict:
-    if mode not in MODES:
-        mode = "stateless"
-    system, steps, source = load_request(request_name)
-    if turns:
-        steps = steps[:max(1, min(turns, len(steps)))]
-
-    records = []
-    # stateless carries the big system prompt every turn; stateful (delta) does not.
-    history: list[dict] = [_user(system)] if system else []
-    for k, text in enumerate(steps, start=1):
-        if on_progress:
-            on_progress({"stage": mode, "turn": k, "turns": len(steps)})
-        if mode == "stateless":
-            history.append(_user(text))
-            contents = list(history)
-            history.append({"role": "model", "parts": [{"text": "(ack)"}]})
-        else:  # stateful = client-side delta: only this step
-            contents = [_user(text)]
-        res = call_gemini(model, contents, mode=mode, turn=k)
-        rec = res.as_dict()
-        rec["question"] = text  # pair the sent question with response_text (answer)
-        records.append(rec)
-
-    return {
-        "params": {
-            "mode": mode,
-            "turns": len(steps),
-            "model": model,
-            "endpoint": ENDPOINT,
-            "request_source": source,
-        },
-        "records": records,
-    }
-
-
-def run_three_stage(model: str, request_name: str = "default",
-                    turns: int | None = None, want_capture: bool = False,
-                    timestamp: str = "", on_progress=None,
-                    stage_pause_seconds: float = 0) -> dict:
-    """Stage order: stateless -> caches -> stateful -> no-context. Returns one
-    combined document.
-
-    When want_capture is set, each stage is captured to its own pcap
-    (stateless / cachebuild / stateful / nocontext) so each stage's traffic is
-    separable. on_progress(event) is called once per turn with {stage, turn, turns}.
-    stage_pause_seconds inserts a pause between stages (spreads calls out to stay
-    under the API's per-minute quotas); during it on_progress emits {stage:'pause'}.
-    """
-    system, steps, source = load_request(request_name)
-    if turns:
-        steps = steps[:max(1, min(turns, len(steps)))]
-    n = len(steps)
-
-    def _prog(stage, turn):
-        if on_progress:
-            on_progress({"stage": stage, "turn": turn, "turns": n})
-
-    def _pause():
-        # Space stages out so a burst of turns doesn't trip the API's RPM/TPM limits.
-        # Tick every few seconds so the UI (and the SSE connection) stays alive.
-        rem = int(stage_pause_seconds)
-        while rem > 0:
-            if on_progress:
-                on_progress({"stage": "pause", "turn": rem, "turns": int(stage_pause_seconds)})
-            step = min(5, rem)
-            time.sleep(step)
-            rem -= step
-
-    pcaps: dict = {}
-
-    def _begin(stage_mode):
-        if not want_capture:
-            return None
-        # Drop any pooled socket from the previous stage so this stage opens a
-        # fresh TCP connection; start tcpdump, then wait so the first request's
-        # 3-way handshake lands inside this stage's pcap.
-        reset_session()
-        cap = pcap.Capture(timestamp or "0", stage_mode)
-        cap.__enter__()
-        time.sleep(CAPTURE_WARMUP_SECONDS)
-        return cap
-
-    def _end(cap, key):
-        if cap is None:
-            return
-        # Close the socket while tcpdump is still running so the FIN teardown is
-        # captured, drain briefly, then stop the capture.
-        reset_session()
-        time.sleep(CAPTURE_DRAIN_SECONDS)
-        cap.__exit__(None, None, None)
-        r = cap.result()
-        if r.get("ok") and r.get("file"):
-            r["download"] = f"/download/pcap/{r['file']}"
-        pcaps[key] = r
-
-    # --- Stage 1: stateless scenario, capture every request + response ---------
-    # The big system prompt sits at history[0] and is resent every stateless turn;
-    # it becomes part of every cache (off=1 accounts for it in the indices below).
-    scenario, stateless_records = [], []
-    off = 1 if system else 0
-    history: list[dict] = [_user(system)] if system else []
-    cap = _begin("stateless")
-    for k, q in enumerate(steps, start=1):
-        _prog("stateless", k)
-        history.append(_user(q))
-        res = call_gemini(model, list(history), mode="stateless", turn=k)
-        ans = res.response_text or ""
-        history.append(_model_turn(res))
-        scenario.append({
-            "turn": k, "question": q, "answer": ans,
-            "req_bytes": res.req_payload_bytes, "resp_bytes": res.resp_payload_bytes,
-            "wire_sent": res.wire_sent, "wire_recv": res.wire_recv, "error": res.error,
-        })
-        rec = res.as_dict()
-        rec["question"] = q  # store question alongside response_text (answer)
-        stateless_records.append(rec)
-    _end(cap, "stateless")
-    _pause()
-
-    # --- Stage 2: cumulative caches. cache_k = history[:2k] (k Q&A pairs) -------
-    cache_set = []
-    cap = _begin("cachebuild")
-    for k in range(1, n + 1):
-        _prog("cachebuild", k)
-        c = create_cache(model, history[:off + 2 * k], CACHE_TTL_SECONDS)
-        cache_set.append({
-            "k": k, "cache_id": c["name"], "cached_tokens": c["cached_tokens"],
-            "skipped": c["name"] is None, "error": c["error"],
-        })
-    _end(cap, "cachebuild")
-    _pause()
-
-    # --- Stage 3: stateful replay. turn k uses cache_(k-1) + question only ------
-    stateful_records = []
-    cap = _begin("stateful")
-    for k, q in enumerate(steps, start=1):
-        _prog("stateful", k)
-        cache = cache_set[k - 2] if k >= 2 else None
-        cache_id = cache["cache_id"] if cache else None
-        hint = cache["cached_tokens"] if cache else 0
-        if cache_id:
-            contents = [_user(q)]                       # prefix is server-side
-        else:
-            contents = history[:off + 2 * (k - 1)] + [_user(q)]  # no cache -> send it
-        res = call_gemini(model, contents, mode="stateful", turn=k,
-                          cached_content=cache_id, cached_tokens_hint=hint)
-        rec = res.as_dict()
-        rec["question"] = q  # store question alongside response_text (answer)
-        rec["cache_id"] = cache_id
-        rec["used_cache"] = cache_id is not None
-        stateful_records.append(rec)
-    _end(cap, "stateful")
-    _pause()
-
-    # --- Stage 4: stateless no-context. The system prompt rides ONLY the first
-    # query; every later turn sends just the bare question — no system prompt, no
-    # prior question/answer, no cache. Models a naive client that primes context
-    # once and then forgets it, so continuity-dependent turns go ambiguous. Run
-    # last since it has no dependency on the earlier stages. ----------------------
-    nocontext_records = []
-    cap = _begin("nocontext")
-    for k, q in enumerate(steps, start=1):
-        _prog("nocontext", k)
-        if k == 1 and system:
-            contents = [_user(system), _user(q)]  # system prompt sent with first query only
-        else:
-            contents = [_user(q)]                 # later turns: bare question, nothing else
-        res = call_gemini(model, contents, mode="stateless-nocontext", turn=k)
-        rec = res.as_dict()
-        rec["question"] = q  # store question alongside response_text (answer)
-        nocontext_records.append(rec)
-    _end(cap, "nocontext")
-
-    # --- cleanup caches (best-effort) ------------------------------------------
-    if os.environ.get("KEEP_CACHE") != "1":
-        for c in cache_set:
-            if c["cache_id"]:
-                delete_cache(c["cache_id"])
-
-    return {
-        "params": {"mode": "caching-3stage", "turns": n, "model": model,
-                   "endpoint": ENDPOINT, "request_source": source},
-        "pcaps": pcaps,
-        "scenario": scenario,
-        "cache_set": cache_set,
-        "stateless_records": stateless_records,
-        "nocontext_records": nocontext_records,
-        "stateful_records": stateful_records,
-    }
 
 
 # --- Comparison across arms (the headline experiment) ----------------------
