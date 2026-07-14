@@ -121,6 +121,8 @@ class CallResult:
     # turn_end_ms is when the server finally let go. On generateContent they coincide
     # -- nothing happens after the last token -- which is exactly what makes them
     # worth reporting next to the interaction arms, where they do not.
+    req_sent_ms: int = 0         # -> request fully written to the socket (upload done)
+    ttfb_ms: int = 0             # -> first response byte back (server started talking)
     ttft_ms: int = 0             # -> first event carrying answer text
     ttlt_ms: int = 0             # -> last event carrying answer text
     turn_end_ms: int = 0         # -> stream closed
@@ -142,31 +144,45 @@ class CallResult:
 # flight and the difference is exact.
 _wire_tally = {"sent": 0, "recv": 0}
 
+# When the socket last wrote, and when it first read back, for the request in flight.
+# The byte counts alone cannot say how long the upload took: a turn that ships a
+# 90 KB history spends real time putting it on the wire before the model has seen a
+# word of it, and that time belongs to the client, not to the model. Stamped on the
+# socket, so it measures the write itself and not the library around it.
+_wire_marks: dict = {"last_send": None, "first_recv": None}
+
 
 class _WireDelta:
-    """Bytes sent/received during one wire_counter() block."""
-    __slots__ = ("sent", "recv")
+    """Bytes sent/received during one wire_counter() block, and when."""
+    __slots__ = ("sent", "recv", "last_send_at", "first_recv_at")
 
     def __init__(self):
         self.sent = 0
         self.recv = 0
+        self.last_send_at = None      # monotonic: request fully written
+        self.first_recv_at = None     # monotonic: first response byte back
 
 
 @contextmanager
 def wire_counter():
     """Count HTTP bytes on the socket for the enclosed request(s), headers and
-    content-encoding included, regardless of keep-alive reuse.
+    content-encoding included, regardless of keep-alive reuse. Also stamp when the
+    request finished going out and when the first byte came back.
 
-    Yields a _WireDelta whose .sent/.recv are populated when the block exits.
+    Yields a _WireDelta whose fields are populated when the block exits.
     """
     before_sent = _wire_tally["sent"]
     before_recv = _wire_tally["recv"]
+    _wire_marks["last_send"] = None
+    _wire_marks["first_recv"] = None
     delta = _WireDelta()
     try:
         yield delta
     finally:
         delta.sent = _wire_tally["sent"] - before_sent
         delta.recv = _wire_tally["recv"] - before_recv
+        delta.last_send_at = _wire_marks["last_send"]
+        delta.first_recv_at = _wire_marks["first_recv"]
 
 
 class _CountingReader:
@@ -181,6 +197,8 @@ class _CountingReader:
         self._c = counter
 
     def _count(self, n: int) -> None:
+        if n and _wire_marks["first_recv"] is None:
+            _wire_marks["first_recv"] = time.monotonic()
         self._c.recv += n
         _wire_tally["recv"] += n
 
@@ -216,25 +234,39 @@ class _CountingSocket:
         self.sent = 0
         self.recv = 0
 
+    def _mark_send(self) -> None:
+        # Every write moves the mark, so when the request is done the mark sits on
+        # its last byte -- which is exactly when the upload finished.
+        _wire_marks["last_send"] = time.monotonic()
+
+    def _mark_recv(self, n: int) -> None:
+        if n and _wire_marks["first_recv"] is None:
+            _wire_marks["first_recv"] = time.monotonic()
+
     def sendall(self, data, *args, **kwargs):
         self.sent += len(data)
         _wire_tally["sent"] += len(data)
-        return self._sock.sendall(data, *args, **kwargs)
+        out = self._sock.sendall(data, *args, **kwargs)
+        self._mark_send()
+        return out
 
     def send(self, data, *args, **kwargs):
         n = self._sock.send(data, *args, **kwargs)
         self.sent += n
         _wire_tally["sent"] += n
+        self._mark_send()
         return n
 
     def recv(self, bufsize, *args, **kwargs):
         chunk = self._sock.recv(bufsize, *args, **kwargs)
+        self._mark_recv(len(chunk))
         self.recv += len(chunk)
         _wire_tally["recv"] += len(chunk)
         return chunk
 
     def recv_into(self, buf, *args, **kwargs):
         n = self._sock.recv_into(buf, *args, **kwargs)
+        self._mark_recv(n or 0)
         self.recv += n
         _wire_tally["recv"] += n
         return n
@@ -382,8 +414,17 @@ def _text_tokens(contents: list) -> int:
 
 # Mock timings. Fixed, so a mock run's latency chart is stable; shaped like the real
 # thing, so the arms that pay a tail can be told apart from the arms that do not.
+# The upload mark scales with the payload, because that is the one part of the delay
+# a bigger history really does buy: MOCK_UPLOAD_MS_PER_KB per KB on the wire.
+MOCK_REQ_SENT_BASE_MS = 20
+MOCK_UPLOAD_MS_PER_KB = 2
+MOCK_TTFB_MS = 200
 MOCK_TTFT_MS = 300
 MOCK_TTLT_MS = 800
+
+
+def _mock_req_sent_ms(req_bytes: int) -> int:
+    return MOCK_REQ_SENT_BASE_MS + (req_bytes // 1024) * MOCK_UPLOAD_MS_PER_KB
 
 
 def _mock_signature(turn: int) -> str:
@@ -427,6 +468,7 @@ def _mock_call(mode: str, turn: int, contents: list, cached_tokens: int) -> Call
         cached_tokens=cached_tokens, response_text=resp_text,
         wire_sent=req_bytes + 200, wire_recv=resp_bytes + 200,
         req_payload_bytes=req_bytes, resp_payload_bytes=resp_bytes,
+        req_sent_ms=_mock_req_sent_ms(req_bytes), ttfb_ms=MOCK_TTFB_MS,
         ttft_ms=MOCK_TTFT_MS, ttlt_ms=MOCK_TTLT_MS,
         turn_end_ms=MOCK_TTLT_MS, elapsed_ms=MOCK_TTLT_MS,
         request_json=body, response_json=resp_json,
@@ -474,6 +516,8 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
                             req_payload_bytes=req_payload_bytes,
                             resp_payload_bytes=len(err_body),
                             elapsed_ms=elapsed, turn_end_ms=elapsed,
+                            req_sent_ms=streaming.since(t0, w.last_send_at),
+                            ttfb_ms=streaming.since(t0, w.first_recv_at, elapsed),
                             ttft_ms=elapsed, ttlt_ms=elapsed,
                             request_json=body, response_json=err_body)
         result.error = f"http_{resp.status_code}: {err_body[:200]}"
@@ -497,6 +541,8 @@ def call_gemini(model: str, contents: list, mode: str, turn: int,
         req_payload_bytes=req_payload_bytes,
         resp_payload_bytes=len(stream.raw),
         elapsed_ms=elapsed,
+        req_sent_ms=streaming.since(t0, w.last_send_at),
+        ttfb_ms=streaming.since(t0, w.first_recv_at, stream.ttft_ms),
         ttft_ms=stream.ttft_ms, ttlt_ms=stream.ttlt_ms,
         turn_end_ms=stream.turn_end_ms,
         request_json=body,

@@ -55,6 +55,16 @@ class StreamResult:
     error: str = ""
 
 
+def since(t0: float, mark, fallback: int = 0) -> int:
+    """Milliseconds from the request going out to a monotonic mark on the socket.
+
+    `mark` is None when the socket never got that far (a connection that failed, a
+    reused-and-closed pool entry): fall back rather than report a 0 that would read
+    as "instant".
+    """
+    return int((mark - t0) * 1000) if mark else fallback
+
+
 def _iter_data(resp):
     """Yield (elapsed_seconds_marker_is_caller_side, parsed_json) for each `data:`
     line. `[DONE]` and unparseable lines are skipped, but they still count as bytes

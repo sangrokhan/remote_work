@@ -113,14 +113,25 @@ def summarize_comparison(comparison: dict) -> dict:
                         key=lambda r: r["turn"])
 
         per_wire = [r["wire_sent"] + r["wire_recv"] for r in steady]
+        # The client's own bill: what a client uploads is what it pays for in
+        # bandwidth, and it is the axis the arms actually differ on -- a resent
+        # history is upload, a stored one is not. Kept apart from the download.
+        per_up = [r["wire_sent"] for r in steady]
+        per_down = [r["wire_recv"] for r in steady]
         per_in = [r["input_tokens"] for r in steady]
 
         series[arm] = {
             "turns": [r["turn"] for r in steady],
             "per_turn_wire": per_wire,
+            "per_turn_wire_sent": per_up,
+            "per_turn_wire_recv": per_down,
             "per_turn_input_tokens": per_in,
             "cum_wire": _cumulative(per_wire),
+            "cum_wire_sent": _cumulative(per_up),
+            "cum_wire_recv": _cumulative(per_down),
             "cum_input_tokens": _cumulative(per_in),
+            "per_turn_req_sent_ms": [r.get("req_sent_ms", 0) for r in steady],
+            "per_turn_ttfb_ms": [r.get("ttfb_ms", 0) for r in steady],
             "per_turn_ttft_ms": [r.get("ttft_ms", 0) for r in steady],
             "per_turn_ttlt_ms": [r.get("ttlt_ms", 0) for r in steady],
             "per_turn_turn_end_ms": [r.get("turn_end_ms", r["elapsed_ms"])
@@ -128,6 +139,11 @@ def summarize_comparison(comparison: dict) -> dict:
         }
         totals[arm] = {
             "steady_wire": sum(per_wire),
+            # Uplink is the client's own traffic bill, and the axis the arms differ
+            # on. Downlink is the model's answer, which is roughly the same work
+            # whoever keeps the history.
+            "steady_wire_sent": sum(per_up),
+            "steady_wire_recv": sum(per_down),
             "steady_input_tokens": sum(per_in),
             "total_wire": sum(per_wire),
             "total_input_tokens": sum(per_in),
@@ -135,13 +151,17 @@ def summarize_comparison(comparison: dict) -> dict:
             "output_tokens": sum(r["output_tokens"] for r in steady),
             "thought_tokens": sum(r["thought_tokens"] for r in steady),
             "latency": _latency_stats([r["elapsed_ms"] for r in steady]),
-            # Three clocks per turn, averaged over the arm's steady turns:
+            # Five marks per turn, averaged over the arm's steady turns:
+            #   req_sent the client's history is finally all on the wire
+            #   ttfb     the server starts answering (network + queue, no tokens yet)
             #   ttft     the answer starts
             #   ttlt     the answer ends           <- what a streaming user waits for
             #   turn_end the server lets go        <- what a blocking client waits for
             # On the generateContent arms ttlt and turn_end are the same number. On a
             # stored interaction they are not: the write lands after the last token,
             # and `store_tail_ms` below is that gap -- the wait no streaming user does.
+            "req_sent": _latency_stats([r.get("req_sent_ms", 0) for r in steady]),
+            "ttfb": _latency_stats([r.get("ttfb_ms", 0) for r in steady]),
             "ttft": _latency_stats([r.get("ttft_ms", 0) for r in steady]),
             "ttlt": _latency_stats([r.get("ttlt_ms", 0) for r in steady]),
             "turn_end": _latency_stats([r.get("turn_end_ms", r["elapsed_ms"])

@@ -278,9 +278,9 @@ def _common_from_call(res, arm: str, phase: str, turn: int, question: str) -> di
         "arm": arm, "phase": phase, "turn": turn, "question": question,
         "wire_sent": res.wire_sent, "wire_recv": res.wire_recv,
         "elapsed_ms": res.elapsed_ms,
-        # Three timings, because one cannot separate "the answer is here" from "the
-        # server finally let go". On generateContent they coincide; on a stored
-        # interaction they do not, and the gap is the write.
+        # Five marks, because one number cannot separate "my history is still going
+        # up the wire" from "the model is thinking" from "the server is persisting".
+        "req_sent_ms": res.req_sent_ms, "ttfb_ms": res.ttfb_ms,
         "ttft_ms": res.ttft_ms, "ttlt_ms": res.ttlt_ms,
         "turn_end_ms": res.turn_end_ms or res.elapsed_ms,
         "input_tokens": res.prompt_tokens, "cached_tokens": res.cached_tokens,
@@ -360,7 +360,8 @@ def _arm_cached_prep(model, system, steps, transcript, on_progress=None) -> tupl
             "wire_sent": c.get("wire_sent", 0), "wire_recv": c.get("wire_recv", 0),
             "elapsed_ms": c.get("elapsed_ms", 0),
             # A cache build is a plain POST, not a generation: no tokens stream out
-            # of it, so all three timings are the one number it has.
+            # of it, so every mark is the one number it has.
+            "req_sent_ms": c.get("elapsed_ms", 0), "ttfb_ms": c.get("elapsed_ms", 0),
             "ttft_ms": c.get("elapsed_ms", 0), "ttlt_ms": c.get("elapsed_ms", 0),
             "turn_end_ms": c.get("elapsed_ms", 0),
             "input_tokens": c.get("cached_tokens", 0), "cached_tokens": c.get("cached_tokens", 0),
@@ -440,6 +441,7 @@ def _arm_interaction(model, request_name, turns, on_progress,
             "question": r.get("question", ""),
             "wire_sent": r["wire_sent"], "wire_recv": r["wire_recv"],
             "elapsed_ms": r["elapsed_ms"],
+            "req_sent_ms": r["req_sent_ms"], "ttfb_ms": r["ttfb_ms"],
             "ttft_ms": r["ttft_ms"], "ttlt_ms": r["ttlt_ms"],
             "turn_end_ms": r["turn_end_ms"],
             "input_tokens": r["input_tokens"], "cached_tokens": r["cached_tokens"],

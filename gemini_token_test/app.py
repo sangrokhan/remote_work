@@ -450,13 +450,21 @@ def download_compare(exec_id):
     return _csv_attachment(COMPARE_COLUMNS, rows, f"compare_{exec_id}.csv")
 
 
-# Three timings per call, not one. ttft/ttlt bracket the answer; turn_end is when the
-# server let go. store_tail_ms = turn_end - ttlt: zero on the generateContent arms
-# (nothing happens after the last token) and ~1.8 s on a stored interaction, where
-# the write lands after the answer is already out. A single "elapsed" column would
-# charge the interaction arms for a wait no streaming user ever does.
+# One row per call, and five marks on it rather than a single "elapsed":
+#
+#   req_sent_ms  the client's request is fully on the wire  <- a resent history costs here
+#   ttfb_ms      the first response byte comes back
+#   ttft_ms      the answer's first token
+#   ttlt_ms      the answer's last token                    <- what a streaming user waits for
+#   turn_end_ms  the server closes the stream               <- what a blocking client waits for
+#
+# store_tail_ms = turn_end - ttlt: ~0 on the generateContent arms (nothing happens
+# after the last token) and ~1.8 s on a stored interaction, where the write lands
+# after the answer is already out. wire_sent is the client's own upload -- the axis
+# the arms actually differ on.
 CASE_COLUMNS = ["arm", "phase", "turn", "wire_sent", "wire_recv",
-                "ttft_ms", "ttlt_ms", "turn_end_ms", "store_tail_ms", "elapsed_ms",
+                "req_sent_ms", "ttfb_ms", "ttft_ms", "ttlt_ms", "turn_end_ms",
+                "store_tail_ms", "elapsed_ms",
                 "input_tokens", "cached_tokens", "output_tokens", "thought_tokens",
                 "total_tokens", "error"]
 

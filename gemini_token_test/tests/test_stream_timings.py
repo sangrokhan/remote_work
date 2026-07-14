@@ -120,13 +120,42 @@ def test_interaction_events_rebuild_the_steps():
 
 # --- the arms carry the timings --------------------------------------------
 
-def test_every_arm_reports_three_timings(monkeypatch):
+def test_every_arm_reports_five_marks(monkeypatch):
     monkeypatch.setenv("GEMINI_MOCK", "1")
     out = experiment.run_comparison("gemini-3.1-flash-lite", turns=2,
                                     arms=list(experiment.COMPARE_ARMS))
     for r in out["records"]:
-        assert {"ttft_ms", "ttlt_ms", "turn_end_ms"} <= set(r), r["arm"]
-        assert r["ttft_ms"] <= r["ttlt_ms"] <= r["turn_end_ms"], r["arm"]
+        assert {"req_sent_ms", "ttfb_ms", "ttft_ms", "ttlt_ms",
+                "turn_end_ms"} <= set(r), r["arm"]
+        assert (r["req_sent_ms"] <= r["ttfb_ms"] <= r["ttft_ms"]
+                <= r["ttlt_ms"] <= r["turn_end_ms"]), r["arm"]
+
+
+def test_a_bigger_upload_costs_more_to_send(monkeypatch):
+    """req_sent is where a resent history is actually paid for. An arm whose payload
+    grows every turn must show that growth here, or the mark measures nothing."""
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    out = experiment.run_comparison("gemini-3.1-flash-lite", turns=4,
+                                    arms=["stateless"])
+    sent = [r["req_sent_ms"] for r in out["records"] if r["phase"] == "steady"]
+    assert sent == sorted(sent) and sent[-1] > sent[0], sent
+
+
+def test_the_client_uplink_is_reported_apart_from_the_download(monkeypatch):
+    """What the client uploads is its own bandwidth bill, and the axis the arms
+    differ on. Folded into one wire total it cannot be read off."""
+    monkeypatch.setenv("GEMINI_MOCK", "1")
+    out = experiment.run_comparison("gemini-3.1-flash-lite", turns=2,
+                                    arms=["stateless", "nocontext"])
+    import metrics
+    summary = metrics.summarize_comparison(out)
+    for arm in ("stateless", "nocontext"):
+        t = summary["totals"][arm]
+        assert t["steady_wire_sent"] + t["steady_wire_recv"] == t["steady_wire"]
+        assert summary["series"][arm]["cum_wire_sent"]
+    # The arm that resends its history uploads more than the one that sends nothing.
+    assert (summary["totals"]["stateless"]["steady_wire_sent"]
+            > summary["totals"]["nocontext"]["steady_wire_sent"])
 
 
 def test_the_stateless_arms_end_when_the_answer_ends(monkeypatch):

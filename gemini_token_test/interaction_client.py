@@ -104,7 +104,7 @@ def _usage_common(usage: dict) -> dict:
 
 def _record(turn, question, text, iid, usage, wire_sent, wire_recv, elapsed_ms,
             req_raw, resp_raw, error, steps=None, ttft_ms=None, ttlt_ms=None,
-            turn_end_ms=None) -> dict:
+            turn_end_ms=None, req_sent_ms=None, ttfb_ms=None) -> dict:
     # An arm with no timings of its own (an error, a dead connection) still ended;
     # zeros there would read as "instant". Fall back to the one number that exists.
     end = elapsed_ms if turn_end_ms is None else turn_end_ms
@@ -116,9 +116,11 @@ def _record(turn, question, text, iid, usage, wire_sent, wire_recv, elapsed_ms,
         # would drop the thought step, which no real client does.
         "response_steps": list(steps or []),
         "wire_sent": wire_sent, "wire_recv": wire_recv, "elapsed_ms": elapsed_ms,
-        # ttlt is when the answer finished; turn_end is when the server let go. On a
-        # stored interaction the gap between them is the write -- ~1.8 s, measured --
-        # and it is the whole reason both numbers are reported.
+        # Five marks on one turn: the upload finishes, the server starts answering,
+        # the answer starts, the answer ends, the server lets go. An arm that resends
+        # a long history pays in req_sent; a stored interaction pays after ttlt.
+        "req_sent_ms": end if req_sent_ms is None else req_sent_ms,
+        "ttfb_ms": end if ttfb_ms is None else ttfb_ms,
         "ttft_ms": end if ttft_ms is None else ttft_ms,
         "ttlt_ms": end if ttlt_ms is None else ttlt_ms,
         "turn_end_ms": end,
@@ -163,6 +165,7 @@ def _mock_interaction(turn: int, text: str, system: str, prev_id: str | None,
     end = gc.MOCK_TTLT_MS + (MOCK_STORE_TAIL_MS if store else 0)
     return _record(turn, text, ans, iid, usage,
                    len(req) + 200, len(resp) + 200, end, req, resp, "", steps=steps,
+                   req_sent_ms=gc._mock_req_sent_ms(len(req)), ttfb_ms=gc.MOCK_TTFB_MS,
                    ttft_ms=gc.MOCK_TTFT_MS, ttlt_ms=gc.MOCK_TTLT_MS, turn_end_ms=end)
 
 
@@ -208,7 +211,10 @@ def _call_interaction(model: str, text: str, system_instruction: str,
     usage = _usage_common(data.get("usage") or {})
     return _record(turn, text, text_out, data.get("id"), usage,
                    w.sent, w.recv, elapsed, req_raw, json.dumps(data), "",
-                   steps=steps, ttft_ms=stream.ttft_ms, ttlt_ms=stream.ttlt_ms,
+                   steps=steps,
+                   req_sent_ms=streaming.since(t0, w.last_send_at),
+                   ttfb_ms=streaming.since(t0, w.first_recv_at, stream.ttft_ms),
+                   ttft_ms=stream.ttft_ms, ttlt_ms=stream.ttlt_ms,
                    turn_end_ms=stream.turn_end_ms)
 
 
