@@ -1,4 +1,4 @@
-"""Flask app: serves UI, runs the Vertex experiment, exposes history."""
+"""Flask app: serves UI, runs the Developer API experiment, exposes history."""
 
 from __future__ import annotations
 
@@ -67,9 +67,8 @@ def _new_exec() -> tuple[str, str]:
 
 @app.route("/")
 def index():
-    """The page reports Developer API readiness. Every arm of the comparison runs
-    on generativelanguage with an API key, so Vertex project/location would only
-    tell the operator to check the wrong thing when a call fails."""
+    """The page reports Developer API readiness -- the only thing there is to report.
+    Every arm runs on generativelanguage with an API key."""
     ok, reason = ready()
     # A restricted-VIP route refuses every call with a 403 that reads like a bad
     # key. Say so up front rather than letting the operator rotate a working key.
@@ -126,7 +125,7 @@ def _execute_three_stage(data: dict, model: str, turns: int, want_capture: bool,
                          timestamp: str, exec_id: str, on_progress=None):
     """The 3-stage caching pipeline: stateless scenario -> caches -> stateful replay."""
     cap_ok, cap_reason = pcap.available() if want_capture else (True, "")
-    # Pause between stages to stay under Vertex per-minute quotas; the UI value wins
+    # Pause between stages to stay under the API's per-minute quotas; the UI value wins
     # over the STAGE_PAUSE_SECONDS default.
     pause = _pause_seconds(data, float(os.environ.get("STAGE_PAUSE_SECONDS", "60")))
 

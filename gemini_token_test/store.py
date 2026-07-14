@@ -6,7 +6,7 @@
   JSON. If neither has any execution, a clearly-marked DUMMY dataset is returned so
   the UI/graph still has something to show.
 
-Firestore uses the same ADC auth as Vertex — no extra key needed.
+Firestore auth is ADC — separate from the API calls, which use a Developer API key.
 """
 
 from __future__ import annotations

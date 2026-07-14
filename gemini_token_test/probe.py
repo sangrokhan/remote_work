@@ -1,27 +1,27 @@
-"""Capability probe for the Interactions API.
+"""Capability probe for the Interactions API, on the Gemini Developer API.
 
 Answers, empirically, the questions the docs leave open before any performance
 comparison is built on top of them:
 
-  1. Does a plain Gemini *model* interaction work at all, and on which host?
-     The Vertex/GEAP reference lists only `lyria-3-*` under `model` and only
-     `deep-research-preview-04-2026` under `agent`, while the Gemini Developer
-     API lists the gemini-* family. But this repo's own history (commit
-     618a76fa) shows the GEAP host accepting `antigravity-preview-05-2026`,
-     which the GEAP docs never mention — so the published enum is incomplete
-     and only a live call settles it.
+  1. Does a plain Gemini *model* interaction work at all? (The published enum of
+     ids is incomplete; only a live call settles it.)
   2. Is `stream:false` accepted, so a single-JSON response can be compared
      like-for-like against generateContent?
-  3. Is a regional location accepted, or is `locations/global` the only path?
-  4. Does the response carry `usage` (token counts) for a *model* interaction?
+  3. Does the response carry `usage` (token counts) for a *model* interaction?
      Every documented usage example is agent + streaming.
-  5. Does `system_instruction` survive `previous_interaction_id`? The docs say
+  4. Does `system_instruction` survive `previous_interaction_id`? The docs say
      it is "interaction-scoped" and must be re-sent every turn; if that is true
      a stateful conversation still uploads the system prompt on every turn, and
      the byte savings come from the history alone.
 
-Nothing here measures performance. It answers "which comparison is even
-possible", and the answer decides the shape of the experiment that follows.
+One host, one auth: generativelanguage.googleapis.com with an API key. Vertex was
+probed here once and never served a plain-model interaction, so it is gone -- and
+with every arm on one host, the latency numbers compare a mechanism rather than a
+network path.
+
+Nothing here measures capability only: probe_latency_matrix and probe_stream_ttft
+below do measure time, because "which field costs the seconds" turned out to be the
+question the arms could not answer on their own.
 
 Every probe is a real, billable call, so each one sends "hi" and caps output at
 16 tokens. No agent, no sandbox, no `background`.
@@ -34,9 +34,7 @@ import os
 import re
 import time
 
-from gemini_client import (
-    LOCATION, PROJECT, DEFAULT_MODEL, _bearer_token, _session, is_mock, vertex_url,
-)
+from gemini_client import DEFAULT_MODEL, _session, is_mock
 from gemini_client import api_base as gc_api_base
 from payloads import (
     answer_text, extract_text, model_content, model_step, single_step_input,
@@ -58,10 +56,6 @@ PROBE_MODELS = [
 # that id; if it is refused differently, something else is going on.
 BOGUS_MODEL = "definitely-not-a-real-model"
 
-# The regional location to test. `global` is the only path the GEAP docs show.
-PROBE_REGION = os.environ.get("PROBE_REGION", "us-west1")
-
-API_REVISION = os.environ.get("INTERACTION_API_REVISION", "2026-05-20")
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
 PROBE_TIMEOUT = float(os.environ.get("PROBE_TIMEOUT", "60"))
 
@@ -137,50 +131,27 @@ def classify(status: int, body: str) -> str:
 
 
 def _targets() -> list[dict]:
-    """The (host, url, auth) combinations worth probing, in priority order."""
-    out = [
-        {
-            "name": "vertex-global",
-            "url": f"https://aiplatform.googleapis.com/v1beta1/projects/{PROJECT}"
-                   f"/locations/global/interactions",
-            "auth": "adc",
-            "note": "GEAP host, locations/global — what the current code uses.",
-        },
-        {
-            "name": f"vertex-{PROBE_REGION}",
-            "url": f"https://aiplatform.googleapis.com/v1beta1/projects/{PROJECT}"
-                   f"/locations/{PROBE_REGION}/interactions",
-            "auth": "adc",
-            "note": "Regional location. Only worth having if it answers 200.",
-        },
-    ]
-    if API_KEY:
-        out.append({
-            "name": "devapi",
-            "url": "https://generativelanguage.googleapis.com/v1beta/interactions",
-            "auth": "apikey",
-            "note": "Gemini Developer API. GA, and the only surface whose docs "
-                    "list gemini-* under `model`.",
-        })
-    else:
-        out.append({
-            "name": "devapi",
-            "url": "https://generativelanguage.googleapis.com/v1beta/interactions",
-            "auth": "apikey",
-            "skipped": "GEMINI_API_KEY not set",
-            "note": "Set GEMINI_API_KEY to probe the Developer API.",
-        })
-    return out
+    """The one host this project talks to. Vertex was probed here and never served a
+    plain-model interaction; every arm now runs on the Developer API, which is what
+    keeps host, auth and network path identical across the comparison."""
+    target = {
+        "name": "devapi",
+        "url": "https://generativelanguage.googleapis.com/v1beta/interactions",
+        "auth": "apikey",
+        "note": "Gemini Developer API. GA, and the only surface that serves "
+                "gemini-* under `model`.",
+    }
+    if not API_KEY:
+        target["skipped"] = "GEMINI_API_KEY not set"
+        target["note"] = "Set GEMINI_API_KEY to probe the Developer API."
+    return [target]
 
 
-def _headers(auth: str) -> dict:
-    h = {"Content-Type": "application/json"}
-    if auth == "adc":
-        h["Authorization"] = f"Bearer {_bearer_token()}"
-        h["Api-Revision"] = API_REVISION
-    else:
-        h["x-goog-api-key"] = API_KEY
-    return h
+def _headers(auth: str = "apikey") -> dict:
+    """One auth on this project: the Developer API key."""
+    if auth != "apikey":
+        raise ValueError(f"unknown auth: {auth} (this project is API-key only)")
+    return {"Content-Type": "application/json", "x-goog-api-key": API_KEY}
 
 
 # --------------------------------------------------------------------------
@@ -341,25 +312,20 @@ def _model_body(model: str, stream: bool, system: str = "",
 # generateContent control
 
 
-def _generate_content(target: str, model: str) -> dict:
-    """Does this host serve this model over the *old* API? Establishes that a
-    model id is valid for the host before its interactions rejection is read as
-    'interactions does not support gemini'."""
+def _generate_content(model: str) -> dict:
+    """Does the host serve this model over the *old* API? Establishes that a model id
+    is valid before its interactions rejection is read as 'interactions does not
+    support gemini'."""
     body = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
             "generationConfig": {"maxOutputTokens": 16}}
-    if target == "devapi":
-        if not API_KEY:
-            return {"status": 0, "verdict": "skipped", "error": "GEMINI_API_KEY not set"}
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{model}:generateContent")
-        auth = "apikey"
-    else:
-        url = vertex_url(model)
-        auth = "adc"
+    if not API_KEY:
+        return {"status": 0, "verdict": "skipped", "error": "GEMINI_API_KEY not set"}
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent")
 
     t0 = time.monotonic()
     try:
-        resp = _session().post(url, data=json.dumps(body), headers=_headers(auth),
+        resp = _session().post(url, data=json.dumps(body), headers=_headers(),
                                timeout=PROBE_TIMEOUT)
     except Exception as exc:
         return {"status": 0, "verdict": "error", "error": f"request_failed: {exc}"}
@@ -390,11 +356,6 @@ def _probe_target(target: dict) -> dict:
         out["reason"] = target["skipped"]
         return out
 
-    if auth == "adc" and not PROJECT:
-        out["verdict"] = "skipped"
-        out["reason"] = "GOOGLE_CLOUD_PROJECT not set"
-        return out
-
     control = _call(url, auth, _model_body(BOGUS_MODEL, stream=False))
     out["checks"]["control_bogus_model"] = control
     if control["verdict"] in ("environment", "unavailable"):
@@ -410,7 +371,7 @@ def _probe_target(target: dict) -> dict:
         entry = {
             "interactions_stream": _call(url, auth, _model_body(model, stream=True)),
             "interactions_nonstream": _call(url, auth, _model_body(model, stream=False)),
-            "generate_content": _generate_content(name, model),
+            "generate_content": _generate_content(model),
         }
         s, n = entry["interactions_stream"], entry["interactions_nonstream"]
         entry["usage_reported"] = bool(s.get("usage")) or bool(n.get("usage"))
@@ -548,9 +509,7 @@ def _probe_system_instruction(url: str, auth: str, model: str) -> dict:
 
 
 def _mock() -> dict:
-    """Offline stand-in matching what the published docs predict, so the UI and
-    the tests can run with no credentials. Deliberately shows Vertex refusing a
-    gemini model and the Developer API accepting one."""
+    """Offline stand-in, so the UI and the tests run with no credentials."""
     def call(status, verdict, usage=None, text=""):
         return {"status": status, "verdict": verdict, "elapsed_ms": 0,
                 "error": "" if verdict == "supported" else "(mock) rejected",
@@ -559,23 +518,10 @@ def _mock() -> dict:
                 "request": {}}
 
     model = PROBE_MODELS[0]
-    vertex = {
-        "target": "vertex-global", "url": "(mock)", "note": "", "verdict": "unsupported",
-        "supported_model": None, "control_message": "(mock) unknown model",
-        "checks": {"control_bogus_model": call(400, "unsupported"),
-                   "region": {"probed": True, "verdict": "supported"},
-                   "system_instruction": {"verdict": "skipped",
-                                          "reason": "no model interaction succeeded"}},
-        "models": {model: {"interactions_stream": call(400, "unsupported"),
-                           "interactions_nonstream": call(400, "unsupported"),
-                           "generate_content": {"status": 200, "verdict": "supported"},
-                           "usage_reported": False, "same_message_as_bogus": True}},
-    }
     dev = {
         "target": "devapi", "url": "(mock)", "note": "", "verdict": "supported",
         "supported_model": model, "control_message": "(mock) unknown model",
         "checks": {"control_bogus_model": call(400, "unsupported"),
-                   "region": {"probed": False, "verdict": "supported"},
                    "system_instruction": {"verdict": "per_turn", "accepted": True,
                                           "marker": MARKER, "trigger": TRIGGER,
                                           "meaning": "(mock) re-send every turn"}},
@@ -585,10 +531,9 @@ def _mock() -> dict:
             "generate_content": {"status": 200, "verdict": "supported"},
             "usage_reported": True, "same_message_as_bogus": False}},
     }
-    return {"mock": True, "targets": [vertex, dev],
-            "env": {"project": PROJECT or "(unset)", "location": LOCATION,
-                    "api_key": False, "models": PROBE_MODELS},
-            "conclusion": _conclude([vertex, dev])}
+    return {"mock": True, "targets": [dev],
+            "env": {"api_key": False, "models": PROBE_MODELS},
+            "conclusion": _conclude([dev])}
 
 
 # --------------------------------------------------------------------------
@@ -597,61 +542,36 @@ def _mock() -> dict:
 
 def _conclude(targets: list[dict]) -> dict:
     """Turn the matrix into the one sentence that decides the next step."""
-    by = {t["target"]: t for t in targets}
-    vertex = [t for n, t in by.items() if n.startswith("vertex")]
-    vertex_ok = [t for t in vertex if t.get("supported_model")]
-    dev = by.get("devapi", {})
+    dev = {t["target"]: t for t in targets}.get("devapi", {})
     dev_ok = bool(dev.get("supported_model"))
 
     # A target that was skipped or that failed on auth never judged the request
-    # body, so it says nothing about which fields the API supports. If no target
-    # got past that point, the only honest answer is "nothing was measured" —
-    # reporting "unsupported" here would turn a missing credential into a claim
-    # about the API.
+    # body, so it says nothing about which fields the API supports. Reporting
+    # "unsupported" there would turn a missing credential into a claim about the API.
     blocked = [t["target"] for t in targets
                if t.get("verdict") in ("environment", "skipped")]
-    if not vertex_ok and not dev_ok and len(blocked) == len(targets):
+    if not dev_ok and blocked:
         reasons = "; ".join(f"{t['target']}: {t.get('reason') or t.get('verdict')}"
                             for t in targets)
         return {"next_step": "fix_environment",
-                "summary": "No target was actually probed — every one was skipped or "
-                           f"blocked before the request body was judged. {reasons}",
+                "summary": "Nothing was probed — the request never got far enough to "
+                           f"be judged on its fields. {reasons}",
                 "blocked": blocked}
-
-    env_blocked = [t["target"] for t in targets if t.get("verdict") == "environment"]
-    if env_blocked and not vertex_ok and not dev_ok:
-        return {"next_step": "fix_environment",
-                "summary": f"Blocked before any schema question: {', '.join(env_blocked)}. "
-                           "Fix credentials / IAM / API enablement, then re-run.",
-                "blocked": env_blocked}
-
-    if vertex_ok:
-        t = vertex_ok[0]
-        sysc = t["checks"].get("system_instruction", {})
-        return {"next_step": "compare_on_vertex",
-                "summary": f"{t['target']} runs model interactions "
-                           f"({t['supported_model']}). All arms stay on Vertex/ADC.",
-                "host": t["target"], "model": t["supported_model"],
-                "system_instruction": sysc.get("verdict")}
 
     if dev_ok:
         sysc = dev["checks"].get("system_instruction", {})
         return {"next_step": "compare_on_devapi",
-                "summary": "No model interaction on Vertex. The Developer API runs "
-                           f"{dev['supported_model']}. Move every arm there so host, "
-                           "auth, and network path stay identical across arms — or "
-                           "keep Vertex and drop the interaction arm.",
+                "summary": f"The Developer API runs model interactions "
+                           f"({dev['supported_model']}). Every arm runs there, so "
+                           "host, auth and network path are identical across arms.",
                 "host": "devapi", "model": dev["supported_model"],
                 "system_instruction": sysc.get("verdict")}
 
-    unprobed = [t["target"] for t in targets if t.get("verdict") == "skipped"]
-    tail = (f" Not probed: {', '.join(unprobed)} — the finding covers only the hosts "
-            "that answered." if unprobed else " Response bodies are attached.")
     return {"next_step": "no_comparison_possible",
-            "summary": "No host accepted a plain model interaction. A stateless-vs-"
-                       "stateful text comparison cannot be built as specified; that "
-                       "is the finding." + tail,
-            "unprobed": unprobed}
+            "summary": "The Developer API did not accept a plain model interaction. "
+                       "The interaction arms cannot be built as specified; that is "
+                       "the finding. Response bodies are attached.",
+            "unprobed": []}
 
 
 # --------------------------------------------------------------------------
@@ -686,9 +606,8 @@ def probe_interactions() -> dict:
     targets = [_probe_target(t) for t in _targets()]
     return {
         "mock": False,
-        "env": {"project": PROJECT or "(unset)", "location": LOCATION,
-                "api_key": bool(API_KEY), "models": PROBE_MODELS,
-                "api_revision": API_REVISION, "region_probed": PROBE_REGION},
+        "env": {"api_key": bool(API_KEY), "models": PROBE_MODELS,
+                "host": gc_api_base()},
         "targets": targets,
         "models": _model_verdicts(targets),
         "conclusion": _conclude(targets),

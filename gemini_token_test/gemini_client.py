@@ -1,8 +1,9 @@
-"""Single Vertex AI generateContent call with real wire-byte counting.
+"""Single generateContent call with real wire-byte counting.
 
-Targets **Vertex AI** (aiplatform.googleapis.com), NOT the Developer API.
-Auth = OAuth bearer via Application Default Credentials (google-auth). On Cloud
-Run the token comes from the metadata server / service account automatically.
+Targets the **Gemini Developer API** (generativelanguage.googleapis.com) with an
+API key. That is the only host serving plain-model Interactions, and every arm has
+to sit on one host, one auth, one network path or the latency numbers compare
+nothing -- so Vertex/ADC is gone from this project entirely.
 
 Measures, per call:
   - wire_sent / wire_recv : bytes of the HTTP request/response as they cross the
@@ -32,15 +33,6 @@ import requests
 from urllib3.connection import HTTPSConnection, HTTPConnection
 
 import streaming
-
-# Vertex config (overridable via env; project/creds come from ADC on Cloud Run).
-PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("VERTEX_PROJECT", "")
-LOCATION = os.environ.get("VERTEX_LOCATION", "us-central1")
-
-
-def _vertex_host() -> str:
-    return "aiplatform.googleapis.com" if LOCATION == "global" else f"{LOCATION}-aiplatform.googleapis.com"
-
 
 # --- Developer API (generativelanguage) -----------------------------------
 # The comparison runs entirely on the Developer API: it is the only host that
@@ -344,7 +336,6 @@ def _build_session() -> requests.Session:
 
 
 _SESSION = None
-_CREDS = None
 
 
 def _session() -> requests.Session:
@@ -374,28 +365,6 @@ def reset_session() -> None:
 
 def is_mock() -> bool:
     return os.environ.get("GEMINI_MOCK") == "1"
-
-
-def _bearer_token() -> str:
-    """ADC OAuth token (service account on Cloud Run, gcloud creds locally)."""
-    global _CREDS
-    import google.auth
-    from google.auth.transport.requests import Request as GAuthRequest
-
-    if _CREDS is None:
-        _CREDS, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-    if not _CREDS.valid:
-        _CREDS.refresh(GAuthRequest())
-    return _CREDS.token
-
-
-def vertex_url(model: str) -> str:
-    return (
-        f"https://{_vertex_host()}/v1/projects/{PROJECT}/locations/{LOCATION}"
-        f"/publishers/google/models/{model}:generateContent"
-    )
 
 
 def ready() -> tuple[bool, str]:
@@ -478,7 +447,7 @@ def _mock_call(mode: str, turn: int, contents: list, cached_tokens: int) -> Call
 def call_gemini(model: str, contents: list, mode: str, turn: int,
                 cached_content: str | None = None,
                 cached_tokens_hint: int = 0) -> CallResult:
-    """One Vertex generateContent call, optionally with a cachedContent ref.
+    """One streamed generateContent call, optionally with a cachedContent ref.
 
     Never raises; errors land in .error. cached_tokens_hint is used only in mock
     mode to simulate the cached prefix size.

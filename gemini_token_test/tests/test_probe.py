@@ -9,6 +9,8 @@ the wrong path, so the classifier is tested before anything is built on it.
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import probe
@@ -215,46 +217,46 @@ def _target(name, model=None, verdict="unsupported", sysv="skipped"):
             "checks": {"system_instruction": {"verdict": sysv}}}
 
 
-def test_vertex_support_keeps_every_arm_on_vertex():
-    c = probe._conclude([_target("vertex-global", "gemini-3-flash-preview", "supported"),
-                         _target("devapi", "gemini-3-flash-preview", "supported")])
-    assert c["next_step"] == "compare_on_vertex"
-    assert c["host"] == "vertex-global"
-
-
-def test_devapi_only_support_moves_the_comparison():
-    c = probe._conclude([_target("vertex-global"),
-                         _target("devapi", "gemini-3-flash-preview", "supported",
+def test_devapi_support_settles_the_comparison():
+    c = probe._conclude([_target("devapi", "gemini-3-flash-preview", "supported",
                                  sysv="per_turn")])
     assert c["next_step"] == "compare_on_devapi"
+    assert c["host"] == "devapi"
     assert c["system_instruction"] == "per_turn"
 
 
-def test_no_host_supports_a_model_interaction():
-    c = probe._conclude([_target("vertex-global"), _target("devapi")])
+def test_no_model_interaction_is_the_finding():
+    c = probe._conclude([_target("devapi")])
     assert c["next_step"] == "no_comparison_possible"
 
 
-def test_all_targets_skipped_is_never_a_schema_conclusion():
-    # No project, no API key: nothing was measured. Calling that "unsupported"
-    # would turn a missing credential into a claim about the API.
-    c = probe._conclude([_target("vertex-global", verdict="skipped"),
-                         _target("devapi", verdict="skipped")])
+def test_a_skipped_host_is_never_a_schema_conclusion():
+    # No API key: nothing was measured. Calling that "unsupported" would turn a
+    # missing credential into a claim about the API.
+    c = probe._conclude([_target("devapi", verdict="skipped")])
     assert c["next_step"] == "fix_environment"
-
-
-def test_a_skipped_host_is_named_when_the_others_say_unsupported():
-    c = probe._conclude([_target("vertex-global"), _target("devapi", verdict="skipped")])
-    assert c["next_step"] == "no_comparison_possible"
-    assert c["unprobed"] == ["devapi"]
 
 
 def test_environment_failure_never_reports_a_schema_conclusion():
-    # A 401 everywhere must not be read as "gemini models are unsupported".
-    c = probe._conclude([_target("vertex-global", verdict="environment"),
-                         _target("devapi", verdict="environment")])
+    # A 401 must not be read as "gemini models are unsupported".
+    c = probe._conclude([_target("devapi", verdict="environment")])
     assert c["next_step"] == "fix_environment"
-    assert "vertex-global" in c["blocked"]
+    assert "devapi" in c["blocked"]
+
+
+# --- one host, one auth ----------------------------------------------------
+
+def test_the_only_target_is_the_developer_api():
+    """Vertex was probed here and never served a plain-model interaction. Every arm
+    runs on one host now -- otherwise the latency numbers compare network paths."""
+    assert [t["name"] for t in probe._targets()] == ["devapi"]
+    assert all("generativelanguage" in t["url"] for t in probe._targets())
+
+
+def test_there_is_no_adc_auth_left():
+    assert probe._headers("apikey")["x-goog-api-key"] is not None
+    with pytest.raises(ValueError):
+        probe._headers("adc")
 
 
 # --- mock ------------------------------------------------------------------
@@ -263,5 +265,5 @@ def test_mock_runs_without_credentials(monkeypatch):
     monkeypatch.setenv("GEMINI_MOCK", "1")
     out = probe.probe_interactions()
     assert out["mock"] is True
-    assert {t["target"] for t in out["targets"]} == {"vertex-global", "devapi"}
+    assert {t["target"] for t in out["targets"]} == {"devapi"}
     assert out["conclusion"]["next_step"] == "compare_on_devapi"

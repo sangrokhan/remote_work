@@ -103,7 +103,7 @@ def run_three_stage(model: str, request_name: str = "default",
     (stateless / cachebuild / stateful / nocontext) so each stage's traffic is
     separable. on_progress(event) is called once per turn with {stage, turn, turns}.
     stage_pause_seconds inserts a pause between stages (spreads calls out to stay
-    under Vertex per-minute quotas); during it on_progress emits {stage:'pause'}.
+    under the API's per-minute quotas); during it on_progress emits {stage:'pause'}.
     """
     system, steps, source = load_request(request_name)
     if turns:
@@ -115,7 +115,7 @@ def run_three_stage(model: str, request_name: str = "default",
             on_progress({"stage": stage, "turn": turn, "turns": n})
 
     def _pause():
-        # Space stages out so a burst of turns doesn't trip Vertex RPM/TPM limits.
+        # Space stages out so a burst of turns doesn't trip the API's RPM/TPM limits.
         # Tick every few seconds so the UI (and the SSE connection) stays alive.
         rem = int(stage_pause_seconds)
         while rem > 0:
