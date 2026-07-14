@@ -195,6 +195,47 @@ a smaller upload than the client it claims to be measuring.
 
 ---
 
+## Measured: `store:true` costs ~1.8 s per turn, and it is a *tail* cost
+
+Probe, 2026-07-14, `gemini-3.1-flash-lite`, `probe.probe_latency_matrix()` /
+`probe.probe_stream_ttft()`. Decoding pinned (`max_output_tokens`,
+`thinking_level:low`), same question, no `previous_interaction_id` unless stated.
+
+**Which field buys the seconds** (stream:false, medians of 7):
+
+| cell | median |
+|---|---|
+| `generateContent`, full history | 601 ms |
+| interactions, client history, `store:false` | 854 ms |
+| interactions, client history, **`store:true`** | **2,685 ms** |
+| interactions, **`previous_interaction_id`** + `store:true` | 2,699 ms |
+
+- **`store` costs +1,831 ms.** `previous_interaction_id` costs +14 ms — nothing.
+- The store cost is **constant, not proportional to what is stored**: a 20,653-char
+  `system_instruction` moves it by ~280 ms (856→957 ms unstored, 2,372→2,653 ms
+  stored).
+- A chained conversation **cannot opt out**: `store:false` with
+  `previous_interaction_id` is rejected —
+  `400 "store must be true when previous_interaction_id is set."`
+
+**Where the 1.8 s sits** (stream:true, medians of 4, answer ~18 chars):
+
+| | first text | stream closed |
+|---|---|---|
+| `store:false` | 1,131 ms | 1,335 ms |
+| `store:true` | **951 ms** | **2,800 ms** |
+
+The answer reaches a streaming client at the *same* time either way — if anything
+sooner with `store:true`. The write happens **after the last text delta**: the SSE
+stream stays open ~1.8 s more (`step.stop` → `interaction.completed` → `[DONE]`)
+while the server persists the interaction.
+
+So a streaming client never feels it, which is why the published examples — all of
+them streamed — look fast. A `stream:false` client waits for the whole tail on every
+single turn, and the `interaction` arm here is exactly that.
+
+---
+
 ## Consequence for the traffic experiment
 
 The `interaction` arm must re-upload `system_instruction` (the ~12K-char system

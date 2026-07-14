@@ -37,7 +37,11 @@ import time
 from gemini_client import (
     LOCATION, PROJECT, DEFAULT_MODEL, _bearer_token, _session, is_mock, vertex_url,
 )
-from payloads import extract_text, model_step, single_step_input, user_step
+from gemini_client import api_base as gc_api_base
+from payloads import (
+    answer_text, extract_text, model_content, model_step, single_step_input,
+    user_content, user_step,
+)
 
 # Candidate text models. The probe is a matrix, so each extra id multiplies the
 # call count -- and it now runs on page load, so the default is exactly the model
@@ -988,6 +992,242 @@ def probe_hidden_state(model: str = "", repeats: int = 2) -> dict:
                       "signature_steps": sum(1 for s in resp_steps if s.get("signature"))},
             "echo_numbers": echo_nums, "drop_numbers": drop_nums,
             "echo_consistent": echo_same, "drop_consistent": drop_same}
+
+
+# --------------------------------------------------------------------------
+# Latency probe: which field costs the seconds?
+#
+# The comparison run puts `interaction` (store:true + previous_interaction_id) at a
+# ~4.7 s median and `interaction_stateless` (store:false, client-side history) at
+# ~2.2 s -- on the same endpoint, same model, same conversation. But those two arms
+# differ in three ways at once (who stores, who chains, what the payload carries), so
+# the run cannot say which of the three buys the delay.
+#
+# This probe holds the conversation fixed and varies one field at a time. Every cell
+# asks the same second question with the same visible history and the same decoding
+# settings; only the mechanism differs:
+#
+#   gen_stateless       generateContent, full history                (control)
+#   client_nostore      interactions, client history, store:false    (the fast arm)
+#   client_store        interactions, client history, store:true     <- store alone
+#   chained_store       interactions, previous_interaction_id, store:true
+#   chained_nostore     interactions, previous_interaction_id, store:false <- read alone
+#
+# client_nostore vs client_store isolates the cost of *writing* the interaction.
+# client_store vs chained_store isolates the cost of *reading* the stored history.
+
+_LAT_SYSTEM = "You are a test fixture. Be terse."
+_LAT_Q1 = "Name one European capital city. One word."
+_LAT_Q2 = "Name a different one. One word."
+
+
+def _lat_config() -> dict:
+    """Decoding is pinned: latency that tracks how much the model chose to think is
+    not latency the endpoint is responsible for."""
+    return {"max_output_tokens": 32, "thinking_level": "low"}
+
+
+def _lat_time(fn) -> tuple[float, dict]:
+    t0 = time.monotonic()
+    out = fn()
+    return (time.monotonic() - t0) * 1000, out
+
+
+def _lat_interaction(history: list, prev_id: str | None, store: bool) -> dict:
+    body = {"model": _SIG_MODEL[0], "stream": False, "store": store,
+            "system_instruction": _LAT_SYSTEM, "input": history,
+            "generation_config": _lat_config()}
+    if prev_id:
+        body["previous_interaction_id"] = prev_id
+    ms, (status, text) = _lat_time(lambda: _sig_post(body))
+    out = {"ms": int(ms), "status": status, "bytes": len(json.dumps(body))}
+    if status in (200, 201):
+        d = json.loads(text)
+        out["output_tokens"] = _sig_usage(d)["output_tokens"]
+        out["thought_tokens"] = _sig_usage(d)["thought_tokens"]
+        out["input_tokens"] = _sig_usage(d)["input_tokens"]
+    else:
+        out["body"] = text[:200]
+    return out
+
+
+def _lat_generate(history: list) -> dict:
+    """The generateContent control: same conversation, the other endpoint."""
+    url = (f"{gc_api_base()}/models/{_SIG_MODEL[0]}:generateContent")
+    # generateContent spells the same two settings differently: thinking_level lives
+    # under thinkingConfig, and a flat `thinkingLevel` is a 400.
+    body = {"contents": history,
+            "systemInstruction": {"parts": [{"text": _LAT_SYSTEM}]},
+            "generationConfig": {"maxOutputTokens": 32,
+                                 "thinkingConfig": {"thinkingLevel": "low"}}}
+    def call():
+        r = _session().post(url, data=json.dumps(body),
+                            headers=_headers("apikey"), timeout=PROBE_TIMEOUT)
+        return r.status_code, r.text
+    ms, (status, text) = _lat_time(call)
+    out = {"ms": int(ms), "status": status, "bytes": len(json.dumps(body))}
+    if status in (200, 201):
+        u = json.loads(text).get("usageMetadata", {})
+        out["input_tokens"] = int(u.get("promptTokenCount", 0))
+        out["output_tokens"] = int(u.get("candidatesTokenCount", 0))
+        out["thought_tokens"] = int(u.get("thoughtsTokenCount", 0))
+    else:
+        out["body"] = text[:200]
+    return out
+
+
+def _median(xs: list) -> int:
+    xs = sorted(xs)
+    if not xs:
+        return 0
+    mid = len(xs) // 2
+    return int(xs[mid] if len(xs) % 2 else (xs[mid - 1] + xs[mid]) / 2)
+
+
+def probe_latency_matrix(model: str = "", repeats: int = 5) -> dict:
+    """Where do the seconds go: `store`, `previous_interaction_id`, or neither?
+
+    One stored turn 1 to chain onto, then `repeats` calls per cell. Each cell sends
+    the same second question; only the state mechanism varies. Returns the per-cell
+    median, plus the two differences the arms confound.
+    """
+    _SIG_MODEL[0] = model or (PROBE_MODELS[0] if PROBE_MODELS else DEFAULT_MODEL)
+    if not API_KEY:
+        return {"verdict": "environment", "error": "GEMINI_API_KEY not set"}
+
+    # Turn 1, stored: gives the chained cells something to point at, and gives the
+    # client-history cells the model's own steps to echo.
+    body1 = {"model": _SIG_MODEL[0], "stream": False, "store": True,
+             "system_instruction": _LAT_SYSTEM,
+             "input": single_step_input(_LAT_Q1),
+             "generation_config": _lat_config()}
+    s1, t1 = _sig_post(body1)
+    if s1 not in (200, 201):
+        return {"verdict": classify(s1, t1), "error": f"turn1 http_{s1}",
+                "body": t1[:300]}
+    d1 = json.loads(t1)
+    iid, steps1 = d1.get("id"), d1.get("steps") or []
+    answer1 = answer_text(steps1)
+
+    history = [user_step(_LAT_Q1), *steps1, user_step(_LAT_Q2)]
+    gen_history = [user_content(_LAT_Q1), model_content(answer1), user_content(_LAT_Q2)]
+    new_turn = single_step_input(_LAT_Q2)
+
+    cells = {
+        "gen_stateless":   lambda: _lat_generate(gen_history),
+        "client_nostore":  lambda: _lat_interaction(history, None, False),
+        "client_store":    lambda: _lat_interaction(history, None, True),
+        "chained_store":   lambda: _lat_interaction(new_turn, iid, True),
+        # There is no chained_nostore cell: the API rejects it outright --
+        #   400 "store must be true when previous_interaction_id is set."
+        # So a chained conversation cannot opt out of the write. Whatever `store`
+        # costs, previous_interaction_id pays it on every turn, by construction.
+    }
+
+    runs = {name: [fn() for _ in range(repeats)] for name, fn in cells.items()}
+    out = {}
+    for name, rs in runs.items():
+        ok = [r for r in rs if r["status"] in (200, 201)]
+        out[name] = {
+            "median_ms": _median([r["ms"] for r in ok]),
+            "ms": [r["ms"] for r in rs],
+            "errors": len(rs) - len(ok),
+            "request_bytes": rs[0]["bytes"],
+            "input_tokens": ok[0].get("input_tokens") if ok else None,
+            "output_tokens": [r.get("output_tokens") for r in ok],
+            "thought_tokens": [r.get("thought_tokens") for r in ok],
+        }
+
+    return {
+        "model": _SIG_MODEL[0], "repeats": repeats, "cells": out,
+        # What each field costs, once the other two are held still.
+        "store_cost_ms": out["client_store"]["median_ms"] - out["client_nostore"]["median_ms"],
+        "chaining_cost_ms": out["chained_store"]["median_ms"] - out["client_store"]["median_ms"],
+        "endpoint_cost_ms": out["client_nostore"]["median_ms"] - out["gen_stateless"]["median_ms"],
+        "chained_nostore": "rejected: store must be true when "
+                           "previous_interaction_id is set (400)",
+    }
+
+
+# --------------------------------------------------------------------------
+# Streaming probe: does `store` hide behind the first token?
+#
+# With stream:false, store:true costs ~1.8 s over store:false -- measured, constant,
+# and independent of payload size. The published examples all stream, which reports
+# time-to-first-token, not time-to-complete. So: is the write happening *before* the
+# first token (in which case streaming hides nothing and the guide's numbers are
+# measuring a different thing), or *after* the last one (in which case a streaming
+# client never waits for it, and only our stream:false arms pay)?
+#
+# Measured three ways per cell: TTFT (first SSE byte), time to the last event, and
+# the token counts, so a slower cell cannot be blamed on a longer answer.
+
+
+def _stream_once(store: bool, question: str, system: str) -> dict:
+    body = {"model": _SIG_MODEL[0], "stream": True, "store": store,
+            "system_instruction": system,
+            "input": single_step_input(question),
+            "generation_config": _lat_config()}
+    t0 = time.monotonic()
+    ttft = None
+    events = 0
+    try:
+        with _session().post(INTERACTIONS_URL, data=json.dumps(body),
+                             headers=_headers("apikey"), timeout=PROBE_TIMEOUT,
+                             stream=True) as resp:
+            if resp.status_code not in (200, 201):
+                return {"status": resp.status_code, "body": resp.text[:200]}
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                if ttft is None:
+                    ttft = (time.monotonic() - t0) * 1000
+                events += 1
+            done = (time.monotonic() - t0) * 1000
+    except Exception as exc:
+        return {"status": 0, "body": str(exc)}
+    return {"status": 200, "ttft_ms": int(ttft or 0), "done_ms": int(done),
+            "events": events}
+
+
+def probe_stream_ttft(model: str = "", repeats: int = 5) -> dict:
+    """Where does the store cost land when the response streams?
+
+    Four cells: {stream:false, stream:true} x {store:false, store:true}, same first
+    turn, no previous_interaction_id, decoding pinned. If streaming's TTFT is the
+    same with and without `store`, the write is not on the path to the first token --
+    it is a tail cost that only a non-streaming client waits for.
+    """
+    _SIG_MODEL[0] = model or (PROBE_MODELS[0] if PROBE_MODELS else DEFAULT_MODEL)
+    if not API_KEY:
+        return {"verdict": "environment", "error": "GEMINI_API_KEY not set"}
+
+    out: dict = {}
+    for store in (False, True):
+        key = f"stream_store_{str(store).lower()}"
+        runs = [_stream_once(store, _LAT_Q1, _LAT_SYSTEM) for _ in range(repeats)]
+        ok = [r for r in runs if r.get("status") == 200]
+        out[key] = {"ttft_median_ms": _median([r["ttft_ms"] for r in ok]),
+                    "done_median_ms": _median([r["done_ms"] for r in ok]),
+                    "ttft_ms": [r.get("ttft_ms") for r in runs],
+                    "done_ms": [r.get("done_ms") for r in runs],
+                    "errors": len(runs) - len(ok)}
+
+        key = f"blocking_store_{str(store).lower()}"
+        b = [_lat_interaction(single_step_input(_LAT_Q1), None, store)
+             for _ in range(repeats)]
+        bok = [r for r in b if r["status"] in (200, 201)]
+        out[key] = {"done_median_ms": _median([r["ms"] for r in bok]),
+                    "done_ms": [r["ms"] for r in b],
+                    "errors": len(b) - len(bok)}
+
+    s = out["stream_store_true"]["ttft_median_ms"] - out["stream_store_false"]["ttft_median_ms"]
+    d = out["stream_store_true"]["done_median_ms"] - out["stream_store_false"]["done_median_ms"]
+    blk = out["blocking_store_true"]["done_median_ms"] - out["blocking_store_false"]["done_median_ms"]
+    return {"model": _SIG_MODEL[0], "repeats": repeats, "cells": out,
+            "store_cost_on_ttft_ms": s,
+            "store_cost_on_stream_completion_ms": d,
+            "store_cost_when_blocking_ms": blk}
 
 
 # --- cached probe ---------------------------------------------------------
