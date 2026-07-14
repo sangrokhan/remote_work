@@ -22,7 +22,20 @@ PRICE_OUTPUT = float(os.environ.get("PRICE_OUTPUT", "0.40"))
 
 _FIELDS = ("req_payload_bytes", "resp_payload_bytes", "wire_sent", "wire_recv",
            "input_tokens", "cached_tokens", "billed_uncached_tokens",
-           "output_tokens", "reasoning_tokens", "latency_ms")
+           "output_tokens", "reasoning_tokens", "latency_ms",
+           "ttft_ms", "ttlt_ms")
+
+# Latency is a distribution, not a number. A mean hides the one turn that took
+# four seconds, and that turn is what a user actually feels.
+_LATENCY_FIELDS = ("ttft_ms", "ttlt_ms", "latency_ms")
+
+
+def _pct(xs: list[float], p: float) -> float:
+    if not xs:
+        return 0.0
+    s = sorted(xs)
+    i = min(int(round((p / 100) * (len(s) - 1))), len(s) - 1)
+    return s[i]
 
 
 def _cumulative(values: list[float]) -> list[float]:
@@ -84,6 +97,20 @@ def arm_series(experiment: dict, arm: str) -> dict:
                                   int(totals["output_tokens"]))
     totals["mean_latency_ms"] = _mean(per_turn["latency_ms"])
     series["totals"] = totals
+
+    # Latency over EVERY call, not over the per-turn averages: averaging first
+    # would erase the slow turns, which are the only ones worth reporting.
+    calls = [t for r in runs for t in r["turns"]]
+    series["latency"] = {
+        f: {
+            "mean": _mean([c[f] for c in calls]),
+            "p50": _pct([c[f] for c in calls], 50),
+            "p95": _pct([c[f] for c in calls], 95),
+            "max": max([c[f] for c in calls], default=0),
+        }
+        for f in _LATENCY_FIELDS
+    }
+    series["streamed"] = bool(calls and calls[0].get("streamed"))
     return series
 
 
@@ -109,6 +136,10 @@ def summarize(experiment: dict) -> dict:
                 "billed_uncached_tokens": _ratio(s["totals"]["billed_uncached_tokens"],
                                                  sf["billed_uncached_tokens"]),
                 "cost_usd": _ratio(s["totals"]["cost_usd"], sf["cost_usd"]),
+                "ttft_p50": _ratio(s["latency"]["ttft_ms"]["p50"],
+                                   stateful["latency"]["ttft_ms"]["p50"]),
+                "ttlt_p50": _ratio(s["latency"]["ttlt_ms"]["p50"],
+                                   stateful["latency"]["ttlt_ms"]["p50"]),
             }
     return out
 
@@ -132,6 +163,22 @@ def print_summary(summary: dict) -> None:
               f"{t['input_tokens']:>8,.0f} {t['cached_tokens']:>8,.0f} "
               f"{t['billed_uncached_tokens']:>8,.0f} {t['output_tokens']:>8,.0f} "
               f"{t['cost_usd']:>9.5f} {t['mean_latency_ms']:>7,.0f}")
+
+    streamed = any(s.get("streamed") for s in summary["arms"].values())
+    if streamed:
+        print("\nlatency (ms, over every call):")
+        h = (f"{'arm':<20} {'TTFT mean':>10} {'p50':>7} {'p95':>7} "
+             f"{'TTLT mean':>11} {'p50':>7} {'p95':>7}")
+        print(h)
+        print("-" * len(h))
+        for arm, s in summary["arms"].items():
+            f, l = s["latency"]["ttft_ms"], s["latency"]["ttlt_ms"]
+            print(f"{arm:<20} {f['mean']:>10,.0f} {f['p50']:>7,.0f} {f['p95']:>7,.0f} "
+                  f"{l['mean']:>11,.0f} {l['p50']:>7,.0f} {l['p95']:>7,.0f}")
+        print("\nTTFT is the wait before anything appears; TTLT is the wait until the\n"
+              "answer is complete. The stateful arm uploads less, so it should reach\n"
+              "the server sooner — but the server still has to read the whole history\n"
+              "it is holding, so most of TTFT is prefill, not transfer.")
 
     if summary["ratios"]:
         print("\nratios (stateless / stateful):")

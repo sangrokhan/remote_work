@@ -42,7 +42,7 @@ def cache_key_for(arm: str, repeat: int) -> str:
 
 
 def run_arm(arm: str, fx: fixture_mod.Fixture, *, model: str, turns: int,
-            repeat: int, on_turn=None) -> ArmRun:
+            repeat: int, stream: bool = False, on_turn=None) -> ArmRun:
     run = ArmRun(arm=arm, repeat=repeat)
     history: list[dict] = []
     conversation = None
@@ -62,6 +62,7 @@ def run_arm(arm: str, fx: fixture_mod.Fixture, *, model: str, turns: int,
             turn=k,
             conversation=conversation,
             cache_key=cache_key,
+            stream=stream,
         )
         run.turns.append(res.as_dict(bodies=True))
 
@@ -81,12 +82,19 @@ def run_arm(arm: str, fx: fixture_mod.Fixture, *, model: str, turns: int,
 def run_experiment(*, fixture_name: str = "perf", model: str = oc.DEFAULT_MODEL,
                    turns: int = 10, repeats: int = 3,
                    arms: tuple[str, ...] = oc.ARMS, capture: bool = False,
-                   on_turn=None) -> dict:
+                   stream: bool = False, on_turn=None) -> dict:
     """Run every arm over the fixture.
 
     `capture` wraps each arm in its own tcpdump, so the pcap for an arm contains
     only that arm's packets. One pcap for the whole run would put all three arms
     in one file and the whole point — comparing their traffic — would be lost.
+
+    `stream` is what makes TTFT measurable at all: a first token only exists in a
+    stream. It comes at a price. Upload bytes stay comparable (the stream flags
+    add ~66 B), but DOWNLOAD bytes do not: SSE framing, the per-chunk envelope,
+    and the full Response object repeated in created/completed all ride along. So
+    a streamed run answers "how fast", and a plain run answers "how many bytes
+    came back". Both answer "how many bytes went up", which is the thesis.
 
     The socket byte tally is global and single-threaded, so arms must not overlap;
     they run strictly one after another.
@@ -108,14 +116,14 @@ def run_experiment(*, fixture_name: str = "perf", model: str = oc.DEFAULT_MODEL,
                 wire.reset_session()
                 with cap_mod.Capture(ts, arm=arm) as cap:
                     run = run_arm(arm, fx, model=model, turns=turns,
-                                  repeat=repeat, on_turn=on_turn)
+                                  repeat=repeat, stream=stream, on_turn=on_turn)
                 wire.reset_session()
                 res = cap.result()
                 res["repeat"] = repeat
                 captures.append(res)
             else:
                 run = run_arm(arm, fx, model=model, turns=turns, repeat=repeat,
-                              on_turn=on_turn)
+                              stream=stream, on_turn=on_turn)
 
             runs.append({"arm": run.arm, "repeat": run.repeat,
                          "setup": run.setup, "turns": run.turns})
@@ -130,7 +138,7 @@ def run_experiment(*, fixture_name: str = "perf", model: str = oc.DEFAULT_MODEL,
             "system_chars": fx.system_chars,
             "max_output_tokens": oc.DEFAULT_MAX_OUTPUT_TOKENS,
             "reasoning_effort": oc.DEFAULT_REASONING_EFFORT,
-            "stream": False,
+            "stream": stream,
             "capture": capture,
         },
         "runs": runs,
@@ -139,10 +147,12 @@ def run_experiment(*, fixture_name: str = "perf", model: str = oc.DEFAULT_MODEL,
 
 
 def _progress(arm: str, k: int, n: int, res: oc.CallResult) -> None:
+    timing = (f"ttft={res.ttft_ms:>5}ms ttlt={res.ttlt_ms:>6}ms"
+              if res.streamed else f"{res.latency_ms:>6}ms")
     print(f"  {arm:<20} turn {k:>2}/{n}  "
           f"up={res.req_payload_bytes:>7}B  "
           f"in_tok={res.input_tokens:>6} (cached {res.cached_tokens:>6})  "
-          f"{res.latency_ms:>5}ms",
+          f"{timing}",
           flush=True)
 
 
@@ -160,6 +170,10 @@ def main() -> None:
     ap.add_argument("--arms", default=",".join(oc.ARMS))
     ap.add_argument("--capture", action="store_true",
                     help="run tcpdump around each arm and keep the .pcap")
+    ap.add_argument("--stream", action="store_true",
+                    help="stream the responses, so TTFT/TTLT can be measured. "
+                         "Upload bytes stay comparable; download bytes do not "
+                         "(SSE framing rides along).")
     args = ap.parse_args()
 
     arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
@@ -177,7 +191,8 @@ def main() -> None:
 
     exp = run_experiment(fixture_name=args.fixture, model=args.model,
                          turns=args.turns, repeats=args.repeats, arms=arms,
-                         capture=args.capture, on_turn=_progress)
+                         capture=args.capture, stream=args.stream,
+                         on_turn=_progress)
 
     summary = metrics.summarize(exp)
     exec_id = store.new_exec_id()

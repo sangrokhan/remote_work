@@ -33,6 +33,10 @@
       <input id="capture" type="checkbox">
       capture packets (.pcap)
     </label>
+    <label class="check" title="Streams the answers so TTFT/TTLT can be timed. Upload bytes stay comparable; download bytes gain SSE framing.">
+      <input id="stream" type="checkbox">
+      stream (measure TTFT / TTLT)
+    </label>
     <button id="start">Start</button>
   </div>
   <div id="arms" class="arms"></div>
@@ -51,6 +55,19 @@
   <div class="table-wrap">
     <table id="totals"></table>
   </div>
+  <div id="latency-block" hidden>
+    <h3>Latency — TTFT / TTLT (ms, over every call)</h3>
+    <div class="table-wrap">
+      <table id="latency"></table>
+    </div>
+    <p class="hint">
+      TTFT is the wait before anything appears; TTLT is the wait until the answer
+      is complete. The stateful arm uploads far less, so its bytes arrive sooner —
+      but the server still has to read the whole history it holds for you, and
+      that prefill, not the transfer, is most of TTFT.
+    </p>
+  </div>
+
   <h3>Per turn — upload bytes</h3>
   <div class="table-wrap">
     <table id="perturn"></table>

@@ -96,7 +96,13 @@ class CallResult:
     output_tokens: int = 0
     reasoning_tokens: int = 0
 
-    latency_ms: int = 0
+    latency_ms: int = 0      # request sent -> response fully read
+    # Only a stream has a first token to time. On a non-streamed call these stay
+    # 0 rather than echoing latency_ms: a total is not a TTFT, and a copied number
+    # is the kind of lie that ends up on a chart.
+    ttft_ms: int = 0         # -> first CONTENT token (not the role/created event)
+    ttlt_ms: int = 0         # -> last token (finish_reason / response.completed)
+    streamed: bool = False
     response_id: str = ""
     error: str = ""
 
@@ -131,6 +137,119 @@ class _Exchange:
     latency_ms: int
     request_json: str
     response_json: str
+    ttft_ms: int = 0
+    ttlt_ms: int = 0
+    text: str = ""          # assembled from the deltas, when streamed
+    streamed: bool = False
+
+
+def _iter_sse(resp):
+    """Yield (event_name, parsed_json) per SSE frame.
+
+    Chat sends bare `data:` frames; Responses prefixes each with `event: <type>`
+    and also repeats the type inside the JSON. Handle both.
+    """
+    event = ""
+    for raw in resp.iter_lines(decode_unicode=True):
+        if raw is None:
+            continue
+        line = raw.strip()
+        if not line:
+            event = ""
+            continue
+        if line.startswith("event:"):
+            event = line[6:].strip()
+            continue
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            return
+        try:
+            obj = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        yield event or obj.get("type", ""), obj
+
+
+def _post_stream(url: str, body: dict) -> _Exchange:
+    """Stream the response, timing the first and last token.
+
+    The byte counting still works: wire_counter wraps the whole read, and the
+    socket tally keeps ticking as the chunks arrive. What is NOT comparable to a
+    non-streamed call is resp_bytes — SSE framing, the per-chunk envelope, and (on
+    Responses) the full Response object shipped again in created/completed all
+    ride along. Upload bytes are comparable; download bytes are not.
+    """
+    payload = json.dumps(body).encode()
+    sess = session()
+    is_chat = url.endswith("/chat/completions")
+
+    t0 = time.perf_counter()
+    ttft = ttlt = 0.0
+    chunks: list[str] = []
+    text_parts: list[str] = []
+    usage: dict = {}
+    resp_id = ""
+    resp_bytes = 0
+
+    with wire_counter() as w:
+        resp = sess.post(url, data=payload, headers=auth_headers(),
+                         timeout=TIMEOUT, stream=True)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"{resp.status_code} from {url}: {resp.text[:500]}")
+
+        for event, obj in _iter_sse(resp):
+            chunks.append(json.dumps(obj))
+            resp_bytes += len(json.dumps(obj))
+
+            if is_chat:
+                choices = obj.get("choices") or []
+                if choices:
+                    delta = choices[0].get("delta") or {}
+                    piece = delta.get("content") or ""
+                    if piece:
+                        # the first chunk carries role with content "" — not a token
+                        if not ttft:
+                            ttft = time.perf_counter()
+                        text_parts.append(piece)
+                    if choices[0].get("finish_reason"):
+                        ttlt = time.perf_counter()
+                # usage rides a trailing chunk with choices: [] — AFTER finish_reason
+                if obj.get("usage"):
+                    usage = obj["usage"]
+                resp_id = resp_id or obj.get("id", "")
+            else:
+                if event == "response.output_text.delta":
+                    if not ttft:
+                        ttft = time.perf_counter()
+                    text_parts.append(obj.get("delta", "") or "")
+                elif event == "response.completed":
+                    ttlt = time.perf_counter()
+                    r = obj.get("response") or {}
+                    usage = r.get("usage") or {}
+                    resp_id = resp_id or r.get("id", "")
+                elif event == "response.created":
+                    resp_id = resp_id or ((obj.get("response") or {}).get("id", ""))
+
+    end = time.perf_counter()
+    ttlt = ttlt or end          # no terminal event seen; fall back to the read end
+
+    ms = lambda t: int((t - t0) * 1000)  # noqa: E731
+    return _Exchange(
+        data={"id": resp_id, "usage": usage},
+        wire_sent=w.sent,
+        wire_recv=w.recv,
+        req_bytes=len(payload),
+        resp_bytes=resp_bytes,
+        latency_ms=ms(end),
+        request_json=payload.decode(),
+        response_json="\n".join(chunks),
+        ttft_ms=ms(ttft) if ttft else 0,
+        ttlt_ms=ms(ttlt),
+        text="".join(text_parts),
+        streamed=True,
+    )
 
 
 def _post(url: str, body: dict) -> _Exchange:
@@ -184,14 +303,26 @@ def create_conversation(system: str) -> tuple[str, CallResult]:
     return x.data["id"], res
 
 
+# Obfuscation pads streaming deltas with random characters to normalize payload
+# sizes (a side-channel mitigation). It is ON by default, and it would make every
+# streamed byte we report meaningless. Off, always.
+_CHAT_STREAM_OPTS = {"include_obfuscation": False, "include_usage": True}
+# Responses always puts usage on response.completed, so there is no include_usage.
+_RESP_STREAM_OPTS = {"include_obfuscation": False}
+
+
 def _chat_body(model: str, system: str, history: list[dict],
-               cache_key: str | None = None) -> dict:
+               cache_key: str | None = None, stream: bool = False) -> dict:
     body = {
         "model": model,
         "messages": [{"role": "system", "content": system}] + history,
         "max_completion_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
-        "stream": False,
+        "stream": stream,
     }
+    if stream:
+        # without include_usage the chat endpoint sends no usage object at all in
+        # a stream, and every token number would come back zero
+        body["stream_options"] = dict(_CHAT_STREAM_OPTS)
     if DEFAULT_REASONING_EFFORT:
         body["reasoning_effort"] = DEFAULT_REASONING_EFFORT
     if cache_key:
@@ -201,14 +332,16 @@ def _chat_body(model: str, system: str, history: list[dict],
 
 def _responses_body(model: str, items: list[dict], *, store: bool,
                     conversation: str | None = None,
-                    cache_key: str | None = None) -> dict:
+                    cache_key: str | None = None, stream: bool = False) -> dict:
     body: dict = {
         "model": model,
         "input": items,
         "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
-        "stream": False,
+        "stream": stream,
         "store": store,
     }
+    if stream:
+        body["stream_options"] = dict(_RESP_STREAM_OPTS)
     if conversation:
         body["conversation"] = conversation
     if DEFAULT_REASONING_EFFORT:
@@ -218,16 +351,27 @@ def _responses_body(model: str, items: list[dict], *, store: bool,
     return body
 
 
+def _normalize_usage(u: dict, *, chat: bool) -> dict:
+    """The two endpoints name the same four numbers differently. One shape out, so
+    every downstream metric can stop caring which endpoint produced it."""
+    if chat:
+        return {
+            "input_tokens": u.get("prompt_tokens", 0),
+            "output_tokens": u.get("completion_tokens", 0),
+            "cached_tokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
+            "reasoning_tokens": (u.get("completion_tokens_details") or {}).get("reasoning_tokens", 0),
+        }
+    return {
+        "input_tokens": u.get("input_tokens", 0),
+        "output_tokens": u.get("output_tokens", 0),
+        "cached_tokens": (u.get("input_tokens_details") or {}).get("cached_tokens", 0),
+        "reasoning_tokens": (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0),
+    }
+
+
 def _parse_chat(data: dict) -> tuple[str, dict]:
     text = data["choices"][0]["message"].get("content") or ""
-    u = data.get("usage") or {}
-    usage = {
-        "input_tokens": u.get("prompt_tokens", 0),
-        "output_tokens": u.get("completion_tokens", 0),
-        "cached_tokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
-        "reasoning_tokens": (u.get("completion_tokens_details") or {}).get("reasoning_tokens", 0),
-    }
-    return text, usage
+    return text, _normalize_usage(data.get("usage") or {}, chat=True)
 
 
 def _parse_responses(data: dict) -> tuple[str, dict]:
@@ -237,19 +381,12 @@ def _parse_responses(data: dict) -> tuple[str, dict]:
             for part in item.get("content", []):
                 if part.get("type") == "output_text":
                     text += part.get("text", "")
-    u = data.get("usage") or {}
-    usage = {
-        "input_tokens": u.get("input_tokens", 0),
-        "output_tokens": u.get("output_tokens", 0),
-        "cached_tokens": (u.get("input_tokens_details") or {}).get("cached_tokens", 0),
-        "reasoning_tokens": (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0),
-    }
-    return text, usage
+    return text, _normalize_usage(data.get("usage") or {}, chat=False)
 
 
 def call(arm: str, *, model: str, system: str, history: list[dict], question: str,
          turn: int, conversation: str | None = None,
-         cache_key: str | None = None) -> CallResult:
+         cache_key: str | None = None, stream: bool = False) -> CallResult:
     """Run one turn on one arm.
 
     `history` is the conversation so far as [{role, content}, ...], NOT including
@@ -269,12 +406,14 @@ def call(arm: str, *, model: str, system: str, history: list[dict], question: st
 
     if arm == "chat_stateless":
         url = f"{base_url()}/chat/completions"
-        body = _chat_body(model, system, history + [user_msg], cache_key=cache_key)
+        body = _chat_body(model, system, history + [user_msg], cache_key=cache_key,
+                          stream=stream)
         parse = _parse_chat
     elif arm == "responses_stateless":
         url = f"{base_url()}/responses"
         items = [{"role": "system", "content": system}] + history + [user_msg]
-        body = _responses_body(model, items, store=False, cache_key=cache_key)
+        body = _responses_body(model, items, store=False, cache_key=cache_key,
+                               stream=stream)
         parse = _parse_responses
     else:  # responses_stateful
         if not conversation:
@@ -282,11 +421,19 @@ def call(arm: str, *, model: str, system: str, history: list[dict], question: st
         url = f"{base_url()}/responses"
         # only the new question. system + prior turns already live on the server.
         body = _responses_body(model, [user_msg], store=True,
-                               conversation=conversation, cache_key=cache_key)
+                               conversation=conversation, cache_key=cache_key,
+                               stream=stream)
         parse = _parse_responses
 
-    x = _post(url, body)
-    text, usage = parse(x.data)
+    if stream:
+        x = _post_stream(url, body)
+        # a stream hands us the text in pieces and the usage in a trailing frame;
+        # both endpoints' usage objects still normalize through the same parsers
+        text = x.text
+        usage = _normalize_usage(x.data.get("usage") or {}, chat=(arm == "chat_stateless"))
+    else:
+        x = _post(url, body)
+        text, usage = parse(x.data)
 
     return CallResult(
         arm=arm,
@@ -298,6 +445,9 @@ def call(arm: str, *, model: str, system: str, history: list[dict], question: st
         req_payload_bytes=x.req_bytes,
         resp_payload_bytes=x.resp_bytes,
         latency_ms=x.latency_ms,
+        ttft_ms=x.ttft_ms,
+        ttlt_ms=x.ttlt_ms,
+        streamed=x.streamed,
         response_id=x.data.get("id", ""),
         request_json=x.request_json,
         response_json=x.response_json,

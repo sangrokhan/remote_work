@@ -121,6 +121,7 @@ $("start").onclick = async () => {
     turns: +$("turns").value,
     repeats: +$("repeats").value,
     capture: $("capture").checked,
+    stream: $("stream").checked,
   };
 
   const resp = await fetch("/run/stream", {
@@ -153,7 +154,8 @@ $("start").onclick = async () => {
 
 function handle(ev, d) {
   if (ev === "start") {
-    log(`start · ${d.model} · ${d.turns} turns × ${d.repeats} · ${d.arms.join(", ")}`);
+    log(`start · ${d.model} · ${d.turns} turns × ${d.repeats} · ${d.arms.join(", ")}` +
+        (d.stream ? " · streaming (TTFT/TTLT)" : ""));
   } else if (ev === "turn") {
     const st = progressRow(d.arm);
     st.uploaded += d.upload_bytes;
@@ -161,11 +163,14 @@ function handle(ev, d) {
     st.row.querySelector("i").style.width = `${pct}%`;
     st.row.querySelector(".bar-num").textContent =
       `${d.turn}/${d.turns} · ${bytes(st.uploaded)}`;
+    const timing = d.streamed
+      ? `ttft=${String(d.ttft_ms).padStart(5)}ms ttlt=${String(d.ttlt_ms).padStart(6)}ms`
+      : `${String(d.latency_ms).padStart(6)}ms`;
     log(
       `${d.arm.padEnd(20)} turn ${String(d.turn).padStart(2)}/${d.turns}  ` +
       `up=${String(d.upload_bytes).padStart(7)}B  ` +
       `in=${String(d.input_tokens).padStart(6)} (cached ${String(d.cached_tokens).padStart(6)})  ` +
-      `${String(d.latency_ms).padStart(5)}ms`
+      timing
     );
   } else if (ev === "note") {
     log(`note: ${d.message}`);
@@ -211,6 +216,26 @@ function renderResult(d) {
     Object.entries(arms).map(([a, v]) =>
       `<tr class="${a}">${cols.map((c) => `<td class="num">${c[1](a, v.totals)}</td>`).join("")}</tr>`
     ).join("");
+
+  // TTFT/TTLT only exist when the run streamed
+  const streamed = Object.values(arms).some((v) => v.streamed);
+  $("latency-block").hidden = !streamed;
+  if (streamed) {
+    const lat = [
+      ["arm", (a, v) => a],
+      ["TTFT mean", (a, v) => fmt(v.latency.ttft_ms.mean)],
+      ["TTFT p50", (a, v) => fmt(v.latency.ttft_ms.p50)],
+      ["TTFT p95", (a, v) => fmt(v.latency.ttft_ms.p95)],
+      ["TTLT mean", (a, v) => fmt(v.latency.ttlt_ms.mean)],
+      ["TTLT p50", (a, v) => fmt(v.latency.ttlt_ms.p50)],
+      ["TTLT p95", (a, v) => fmt(v.latency.ttlt_ms.p95)],
+    ];
+    $("latency").innerHTML =
+      `<tr>${lat.map((c) => `<th>${c[0]}</th>`).join("")}</tr>` +
+      Object.entries(arms).map(([a, v]) =>
+        `<tr class="${a}">${lat.map((c) => `<td class="num">${c[1](a, v)}</td>`).join("")}</tr>`
+      ).join("");
+  }
 
   // per-turn upload, the shape of the argument
   const n = Object.values(arms)[0].turns;

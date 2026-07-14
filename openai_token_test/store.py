@@ -90,6 +90,9 @@ def write_csv(summary: dict, path: Path) -> Path:
                 "billed_uncached_tokens": round(s["per_turn"]["billed_uncached_tokens"][k]),
                 "output_tokens": round(s["per_turn"]["output_tokens"][k]),
                 "latency_ms": round(s["per_turn"]["latency_ms"][k]),
+                # 0 on a non-streamed run: there was no first token to time
+                "ttft_ms": round(s["per_turn"]["ttft_ms"][k]),
+                "ttlt_ms": round(s["per_turn"]["ttlt_ms"][k]),
                 "cum_upload_bytes": round(s["cum_req_bytes"][k]),
                 "cum_input_tokens": round(s["cum_input_tokens"][k]),
             })

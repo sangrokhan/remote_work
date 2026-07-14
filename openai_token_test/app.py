@@ -97,6 +97,7 @@ def run_stream():
     model = body.get("model") or oc.DEFAULT_MODEL
     arms = tuple(body.get("arms") or oc.ARMS)
     want_capture = bool(body.get("capture"))
+    stream = bool(body.get("stream"))
 
     if not _run_lock.acquire(blocking=False):
         return Response(_sse("error", {"message": "a run is already in progress"}),
@@ -113,6 +114,9 @@ def run_stream():
             "cached_tokens": res.cached_tokens,
             "output_tokens": res.output_tokens,
             "latency_ms": res.latency_ms,
+            "ttft_ms": res.ttft_ms,
+            "ttlt_ms": res.ttlt_ms,
+            "streamed": res.streamed,
         }))
 
     def work():
@@ -123,7 +127,8 @@ def run_stream():
                                                 + cap_mod.available()[1]}))
             exp = experiment.run_experiment(
                 fixture_name=fixture_name, model=model, turns=turns,
-                repeats=repeats, arms=arms, capture=capture, on_turn=on_turn,
+                repeats=repeats, arms=arms, capture=capture, stream=stream,
+                on_turn=on_turn,
             )
             summary = metrics.summarize(exp)
             exec_id = store.new_exec_id()
@@ -145,7 +150,8 @@ def run_stream():
 
     def gen():
         yield _sse("start", {"turns": turns, "repeats": repeats,
-                             "arms": list(arms), "model": model})
+                             "arms": list(arms), "model": model,
+                             "stream": stream})
         while True:
             kind, payload = events.get()
             if kind is None:
