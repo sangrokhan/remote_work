@@ -1,0 +1,184 @@
+"""Each arm must put on the wire exactly what the experiment claims it does.
+
+If responses_stateful quietly resent the history, the result would be a tautology;
+if the mock billed the stateful arm for what it uploaded rather than for what the
+server holds, the headline finding would disappear into the fixture. These tests
+pin both.
+
+Offline: mock mode, no key, no socket.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from providers import openai as p
+
+
+@pytest.fixture(autouse=True)
+def mock(monkeypatch):
+    monkeypatch.setenv("TRAFFIC_MOCK", "1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    p.reset_mock()
+    yield
+    p.reset_mock()
+
+
+SYSTEM = "You are a terse assistant. " * 40
+STEPS = [f"Question number {k}, and some words to give it a body." for k in range(1, 7)]
+
+
+def _run(arm, turns=6, measure="bytes"):
+    return p.run_arm(arm, "gpt-4.1-nano", SYSTEM, STEPS[:turns], measure)
+
+
+def _steady(records):
+    return [r for r in records if r["phase"] == "steady"]
+
+
+def _bodies(records):
+    return [json.loads(r["request_raw"]) for r in _steady(records)]
+
+
+def test_ready_without_a_key_in_mock_mode():
+    ok, why = p.ready()
+    assert ok and "mock" in why
+
+
+def test_every_arm_produces_a_record_per_turn():
+    for arm in p.HEADLINE_ARMS:
+        p.reset_mock()
+        assert len(_steady(_run(arm))) == len(STEPS)
+
+
+def test_chat_stateless_resends_everything():
+    bodies = _bodies(_run("chat_stateless"))
+    for k, body in enumerate(bodies, start=1):
+        msgs = body["messages"]
+        assert msgs[0]["role"] == "system"
+        # system + the k-1 completed turns (user + assistant) + the new question
+        assert len(msgs) == 1 + 2 * (k - 1) + 1
+        assert msgs[-1]["role"] == "user"
+        assert body["stream"] is False
+
+
+def test_responses_stateless_is_the_control_arm():
+    bodies = _bodies(_run("responses_stateless"))
+    for k, body in enumerate(bodies, start=1):
+        assert body["input"][0]["role"] == "system"
+        assert body["store"] is False, "store=false, or it is not a stateless arm"
+        assert "conversation" not in body
+        assert len(body["input"]) == 1 + 2 * (k - 1) + 1
+
+
+def test_responses_stateful_sends_only_the_new_question():
+    records = _run("responses_stateful")
+    for body in _bodies(records):
+        assert len(body["input"]) == 1
+        assert body["input"][0]["role"] == "user"
+        assert "system" not in json.dumps(body["input"]), \
+            "the system prompt must not ride along on any turn"
+
+
+def test_the_conversation_create_is_a_setup_record():
+    records = _run("responses_stateful")
+    setup = records[0]
+    assert setup["phase"] == "setup", "prep is not traffic; metrics keeps it out of the totals"
+    assert setup["turn"] == 0
+    assert setup["req_payload_bytes"] > 0, "the setup upload is counted, not hidden"
+    assert SYSTEM in setup["request_raw"], "setup is where the system prompt is uploaded"
+
+
+def test_the_conversation_id_is_carried_from_turn_one():
+    records = _run("responses_stateful")
+    conv = records[0]["conversation"]
+    assert conv
+    for body in _bodies(records):
+        assert body["conversation"] == conv
+
+
+def test_stateless_upload_grows_while_stateful_stays_flat():
+    """The shape of the whole experiment, in one test."""
+    chat = [r["req_payload_bytes"] for r in _steady(_run("chat_stateless"))]
+    p.reset_mock()
+    resp = [r["req_payload_bytes"] for r in _steady(_run("responses_stateless"))]
+    p.reset_mock()
+    stateful = [r["req_payload_bytes"] for r in _steady(_run("responses_stateful"))]
+
+    for series in (chat, resp):
+        assert series == sorted(series) and series[-1] > series[0], \
+            "a client holding the history re-uploads more of it every turn"
+
+    # The stateful turns carry a question and nothing else, so they track question
+    # length rather than history length.
+    assert max(stateful) < min(chat), \
+        "every stateful turn uploads less than the smallest stateless turn"
+    assert sum(stateful) * 5 < sum(chat), "the cumulative gap is not marginal"
+
+
+def test_the_billing_gap_survives_the_collapse_in_bytes():
+    """The headline finding: the bytes collapse and the billing does not.
+
+    OpenAI bills all previous input tokens in the chain, so an arm that stopped
+    uploading the history still pays for it. A mock that let input_tokens go flat
+    here would be arguing the experiment's conclusion away.
+    """
+    records = _steady(_run("responses_stateful"))
+    uploaded = [r["req_payload_bytes"] for r in records]
+    billed = [r["input_tokens"] for r in records]
+
+    p.reset_mock()
+    resent = _steady(_run("responses_stateless"))
+    resent_uploaded = [r["req_payload_bytes"] for r in resent]
+    resent_billed = [r["input_tokens"] for r in resent]
+
+    # Bytes: one arm's upload grows every turn, the other's does not move.
+    assert max(uploaded) - min(uploaded) < 40, "the upload is flat: only a question goes up"
+    assert resent_uploaded == sorted(resent_uploaded) and resent_uploaded[-1] > resent_uploaded[0], \
+        "the arm that re-sends the history uploads more of it every turn"
+
+    # Billing: both arms are charged for a history that grows every turn. The stateful
+    # arm stopped putting that history on the wire and is billed for it all the same --
+    # OpenAI bills every previous input token in the chain. The bytes can be saved; the
+    # billing does not follow, and this is the run refusing to pretend otherwise.
+    for series, who in ((billed, "stateful"), (resent_billed, "stateless")):
+        assert series == sorted(series) and series[-1] > series[0], \
+            f"{who}: input_tokens grow turn over turn"
+    assert sum(billed) > 4 * (sum(uploaded) / 4), \
+        "the stateful arm is billed for far more input than it ever uploaded"
+
+
+def test_a_reasoning_item_is_echoed_back_verbatim(monkeypatch):
+    """Rule 1: what the server sent goes back exactly as it came off the wire.
+
+    Rebuilding the assistant turn from its answer text would drop the reasoning item
+    and under-report what a real client uploads.
+    """
+    monkeypatch.setattr(p, "REASONING_EFFORT", "low")
+    bodies = _bodies(_run("responses_stateless", turns=3))
+
+    echoed = [it for it in bodies[-1]["input"] if it.get("type") == "reasoning"]
+    assert len(echoed) == 2, "one reasoning item per completed turn, carried forward"
+    assert all(it["encrypted_content"] for it in echoed), \
+        "the opaque payload rides along; it is bytes a real client pays for"
+
+
+def test_a_reasoning_summary_never_becomes_the_answer():
+    """Rule 2: reasoning text is not the answer and must not start the TTFT clock."""
+    assert p._responses_text_of(
+        {"type": "response.reasoning_summary_text.delta", "delta": "hmm..."}) == ""
+    assert p._responses_text_of(
+        {"type": "response.output_text.delta", "delta": "the answer"}) == "the answer"
+
+
+def test_latency_marks_only_exist_on_a_timed_pass():
+    """A total is not a TTFT. A bytes pass reports zeros rather than a copied number."""
+    byte_pass = _steady(_run("chat_stateless", turns=2, measure="bytes"))
+    assert all(r["ttft_ms"] == 0 for r in byte_pass)
+
+    p.reset_mock()
+    timed = _steady(_run("chat_stateless", turns=2, measure="latency"))
+    for r in timed:
+        assert 0 < r["ttfb_ms"] <= r["ttft_ms"] <= r["ttlt_ms"] <= r["turn_end_ms"]

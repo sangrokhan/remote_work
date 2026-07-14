@@ -1,0 +1,159 @@
+# What a run produces
+
+A run leaves behind one JSON document, two CSVs derived from it on demand, and — if
+capture was asked for and was available — one pcap per arm. Nothing else. There is no
+second datastore: a run is a few hundred kilobytes and this experiment runs on one
+machine.
+
+## The run document
+
+One file per run, written by `core.store.save_run()`:
+
+```
+$TRAFFIC_DATA_DIR/            exec_20260714T101530Z_a1b2c3d4.json     (live)
+$TRAFFIC_DATA_DIR/mock/       exec_20260714T101602Z_9f8e7d6c.json     (mock)
+```
+
+`TRAFFIC_DATA_DIR` defaults to `data/runs`. The `exec_id` is a UTC timestamp plus four
+random bytes.
+
+| key | what it holds |
+|---|---|
+| `exec_id` | the run's id, and the filename |
+| `schema_version` | currently `1`. A run written under an older layout has to be identifiable as such, not silently charted next to a current one whose columns mean something else |
+| `timestamp` | when the run started, UTC ISO-8601 |
+| `mock` | `true` if the run made no network call. Every consumer keys off this |
+| `params` | `mode`, `measure`, `pairs` (`["gemini:cached", "openai:responses_stateful", …]`), `providers`, `models`, `turns`, `fixture`, `capture`, and `warnings` — everything the operator was told before the calls went out, kept with the numbers they produced |
+| `records` | one row per (provider, arm, turn, pass), including prep. See below |
+| `summary` | `core.metrics.summarize()`, computed once, at save time, and stored |
+| `pcaps` | keyed `provider:arm`; what each capture actually got |
+| `wall_ms` | keyed `provider:arm`; how long the arm's steady stage took, start to finish — the same window the pcap covers, so the two can be read against each other |
+
+The summary is computed **before** saving rather than per page view, because recomputing
+it later means an old run's numbers change when the metrics code changes — which is how a
+chart quietly comes to disagree with the CSV beside it.
+
+Each record carries `request_raw` and `response_raw`: the bodies exactly as they went out
+and came back. They are the evidence. They are not in the CSVs — a 40 KB history echo in
+a spreadsheet cell makes the file unopenable and the numbers unreadable.
+
+### Retention
+
+`save_run()` prunes its own bucket back to `TRAFFIC_RETENTION_KEEP` (default 20) on every
+write. Pruning at write time rather than in a cron job or a cleanup route means retention
+holds even if nobody remembers it exists — which is exactly what failed last time: the
+previous layout accumulated 122 files and 17 MB, most of them synthetic runs sitting in
+the same directory as the live ones, under the same naming scheme, charting identically.
+
+Each bucket gets its own budget. A week of offline development cannot evict the one live
+run somebody paid for, and live runs do not evict mock ones either, so a fixture run stays
+reproducible.
+
+### The rule about mock runs
+
+A mock run lives in its own subdirectory rather than behind a flag in a filename, because
+a flag in a filename is a rule a future reader has to remember and a directory is one the
+filesystem enforces. `list_runs()` returns `runs` and `mock_runs` as two lists rather than
+one flagged list, because a caller that has to remember to filter is a caller that will
+forget to filter. A downloaded CSV from a mock run has `mock_` in front of its filename: a
+number lifted out of a spreadsheet has no other way of remembering it was never measured.
+
+**A mock run is never charted or averaged with a live one.** Its bytes are shaped like
+real bytes and its timings are shaped like real timings — that is the point of it — which
+is exactly why the two must never end up on one axis.
+
+## `records.csv`
+
+`GET /api/runs/<exec_id>/records.csv`, or `core.export.records_csv(run)`. One row per
+record — prep rows included, phased, not dropped. A reader who wants only the steady turns
+can filter; a reader who is never shown the cache build cannot discover what the arm paid
+before its first question.
+
+The first five columns exist so that two rows which are not comparable never look
+comparable. They ride at the front, before any number.
+
+| column | meaning |
+|---|---|
+| `provider` | `gemini` or `openai`. A run holds both vendors, and `stateless` alone names nothing |
+| `arm` | which strategy. Unique only together with `provider` |
+| `phase` | `steady` for the turns that count; `cachegen` (a Gemini cache build or transcript replay) or `setup` (an OpenAI conversation create) for prep. A cache build is not a turn, and `core.metrics` never folds one into a total |
+| `turn` | 1-based within the arm; `0` on a prep record that belongs to no turn |
+| `measure` | `bytes`, `latency`, or `both`. Bytes off a streamed pass are framed (and, on OpenAI, obfuscation-padded); bytes off a blocking pass are not. They are different measurements wearing the same column name, and averaging them is the mistake this column exists to prevent |
+| `wire_sent`, `wire_recv` | socket bytes, headers and content-encoding included. `wire_sent` is the axis the arms differ on |
+| `req_payload_bytes`, `resp_payload_bytes` | the decoded body sizes, for reference. Not what anyone pays |
+| `req_sent_ms` | the request's last byte went out — the client's history has finished uploading |
+| `ttfb_ms` | the response's first byte came back: network and queue, no tokens yet |
+| `ttft_ms` | the first event carrying **answer** text. A reasoning delta is not the answer and does not start this clock |
+| `ttlt_ms` | the last event carrying answer text — what a streaming user waits for |
+| `turn_end_ms` | the stream closed — what a blocking client waits for |
+| `store_tail_ms` | `turn_end − ttlt`, floored at zero. On a stored Gemini interaction this is the ~1.8 s the server spends persisting the turn after the answer is already out |
+| `input_tokens`, `cached_tokens`, `output_tokens`, `reasoning_tokens`, `total_tokens` | from the provider's own usage block, translated into one vocabulary. `reasoning_tokens` is what Gemini bills as thought tokens |
+| `error` | empty when the call succeeded |
+
+On a `measure=bytes` row the five marks are `0`. That is not "instant" — it is "not
+measured", and `measure` is the column that says so. A row from a *failed* call is
+different: its marks are pinned to the moment the turn ended, because a zero mark would
+chart as the fastest turn in the run.
+
+## `summary.csv`
+
+`GET /api/runs/<exec_id>/summary.csv`, or `core.export.summary_csv(run)`. One row per
+(provider, arm), over the **steady** turns only.
+
+| column | meaning |
+|---|---|
+| `provider`, `arm`, `measure` | the identity of the series, and what kind of measurement it is |
+| `turns` | how many steady turns went into the row |
+| `wire_sent`, `wire_recv`, `wire` | totals over the steady turns. `wire` is the sum of the two, kept separate from `wire_sent` because the model's answer dominates it and would bury the difference the arms are actually about |
+| `input_tokens`, `cached_tokens`, `output_tokens`, `reasoning_tokens`, `total_tokens` | totals |
+| `<mark>_mean`, `<mark>_median` | for each of `req_sent_ms`, `ttfb_ms`, `ttft_ms`, `ttlt_ms`, `turn_end_ms`, `store_tail_ms`. Both, always: a mean alone hides the one turn that took eight seconds; a median alone hides that it happened at all |
+| `call_ms` | time spent inside the measured calls |
+| `wall_ms` | the steady stage, start to finish — the same window the pcap covers. Neither clock includes prep or teardown |
+| `prep_calls`, `prep_wire_sent`, `prep_wire_recv` | what the arm paid before its first measured turn. **Zero, not blank**, for an arm with no prep: blank reads as "not measured", and a stateless arm's zero setup cost is a measurement and the point of the row |
+| `errors` | how many records of this arm carried one |
+
+Prep is excluded from the totals but never hidden. A Gemini cache build re-uploads the
+whole prefix — build one per turn and the setup alone costs O(N²) — so folding it into the
+totals would drown every number the arm exists to produce. But an arm whose steady traffic
+is cheap because it paid up front should be seen to have paid up front, which is what the
+three `prep_*` columns are for.
+
+The run's `summary` also carries a `failures` list, naming every record with an error. A
+run with a broken arm still produces plausible numbers, and a number from a failed call is
+shaped exactly like a number from a good one.
+
+## The pcaps
+
+One per (provider, arm), written to `TRAFFIC_PCAP_DIR`, downloadable at
+`GET /api/pcaps/<name>`:
+
+```
+capture_gemini_interaction_inline_2026-07-14T10-15-30+00-00_9f8e7d6c5b4a3f21.pcap
+```
+
+The label is `provider_arm`; the timestamp is the run's; the trailing 64-bit token means
+two concurrent arms cannot collide and a download URL is not guessable from another one. A
+label that cannot be spelled safely in a filename is **refused**, not substituted — the
+predecessor renamed unspellable labels to a default, which is how an arm once shipped a
+pcap claiming to be a different arm.
+
+A byte count taken inside the process is a claim; a pcap taken on the interface is the
+thing the claim is about. The TLS payload is encrypted and is not the point: packet sizes
+and timing are exactly the traffic being argued over, and they can be opened in Wireshark
+by somebody who does not trust this code. One capture per arm, because a single pcap
+spanning all of them cannot be attributed after the fact.
+
+The capture covers the arm's steady stage only — it opens on the arm's first `steady`
+progress event, after the pooled connection has been dropped and the peer's FIN has been
+waited out, and closes on `teardown`. So each pcap is one self-contained SYN…FIN
+conversation containing the measured turns and nothing else.
+
+`run["pcaps"]["gemini:cached"]` records what the capture actually got: `ok`, `file`,
+`bytes`, the `host` and resolved `ips`, the tcpdump `filter`, the `snaplen`, tcpdump's own
+`stats` (captured / received by filter / dropped), a `dropped` total and a `log`. A lossy
+pcap announces itself rather than being read as a complete record of the run: dropped
+packets mean the capture was overloaded, the pcap will show "previous segment not
+captured", and the fix is a quieter host or a smaller `TRAFFIC_PCAP_SNAPLEN`.
+
+A mock run produces no packets. Its capture, if one was asked for, comes back with
+`ok: false` and the note "no packets captured (a mock run makes no real traffic)".

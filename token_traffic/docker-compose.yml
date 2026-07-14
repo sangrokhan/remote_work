@@ -1,0 +1,31 @@
+services:
+  token-traffic:
+    build:
+      context: .
+      # Mirror overrides (empty = upstream Docker Hub / PyPI / Debian).
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-python:3.12-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+        APT_MIRROR: ${APT_MIRROR:-}
+    ports:
+      - "8080:8080"
+    # The reason this file exists: the optional packet-capture toggle runs
+    # tcpdump, which needs raw sockets. Drop these and capture reports itself
+    # unavailable; everything else still runs.
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    environment:
+      # Two hosts, two keys. Both are Developer-API style: key in a header, no ADC.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Set to 1 to run with no keys at all (synthetic data, no quota). The
+      # per-provider switches mock one vendor and leave the other live.
+      - TRAFFIC_MOCK=${TRAFFIC_MOCK:-0}
+      - GEMINI_MOCK=${GEMINI_MOCK:-0}
+      - OPENAI_MOCK=${OPENAI_MOCK:-0}
+    volumes:
+      # Run history: one JSON file per execution under data/runs, with mock runs
+      # in their own bucket (data/runs/mock).
+      - ./data:/app/data
