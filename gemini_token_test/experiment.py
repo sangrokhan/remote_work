@@ -20,6 +20,7 @@ from pathlib import Path
 from gemini_client import (
     call_gemini, create_cache, delete_cache, reset_session, ENDPOINT,
 )
+from payloads import user_content as _user, model_content as _model
 
 MODES = ("stateless", "stateful")
 REQUESTS_DIR = Path(__file__).resolve().parent / "requests"
@@ -51,10 +52,6 @@ def load_request(name: str = "default") -> tuple[str, list[str], str]:
         pass
     steps = [f"Turn {k}. " + ("the quick brown fox. " * 8) for k in range(1, 9)]
     return "", steps, "synthetic"
-
-
-def _user(text: str) -> dict:
-    return {"role": "user", "parts": [{"text": text}]}
 
 
 def run_experiment(mode: str, model: str, request_name: str = "default",
@@ -92,10 +89,6 @@ def run_experiment(mode: str, model: str, request_name: str = "default",
         },
         "records": records,
     }
-
-
-def _model(text: str) -> dict:
-    return {"role": "model", "parts": [{"text": text}]}
 
 
 def run_three_stage(model: str, request_name: str = "default",

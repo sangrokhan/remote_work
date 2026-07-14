@@ -37,30 +37,18 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import time
 
 import gemini_client as gc
 from gemini_client import is_mock, wire_counter, _text_tokens
 from experiment import load_request
+from payloads import extract_text, model_step, single_step_input, user_step
 
 INTERACTION_TIMEOUT = float(os.environ.get("INTERACTION_TIMEOUT", "180"))
 
 
 def interactions_url() -> str:
     return f"{gc.api_base()}/interactions"
-
-
-def _step_user(text: str) -> dict:
-    return {"type": "user_input", "content": [{"type": "text", "text": text}]}
-
-
-def _step_model(text: str) -> dict:
-    return {"type": "model_output", "content": [{"type": "text", "text": text}]}
-
-
-def _input(text: str) -> list:
-    return [_step_user(text)]
 
 
 def interaction_body(model: str, text: str, system_instruction: str,
@@ -81,7 +69,7 @@ def interaction_body(model: str, text: str, system_instruction: str,
         "model": model,
         "stream": False,
         "store": store,
-        "input": list(history) if history is not None else _input(text),
+        "input": list(history) if history is not None else single_step_input(text),
     }
     if system_instruction:
         body["system_instruction"] = system_instruction
@@ -100,24 +88,6 @@ def _usage_common(usage: dict) -> dict:
         "thought_tokens": int(u.get("total_thought_tokens", 0)),
         "total_tokens": int(u.get("total_tokens", 0)),
     }
-
-
-def _extract_text(obj) -> str:
-    """Collect every {"type":"text","text":...} leaf in a payload."""
-    out: list[str] = []
-
-    def walk(o):
-        if isinstance(o, dict):
-            if o.get("type") == "text" and isinstance(o.get("text"), str):
-                out.append(o["text"])
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-
-    walk(obj)
-    return "".join(out)
 
 
 def _record(turn, question, text, iid, usage, wire_sent, wire_recv, elapsed_ms,
@@ -145,7 +115,7 @@ def _mock_interaction(turn: int, text: str, system: str, prev_id: str | None,
         # This must grow with the conversation -- that growth is the whole
         # point of the arm -- unlike the chained-arm estimate below, which is
         # untouched.
-        history_text = "".join(_extract_text(step) for step in history)
+        history_text = "".join(extract_text(step) for step in history)
         inp = _text_tokens([{"parts": [{"text": system + history_text}]}])
     else:
         inp = _text_tokens([{"parts": [{"text": (system if turn == 1 else '') + text}]}])
@@ -192,7 +162,7 @@ def _call_interaction(model: str, text: str, system_instruction: str,
                        f"parse_failed: {exc}")
 
     iid = data.get("id")
-    text_out = _extract_text(data.get("steps", data))
+    text_out = extract_text(data.get("steps", data))
     usage = _usage_common(data.get("usage") or {})
     return _record(turn, text, text_out, iid, usage,
                    w.sent, w.recv, elapsed, req_raw, resp_raw, "")
@@ -245,7 +215,7 @@ def run_interaction(model: str, request_name: str = "perf",
             text, sys_instruction = q, system
 
         if client_history:
-            history.append(_step_user(text))
+            history.append(user_step(text))
             sent_history, store = list(history), False
         else:
             sent_history, store = None, True
@@ -261,7 +231,7 @@ def run_interaction(model: str, request_name: str = "perf",
         if client_history:
             # The arm's own answer, not another arm's transcript. A history of a
             # conversation that never happened measures nothing.
-            history.append(_step_model(r.get("response_text") or ""))
+            history.append(model_step(r.get("response_text") or ""))
         elif r.get("interaction_id"):
             prev_id = r["interaction_id"]     # chain the next turn onto this one
         records.append(r)

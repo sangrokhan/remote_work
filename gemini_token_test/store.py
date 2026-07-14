@@ -16,6 +16,8 @@ import os
 import re
 from pathlib import Path
 
+from metrics import _cumulative
+
 DATA_DIR = Path(os.environ.get("GEMINI_DATA_DIR", "data/runs"))
 # exec_id format: exec_<ts>_<8hex>  or  dummy_<word>. Guards path traversal.
 _SAFE_EXEC = re.compile(r"^(exec_[0-9T\-]+_[0-9a-f]{8}|dummy_[a-z]+)$")
@@ -194,19 +196,10 @@ def _dummy_series(growth):
     turns = list(range(1, 9))
     per = [growth(k) for k in turns]
     wire = [v * 6 for v in per]
-    cum = []
-    acc = 0
-    for v in per:
-        acc += v
-        cum.append(acc)
-    cumw = []
-    acc = 0
-    for v in wire:
-        acc += v
-        cumw.append(acc)
+    cum, cum_wire = _cumulative(per), _cumulative(wire)
     return {"turns": turns, "per_turn_tokens": per, "per_turn_prompt_tokens": per,
             "per_turn_wire_bytes": wire, "cum_tokens": cum, "cum_prompt_tokens": cum,
-            "cum_wire_bytes": cumw, "cum_payload_bytes": cumw, "errors": []}
+            "cum_wire_bytes": cum_wire, "cum_payload_bytes": cum_wire, "errors": []}
 
 
 def _dummy_doc(exec_id, mode, growth):

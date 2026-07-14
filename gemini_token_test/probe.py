@@ -37,6 +37,7 @@ import time
 from gemini_client import (
     LOCATION, PROJECT, DEFAULT_MODEL, _bearer_token, _session, is_mock, vertex_url,
 )
+from payloads import extract_text, model_step, single_step_input, user_step
 
 # Candidate text models. The probe is a matrix, so each extra id multiplies the
 # call count -- and it now runs on page load, so the default is exactly the model
@@ -178,10 +179,6 @@ def _headers(auth: str) -> dict:
     return h
 
 
-def _input(text: str) -> list:
-    return [{"type": "user_input", "content": [{"type": "text", "text": text}]}]
-
-
 # --------------------------------------------------------------------------
 # One call
 
@@ -234,23 +231,6 @@ def _usage_from_events(events: list) -> dict:
         if isinstance(meta, dict) and isinstance(meta.get("total_usage"), dict):
             return meta["total_usage"]
     return {}
-
-
-def _text_from(obj) -> str:
-    out: list[str] = []
-
-    def walk(o):
-        if isinstance(o, dict):
-            if o.get("type") == "text" and isinstance(o.get("text"), str):
-                out.append(o["text"])
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-
-    walk(obj)
-    return "".join(out)
 
 
 def _parse_sse(raw: str) -> list:
@@ -307,7 +287,7 @@ def _call(url: str, auth: str, body: dict) -> dict:
                 # 200 headers, failure in the body. Trust the body.
                 verdict = classify_stream_error(stream_error)
             usage = _usage_from_events(events)
-            text = _text_from(events)
+            text = extract_text(events)
             for ev in events:
                 inter = ev.get("interaction") if isinstance(ev, dict) else None
                 if isinstance(inter, dict) and inter.get("id"):
@@ -316,7 +296,7 @@ def _call(url: str, auth: str, body: dict) -> dict:
             try:
                 data = resp.json()
                 usage = data.get("usage") or {}
-                text = _text_from(data)
+                text = extract_text(data)
                 interaction_id = data.get("id")
             except Exception as exc:
                 verdict = "error"
@@ -343,7 +323,7 @@ def _model_body(model: str, stream: bool, system: str = "",
         "model": model,
         "stream": stream,
         "store": True,
-        "input": _input(text),
+        "input": single_step_input(text),
         "generation_config": {"max_output_tokens": max_tokens},
     }
     if system:
@@ -715,14 +695,6 @@ def probe_interactions() -> dict:
 # Step-echo probe: can a client hand the server a history it already has?
 
 
-def _step_user(text: str) -> dict:
-    return {"type": "user_input", "content": [{"type": "text", "text": text}]}
-
-
-def _step_model(text: str) -> dict:
-    return {"type": "model_output", "content": [{"type": "text", "text": text}]}
-
-
 def probe_step_echo(model: str = "") -> dict:
     """Does `input` accept a client-supplied history, `model_output` steps included?
 
@@ -741,9 +713,9 @@ def probe_step_echo(model: str = "") -> dict:
                 "body": "GEMINI_API_KEY not set", "sent_steps": 0}
 
     steps = [
-        _step_user("What is the capital of France?"),
-        _step_model("Paris."),
-        _step_user("And of Italy? Answer in one word."),
+        user_step("What is the capital of France?"),
+        model_step("Paris."),
+        user_step("And of Italy? Answer in one word."),
     ]
     body = {"model": model, "stream": False, "store": False, "input": steps,
             "system_instruction": "You are a test fixture. Answer in one word.",

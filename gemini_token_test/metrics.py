@@ -10,11 +10,26 @@ from gemini_client import PRICE_PER_TOKEN
 
 
 def _cumulative(values: list[float]) -> list[float]:
-    out, acc = [], 0.0
+    # acc starts at int 0, so an all-int series stays int: these numbers are token
+    # and byte counts, and a chart tooltip reading "1400.0 bytes" is a lie about
+    # the precision of the measurement.
+    out, acc = [], 0
     for v in values:
         acc += v
         out.append(acc)
     return out
+
+
+def _last(series: dict, key: str):
+    """The final point of a cumulative series -- i.e. its total. 0 when the series
+    is empty (a run whose every call failed still has to summarize)."""
+    return series[key][-1] if series[key] else 0
+
+
+def _ratio(a, b):
+    """a / b, or None when b is 0: an arm that sent nothing has no ratio, and a
+    zero would read as "no difference"."""
+    return round(a / b, 2) if b else None
 
 
 def _series(records: list[dict]) -> dict:
@@ -41,12 +56,10 @@ def summarize_three_stage(experiment: dict) -> dict:
     caching run, plus traffic-ratio totals."""
     sl = _series(experiment["stateless_records"])
     sf = _series(experiment["stateful_records"])
-    last2 = lambda s, k: s[k][-1] if s[k] else 0
-    sl_wire, sf_wire = last2(sl, "cum_wire_bytes"), last2(sf, "cum_wire_bytes")
-    sl_cont, sf_cont = last2(sl, "cum_payload_bytes"), last2(sf, "cum_payload_bytes")
+    sl_wire, sf_wire = _last(sl, "cum_wire_bytes"), _last(sf, "cum_wire_bytes")
+    sl_cont, sf_cont = _last(sl, "cum_payload_bytes"), _last(sf, "cum_payload_bytes")
     cached = sum(r.get("cached_tokens", 0) for r in experiment["stateful_records"])
     used = sum(1 for r in experiment["stateful_records"] if r.get("used_cache"))
-    ratio = lambda a, b: round(a / b, 2) if b else None
     return {
         "mode": "caching-3stage",
         "stateless_series": sl,
@@ -54,9 +67,9 @@ def summarize_three_stage(experiment: dict) -> dict:
         "totals": {
             "mode": "caching-3stage",
             "stateless_wire": sl_wire, "stateful_wire": sf_wire,
-            "wire_ratio": ratio(sl_wire, sf_wire),
+            "wire_ratio": _ratio(sl_wire, sf_wire),
             "stateless_content": sl_cont, "stateful_content": sf_cont,
-            "content_ratio": ratio(sl_cont, sf_cont),
+            "content_ratio": _ratio(sl_cont, sf_cont),
             "cached_tokens": cached, "caches_used": used,
         },
     }
@@ -145,9 +158,8 @@ def summarize_comparison(comparison: dict) -> dict:
 def summarize(experiment: dict) -> dict:
     mode = experiment["params"].get("mode", "stateless")
     series = _series(experiment["records"])
-    last = lambda k: series[k][-1] if series[k] else 0
-    tokens = last("cum_tokens")
-    wire = last("cum_wire_bytes")
+    tokens = _last(series, "cum_tokens")
+    wire = _last(series, "cum_wire_bytes")
     return {
         "mode": mode,
         "series": series,

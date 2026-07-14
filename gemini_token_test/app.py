@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import secrets
 from datetime import datetime, timezone
 
-from flask import Flask, abort, jsonify, render_template, request, send_file
+from flask import (
+    Flask, Response, abort, jsonify, render_template, request, send_file,
+)
 
 import capture as pcap
 import inspector
@@ -15,14 +19,50 @@ import netdiag
 import probe
 from experiment import run_experiment, run_three_stage, run_comparison, MODES, COMPARE_ARMS
 from gemini_client import (
-    ready, is_mock, api_host, api_key, ENDPOINT, DEFAULT_MODEL, list_models,
+    ready, is_mock, api_host, api_key, DEFAULT_MODEL, list_models,
 )
 from metrics import summarize, summarize_three_stage, summarize_comparison
-
-THREE_STAGE = "caching-3stage"
 from store import save_run, list_runs, get_run, firestore_active, delete_run
 
+THREE_STAGE = "caching-3stage"
+# A run of 100 turns on the stateless arm already sends the system prompt 100 times;
+# anything past that is a bill, not an experiment.
+MAX_TURNS = 100
+# Longest gap the UI may ask for between stages/arms. The pause exists to stay under
+# per-minute quota, not to park the process for an hour.
+MAX_PAUSE_SECONDS = 600.0
+
 app = Flask(__name__)
+
+
+# --- Request parsing shared by every run endpoint ---------------------------
+
+def _turns(data: dict) -> int:
+    """Default 1: a single-turn smoke query. The UI raises it to send more steps."""
+    return max(1, min(int(data.get("turns", 1)), MAX_TURNS))
+
+
+def _model(data: dict) -> str:
+    return (data.get("model") or DEFAULT_MODEL).strip()
+
+
+def _pause_seconds(data: dict, default: float = 0.0) -> float:
+    """A mock run hits no quota, so spacing the calls apart would only waste the
+    operator's time. Clamp to a sane range otherwise."""
+    if is_mock():
+        return 0.0
+    raw = data.get("pause_seconds")
+    # An absent field means "use the default"; an empty one is the UI sending a
+    # blank box, which is not a number and must not blow up the run either.
+    value = default if raw is None or raw == "" else float(raw)
+    return max(0.0, min(value, MAX_PAUSE_SECONDS))
+
+
+def _new_exec() -> tuple[str, str]:
+    """(timestamp, exec_id) for one run. The id carries the timestamp plus enough
+    entropy that two runs started in the same second cannot collide."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return timestamp, f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
 
 
 @app.route("/")
@@ -82,6 +122,30 @@ def diagnose():
     return jsonify(netdiag.diagnose(api_host()))
 
 
+def _execute_three_stage(data: dict, model: str, turns: int, want_capture: bool,
+                         timestamp: str, exec_id: str, on_progress=None):
+    """The 3-stage caching pipeline: stateless scenario -> caches -> stateful replay."""
+    cap_ok, cap_reason = pcap.available() if want_capture else (True, "")
+    # Pause between stages to stay under Vertex per-minute quotas; the UI value wins
+    # over the STAGE_PAUSE_SECONDS default.
+    pause = _pause_seconds(data, float(os.environ.get("STAGE_PAUSE_SECONDS", "60")))
+
+    experiment = run_three_stage(model, turns=turns, timestamp=timestamp,
+                                 want_capture=(want_capture and cap_ok),
+                                 on_progress=on_progress, stage_pause_seconds=pause)
+    experiment["params"]["mock"] = is_mock()
+    summary = summarize_three_stage(experiment)
+    saved = save_run(exec_id, timestamp, experiment, summary)
+
+    resp = {"exec_id": exec_id, "timestamp": timestamp, "saved_to": saved,
+            "mock": is_mock(), "mode": THREE_STAGE, "params": experiment["params"],
+            "summary": summary, "pcaps": experiment.get("pcaps") or {},
+            "comparison": build_comparison(experiment)}
+    if want_capture and not cap_ok:
+        resp["capture_unavailable"] = cap_reason
+    return resp, 200
+
+
 def _execute_run(data: dict, on_progress=None):
     """Run one experiment and build the response dict. on_progress(event) is
     called per turn (event: {stage, turn, turns}) so callers can stream progress.
@@ -93,55 +157,29 @@ def _execute_run(data: dict, on_progress=None):
     mode = data.get("mode", "stateless")
     if mode != THREE_STAGE and mode not in MODES:
         mode = "stateless"
-    # Default 1 turn: a single-turn smoke query for initial testing. Raise it in
-    # the UI to send more steps.
-    turns = max(1, min(int(data.get("turns", 1)), 100))
-    model = (data.get("model") or DEFAULT_MODEL).strip()
+    turns, model = _turns(data), _model(data)
     want_capture = bool(data.get("capture", False))
+    timestamp, exec_id = _new_exec()
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
-
-    # 3-stage caching pipeline: stateless scenario -> caches -> stateful replay.
     if mode == THREE_STAGE:
-        cap_ok, cap_reason = (True, "")
-        if want_capture:
-            cap_ok, cap_reason = pcap.available()
-        # Pause between stages to stay under Vertex per-minute quotas; skip in mock
-        # (no real quota) so tests/dev runs don't sleep. UI value wins over the
-        # STAGE_PAUSE_SECONDS default; clamped to a sane 0..600s.
-        if is_mock():
-            pause = 0
-        else:
-            raw = data.get("pause_seconds")
-            pause = float(raw) if raw is not None else float(os.environ.get("STAGE_PAUSE_SECONDS", "60"))
-            pause = max(0.0, min(pause, 600.0))
-        experiment = run_three_stage(model, turns=turns, timestamp=timestamp,
-                                     want_capture=(want_capture and cap_ok),
-                                     on_progress=on_progress, stage_pause_seconds=pause)
-        experiment["params"]["mock"] = is_mock()
-        summary = summarize_three_stage(experiment)
-        saved = save_run(exec_id, timestamp, experiment, summary)
-        resp = {"exec_id": exec_id, "timestamp": timestamp, "saved_to": saved,
-                "mock": is_mock(), "mode": mode, "params": experiment["params"],
-                "summary": summary, "pcaps": experiment.get("pcaps") or {},
-                "comparison": build_comparison(experiment)}
-        if want_capture and not cap_ok:
-            resp["capture_unavailable"] = cap_reason
-        return resp, 200
+        return _execute_three_stage(data, model, turns, want_capture,
+                                    timestamp, exec_id, on_progress)
+
+    def run():
+        return run_experiment(mode, model, turns=turns, on_progress=on_progress)
 
     capture_info = None
     if want_capture:
         cap_ok, cap_reason = pcap.available()
         if not cap_ok:
             capture_info = {"ok": False, "error": cap_reason}
-            experiment = run_experiment(mode, model, turns=turns, on_progress=on_progress)
+            experiment = run()
         else:
             with pcap.Capture(timestamp, mode) as cap:
-                experiment = run_experiment(mode, model, turns=turns, on_progress=on_progress)
+                experiment = run()
             capture_info = cap.result()
     else:
-        experiment = run_experiment(mode, model, turns=turns, on_progress=on_progress)
+        experiment = run()
 
     # Mark synthetic runs so the result (and saved history) can't be mistaken
     # for real traffic.
@@ -173,10 +211,8 @@ def _execute_interaction(data: dict, on_progress=None):
     if not ok:
         return {"error": reason}, 400
 
-    turns = max(1, min(int(data.get("turns", 1)), 100))
-    model = (data.get("model") or DEFAULT_MODEL).strip()
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
+    turns, model = _turns(data), _model(data)
+    timestamp, exec_id = _new_exec()
 
     from interaction_client import run_interaction
     experiment = run_interaction(model, turns=turns, on_progress=on_progress)
@@ -195,19 +231,14 @@ def _execute_compare(data: dict, on_progress=None):
     if not ok:
         return {"error": reason}, 400
 
-    turns = max(1, min(int(data.get("turns", 1)), 100))
-    model = (data.get("model") or DEFAULT_MODEL).strip()
+    turns, model = _turns(data), _model(data)
     arms = data.get("arms") or list(COMPARE_ARMS)
     arms = [a for a in arms if a in COMPARE_ARMS] or list(COMPARE_ARMS)
-    # A mock run hits no quota, so spacing the arms apart would only waste the
-    # operator's time. Clamp to a sane range otherwise.
-    pause = 0.0 if is_mock() else max(0.0, min(float(data.get("pause_seconds") or 0), 600.0))
+    pause = _pause_seconds(data)
 
     want_capture = bool(data.get("capture", False))
     cap_ok, cap_reason = pcap.available() if want_capture else (True, "")
-
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    exec_id = f"exec_{timestamp.replace(':', '-')}_{secrets.token_hex(4)}"
+    timestamp, exec_id = _new_exec()
 
     experiment = run_comparison(model, turns=turns, arms=arms, on_progress=on_progress,
                                 pause_seconds=pause,
@@ -237,7 +268,6 @@ def _sse_response(run):
     """
     import queue
     import threading
-    from flask import Response
 
     q: "queue.Queue" = queue.Queue()
 
@@ -311,7 +341,6 @@ def interaction_test():
 
 def _attachment(body: str, mimetype: str, filename: str):
     """A downloadable response. Flask appends charset=utf-8 to the mimetype."""
-    from flask import Response
     return Response(body, mimetype=mimetype,
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -319,6 +348,27 @@ def _attachment(body: str, mimetype: str, filename: str):
 def _json_attachment(payload, filename: str):
     return _attachment(json.dumps(payload, indent=2, ensure_ascii=False),
                        "application/json", filename)
+
+
+def _csv_attachment(header: list, rows: list, filename: str):
+    """A downloadable CSV. Every cell goes through _csv_safe, and the file opens
+    with a BOM so Excel reads it as UTF-8 instead of guessing."""
+    buf = io.StringIO()
+    buf.write("﻿")
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    for row in rows:
+        writer.writerow([_csv_safe(v) for v in row])
+    return _attachment(buf.getvalue(), "text/csv", filename)
+
+
+def _csv_safe(v):
+    # Neutralize CSV formula injection: a cell a spreadsheet would treat as a
+    # formula (leading = + - @ TAB CR) is prefixed with a quote so it stays text.
+    s = "" if v is None else str(v)
+    if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+        s = "'" + s
+    return s
 
 
 def _parse_json(s):
@@ -386,36 +436,18 @@ def build_comparison(doc: dict) -> list[dict]:
     return rows
 
 
+COMPARE_COLUMNS = ["turn", "query", "stateless_response",
+                   "nocontext_response", "stateful_response"]
+
+
 @app.route("/download/compare/<exec_id>")
 def download_compare(exec_id):
     """CSV of the per-step comparison (turn, query, stateless, stateful)."""
-    import csv
-    import io
     doc = get_run(exec_id)
     if doc is None:
         abort(404)
-    rows = build_comparison(doc)
-
-    buf = io.StringIO()
-    buf.write("﻿")  # BOM: nudge Excel toward UTF-8
-    writer = csv.writer(buf)
-    writer.writerow(["turn", "query", "stateless_response",
-                     "nocontext_response", "stateful_response"])
-    for r in rows:
-        writer.writerow([_csv_safe(r["turn"]), _csv_safe(r["query"]),
-                         _csv_safe(r["stateless_response"]),
-                         _csv_safe(r["nocontext_response"]),
-                         _csv_safe(r["stateful_response"])])
-    return _attachment(buf.getvalue(), "text/csv", f"compare_{exec_id}.csv")
-
-
-def _csv_safe(v):
-    # Neutralize CSV formula injection: a cell a spreadsheet would treat as a
-    # formula (leading = + - @ TAB CR) is prefixed with a quote so it stays text.
-    s = "" if v is None else str(v)
-    if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
-        s = "'" + s
-    return s
+    rows = [[r[c] for c in COMPARE_COLUMNS] for r in build_comparison(doc)]
+    return _csv_attachment(COMPARE_COLUMNS, rows, f"compare_{exec_id}.csv")
 
 
 CASE_COLUMNS = ["arm", "phase", "turn", "wire_sent", "wire_recv", "elapsed_ms",
@@ -494,37 +526,22 @@ def build_responses_table(doc: dict) -> tuple[list, list]:
 @app.route("/download/comparison/<exec_id>-responses.csv")
 def download_comparison_responses(exec_id):
     """Answers side by side: one row per step, one column per arm."""
-    import csv
-    import io
     doc = get_run(exec_id)
     if doc is None:
         abort(404)
     header, rows = build_responses_table(doc)
-    buf = io.StringIO()
-    buf.write("﻿")  # BOM: nudge Excel toward UTF-8
-    writer = csv.writer(buf)
-    writer.writerow(header)
-    for r in rows:
-        writer.writerow([_csv_safe(v) for v in r])
-    return _attachment(buf.getvalue(), "text/csv", f"responses_{exec_id}.csv")
+    return _csv_attachment(header, rows, f"responses_{exec_id}.csv")
 
 
 @app.route("/download/comparison/<exec_id>.csv")
 def download_comparison_csv(exec_id):
     """Flat metrics table: one row per call. For spreadsheets, not for reading raw
     bodies -- those are in the JSON export."""
-    import csv
-    import io
     doc = get_run(exec_id)
     if doc is None:
         abort(404)
-    buf = io.StringIO()
-    buf.write("﻿")  # BOM: nudge Excel toward UTF-8
-    writer = csv.writer(buf)
-    writer.writerow(CASE_COLUMNS)
-    for r in doc.get("records") or []:
-        writer.writerow([_csv_safe(r.get(c)) for c in CASE_COLUMNS])
-    return _attachment(buf.getvalue(), "text/csv", f"comparison_{exec_id}.csv")
+    rows = [[r.get(c) for c in CASE_COLUMNS] for r in doc.get("records") or []]
+    return _csv_attachment(CASE_COLUMNS, rows, f"comparison_{exec_id}.csv")
 
 
 @app.route("/download/chat/<exec_id>")

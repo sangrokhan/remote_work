@@ -119,12 +119,6 @@ class CallResult:
         return asdict(self)
 
 
-# Cached input tokens are billed at 10% of normal for Gemini 2.5+.
-CACHED_DISCOUNT = 0.10
-# Vertex context caching needs >= ~2048 tokens; below this, skip caching.
-MIN_CACHE_TOKENS = int(os.environ.get("MIN_CACHE_TOKENS", "2048"))
-
-
 # Module-global byte tally. Every counting socket and reader adds to it, so the
 # count survives connection pooling: a keep-alive socket keeps feeding the tally
 # whether or not connect() fired for this request. wire_counter() reads it by
@@ -170,28 +164,28 @@ class _CountingReader:
         self._fp = fp
         self._c = counter
 
+    def _count(self, n: int) -> None:
+        self._c.recv += n
+        _wire_tally["recv"] += n
+
     def read(self, *a, **k):
         b = self._fp.read(*a, **k)
-        self._c.recv += len(b)
-        _wire_tally["recv"] += len(b)
+        self._count(len(b))
         return b
 
     def read1(self, *a, **k):
         b = self._fp.read1(*a, **k)
-        self._c.recv += len(b)
-        _wire_tally["recv"] += len(b)
+        self._count(len(b))
         return b
 
     def readline(self, *a, **k):
         b = self._fp.readline(*a, **k)
-        self._c.recv += len(b)
-        _wire_tally["recv"] += len(b)
+        self._count(len(b))
         return b
 
     def readinto(self, buf):
         n = self._fp.readinto(buf)
-        self._c.recv += n or 0
-        _wire_tally["recv"] += n or 0
+        self._count(n or 0)
         return n
 
     def __getattr__(self, name):
@@ -244,8 +238,12 @@ class _CountingSocket:
 _active_counter: dict = {"counter": None}
 
 
-class _CountingHTTPSConnection(HTTPSConnection):
-    """HTTPS connection that swaps in a counting socket after connect."""
+class _CountingConnection:
+    """Swaps in a counting socket once the connection is up.
+
+    Mixed into both connection classes: HTTPS is what the API is called over, and
+    plain HTTP exists so a local (TLS-less) test server is counted the same way.
+    """
 
     def connect(self):
         super().connect()
@@ -254,14 +252,12 @@ class _CountingHTTPSConnection(HTTPSConnection):
         _active_counter["counter"] = counter
 
 
-class _CountingHTTPConnection(HTTPConnection):
-    """Plain-HTTP counterpart, so a local (TLS-less) test server is counted too."""
+class _CountingHTTPSConnection(_CountingConnection, HTTPSConnection):
+    pass
 
-    def connect(self):
-        super().connect()
-        counter = _CountingSocket(self.sock)
-        self.sock = counter
-        _active_counter["counter"] = counter
+
+class _CountingHTTPConnection(_CountingConnection, HTTPConnection):
+    pass
 
 
 def _build_session() -> requests.Session:
@@ -360,18 +356,6 @@ def ready() -> tuple[bool, str]:
         return True, ""
     if not api_key():
         return False, "GEMINI_API_KEY not set (or run with GEMINI_MOCK=1)."
-    return True, ""
-
-
-def _ready_vertex_unused() -> tuple[bool, str]:
-    """Retained ADC readiness check, unused now that the comparison is on the
-    Developer API. Kept so the Vertex path can be revived without re-deriving it."""
-    if not PROJECT:
-        return False, "GOOGLE_CLOUD_PROJECT not set (or run with GEMINI_MOCK=1)."
-    try:
-        _bearer_token()
-    except Exception as exc:
-        return False, f"No ADC credentials: {exc}"
     return True, ""
 
 
