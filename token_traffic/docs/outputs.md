@@ -23,7 +23,7 @@ random bytes.
 | `schema_version` | currently `1`. A run written under an older layout has to be identifiable as such, not silently charted next to a current one whose columns mean something else |
 | `timestamp` | when the run started, UTC ISO-8601 |
 | `mock` | `true` if the run made no network call. Every consumer keys off this |
-| `params` | `mode`, `measure`, `pairs` (`["gemini:cached", "openai:responses_stateful", …]`), `providers`, `models`, `turns`, `fixture`, `capture`, `cache_bust`, and `warnings` — everything the operator was told before the calls went out, kept with the numbers they produced |
+| `params` | `mode`, `measure`, `pairs` (`["gemini:cached", "openai:responses_inline", …]`), `providers`, `models`, `turns`, `fixture`, `capture`, `cache_bust`, and `warnings` — everything the operator was told before the calls went out, kept with the numbers they produced |
 | `params.cache_bust` | `{enabled, tags}`. `tags` is `{"gemini:stateless": "3f9a1c2e7b40d5a6", …}`: the marker each arm's system prompt actually carried. Recorded rather than merely flagged, because a run that came back suspiciously warm can only be explained if the prefixes it sent are recoverable. `enabled: false` means the arms shared a prefix and an arm's `cached_tokens` and TTFT may belong to the arm before it — the run says so in `warnings` too |
 | `records` | one row per (provider, arm, turn, pass), including prep. See below |
 | `summary` | `core.metrics.summarize()`, computed once, at save time, and stored |

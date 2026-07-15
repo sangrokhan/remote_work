@@ -104,7 +104,7 @@ def _stamp(timestamp: str) -> str:
     return _UNSAFE_STAMP.sub("-", timestamp or "").strip("-")[:64] or "0"
 # The label is provider_arm. Anything outside this alphabet could escape the pcap
 # directory once it lands in a filename. Underscores belong here: arm names carry
-# them (interaction_inline, responses_stateful), and an earlier version that left
+# them (interaction_inline, responses_inline), and an earlier version that left
 # them out quietly relabelled such arms and shipped a pcap claiming to be a
 # different one.
 _SAFE_LABEL = re.compile(r"^[a-z0-9_-]{1,64}$")

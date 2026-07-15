@@ -24,7 +24,7 @@ def _clean_env(monkeypatch):
 def test_two_arms_of_one_run_do_not_share_a_prefix():
     cachebust.begin("2026-07-14T09:52:30+00:00")
     a = cachebust.apply(SYSTEM, "openai", "responses_stateless")
-    b = cachebust.apply(SYSTEM, "openai", "responses_stateful")
+    b = cachebust.apply(SYSTEM, "openai", "responses_inline")
     assert a != b
     # Distinct from the first token, not merely somewhere: a prefix cache matches from
     # the front, and a marker anywhere else leaves the shared part cacheable.

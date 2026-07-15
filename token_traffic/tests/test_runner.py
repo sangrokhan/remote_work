@@ -78,8 +78,8 @@ class TestMeasure:
         # Both passes carry the conversation id; OpenAI appends each of them; turn k+1
         # is then billed for turn k twice. The run still happens -- the operator may
         # have a reason -- but it must not happen quietly.
-        run = _run(providers={"openai": ["responses_stateful"]}, measure="both")
-        assert any("responses_stateful" in w and "twice" in w
+        run = _run(providers={"openai": ["responses_inline"]}, measure="both")
+        assert any("responses_inline" in w and "twice" in w
                    for w in run["params"]["warnings"])
 
     def test_both_on_a_stateless_arm_does_not_warn(self):
@@ -139,7 +139,7 @@ class TestPrefixIsolation:
     """The socket is not the only thing an arm can inherit from the one before it.
 
     Both vendors cache on the token prefix, and every arm sends the same system prompt.
-    Measured before core.cachebust: responses_stateful was billed 4224 cached tokens on
+    Measured before core.cachebust: responses_inline was billed 4224 cached tokens on
     its own turn 1, off a prefix responses_stateless had left warm three arms earlier.
     """
 

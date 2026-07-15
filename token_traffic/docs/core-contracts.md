@@ -26,7 +26,7 @@ token_traffic/
     base.py        the Provider protocol
     gemini.py      stateless, nocontext, cached, interaction, interaction_inline,
                    interaction_stateless
-    openai.py      chat_stateless, responses_stateless, responses_stateful
+    openai.py      chat_stateless, responses_stateless, responses, responses_inline
   fixtures/
     perf.json      the shared scenario: one system prompt, N questions
   tests/
@@ -61,7 +61,7 @@ in `params`, and the CSV carries it per row: a bytes column from a streamed pass
 one from a blocking pass are not the same measurement and must never be averaged
 together.
 
-On one arm `both` is not merely expensive but wrong. On `openai:responses_stateful`
+On one arm `both` is not merely expensive but wrong. On `openai:responses_inline`
 every pass carries the conversation id, and OpenAI appends each of them to the
 server-side history (`store: false` is not allowed alongside a conversation), so the
 second call of turn *k* makes turn *k+1*'s `input_tokens` count turn *k* twice.
@@ -357,7 +357,7 @@ prep and no teardown announces `steady` first and never announces teardown, so i
 captured whole — which is right: all of it is traffic.
 
 `warnings_for()` is what the operator is told **before** the calls go out, not after they
-are billed. It refuses `measure="both"` on `openai:responses_stateful` (see "Why two
+are billed. It refuses `measure="both"` on `openai:responses_inline` (see "Why two
 passes"). A capture that cannot start does not stop a run — the byte counts come from the
 socket and stand on their own — but the reason is appended to the same list, or a run with
 no pcaps looks like a run that was never asked for one.

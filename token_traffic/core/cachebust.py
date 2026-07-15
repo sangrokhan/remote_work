@@ -8,7 +8,7 @@ them contaminate each other.
 
 Measured, before this module existed:
 
-    openai:responses_stateful  turn 1  input=4445  cached=4224
+    openai:responses_inline  turn 1  input=4445  cached=4224
 
 Turn 1 of an arm that had sent nothing before it, billed as 95% cached. The prefix came
 from `responses_stateless`, three arms earlier in the same run. And across runs, the

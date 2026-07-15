@@ -121,9 +121,9 @@ def test_store_tail_is_derived_when_the_record_does_not_carry_it():
 
 def test_token_totals():
     s = summarize(run_of([
-        rec("openai", "responses_stateful", 1, tokens=(100, 40, 20, 5)),
-        rec("openai", "responses_stateful", 2, tokens=(200, 80, 30, 5)),
-    ]))["totals"]["openai:responses_stateful"]
+        rec("openai", "responses_inline", 1, tokens=(100, 40, 20, 5)),
+        rec("openai", "responses_inline", 2, tokens=(200, 80, 30, 5)),
+    ]))["totals"]["openai:responses_inline"]
     assert s["input_tokens"] == 300
     assert s["cached_tokens"] == 120
     assert s["output_tokens"] == 50
@@ -205,11 +205,11 @@ def test_a_conversation_create_reports_no_tokens_and_says_why():
     """0 in a token column means "not billed" here and "not measured" elsewhere. Only the
     kind can tell them apart, so the kind has to be in the summary."""
     s = summarize(run_of([
-        rec("openai", "responses_stateful", 0, phase="setup", sent=21201,
+        rec("openai", "responses_inline", 0, phase="setup", sent=21201,
             tokens=(0, 0, 0, 0), kind="conversation_create", billed=False),
-        rec("openai", "responses_stateful", 1),
+        rec("openai", "responses_inline", 1),
     ]))
-    p = s["prep"]["openai:responses_stateful"]
+    p = s["prep"]["openai:responses_inline"]
     assert p["input_tokens"] == 0
     (create,) = p["by_kind"]
     assert create["kind"] == "conversation_create"
@@ -224,11 +224,11 @@ def test_any_phase_that_is_not_steady_counts_as_prep():
     # OpenAI's conversation create is called "setup", not "cachegen". The rule is the
     # phase name being anything other than steady, not a list of known prep names.
     s = summarize(run_of([
-        rec("openai", "responses_stateful", 0, phase="setup", sent=21000),
-        rec("openai", "responses_stateful", 1, sent=900),
+        rec("openai", "responses_inline", 0, phase="setup", sent=21000),
+        rec("openai", "responses_inline", 1, sent=900),
     ]))
-    assert s["totals"]["openai:responses_stateful"]["wire_sent"] == 900
-    assert s["prep"]["openai:responses_stateful"]["phases"] == ["setup"]
+    assert s["totals"]["openai:responses_inline"]["wire_sent"] == 900
+    assert s["prep"]["openai:responses_inline"]["phases"] == ["setup"]
 
 
 def test_an_arm_with_no_prep_has_no_prep_entry():

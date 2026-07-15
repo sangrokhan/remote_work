@@ -45,7 +45,7 @@ class TestPreflight:
 
     def test_it_warns_about_the_pass_that_would_double_bill_a_stateful_arm(self, client):
         body = client.post("/api/preflight", json={
-            "providers": {"openai": ["responses_stateful"]},
+            "providers": {"openai": ["responses_inline"]},
             "measure": "both"}).get_json()
         assert any("twice" in w for w in body["warnings"])
 

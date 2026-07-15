@@ -114,7 +114,7 @@ def test_two_arms_of_two_providers_do_not_collide():
     names = {
         capture.Capture("2026-07-14T00:00:00", p, a, "h").path.name
         for p, a in [("gemini", "stateless"), ("openai", "chat_stateless"),
-                     ("gemini", "cached"), ("openai", "responses_stateful")]
+                     ("gemini", "cached"), ("openai", "responses_inline")]
     }
     assert len(names) == 4
 
