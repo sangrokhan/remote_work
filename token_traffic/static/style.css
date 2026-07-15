@@ -195,3 +195,5 @@ tr.empty td { color: var(--dim); text-align: left; font-style: italic; }
       font-size: .78rem; }
 .dl:hover { background: #0d3b1e; }
 .dl.dead { color: var(--bad); border-color: #6a2d2d; pointer-events: none; }
+.dl.strong { background: #12492a; border-color: var(--ok); font-weight: 600; }
+.dl.strong:hover { background: #16613a; }

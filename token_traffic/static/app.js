@@ -643,6 +643,14 @@ function renderDownloads(run) {
   const id = run.exec_id;
   if (!id) return;
 
+  // One archive with both CSVs, the run document, and every pcap. First, because it is
+  // the thing an operator saving a run actually wants; the individual links stay for when
+  // only one file is needed.
+  const all = el('a', 'dl strong', (run.mock ? 'MOCK ' : '') + 'download all (.zip)');
+  all.href = `/api/runs/${id}/bundle.zip`;
+  all.setAttribute('download', '');
+  host.appendChild(all);
+
   for (const [label, href] of [
     ['records.csv', `/api/runs/${id}/records.csv`],
     ['summary.csv', `/api/runs/${id}/summary.csv`],

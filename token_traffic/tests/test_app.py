@@ -125,6 +125,33 @@ class TestHistoryAndDownloads:
         assert client.get("/api/runs/nope/records.csv").status_code == 404
         assert client.get("/api/runs/nope").status_code == 404
 
+    def test_the_bundle_holds_both_csvs_and_the_run_document(self, client):
+        import io
+        import zipfile
+
+        run = client.post("/api/run", json={"providers": {"gemini": ["stateless"]},
+                                            "turns": 1}).get_json()["run"]
+        r = client.get(f"/api/runs/{run['exec_id']}/bundle.zip")
+        assert r.status_code == 200
+        assert r.mimetype == "application/zip"
+        # A mock run says so in the archive name, the same as its CSVs.
+        assert "mock_run_" in r.headers["Content-Disposition"]
+
+        with zipfile.ZipFile(io.BytesIO(r.get_data())) as z:
+            names = z.namelist()
+            eid = run["exec_id"]
+            assert f"mock_records_{eid}.csv" in names
+            assert f"mock_summary_{eid}.csv" in names
+            assert f"mock_run_{eid}.json" in names
+            # A mock run makes no real traffic, so there is no pcap to bundle -- and the
+            # zip still assembles rather than erroring on an empty pcap set.
+            assert not any(n.startswith("pcaps/") for n in names)
+            doc = json.loads(z.read(f"mock_run_{eid}.json"))
+            assert doc["exec_id"] == eid
+
+    def test_the_bundle_of_an_unknown_run_is_a_404(self, client):
+        assert client.get("/api/runs/nope/bundle.zip").status_code == 404
+
     def test_a_run_can_be_deleted(self, client):
         run = client.post("/api/run", json={"providers": {"gemini": ["stateless"]},
                                             "turns": 1}).get_json()["run"]

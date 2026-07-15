@@ -22,7 +22,10 @@ from __future__ import annotations
 import json
 import os
 import queue
+import io
+import json
 import threading
+import zipfile
 from datetime import datetime, timezone
 
 from flask import Flask, Response, jsonify, render_template, request, send_file
@@ -272,6 +275,47 @@ def pcap_file(name: str):
     if path is None:
         return jsonify({"ok": False, "error": "not_found"}), 404
     return send_file(path, as_attachment=True)
+
+
+def _pcap_names(doc: dict):
+    """Every pcap filename the run recorded, across arms and kinds.
+
+    `pcaps` is {"provider:arm": {"bytes": {...}, "latency": {...}}}; only entries that
+    actually captured something carry a `file`. A pcap that failed or got no packets has
+    no file to bundle and is skipped -- the run document still explains its absence.
+    """
+    for by_kind in (doc.get("pcaps") or {}).values():
+        for result in (by_kind or {}).values():
+            name = (result or {}).get("file")
+            if name:
+                yield name
+
+
+@app.get("/api/runs/<exec_id>/bundle.zip")
+def bundle(exec_id: str):
+    """Everything a run produced, in one download: both CSVs, the run document, and every
+    pcap. Assembled here rather than in the browser because the server already holds all
+    of it and the pcaps never leave the box until asked for."""
+    doc = store.get_run(exec_id)
+    if doc is None:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+
+    tag = "mock_" if doc.get("mock") else ""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(f"{tag}records_{exec_id}.csv", export.records_csv(doc))
+        z.writestr(f"{tag}summary_{exec_id}.csv", export.summary_csv(doc))
+        z.writestr(f"{tag}run_{exec_id}.json", json.dumps(doc, indent=2))
+        for name in _pcap_names(doc):
+            # safe_pcap_path validates the name and confirms the file is inside the pcap
+            # directory: a run document is trusted, but the filename still goes through
+            # the same gate a download URL does, so a doctored name cannot read elsewhere.
+            path = pcap.safe_pcap_path(name)
+            if path is not None:
+                z.write(path, arcname=f"pcaps/{name}")
+    buf.seek(0)
+    return send_file(buf, mimetype="application/zip", as_attachment=True,
+                     download_name=f"{tag}run_{exec_id}.zip")
 
 
 def main() -> None:
