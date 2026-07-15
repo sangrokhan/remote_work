@@ -161,19 +161,47 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
                             "turn": 0, "error": f"not_ready: {reason}"})
             continue
 
-        window = _Window(provider, arm, mod.api_host(), timestamp or "0",
-                         want_capture, on_progress)
-        try:
-            arm_records = mod.run_arm(arm, model,
-                                      cachebust.apply(system, provider, arm),
-                                      steps, measure, window.tick)
-        finally:
-            window.close()
+        prompt = cachebust.apply(system, provider, arm)
+        host = mod.api_host()
+
+        if measure == "both" and want_capture:
+            # One capture cannot hold `both`: the blocking and streamed passes interleave
+            # on the same host and port, so a single pcap matches neither the bytes number
+            # (which drops the streamed frames) nor the latency number. So the arm runs
+            # twice -- the whole conversation in bytes, then the whole conversation in
+            # latency -- each sweep under its own window, and the per-turn records are
+            # merged back the way core.call.send merges the two passes of one turn: bytes
+            # and body from the bytes sweep, marks from the latency sweep.
+            sweeps = {}
+            for kind in ("bytes", "latency"):
+                window = _Window(provider, arm, host, timestamp or "0",
+                                 want_capture, on_progress, kind=kind)
+                try:
+                    sweeps[kind] = mod.run_arm(arm, model, prompt, steps, kind,
+                                               window.tick)
+                finally:
+                    window.close()
+                if window.pcap is not None:
+                    pcaps.setdefault(key, {})[kind] = window.pcap
+                # The latency sweep is the one whose clock the marks come from, so its
+                # wall is the arm's wall; the bytes sweep's is kept for its own pcap.
+                wall_ms[key] = window.wall_ms
+            arm_records = _merge_sweeps(sweeps["bytes"], sweeps["latency"])
+        else:
+            # Single kind: the capture, if any, is labelled with the measure it holds.
+            kind = measure if measure in ("bytes", "latency") else "bytes"
+            window = _Window(provider, arm, host, timestamp or "0",
+                             want_capture, on_progress, kind=kind)
+            try:
+                arm_records = mod.run_arm(arm, model, prompt, steps, measure,
+                                          window.tick)
+            finally:
+                window.close()
+            wall_ms[key] = window.wall_ms
+            if window.pcap is not None:
+                pcaps.setdefault(key, {})[kind] = window.pcap
 
         records.extend(arm_records)
-        wall_ms[key] = window.wall_ms
-        if window.pcap is not None:
-            pcaps[key] = window.pcap
 
     return {
         "params": {
@@ -197,6 +225,43 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
     }
 
 
+# The marks are the only thing a latency pass is entitled to report; everything else on
+# the record -- bytes, tokens, body -- belongs to the bytes pass. Same split core.call
+# makes between the two passes of one `both` turn, applied here to two whole sweeps.
+_LATENCY_MARKS = ("req_sent_ms", "ttfb_ms", "ttft_ms", "ttlt_ms", "turn_end_ms",
+                  "store_tail_ms")
+
+
+def _merge_sweeps(bytes_recs: list[dict], latency_recs: list[dict]) -> list[dict]:
+    """Fold a bytes sweep and a latency sweep of one arm into `both` records.
+
+    A steady record keeps its bytes, tokens and body from the bytes sweep and takes its
+    marks from the latency sweep's record for the same turn; `measure` becomes `both`.
+    Prep records are kept from the bytes sweep alone -- the latency sweep re-ran prep too
+    (a second cache build, a second conversation create), but that is duplicated setup, not
+    a second measurement, and folding both would double an arm's reported prep.
+
+    A turn the latency sweep failed or never reached leaves the bytes record's own marks
+    in place, which are pinned rather than zero -- an honest "not measured", not "instant".
+    """
+    lat_by_turn = {r.get("turn"): r for r in latency_recs
+                   if r.get("phase") == "steady"}
+    out: list[dict] = []
+    for r in bytes_recs:
+        if r.get("phase") != "steady":
+            out.append(r)
+            continue
+        merged = dict(r)
+        merged["measure"] = "both"
+        lat = lat_by_turn.get(r.get("turn"))
+        if lat:
+            for m in _LATENCY_MARKS:
+                if m in lat:
+                    merged[m] = lat[m]
+        out.append(merged)
+    return out
+
+
 class _Window:
     """The measured stage of one arm: what the pcap covers and what wall_ms times.
 
@@ -212,11 +277,15 @@ class _Window:
     """
 
     def __init__(self, provider: str, arm: str, host: str, timestamp: str,
-                 want_capture: bool, on_progress):
+                 want_capture: bool, on_progress, kind: str = ""):
         self.provider, self.arm, self.host = provider, arm, host
         self.timestamp = timestamp
         self.want_capture = want_capture
         self.on_progress = on_progress
+        # Which pass this window captures -- "bytes" or "latency". It rides into the pcap
+        # filename so a `both` run's two sweeps do not collide and a reader can tell the
+        # blocking capture from the streamed one.
+        self.kind = kind
         self.cap: pcap.Capture | None = None
         self.pcap: dict | None = None
         self.wall_ms = 0
@@ -239,7 +308,8 @@ class _Window:
         wire.reset_session()
         if self.want_capture:
             time.sleep(_SETTLE_SECONDS)
-            self.cap = pcap.Capture(self.timestamp, self.provider, self.arm, self.host)
+            self.cap = pcap.Capture(self.timestamp, self.provider, self.arm, self.host,
+                                    kind=self.kind)
             self.cap.__enter__()
         self._t0 = time.monotonic()
 

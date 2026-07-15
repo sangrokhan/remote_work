@@ -1,7 +1,7 @@
 # What a run produces
 
 A run leaves behind one JSON document, two CSVs derived from it on demand, and — if
-capture was asked for and was available — one pcap per arm. Nothing else. There is no
+capture was asked for and was available — one pcap per (arm, kind). Nothing else. There is no
 second datastore: a run is a few hundred kilobytes and this experiment runs on one
 machine.
 
@@ -128,30 +128,44 @@ shaped exactly like a number from a good one.
 
 ## The pcaps
 
-One per (provider, arm), written to `TRAFFIC_PCAP_DIR`, downloadable at
+One per (provider, arm, **kind**), written to `TRAFFIC_PCAP_DIR`, downloadable at
 `GET /api/pcaps/<name>`:
 
 ```
-capture_gemini_interaction_inline_2026-07-14T10-15-30-837905-00-00_9f8e7d6c5b4a3f21.pcap
+capture_gemini_interaction_inline_bytes_2026-07-14T10-15-30-837905-00-00_9f8e7d6c5b4a3f21.pcap
 ```
 
-The label is `provider_arm`; the timestamp is the run's, with every non-alphanumeric
-character squeezed to a dash — the run stamps itself with `datetime.isoformat()`, which
-carries a `.` and a `+`, and a filename holding either of them is a filename the download
-route's own validator rejects. It used to: tcpdump wrote a good pcap, the run recorded it,
-and `GET /api/pcaps/<name>` answered 404 for a file sitting on disk. The authoritative
-timestamp is in the run document, next to the pcap's entry; the one in the name is a
-label. The trailing 64-bit token means
-two concurrent arms cannot collide and a download URL is not guessable from another one. A
-label that cannot be spelled safely in a filename is **refused**, not substituted — the
-predecessor renamed unspellable labels to a default, which is how an arm once shipped a
-pcap claiming to be a different arm.
+The label is `provider_arm_kind`, where `kind` is the measure the pcap holds — `bytes` or
+`latency`. The timestamp is the run's, with every non-alphanumeric character squeezed to a
+dash — the run stamps itself with `datetime.isoformat()`, which carries a `.` and a `+`,
+and a filename holding either of them is a filename the download route's own validator
+rejects. It used to: tcpdump wrote a good pcap, the run recorded it, and
+`GET /api/pcaps/<name>` answered 404 for a file sitting on disk. The authoritative
+timestamp is in the run document, next to the pcap's entry; the one in the name is a label.
+The trailing 64-bit token means two concurrent captures cannot collide and a download URL
+is not guessable from another one. A label that cannot be spelled safely in a filename is
+**refused**, not substituted — the predecessor renamed unspellable labels to a default,
+which is how an arm once shipped a pcap claiming to be a different arm.
+
+`run["pcaps"]` is `{"provider:arm": {"bytes": {...}, "latency": {...}}}` — a map of kind to
+capture result. A single-measure run has one kind; a `measure=both` run has two.
+
+**Why `both` captures twice.** In a `both` run each turn sends a blocking pass (the bytes)
+and a streamed pass (the marks), and the two interleave on the same host and port. One
+capture spanning the arm would hold both passes, and its packet total would match neither
+the recorded `wire_sent` (which drops the streamed frames) nor the latency number — the
+pcap could verify nothing, which is its whole job. So the arm runs twice: the whole
+conversation in `bytes` under one capture, then the whole conversation in `latency` under
+another, and the per-turn records are merged back the way `core.call.send` merges the two
+passes of one turn — bytes and body from the bytes sweep, marks from the latency sweep. The
+latency sweep re-runs prep too (a second cache build, a second conversation create); those
+duplicate setup records are dropped, and only the bytes sweep's prep is kept.
 
 A byte count taken inside the process is a claim; a pcap taken on the interface is the
 thing the claim is about. The TLS payload is encrypted and is not the point: packet sizes
 and timing are exactly the traffic being argued over, and they can be opened in Wireshark
-by somebody who does not trust this code. One capture per arm, because a single pcap
-spanning all of them cannot be attributed after the fact.
+by somebody who does not trust this code. One capture per (arm, kind), because a single
+pcap spanning either more arms or both passes cannot be attributed after the fact.
 
 The capture covers the arm's steady stage only — it opens on the arm's first `steady`
 progress event, after the pooled connection has been dropped and the peer's FIN has been

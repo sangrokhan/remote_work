@@ -254,15 +254,25 @@ def safe_pcap_path(name: str) -> Path | None:
 
 
 class Capture:
-    """Context manager around one arm: start tcpdump on enter, stop and read its
-    stats on exit. One instance, one pcap, one (provider, arm)."""
+    """Context manager around one arm's traffic of one kind: start tcpdump on enter, stop
+    and read its stats on exit. One instance, one pcap, one (provider, arm, kind).
+
+    `kind` is the measure the pcap covers -- "bytes" or "latency". It is in the label, and
+    so in the filename, because a `both` run captures the blocking and the streamed passes
+    into *separate* pcaps: the two passes interleave on the same host and port, so one
+    capture holding both cannot be read against either the bytes number or the latency
+    number. A run does the whole arm in one kind, then the whole arm in the other, and
+    each sweep gets its own file.
+    """
 
     def __init__(self, timestamp: str, provider: str, arm: str, host: str,
-                 interface: str | None = None):
+                 kind: str = "", interface: str | None = None):
         self.timestamp = timestamp
         self.provider = provider or ""
         self.arm = arm or ""
-        self.label = f"{self.provider}_{self.arm}"
+        self.kind = kind or ""
+        self.label = (f"{self.provider}_{self.arm}_{self.kind}" if self.kind
+                      else f"{self.provider}_{self.arm}")
         self.host = host or ""
         self.interface = interface or _iface()
         self.ips: list[str] = []
@@ -335,7 +345,7 @@ class Capture:
         """What the capture actually got, for the run document and the UI."""
         if self.error:
             return {"ok": False, "provider": self.provider, "arm": self.arm,
-                    "error": self.error, "host": self.host}
+                    "kind": self.kind, "error": self.error, "host": self.host}
         size = self.path.stat().st_size if self.path.exists() else 0
         dropped = (self.stats.get("dropped_by_kernel", 0)
                    + self.stats.get("dropped_by_interface", 0))
@@ -343,6 +353,7 @@ class Capture:
             "ok": size > 0,
             "provider": self.provider,
             "arm": self.arm,
+            "kind": self.kind,
             "file": self.path.name,
             "bytes": size,
             "host": self.host,

@@ -31,8 +31,10 @@ For every (provider, arm, turn):
   `ttlt_ms`, `turn_end_ms`, plus the derived `store_tail_ms` (`turn_end − ttlt`). One
   number cannot tell a history still going up the wire apart from a model thinking
   apart from a server persisting the turn.
-- **Optionally, the packets** — one pcap per arm, via tcpdump, so the in-process byte
-  count can be checked by somebody who does not trust this code.
+- **Optionally, the packets** — one pcap per (arm, kind), via tcpdump, so the in-process
+  byte count can be checked by somebody who does not trust this code. A `measure=both` run
+  captures its blocking and streamed passes into separate `bytes` and `latency` pcaps,
+  because the two interleave on one socket and a shared capture would verify neither.
 
 The scenario is one fixture (`fixtures/perf.json`): a 20,653-character system prompt
 (persona, tool descriptions, operating policy — over 4k tokens, so both implicit and
@@ -267,7 +269,8 @@ parameter must not be sent at all to a non-reasoning model, or the call 400s),
 
 ## What a run produces
 
-One JSON document per run, `records.csv`, `summary.csv`, and optionally one pcap per arm.
+One JSON document per run, `records.csv`, `summary.csv`, and optionally one pcap per
+(arm, kind) — two per arm on a `both` run, `bytes` and `latency`.
 A mock run is stored in its own bucket, listed separately, tagged in its CSV filename,
 and is never charted or averaged with a live one. See `docs/outputs.md`.
 

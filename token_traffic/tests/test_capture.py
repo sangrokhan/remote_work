@@ -97,6 +97,22 @@ def test_the_pcap_is_named_for_the_provider_and_the_arm():
     assert capture._SAFE_NAME.match(c.path.name)
 
 
+def test_the_kind_is_in_the_name_so_a_both_runs_two_pcaps_do_not_collide():
+    """A `both` run captures the blocking and streamed passes separately. The kind is in
+    the label, and so in the filename, or the two sweeps of one arm would be two files
+    the reader cannot tell apart -- and the download route would still have to accept the
+    name capture wrote."""
+    b = capture.Capture("2026-07-14T00:00:00", "openai", "responses", "h", kind="bytes")
+    lat = capture.Capture("2026-07-14T00:00:00", "openai", "responses", "h",
+                          kind="latency")
+    assert b.path.name.startswith("capture_openai_responses_bytes_")
+    assert lat.path.name.startswith("capture_openai_responses_latency_")
+    assert b.path.name != lat.path.name
+    assert capture._SAFE_NAME.match(b.path.name)
+    assert capture._SAFE_NAME.match(lat.path.name)
+    assert b.result().get("kind") == "bytes"
+
+
 def test_the_name_capture_writes_is_a_name_the_download_route_accepts():
     """A run stamps its arms with `datetime.now(timezone.utc).isoformat()`, which carries
     a dot and a plus (2026-07-14T09:46:57.837905+00:00). Only the colons used to be

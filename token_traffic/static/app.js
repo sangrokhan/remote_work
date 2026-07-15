@@ -672,18 +672,24 @@ function renderDownloads(run) {
     }
     return;
   }
+  // pcaps is {key: {kind: result}} — one entry per captured pass. A single-measure run
+  // has one kind; a `both` run captures the blocking and streamed passes into separate
+  // files, so its arm shows a bytes link and a latency link side by side.
   for (const key of names) {
-    const c = pcaps[key] || {};
-    if (c.ok && c.file) {
-      const a = el('a', 'dl', `pcap ${key} · ${fmtBytes(c.bytes)}` +
-                              (c.dropped ? ` · ${c.dropped} dropped` : ''));
-      a.href = '/api/pcaps/' + encodeURIComponent(c.file);
-      a.setAttribute('download', '');
-      pl.appendChild(a);
-    } else {
-      const s = el('span', 'dl dead',
-        `pcap ${key} failed: ${c.error || c.note || 'empty capture'}`);
-      pl.appendChild(s);
+    const byKind = pcaps[key] || {};
+    for (const kind of Object.keys(byKind)) {
+      const c = byKind[kind] || {};
+      const label = `pcap ${key} · ${kind}`;
+      if (c.ok && c.file) {
+        const a = el('a', 'dl', `${label} · ${fmtBytes(c.bytes)}` +
+                                (c.dropped ? ` · ${c.dropped} dropped` : ''));
+        a.href = '/api/pcaps/' + encodeURIComponent(c.file);
+        a.setAttribute('download', '');
+        pl.appendChild(a);
+      } else {
+        pl.appendChild(el('span', 'dl dead',
+          `${label} failed: ${c.error || c.note || 'empty capture'}`));
+      }
     }
   }
 }

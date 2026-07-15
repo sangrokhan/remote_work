@@ -223,7 +223,7 @@ class TestIsolation:
         seen: list[str] = []
 
         class FakeCapture:
-            def __init__(self, timestamp, provider, arm, host):
+            def __init__(self, timestamp, provider, arm, host, kind=""):
                 self.arm = arm
 
             def __enter__(self):
@@ -251,16 +251,54 @@ class TestIsolation:
         assert opened == ["cached"] and closed == ["cached"]
         # Nothing but steady turns happened between the tcpdump start and its stop.
         assert set(phases_inside[0]) == {"steady"}
-        assert run["pcaps"]["gemini:cached"]["ok"] is True
+        # pcaps is {key: {kind: result}}; a bytes run has one kind.
+        assert run["pcaps"]["gemini:cached"]["bytes"]["ok"] is True
 
     def test_an_arm_with_no_prep_is_captured_whole(self, monkeypatch):
         monkeypatch.setattr(runner.pcap, "available", lambda: (True, "ready"))
         monkeypatch.setattr(runner.time, "sleep", lambda s: None)
         started = []
         monkeypatch.setattr(runner.pcap, "Capture",
-                            lambda ts, p, a, h: started.append(a) or _NullCapture(a))
+                            lambda ts, p, a, h, kind="": started.append(a)
+                            or _NullCapture(a))
         _run(providers={"gemini": ["stateless"]}, want_capture=True)
         assert started == ["stateless"]
+
+    def test_both_with_capture_runs_two_sweeps_and_yields_two_pcaps(self, monkeypatch):
+        # `both` cannot share one capture: the blocking and streamed passes interleave on
+        # the same host and port. So the arm runs twice -- once in bytes, once in latency
+        # -- and each sweep gets its own pcap, tagged by kind.
+        monkeypatch.setattr(runner.pcap, "available", lambda: (True, "ready"))
+        monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+        kinds_seen = []
+
+        class KindCapture:
+            def __init__(self, timestamp, provider, arm, host, kind=""):
+                self.arm, self.kind = arm, kind
+                kinds_seen.append(kind)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return None
+
+            def result(self):
+                return {"ok": True, "arm": self.arm, "kind": self.kind}
+
+        monkeypatch.setattr(runner.pcap, "Capture", KindCapture)
+        run = _run(providers={"gemini": ["stateless"]}, want_capture=True,
+                   measure="both")
+
+        assert kinds_seen == ["bytes", "latency"], "one full sweep per kind, in order"
+        pc = run["pcaps"]["gemini:stateless"]
+        assert set(pc) == {"bytes", "latency"}
+        assert pc["bytes"]["kind"] == "bytes" and pc["latency"]["kind"] == "latency"
+        # The merged records read as `both`, one per turn -- not two sweeps' worth.
+        steady = [r for r in run["records"]
+                  if r["provider"] == "gemini" and r["phase"] == "steady"]
+        assert [r["turn"] for r in steady] == [1, 2]
+        assert all(r["measure"] == "both" for r in steady)
 
     def test_no_pause_after_the_last_arm(self, monkeypatch):
         slept = []
