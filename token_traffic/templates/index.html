@@ -61,6 +61,7 @@
     </label>
     <label class="cap"><input id="capture" type="checkbox"> capture pcap</label>
     <label class="cap" title="Prepend a per-run, per-arm marker to the system prompt so no arm is answered from the prefix cache another arm — or another run — left warm."><input id="cacheBust" type="checkbox" checked> cold prefix per arm</label>
+    <label class="cap" title="Negative control: put a turn counter in front of the system prompt so the prefix moves every turn. The KV cache then misses every turn and the server re-prefills the whole prompt and history. Shows what a system prompt that changes mid-task costs."><input id="prefixDrift" type="checkbox"> drift prefix per turn (cache-miss control)</label>
     <span class="spacer"></span>
     <button id="preflightBtn">Preflight</button>
     <button id="runBtn" class="go" disabled>Run</button>

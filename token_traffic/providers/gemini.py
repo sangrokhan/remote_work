@@ -36,7 +36,7 @@ import json
 import os
 import secrets
 
-from core import call, config, record, wire
+from core import cachebust, call, config, record, wire
 from providers import base
 
 NAME = "gemini"
@@ -49,6 +49,11 @@ ARMS = ("stateless", "nocontext", "cached", "interaction", "interaction_inline",
 # run leaves it out of the headline.
 HEADLINE_ARMS = ("stateless", "cached", "interaction", "interaction_inline",
                  "interaction_stateless")
+# Arms that put the system prompt on the wire once and let somebody else keep it -- an
+# explicit cache, or the stored first turn. A per-turn marker cannot vary on these: there
+# is no per-turn send to vary. The runner reads this to warn rather than let a drift run
+# look as if it applied everywhere.
+PROMPT_SENT_ONCE_ARMS = ("cached", "interaction_inline", "nocontext")
 
 CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "1800"))
 
@@ -517,12 +522,16 @@ def _arm_stateless(model, system, steps, measure, on_progress) -> list[dict]:
     would drop ~1 KB of upload a turn that a real client pays, from the one arm whose
     entire purpose is to pay for its own history.
     """
-    recs, history = [], ([user_content(system)] if system else [])
+    # The system prompt is rebuilt per turn rather than parked in history[0]: with drift
+    # on it carries a turn counter, and the whole point of that arm is that the prefix
+    # moves. With drift off `per_turn` returns it unchanged and this is the old behaviour.
+    recs, history = [], []
     n = len(steps)
     for k, q in enumerate(steps, start=1):
         _tick(on_progress, "stateless", "steady", k, n)
         history.append(user_content(q))
-        ex = _generate(model, list(history), measure, k)
+        prefix = [user_content(cachebust.per_turn(system, k))] if system else []
+        ex = _generate(model, prefix + history, measure, k)
         history.append(model_content_from_response(ex.response, ex.text))
         recs.append(_rec("stateless", "steady", k, q, measure, ex, _usage_gen(ex.response)))
     return recs
@@ -535,7 +544,7 @@ def _arm_nocontext(model, system, steps, measure, on_progress) -> list[dict]:
     recs, n = [], len(steps)
     for k, q in enumerate(steps, start=1):
         _tick(on_progress, "nocontext", "steady", k, n)
-        contents = ([user_content(system), user_content(q)]
+        contents = ([user_content(cachebust.per_turn(system, k)), user_content(q)]
                     if (k == 1 and system) else [user_content(q)])
         ex = _generate(model, contents, measure, k)
         recs.append(_rec("nocontext", "steady", k, q, measure, ex, _usage_gen(ex.response)))
@@ -644,10 +653,15 @@ def _arm_interactions(arm, model, system, steps, measure, on_progress, *,
     for k, q in enumerate(steps, start=1):
         _tick(on_progress, arm, "steady", k, n)
         if inline_system:
-            text = f"{system}\n\n{q}" if (k == 1 and system) else q
+            # Sent once and stored: a per-turn counter can only ride turn 1, which is why
+            # this arm is named in PROMPT_SENT_ONCE_ARMS and the runner warns about it.
+            text = (f"{cachebust.per_turn(system, k)}\n\n{q}"
+                    if (k == 1 and system) else q)
             sys_instruction = ""
         else:
-            text, sys_instruction = q, system
+            # system_instruction is interaction-scoped and goes up on every turn, so the
+            # drifting counter really does move the prefix every turn here.
+            text, sys_instruction = q, cachebust.per_turn(system, k)
 
         if client_history:
             history.append(user_step(text))

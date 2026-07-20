@@ -112,6 +112,8 @@ def _selection(payload: dict) -> tuple[dict, dict]:
         # arms' cache isolation off.
         "cache_bust": (None if payload.get("cache_bust") is None
                        else bool(payload["cache_bust"])),
+        # Off unless asked for: it deliberately makes every number worse.
+        "prefix_drift": bool(payload.get("prefix_drift")),
     }
     if opts["measure"] not in runner.MEASURES:
         raise ValueError(f"measure must be one of {', '.join(runner.MEASURES)}")
@@ -159,6 +161,7 @@ def _execute(providers: dict | None, opts: dict, on_progress=None) -> dict:
         pause_seconds=opts["pause_seconds"],
         timestamp=timestamp,
         cache_bust=opts["cache_bust"],
+        prefix_drift=opts["prefix_drift"],
         on_progress=on_progress,
     )
     run["timestamp"] = timestamp

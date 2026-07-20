@@ -48,6 +48,11 @@ def _report(run: dict) -> None:
     summary = run["summary"]
     print(f"\nexec_id: {run['exec_id']}  measure: {run['params']['measure']}"
           f"{'  (MOCK)' if run.get('mock') else ''}\n")
+    # What the run did to itself, printed with the numbers it did it to. A knob that
+    # deliberately degrades a run -- prefix drift, cache-bust off -- is only honest if the
+    # warning arrives next to the table a reader is about to believe.
+    for warning in run["params"].get("warnings") or []:
+        print(f"⚠ {warning}\n")
     head = f"{'arm':<32} {'up B':>9} {'down B':>9} {'in tok':>8} {'ttft ms':>8} {'tail ms':>8}"
     print(head)
     print("-" * len(head))
@@ -82,6 +87,9 @@ def main(argv=None) -> int:
     ap.add_argument("--fixture", default=scenario.DEFAULT, choices=scenario.names())
     ap.add_argument("--turns", type=int, help="truncate the thread")
     ap.add_argument("--capture", action="store_true", help="pcap per arm (needs tcpdump)")
+    ap.add_argument("--prefix-drift", action="store_true",
+                    help="put a turn counter in front of the system prompt so the KV "
+                         "cache misses every turn (the negative control)")
     ap.add_argument("--no-cache-bust", dest="cache_bust", action="store_false",
                     default=None,
                     help="let the arms share a prefix, so each one can be answered "
@@ -132,7 +140,8 @@ def main(argv=None) -> int:
     run = runner.run(providers, system=fixture["system"], steps=fixture["steps"],
                      measure=args.measure, want_capture=args.capture,
                      pause_seconds=args.pause, timestamp=timestamp,
-                     cache_bust=args.cache_bust, on_progress=_progress)
+                     cache_bust=args.cache_bust, prefix_drift=args.prefix_drift,
+                     on_progress=_progress)
     run["timestamp"] = timestamp
     run["mock"] = mock
     run["params"]["fixture"] = fixture["name"]

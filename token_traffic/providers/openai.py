@@ -90,6 +90,10 @@ DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-nano")
 
 ARMS = ("chat_stateless", "responses_stateless", "responses", "responses_inline")
 HEADLINE_ARMS = ARMS
+# The system prompt goes up once and the server keeps it, so a per-turn marker has no
+# per-turn send to ride. The runner warns rather than let a drift run look as if it
+# applied to every arm.
+PROMPT_SENT_ONCE_ARMS = ("responses_inline",)
 
 MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "400"))
 # Empty for a non-reasoning model: the parameter must not be sent at all, or the
@@ -372,24 +376,29 @@ def run_arm(arm, model, system, steps, measure, on_progress=None) -> list[dict]:
 
         if arm == "chat_stateless":
             url = f"{base_url()}/chat/completions"
-            body = _chat_body(model, system, history, question, arm)
+            body = _chat_body(model, cachebust.per_turn(system, k), history, question,
+                              arm)
         elif arm == "responses_stateless":
-            items = ([{"role": "system", "content": system}]
+            items = ([{"role": "system", "content": cachebust.per_turn(system, k)}]
                      + history
                      + [{"role": "user", "content": question}])
             body = _responses_body(model, items, arm, store=False)
         elif arm == "responses":
             # The server holds the history; it does not hold the system prompt.
             # `instructions` is not stored, so it goes up again on every single turn --
-            # the same bill Gemini's `interaction` arm pays for the same reason.
+            # the same bill Gemini's `interaction` arm pays for the same reason, and the
+            # turn the drifting marker moves the prefix on.
             body = _responses_body(model, [{"role": "user", "content": question}],
                                    arm, store=True, previous=previous or None,
-                                   instructions=system)
+                                   instructions=cachebust.per_turn(system, k))
         else:   # responses_inline
             # Turn 1 carries the system prompt as an input *item*, so the server stores
             # it with the history and no later turn resends it. Not `instructions`:
             # that would not be stored, and this arm would silently become `responses`.
-            items = ([{"role": "system", "content": system}] if k == 1 else [])
+            # Sent once, so a per-turn marker cannot vary here -- see
+            # PROMPT_SENT_ONCE_ARMS.
+            items = ([{"role": "system", "content": cachebust.per_turn(system, k)}]
+                     if k == 1 else [])
             items += [{"role": "user", "content": question}]
             body = _responses_body(model, items, arm, store=True,
                                    conversation=conversation)

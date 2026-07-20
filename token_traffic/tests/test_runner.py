@@ -8,6 +8,8 @@ about the specific ways a run stops being evidence.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from core import metrics, runner
@@ -181,10 +183,49 @@ class TestPrefixIsolation:
     def test_turning_it_off_warns_that_the_numbers_are_not_the_arms_own(
             self, monkeypatch):
         run = _run(providers={"gemini": ["stateless"]}, cache_bust=False)
-        assert run["params"]["cache_bust"] == {"enabled": False, "tags": {}}
+        cb = run["params"]["cache_bust"]
+        assert cb["enabled"] is False and cb["tags"] == {}
         assert any("cache-bust off" in w for w in run["params"]["warnings"])
         seen = self._systems_seen(monkeypatch, cache_bust=False)
         assert seen["stateless"] == FIXTURE["system"]
+
+
+class TestPrefixDrift:
+    def _bodies(self, **kw):
+        run = _run(providers={"gemini": ["stateless"]}, **kw)
+        return [json.loads(r["request_raw"]) for r in run["records"]
+                if r.get("phase") == "steady"], run
+
+    def test_the_system_prompt_moves_every_turn_when_drift_is_on(self):
+        """The arm resends the whole history each turn, so its system prompt is rebuilt
+        per turn -- and with drift on, rebuilt differently. Two turns, two prefixes."""
+        bodies, run = self._bodies(prefix_drift=True,
+                                   timestamp="2026-07-15T09:00:00+00:00")
+        firsts = ["".join(p["text"] for p in b["contents"][0]["parts"])
+                  for b in bodies]
+        assert firsts[0] != firsts[1]
+        assert firsts[0].startswith("[turn 001]")
+        assert firsts[1].startswith("[turn 002]")
+        assert run["params"]["cache_bust"]["prefix_drift"] is True
+
+    def test_the_system_prompt_holds_still_when_drift_is_off(self):
+        bodies, run = self._bodies(timestamp="2026-07-15T09:00:00+00:00")
+        firsts = ["".join(p["text"] for p in b["contents"][0]["parts"])
+                  for b in bodies]
+        assert firsts[0] == firsts[1], "the default must not move the prefix"
+        assert run["params"]["cache_bust"]["prefix_drift"] is False
+
+    def test_a_drift_run_says_what_it_did_to_itself(self):
+        run = _run(providers={"gemini": ["stateless"]}, prefix_drift=True)
+        assert any("prefix drift ON" in w for w in run["params"]["warnings"])
+
+    def test_an_arm_that_sends_the_prompt_once_is_named_as_unaffected(self):
+        """`cached` parks the prefix in an explicit cache, so there is no per-turn send
+        for the counter to ride. A reader must not read it as a drifting arm."""
+        run = _run(providers={"gemini": ["cached", "stateless"]}, prefix_drift=True)
+        stuck = [w for w in run["params"]["warnings"] if "cannot apply" in w]
+        assert stuck and "gemini:cached" in stuck[0]
+        assert "gemini:stateless" not in stuck[0]
 
 
 class TestIsolation:

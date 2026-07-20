@@ -55,11 +55,17 @@ _TAG_LEN = 16                       # 64 bits of digest; collisions are not a co
 
 _FALSE = {"0", "false", "no", "off"}
 
+# The drifting marker: the same idea as the run marker, moved one level down so that it
+# changes every *turn* instead of every run. Fixed width (a zero-padded counter), so the
+# system prompt is the same number of tokens on every turn and the only thing that moves
+# is which tokens they are.
+_TURN_MARKER = "[turn {turn:03d}]\n\n"
+
 # Set once per run by core.runner, read by whoever needs the tag -- the runner to build
 # the system prompt, the openai adapter to build its prompt_cache_key. Run-level, never
 # per-arm: there is no "current arm" hiding here, so an arm's tag is the same value
 # whoever asks for it and whenever.
-_RUN = {"timestamp": "", "enabled": False}
+_RUN = {"timestamp": "", "enabled": False, "drift": False}
 
 
 def env_default() -> bool:
@@ -68,14 +74,47 @@ def env_default() -> bool:
     return (os.environ.get("TRAFFIC_CACHE_BUST") or "").strip().lower() not in _FALSE
 
 
-def begin(timestamp: str, enabled: bool | None = None) -> None:
-    """Open a run. `enabled=None` defers to TRAFFIC_CACHE_BUST."""
+def begin(timestamp: str, enabled: bool | None = None,
+          drift: bool = False) -> None:
+    """Open a run. `enabled=None` defers to TRAFFIC_CACHE_BUST.
+
+    `drift` turns on the per-turn marker -- the failure this module's whole design exists
+    to avoid, run deliberately as its own measurement. See `per_turn`.
+    """
     _RUN["timestamp"] = timestamp or ""
     _RUN["enabled"] = env_default() if enabled is None else bool(enabled)
+    _RUN["drift"] = bool(drift)
 
 
 def enabled() -> bool:
     return bool(_RUN["enabled"])
+
+
+def drift_enabled() -> bool:
+    return bool(_RUN["drift"])
+
+
+def per_turn(system: str, turn: int) -> str:
+    """The system prompt for turn `turn`, with a counter in front when drift is on.
+
+    This is the negative control, and it is the one thing the rest of this module is built
+    to prevent. A prefix cache matches from the first token, so a marker that moves every
+    turn misses on every turn: the server cannot reuse the KV it computed for turn k-1 and
+    re-prefills the entire prompt -- and, on the arms that keep a history, the entire
+    conversation behind it -- from scratch. Expect `cached_tokens` to collapse to ~0 and
+    TTFT to rise with the length of the prompt rather than sit flat.
+
+    That is the argument this makes runnable: a system prompt must be byte-identical for
+    the whole of a multi-turn or agentic task. Anything genuinely per-turn -- a timestamp,
+    a turn counter, a request id -- belongs *after* the stable prefix, never in front of
+    it. Turn it on to measure what putting it in front costs.
+
+    A fixed-width counter, so the prompt is the same token count on every turn: the
+    difference between a drift run and a still one is then the cache, not the payload.
+    """
+    if not _RUN["drift"] or not system:
+        return system
+    return _TURN_MARKER.format(turn=turn) + system
 
 
 def tag(provider: str, arm: str) -> str:

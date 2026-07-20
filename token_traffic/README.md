@@ -110,6 +110,19 @@ Three measurement choices that are not incidental:
   the arm's name, so no arm's `input_tokens` carries the length of its own label. Every
   tag is recorded in `params.cache_bust`. Turn it off with `--no-cache-bust` /
   `TRAFFIC_CACHE_BUST=0` when the warm case is what you want to measure.
+- **A drifting prefix, on request** (`--prefix-drift`, or the *drift prefix per turn*
+  checkbox). The negative control: a `[turn 001]` counter goes in **front** of the system
+  prompt on every turn, so the prefix moves every turn, the KV cache misses every turn,
+  and the server re-prefills the whole prompt — plus the history behind it — from scratch.
+  `cached_tokens` collapses to ~0 and TTFT grows with the prompt instead of sitting flat.
+  That is the argument made runnable: **a system prompt must be byte-identical for the
+  whole of a multi-turn or agentic task**, and anything genuinely per-turn (a timestamp, a
+  turn counter, a request id) belongs *after* the stable prefix, never in front of it. The
+  counter is fixed-width so the prompt is the same token count every turn — the difference
+  against a still-prefix run is the cache, not the payload. Off by default, and a run that
+  used it says so in `params.warnings`, because every number it produces is meant to be
+  worse. Arms that send the prompt once (`cached`, `interaction_inline`,
+  `responses_inline`) have no per-turn send for it to ride and are named in the warning.
 - The system prompt is byte-identical on every turn **of an arm**. OpenAI's prompt cache
   matches on an exact prefix, so a timestamp that moved *between turns* would miss the
   cache every turn and turn `cached_tokens` into noise. `prompt_cache_key` is pinned per

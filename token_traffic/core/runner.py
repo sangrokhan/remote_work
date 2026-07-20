@@ -95,7 +95,7 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
         measure: str = "bytes", models: dict | None = None,
         want_capture: bool = False, pause_seconds: float = 0,
         timestamp: str = "", cache_bust: bool | None = None,
-        on_progress=None) -> dict:
+        prefix_drift: bool = False, on_progress=None) -> dict:
     """Replay `steps` across every (provider, arm) pair and return the run document.
 
     Returns {params, records, pcaps, wall_ms}. Records carry provider and arm, so one
@@ -115,7 +115,25 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
     # Before the first arm: every tag a prompt or a cache key will carry is derived from
     # this timestamp, and the openai adapter reads its own tag out of here rather than
     # being handed one, so the run has to be open before any arm runs.
-    cachebust.begin(timestamp, cache_bust)
+    cachebust.begin(timestamp, cache_bust, drift=prefix_drift)
+    if prefix_drift:
+        # The negative control, and it has to announce itself: every number it produces is
+        # meant to be worse, and a reader who did not know the knob was on would file the
+        # collapse in cached_tokens as a cache outage rather than as the result.
+        warnings.append(
+            "prefix drift ON: a turn counter rides in front of the system prompt, so the "
+            "prefix moves every turn and the KV cache misses every turn. Expect "
+            "cached_tokens near zero and TTFT to grow with the prompt. This is the "
+            "control for 'the system prompt must not change mid-task', not a run to "
+            "compare against a still-prefix run's cost.")
+        stuck = [f"{p}:{a}" for p, a in pairs
+                 if a in getattr(base.get(p), "PROMPT_SENT_ONCE_ARMS", ())]
+        if stuck:
+            warnings.append(
+                "prefix drift cannot apply to " + ", ".join(stuck) + ": these send the "
+                "system prompt once and let the server (or an explicit cache) keep it, so "
+                "there is no per-turn send for the counter to ride. Their marker sits on "
+                "turn 1 and never moves -- read them as still-prefix arms.")
     if not cachebust.enabled():
         warnings.append(
             "cache-bust off: every arm sends the same system prompt, so an arm can be "
@@ -216,7 +234,8 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
             # The tags, not just the flag: a run whose arms came back suspiciously warm
             # can only be explained if the prefixes it actually sent are recoverable.
             "cache_bust": {"enabled": cachebust.enabled(),
-                           "tags": cachebust.tags(pairs)},
+                           "tags": cachebust.tags(pairs),
+                           "prefix_drift": cachebust.drift_enabled()},
             "warnings": warnings,
         },
         "records": records,
