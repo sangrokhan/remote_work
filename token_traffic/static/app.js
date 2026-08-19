@@ -119,6 +119,21 @@ function renderConfig(cfg) {
   crow.appendChild(el('span', 'why', cfg.capture.reason || ''));
   crow.appendChild(el('span', 'why', 'dir: ' + cfg.capture.dir));
   c.appendChild(crow);
+  // Second line, because it is a caveat about what the pcap means rather than whether
+  // there will be one. A reader who does not know offload is on will read a 64KB
+  // kernel super-packet as a frame that crossed the wire.
+  if (cfg.capture.offload) {
+    const orow = el('div', 'row');
+    const off = /offload off/.test(cfg.capture.offload);
+    orow.appendChild(el('span', 'badge ' + (off ? 'ok' : 'warn'),
+                        off ? 'WIRE FRAMES' : 'SUPER-PACKETS'));
+    orow.appendChild(el('span', 'why', cfg.capture.offload));
+    if (cfg.capture.no_offload && !cfg.capture.ethtool) {
+      orow.appendChild(el('span', 'why',
+        'TRAFFIC_PCAP_NO_OFFLOAD is set but ethtool is missing'));
+    }
+    c.appendChild(orow);
+  }
   if (!cfg.capture.available) $('capture').disabled = true;
 
   // Same shape as capture, and for the same reason: an operator about to spend money

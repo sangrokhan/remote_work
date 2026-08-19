@@ -181,6 +181,22 @@ One per (provider, arm, **kind**), written to `TRAFFIC_PCAP_DIR`, downloadable a
 capture_gemini_interaction_inline_bytes_2026-07-14T10-15-30-837905-00-00_9f8e7d6c5b4a3f21.pcap
 ```
 
+Every pcap's entry carries an `offload` block, and it is not decoration: without it a
+reader cannot tell a 64 KB kernel super-packet from a jumbo frame, or a slow-start burst
+that is missing from one that never happened.
+
+| field | what it is |
+|---|---|
+| `iface` | the device the capture's traffic actually leaves by, resolved from the routing table (`TRAFFIC_PCAP_IFACE` defaults to `any`, which is not a device) |
+| `during_capture` | `{tso, gso, gro}` as they were while packets were being recorded. Any `true` here means the packet sizes in the file are not wire frames |
+| `before` | what they were before the capture, and what they were restored to |
+| `disabled` | which ones this capture turned off. Empty unless `TRAFFIC_PCAP_NO_OFFLOAD` is set |
+| `fixed` | features the driver will not let anyone change |
+| `error` | why the state is unknown or could not be changed. A `RESTORE FAILED` here means the machine was left altered and needs attention |
+
+The `log` lines lead with the same thing in a sentence, before the packet counts,
+because "3412 captured" means nothing until you know whether those were packets.
+
 The label is `provider_arm_kind`, where `kind` is the measure the pcap holds — `bytes` or
 `latency`. The timestamp is the run's, with every non-alphanumeric character squeezed to a
 dash — the run stamps itself with `datetime.isoformat()`, which carries a `.` and a `+`,

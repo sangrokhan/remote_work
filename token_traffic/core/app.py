@@ -32,6 +32,7 @@ from flask import Flask, Response, jsonify, render_template, request, send_file
 
 from core import capture as pcap
 from core import cwnd as cwndmon
+from core import offload
 from core import config, export, metrics, runner, scenario, store
 from providers import base
 
@@ -87,7 +88,12 @@ def api_config():
         "providers": _providers_view(),
         "measures": list(runner.MEASURES),
         "capture": {"available": cap_ok, "reason": cap_reason,
-                    "dir": str(pcap.pcap_dir())},
+                    "dir": str(pcap.pcap_dir()),
+                    # What a pcap from this box will actually contain. An operator who
+                    # does not know offload is on will read super-packets as frames.
+                    "offload": offload.describe(offload.current()),
+                    "no_offload": offload.enabled(),
+                    "ethtool": bool(offload.ethtool_path())},
         "cwnd": {"available": cwnd_ok, "reason": cwnd_reason,
                  "interval_ms": cwndmon.interval_ms()},
         "fixtures": scenario.names(),

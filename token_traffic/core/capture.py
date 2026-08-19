@@ -30,6 +30,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from core import offload
+
 
 def apparmor_blocks(path: str) -> bool:
     """Whether Ubuntu's tcpdump AppArmor profile forbids writing here.
@@ -278,6 +280,10 @@ class Capture:
         self.ips: list[str] = []
         self.snaplen = PCAP_SNAPLEN
         self.proc: subprocess.Popen | None = None
+        # Exists from construction, so restore() and result() never have to check for
+        # None -- including on the rejected-label path, which returns before __enter__
+        # does anything.
+        self.offload = offload.Window("", iface="")
         self.error = ""
         self.stats: dict = {}
         # Refuse a label we cannot spell in a filename rather than substituting one
@@ -306,6 +312,11 @@ class Capture:
             self.error = f"pcap_open_failed: {exc}"
             return self
         self.ips = _resolve_ips(self.host)
+        # Before tcpdump, not after. A capture that started under offload and then had
+        # it turned off mid-window would hold two kinds of packet in one file with
+        # nothing in the file to say where the boundary is.
+        self.offload = offload.Window(self.ips[0] if self.ips else self.host)
+        self.offload.__enter__()
         cmd = [
             tcpdump_path(), "-i", self.interface, "-w", str(self.path),
             "-s", str(self.snaplen), "-U", "-n", *_keep_uid(),
@@ -317,16 +328,19 @@ class Capture:
             )
         except Exception as exc:
             self.error = f"start_failed: {exc}"
+            self.offload.restore()
             return self
         time.sleep(0.4)  # let tcpdump initialize before any traffic flows
         if self.proc.poll() is not None:
             err = (self.proc.stderr.read() or b"").decode(errors="replace").strip()
             self.error = f"tcpdump_exited: {err[:200]}"
             self.proc = None
+            self.offload.restore()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self.proc is None:
+            self.offload.restore()
             return
         try:
             self.proc.send_signal(signal.SIGINT)  # clean flush of the buffer
@@ -340,12 +354,16 @@ class Capture:
             pass
         finally:
             self.proc = None
+            # After tcpdump has stopped, so the last packet in the file was still taken
+            # under the settings this capture's result reports.
+            self.offload.restore()
 
     def result(self) -> dict:
         """What the capture actually got, for the run document and the UI."""
         if self.error:
             return {"ok": False, "provider": self.provider, "arm": self.arm,
-                    "kind": self.kind, "error": self.error, "host": self.host}
+                    "kind": self.kind, "error": self.error, "host": self.host,
+                    "offload": self.offload.result()}
         size = self.path.stat().st_size if self.path.exists() else 0
         dropped = (self.stats.get("dropped_by_kernel", 0)
                    + self.stats.get("dropped_by_interface", 0))
@@ -360,6 +378,9 @@ class Capture:
             "ips": self.ips,
             "filter": _filter_expr(self.ips),
             "snaplen": self.snaplen,
+            # Without this a reader cannot tell a 64 KB kernel super-packet from a
+            # jumbo frame, or a missing slow-start burst from one that never happened.
+            "offload": self.offload.result(),
             "stats": self.stats,
             "dropped": dropped,
             "log": self._log_lines(dropped),
@@ -368,10 +389,17 @@ class Capture:
         }
 
     def _log_lines(self, dropped: int) -> list[str]:
+        state = self.offload.result()
+        # First line, before the counts. Somebody reading "3412 captured" needs to know
+        # whether those were packets or kernel super-packets before the number means
+        # anything.
+        lines = [f"offload[{self.label}]: {offload.describe(state)}"]
+        if state.get("error"):
+            lines.append(f"⚠ offload: {state['error']}")
         if not self.stats:
-            return []
+            return lines
         s = self.stats
-        lines = [
+        lines += [
             f"tcpdump[{self.label}]: {s.get('captured', '?')} captured, "
             f"{s.get('received_by_filter', '?')} received by filter, "
             f"{dropped} dropped (snaplen={self.snaplen})"

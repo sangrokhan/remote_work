@@ -32,7 +32,10 @@ For every (provider, arm, turn):
   number cannot tell a history still going up the wire apart from a model thinking
   apart from a server persisting the turn.
 - **Optionally, the packets** — one pcap per (arm, kind), via tcpdump, so the in-process
-  byte count can be checked by somebody who does not trust this code. A `measure=both` run
+  byte count can be checked by somebody who does not trust this code. Every pcap records
+  the interface's segmentation-offload state, because with TSO/GSO on the tap sits
+  *before* the NIC segments anything and the file holds 64 KB kernel super-packets
+  rather than the ~1448-byte frames that crossed the wire. A `measure=both` run
   captures its blocking and streamed passes into separate `bytes` and `latency` pcaps,
   because the two interleave on one socket and a shared capture would verify neither.
 - **Optionally, the congestion window** — `snd_cwnd`, `snd_ssthresh` and `rtt` sampled
@@ -257,6 +260,33 @@ window is back where it started inside a single 10 ms sample. That limit is stat
 `native/cwnd_monitor.c` and is why `tests/test_cwnd_live.py` checks the monitor against
 `ss` rather than asserting the reset it cannot reliably resolve there.
 
+### Offload, and why a pcap can lie about packet sizes
+
+tcpdump taps AF_PACKET. On egress that tap sits before segmentation, so with TSO or GSO
+enabled the pcap records the super-packet the kernel handed the NIC — up to 64 KB — not
+the frames that went out. GRO does the mirror image on receive. Byte totals survive
+this (offload splits a payload, it does not change it); two things do not:
+
+- **Header overhead is undercounted.** One super-packet records one 40-byte header; the
+  ~45 real frames it becomes each pay their own.
+- **Segment counts become meaningless**, and segment counts are how congestion control
+  is read. Slow start's signature — bursts of 10, then 20, then 40 — is invisible when
+  40 frames arrive as one record.
+
+The congestion monitor is unaffected: `snd_cwnd` and `segs_out` come from the kernel's
+TCP stack, which counts real segments regardless of what the NIC does later. So the
+default is to leave offload alone and record its state, and `cwnd.csv` is where segment
+counts come from. `TRAFFIC_PCAP_NO_OFFLOAD=1` buys true wire frames at the cost of
+perturbing the timings.
+
+Under Docker the capture runs in the container's network namespace, so the interface
+that matters is the container's `eth0` — changing the host NIC would not affect anything
+a containerized tcpdump can see, and no host-wide change (or root) is needed:
+
+```sh
+TRAFFIC_PCAP_NO_OFFLOAD=1 TRAFFIC_HOST_PORT=10000 docker compose up -d
+```
+
 Packet capture needs the `tcpdump` binary and `NET_RAW`. Locally:
 `sudo setcap cap_net_raw,cap_net_admin+eip $(which tcpdump)`. In Docker:
 `--cap-add=NET_RAW`. Where it is unavailable, `core.capture.available()` says why and the
@@ -288,6 +318,7 @@ here does not exist.
 | `TRAFFIC_RETENTION_KEEP` | `20` | how many runs to keep **per bucket**. `save_run` prunes on every write. Mock runs cannot evict live ones |
 | `TRAFFIC_PCAP_DIR` | `data/pcaps`, or a temp dir | where pcaps are written, re-read on every capture |
 | `TRAFFIC_PCAP_DISABLE` | unset | `1` reports capture unavailable without probing for it |
+| `TRAFFIC_PCAP_NO_OFFLOAD` | unset | `1` turns TSO/GSO/GRO off on the capture interface for the duration of each capture and restores them exactly afterwards, so the pcap holds real wire frames. Off by default because segmenting in software costs CPU per packet and shifts pacing — a latency arm captured this way is not the same experiment. Needs `ethtool` and `CAP_NET_ADMIN` (the compose file already grants it); where it cannot be done, the run says so and proceeds |
 | `TRAFFIC_PCAP_IFACE` | `any` | the interface tcpdump listens on |
 | `TRAFFIC_CWND_BIN` | `native/cwnd_monitor` | the compiled congestion-window helper. `make cwnd` builds it; `core.cwnd` builds it on demand if it is missing and a compiler is present |
 | `TRAFFIC_CWND_INTERVAL_MS` | `10` | sampling period. The helper does a full netlink dump per tick, so on a busy box the practical floor is a few milliseconds — asking for 1 ms gets roughly 4 ms and says so in the sample timestamps |
@@ -387,6 +418,7 @@ token_traffic/
     metrics.py       per-(provider, arm) series and totals; prep never folded in
     store.py         one run, one JSON file; retention; a wall between live and mock
     capture.py       tcpdump around one arm's steady stage
+    offload.py       TSO/GSO/GRO: read it, optionally suspend it, always record it
     cwnd.py          the congestion monitor's lifecycle, and the reset count
     runner.py        the plan, the fresh connection, the measurement window
     scenario.py      the fixture every arm replays

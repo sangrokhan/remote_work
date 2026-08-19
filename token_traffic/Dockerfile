@@ -38,6 +38,16 @@ ARG APT_MIRROR=
 # see docker-compose.yml. Where raw sockets are unavailable, core.capture
 # reports it and the run proceeds without a pcap).
 #
+# ethtool and iproute2, so a capture can turn segmentation offload off for its own
+# window. iproute2 is not optional here: TRAFFIC_PCAP_IFACE defaults to tcpdump's
+# `any`, which ethtool cannot address, so the real device has to come from
+# `ip route get` before anything can be configured on it. Under
+# Docker the capture runs in the container's network namespace, so the interface that
+# matters is the container's eth0 -- changing the host NIC would not affect anything a
+# containerized tcpdump can see. It needs NET_ADMIN, which docker-compose.yml already
+# grants. Off unless TRAFFIC_PCAP_NO_OFFLOAD says otherwise, because segmenting in
+# software changes the timings this package measures.
+#
 # The congestion monitor needs no package and no capability at run time: sock_diag
 # reports the container's own sockets to its own uid. A sandbox that blocks
 # AF_NETLINK (gVisor, a restrictive seccomp profile) makes core.cwnd report itself
@@ -46,7 +56,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
       sed -i "s|https\?://deb.debian.org|$APT_MIRROR|g" \
         /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
     fi && \
-    apt-get update && apt-get install -y --no-install-recommends tcpdump \
+    apt-get update && apt-get install -y --no-install-recommends tcpdump ethtool iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

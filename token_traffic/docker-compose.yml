@@ -25,6 +25,10 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       # Set to 1 to run with no keys at all (synthetic data, no quota). The
       # per-provider switches mock one vendor and leave the other live.
+      # Turn segmentation offload off on the container's eth0 for the duration of
+      # each capture, so the pcap holds real wire frames instead of the kernel's
+      # super-packets. Costs CPU per packet and perturbs the timings, so it is opt-in.
+      - TRAFFIC_PCAP_NO_OFFLOAD=${TRAFFIC_PCAP_NO_OFFLOAD:-0}
       - TRAFFIC_MOCK=${TRAFFIC_MOCK:-0}
       - GEMINI_MOCK=${GEMINI_MOCK:-0}
       - OPENAI_MOCK=${OPENAI_MOCK:-0}
