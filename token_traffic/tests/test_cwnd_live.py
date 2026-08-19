@@ -186,15 +186,45 @@ def test_the_numbers_agree_with_ss(sink):
 
 
 def test_the_sample_rate_is_the_one_that_was_asked_for(sink):
-    """10 ms, near enough. A monitor that quietly sampled at 100 ms would still find a
-    multi-second idle reset and would still be wrong about when it happened."""
+    """2 ms, and actually delivered.
+
+    This is the assertion that would have caught the old behaviour. Dumping the whole
+    socket table every tick cost about 5 ms, so asking for 2 ms silently produced 5 --
+    the sampler reported the period it wanted in its metadata while running at half
+    the rate, and events landed at the wrong times with nothing to say so.
+    """
     result = _monitored(sink, lambda c: (c.sendall(b"ping"), time.sleep(0.5)))
 
-    assert result["interval_ms"] == 10
-    # Ticks, not samples: samples are per (tick, socket). Slack is generous because a
-    # loaded box is allowed to miss ticks -- the claim is "about a hundred a second",
-    # not a real-time guarantee this program does not make.
-    assert result["ticks"] >= 30, f"only {result['ticks']} ticks in ~0.7s"
+    assert result["interval_ms"] == 2
+    # Ticks, not samples: samples are per (tick, socket). The window is ~0.7s, so 2 ms
+    # should give ~350. Demand at least half of that: a loaded box may miss ticks, but
+    # falling to a 5 ms period -- which is what a table walk per tick produced -- would
+    # leave under 150 and fail here.
+    assert result["ticks"] >= 175, (
+        f"asked for 2ms and got {result['ticks']} ticks in ~0.7s "
+        f"(~{700 / max(result['ticks'], 1):.1f}ms per tick)")
+
+
+def test_it_stops_dumping_once_it_knows_which_socket_to_watch(sink):
+    """The change that made 2 ms affordable, asserted on the numbers the helper reports.
+
+    A dump makes the kernel walk the entire established hash table -- measured at
+    2410us, and the same whether it returns eleven sockets or none, because the walk is
+    the cost. An exact query is a hash lookup at 3us. If this ever regresses to dumping
+    per tick, the period silently stretches and the reset lands at the wrong time, so
+    the ratio is worth pinning rather than trusting.
+    """
+    result = _monitored(sink, lambda c: (c.sendall(b"ping"), time.sleep(0.5)))
+    dumps, exacts = result["dumps"], result["exact_queries"]
+
+    assert result["ticks"] > 0
+    assert exacts > 0, "never switched to exact queries; every tick was a full dump"
+    # Rediscovery runs on a 100ms timer, so ~0.7s of monitoring allows a handful of
+    # dumps. Anything approaching one per tick means the fast path is not being taken.
+    assert dumps <= result["ticks"] // 10, (
+        f"{dumps} dumps in {result['ticks']} ticks -- expected a dump only every "
+        f"100ms, not per tick")
+    assert result["tracked"] >= 1
 
 
 def test_the_helper_emits_every_field_the_csv_promises(sink):

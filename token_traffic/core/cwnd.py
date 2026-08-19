@@ -24,6 +24,12 @@ Absence is not failure. Monitoring is best-effort in exactly the way capture is:
 without the compiled binary, or a container without netlink, runs the experiment
 anyway and says why the column is empty.
 
+Cost. The helper does not dump the kernel's socket table every tick -- it dumps once
+to find the sockets talking to the API host, then asks for those by 4-tuple, which is a
+hash lookup rather than a walk of every bucket. Measured on this package's bench, one
+tracked socket: a 2 ms period costs 7% of a core, where dumping every tick could not
+hold 2 ms at all and burned 100%.
+
 Knobs: TRAFFIC_CWND_BIN, TRAFFIC_CWND_INTERVAL_MS, TRAFFIC_CWND_MAX_SAMPLES,
 TRAFFIC_CWND_DISABLE.
 """
@@ -42,14 +48,21 @@ from pathlib import Path
 
 from core import config
 
-# 10 ms. Fast enough that an idle gap of one RTO (200 ms and up) is resolved into
-# dozens of samples, slow enough that the helper costs a fraction of a core.
-DEFAULT_INTERVAL_MS = 10
+# 2 ms. Not chosen against the idle gap -- that is seconds long and a slow sampler
+# would find it -- but against the path's RTT, because the reset is only visible until
+# slow start doubles the window back. api.openai.com terminates at a CDN edge measured
+# at 3.3 ms away, where the climb from 10 segments to 65 takes about 10 ms: a 10 ms
+# sampler steps over the event entirely, which is exactly what a run against it showed.
+#
+# 2 ms used to be unaffordable and silently became 5 ms under load, because every tick
+# dumped the whole TCP hash table. Now that a tick is hash lookups, 2 ms costs 7% of a
+# core against 100% before -- measured, one tracked socket, in this package's bench.
+DEFAULT_INTERVAL_MS = 2
 
 # A ceiling on what one arm may keep, because the samples ride in the run document and
-# a run document is written to disk and served over HTTP. At 10 ms with a couple of
-# sockets in flight, this is roughly half an hour of monitoring -- far past any run --
-# and an arm that hits it says so in its result rather than quietly dropping the tail.
+# a run document is written to disk and served over HTTP. At 2 ms with a couple of
+# sockets in flight this is roughly six minutes of monitoring, and an arm that hits it
+# says so in its result rather than quietly dropping the tail.
 DEFAULT_MAX_SAMPLES = 400_000
 
 # The helper is killed when the arm ends. This is the backstop for the case where it
@@ -349,6 +362,14 @@ class Monitor:
             "sample_count": len(self.samples),
             "ticks": self.end.get("ticks", 0),
             "seconds": self.end.get("seconds", 0),
+            # How the ticks were paid for. A dump walks the kernel's whole socket
+            # table (~2.4ms); an exact query is a hash lookup (~3us). If `dumps`
+            # approaches `ticks`, the helper lost track of its socket and is paying
+            # the walk every time -- which stretches the period and misplaces every
+            # event, silently, unless the number is on the record.
+            "dumps": self.end.get("dumps", 0),
+            "exact_queries": self.end.get("exact_queries", 0),
+            "tracked": self.end.get("tracked", 0),
             "sockets": sockets,
             "truncated": self.truncated,
             "error": err,

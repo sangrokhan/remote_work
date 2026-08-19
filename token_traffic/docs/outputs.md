@@ -151,6 +151,7 @@ shrank because of loss, which is a different finding with a different fix.
 | column | what it is |
 |---|---|
 | `interval_ms` | the sampling period actually requested |
+| `dumps`, `exact_queries` | how the ticks were paid for. A dump walks the kernel's whole socket table (~2.4 ms); an exact query is a hash lookup (~3 us). `dumps` approaching `ticks` means the helper kept losing its socket and paid the walk every time, which stretches the period and misplaces every event — so it is on the record rather than left as unexplained CPU |
 | `samples`, `ticks`, `seconds` | how much was collected, over how long. `ticks` well below `seconds × 1000 / interval_ms` means the box could not keep up |
 | `sockets` | every local `ip:port` that matched the API host. More than one is normal: a pooled client may open several |
 | `peak_cwnd`, `final_cwnd` | the widest window the arm earned, and where it ended |
@@ -163,10 +164,13 @@ the idle gaps cost nothing.
 
 Samples come from `native/cwnd_monitor`, a C helper reading netlink `sock_diag` —
 unprivileged, the same interface `ss -ti` uses, and it never touches the client's
-sockets. Sampling at 10 ms resolves an idle gap of one RTO (200 ms and up) into dozens
-of points; it cannot resolve an event shorter than a tick, which is why the loopback
-tests check the monitor against `ss` instead of asserting a reset that completes in
-microseconds there.
+sockets. The period is chosen against the path's RTT rather than the idle gap. The gap is
+seconds long and a slow sampler would find it; the reset is visible only until slow
+start doubles the window back, which takes a few RTTs. Against a CDN edge 3 ms away
+that is about 10 ms, so a 10 ms sampler steps over the event entirely — measured, and
+the reason the default is 2 ms. What sampling still cannot do is resolve anything
+shorter than one tick, which is why the loopback tests check the monitor against `ss`
+rather than asserting a reset that completes in microseconds there.
 
 A mock run produces no traffic to the API host, so its monitor comes back with zero
 samples and no error — the same shape as a live arm whose connection went somewhere

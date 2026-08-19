@@ -91,7 +91,7 @@ CWND_COLUMNS = list(dict.fromkeys(
 
 CWND_SUMMARY_COLUMNS = [
     "provider", "arm", "kind", "host", "ips", "interval_ms",
-    "samples", "ticks", "seconds", "sockets",
+    "samples", "ticks", "seconds", "sockets", "dumps", "exact_queries",
     "peak_cwnd", "final_cwnd", "idle_resets",
     "truncated", "error",
 ]
@@ -153,6 +153,8 @@ def cwnd_summary_csv(run: dict) -> str:
             "ticks": mon.get("ticks", 0),
             "seconds": mon.get("seconds", 0),
             "sockets": " ".join(mon.get("sockets") or []),
+            "dumps": mon.get("dumps", 0),
+            "exact_queries": mon.get("exact_queries", 0),
             "peak_cwnd": mon.get("peak_cwnd", 0),
             "final_cwnd": mon.get("final_cwnd", 0),
             "idle_resets": mon.get("idle_resets", 0),

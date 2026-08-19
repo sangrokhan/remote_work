@@ -16,11 +16,17 @@
  * the kernel asks. So the client stays in Python, unmodified, and this watches from
  * outside; nothing about the traffic being measured is perturbed by measuring it.
  *
- * Sampling, not tracing. At a 10 ms period a window that opens and collapses inside one
- * period is missed. That is the accepted trade: the phenomenon here plays out over
- * seconds of idle, so 10 ms resolves it with room to spare, and the alternative
- * (a tcp_probe eBPF program) needs root and a BTF toolchain to see events this code
- * does not need to see.
+ * Sampling, not tracing -- and the period has to be chosen against the path's RTT, not
+ * against the idle gap. The gap is seconds long and easy to catch. The *reset* is
+ * visible only until slow start doubles the window back, which takes a few RTTs. On a
+ * 3 ms path -- api.openai.com terminates at a CDN edge one hop away, measured at
+ * 3.3 ms -- the climb from 10 segments back to 65 fits inside 10 ms, so a 10 ms
+ * sampler steps over the very event it exists to record. Hence 2 ms by default, which
+ * only became affordable once a tick stopped being a full table walk: see `struct
+ * tracked` below.
+ *
+ * What sampling still cannot do is catch anything shorter than one period. A tcp_probe
+ * eBPF program could, and needs root and a BTF toolchain; this does not.
  *
  * Build:  cc -O2 -Wall -o cwnd_monitor cwnd_monitor.c
  * Usage:  cwnd_monitor --dst 1.2.3.4,5.6.7.8 --port 443 --interval-ms 10 \
@@ -213,6 +219,75 @@ static int dst_matches(int family, const unsigned char *addr, unsigned port)
     return 0;
 }
 
+/* --- tracked sockets ------------------------------------------------------ */
+
+/* The sockets we have already found, so later ticks can ask for them by name instead
+ * of asking for everything.
+ *
+ * This is the difference between a tick that costs 2.4 ms and one that costs 3 us.
+ * A dump makes the kernel walk the entire established hash table -- every bucket,
+ * sized from system memory, not from how many sockets are actually open -- and hand
+ * back every TCP socket for us to filter in userspace. Measured on a 16 GB box with
+ * 25 sockets open: 2410 us per dump, and identical whether 11 sockets matched the
+ * filter or none did, because the walk is the cost, not the answer.
+ *
+ * The same request carrying a 4-tuple and *without* NLM_F_DUMP is a hash lookup:
+ * 3.0 us, measured over 2000 queries on the same box. 800x. That is what makes a 2 ms
+ * period affordable, and 2 ms is what it takes to see an idle reset on a path whose
+ * RTT is 3 ms -- there the restarted window doubles back out of sight inside a single
+ * 10 ms sample, so the event is real and the sampler simply steps over it.
+ *
+ * The cookie is kept and sent back with each query. It identifies the socket
+ * *instance*, so when a connection closes and the kernel hands its ephemeral port to
+ * something else, the answer is ENOENT rather than a stranger's congestion window
+ * filed under the old socket's name.
+ */
+#define MAX_TRACKED 64
+
+/* How often to dump anyway, to notice sockets that appeared since the last one. Every
+ * arm opens a fresh connection (the runner drops the pooled one so each arm starts
+ * from a handshake), and a socket nobody is tracking is a socket nobody is measuring.
+ * At 2410 us per dump this costs about 5% of a core -- still fifteen times cheaper
+ * than dumping every tick, and it bounds how long a new connection can go unseen. */
+#define REDISCOVER_SECONDS 0.100
+
+/* How soon a dump may follow the discovery that a followed socket has gone.
+ *
+ * Losing a socket is the one moment worth looking again quickly: the connection that
+ * replaces it opens with a handshake and an initial window, which is the part worth
+ * seeing. But "look again immediately" turns into a loop during teardown -- a closing
+ * socket sits in FIN_WAIT long enough to be re-found by the dump, fails its exact query
+ * on the next tick, forces another dump, and so on. Measured: 117 dumps in 1017 ticks
+ * across three reconnects, against 20 in steady state. A floor of 20 ms bounds that at
+ * one dump per 10 ticks while still picking a new connection up almost at once. */
+#define REDISCOVER_AFTER_LOSS 0.020
+
+struct tracked {
+    int family;
+    struct inet_diag_sockid id;
+};
+
+static struct tracked g_tracked[MAX_TRACKED];
+static int g_ntracked = 0;
+
+static void track_add(int family, const struct inet_diag_sockid *id)
+{
+    for (int i = 0; i < g_ntracked; i++) {
+        if (g_tracked[i].family == family &&
+            g_tracked[i].id.idiag_sport == id->idiag_sport &&
+            g_tracked[i].id.idiag_dport == id->idiag_dport &&
+            memcmp(g_tracked[i].id.idiag_src, id->idiag_src,
+                   sizeof id->idiag_src) == 0 &&
+            memcmp(g_tracked[i].id.idiag_dst, id->idiag_dst,
+                   sizeof id->idiag_dst) == 0)
+            return;
+    }
+    if (g_ntracked >= MAX_TRACKED) return;
+    g_tracked[g_ntracked].family = family;
+    g_tracked[g_ntracked].id = *id;
+    g_ntracked++;
+}
+
 /* --- netlink -------------------------------------------------------------- */
 
 static int diag_open(void)
@@ -233,7 +308,11 @@ static int diag_open(void)
     return fd;
 }
 
-static int diag_request(int fd, int family, uint32_t seq)
+/* One request. With `id`, it asks for that one socket and the kernel does a hash
+ * lookup; without, it is a dump and the kernel walks the table. Same message type
+ * either way -- NLM_F_DUMP and a filled-in sockid are the whole difference. */
+static int diag_request(int fd, int family, uint32_t seq,
+                        const struct inet_diag_sockid *id)
 {
     struct {
         struct nlmsghdr nlh;
@@ -243,13 +322,21 @@ static int diag_request(int fd, int family, uint32_t seq)
 
     msg.nlh.nlmsg_len = sizeof msg;
     msg.nlh.nlmsg_type = SOCK_DIAG_BY_FAMILY;
-    msg.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+    msg.nlh.nlmsg_flags = NLM_F_REQUEST | (id ? 0 : NLM_F_DUMP);
     msg.nlh.nlmsg_seq = seq;
 
     msg.req.sdiag_family = (uint8_t)family;
     msg.req.sdiag_protocol = IPPROTO_TCP;
     msg.req.idiag_ext = (1 << (INET_DIAG_INFO - 1));
-    msg.req.idiag_states = WANTED_STATES;
+    if (id) {
+        msg.req.id = *id;
+        /* Every state, for an exact query: the socket we are following may have moved
+         * to FIN_WAIT or CLOSE_WAIT since we found it, and a state mask that excluded
+         * where it went would read as "gone" and trigger a needless rediscovery. */
+        msg.req.idiag_states = 0xffffffffu;
+    } else {
+        msg.req.idiag_states = WANTED_STATES;
+    }
 
     struct sockaddr_nl nladdr = {.nl_family = AF_NETLINK};
     return sendto(fd, &msg, sizeof msg, 0, (struct sockaddr *)&nladdr, sizeof nladdr)
@@ -317,11 +404,21 @@ static void emit_sample(double t_rel, double wall, int family,
            m->idiag_inode);
 }
 
-/* Drain one dump. Returns the number of matching sockets emitted, or -1 if the dump
- * could not be read at all. `*info_len_out` is set to the tcp_info size the kernel
- * actually returned, for the meta line. */
+/* Read the answer to one request and emit what it holds.
+ *
+ * `is_dump` says which shape to expect. A dump is multipart and ends with NLMSG_DONE,
+ * and every socket in it has to be filtered against the destination. An exact reply is
+ * one message, has no NLMSG_DONE to wait for -- waiting would block for the receive
+ * timeout on every single tick -- and needs no filtering, because the 4-tuple was the
+ * question. On a dump, matching sockets are also remembered, so subsequent ticks can
+ * ask for them directly.
+ *
+ * Returns the number of sockets emitted; 0 when an exact query found nothing (the
+ * socket closed, or its port was recycled and the cookie no longer matches), or -1
+ * when the answer could not be read at all.
+ */
 static int diag_drain(int fd, int family, double t_rel, double wall,
-                      char *buf, size_t buflen, int *info_len_out)
+                      char *buf, size_t buflen, int *info_len_out, int is_dump)
 {
     int emitted = 0;
 
@@ -342,15 +439,22 @@ static int diag_drain(int fd, int family, double t_rel, double wall,
             if (h->nlmsg_type == NLMSG_DONE) return emitted;
             if (h->nlmsg_type == NLMSG_ERROR) {
                 struct nlmsgerr *e = (struct nlmsgerr *)NLMSG_DATA(h);
-                fprintf(stderr, "cwnd_monitor: netlink error %d (family %d)\n",
-                        e->error, family);
-                return -1;
+                /* ENOENT on an exact query is the ordinary way a followed socket ends.
+                 * Reporting it would put one line on stderr per tick per closed
+                 * connection, which is how a diagnostic channel becomes unreadable. */
+                if (!(!is_dump && e->error == -ENOENT))
+                    fprintf(stderr, "cwnd_monitor: netlink error %d (family %d)\n",
+                            e->error, family);
+                return is_dump ? -1 : 0;
             }
 
             struct inet_diag_msg *m = (struct inet_diag_msg *)NLMSG_DATA(h);
-            unsigned dport = ntohs(m->id.idiag_dport);
-            if (!dst_matches(family, (const unsigned char *)m->id.idiag_dst, dport))
-                continue;
+            if (is_dump) {
+                unsigned dport = ntohs(m->id.idiag_dport);
+                if (!dst_matches(family, (const unsigned char *)m->id.idiag_dst, dport))
+                    continue;
+                track_add(family, &m->id);
+            }
 
             /* Zeroed full-size copy: a kernel older than this build's headers returns
              * a shorter tcp_info, and reading past it would be a genuine overread. */
@@ -373,6 +477,10 @@ static int diag_drain(int fd, int family, double t_rel, double wall,
             emit_sample(t_rel, wall, family, m, &ti);
             emitted++;
         }
+        /* A single-part reply is complete when its one message has been read. Looping
+         * for a NLMSG_DONE that is never coming would stall the tick until the receive
+         * timeout, which at a 2 ms period is the whole run. */
+        if (!is_dump) return emitted;
     }
 }
 
@@ -387,7 +495,10 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
-    long interval_ms = 10;
+    /* 2 ms, not 10: on a path whose RTT is 3 ms a restarted window is back where it
+     * started within one 10 ms sample. Affordable only because a tick is now hash
+     * lookups rather than a table walk. */
+    long interval_ms = 2;
     /* 0 = run until signalled. Fractional, so a caller can ask for a 20 ms run purely
      * to find out whether netlink answers at all -- which is how core.cwnd decides
      * whether to offer monitoring, and it cannot spend a second doing it. */
@@ -449,8 +560,9 @@ int main(int argc, char **argv)
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
 
-    unsigned long ticks = 0, samples = 0;
+    unsigned long ticks = 0, samples = 0, dumps = 0, exacts = 0;
     uint32_t seq = 1;
+    double last_dump = -1e9;
 
     while (!g_stop) {
         double t = now_monotonic();
@@ -459,11 +571,57 @@ int main(int argc, char **argv)
 
         double wall = now_realtime();
         int got = 0;
-        for (int fi = 0; fi < 2; fi++) {
-            int family = fi == 0 ? AF_INET : AF_INET6;
-            if (diag_request(fd, family, seq++) < 0) continue;
-            int n = diag_drain(fd, family, t_rel, wall, buf, RECV_BUF, &info_len);
-            if (n > 0) got += n;
+
+        /* Dump only to discover, and never more often than the timer allows -- not
+         * even when nothing is being followed. "Nothing to follow" is a normal state,
+         * not an emergency: it is every gap between arms, the whole of a mock run, and
+         * the moment after a connection closes. Letting an empty table bypass the
+         * timer meant dumping flat out through all of them, which is 2.4ms of kernel
+         * work per 2ms tick -- a monitor that costs the most exactly when it has
+         * nothing to measure. Every other tick is hash lookups. */
+        int need_dump = (t - last_dump >= REDISCOVER_SECONDS);
+
+        if (need_dump) {
+            g_ntracked = 0;
+            for (int fi = 0; fi < 2; fi++) {
+                int family = fi == 0 ? AF_INET : AF_INET6;
+                if (diag_request(fd, family, seq++, NULL) < 0) continue;
+                int n = diag_drain(fd, family, t_rel, wall, buf, RECV_BUF,
+                                   &info_len, 1);
+                if (n > 0) got += n;
+            }
+            last_dump = t;
+            dumps++;
+        } else {
+            /* Copy the table first: a query that comes back empty drops that socket,
+             * and rewriting the array underneath the loop would skip its neighbour. */
+            struct tracked live[MAX_TRACKED];
+            int nlive = 0;
+            for (int i = 0; i < g_ntracked; i++) {
+                if (diag_request(fd, g_tracked[i].family, seq++,
+                                 &g_tracked[i].id) < 0)
+                    continue;
+                int n = diag_drain(fd, g_tracked[i].family, t_rel, wall, buf,
+                                   RECV_BUF, &info_len, 0);
+                exacts++;
+                if (n > 0) {
+                    got += n;
+                    live[nlive++] = g_tracked[i];
+                }
+            }
+            if (nlive != g_ntracked) {
+                /* Something closed. Keep what is left for this tick and rediscover on
+                 * the next one -- a closed connection is often replaced immediately,
+                 * and the replacement's handshake and initial window are the part
+                 * worth seeing. */
+                memcpy(g_tracked, live, (size_t)nlive * sizeof *live);
+                g_ntracked = nlive;
+                /* Look again soon, but not on the very next tick -- see
+                 * REDISCOVER_AFTER_LOSS. Never push the deadline later than it
+                 * already was. */
+                double soon = t + REDISCOVER_AFTER_LOSS - REDISCOVER_SECONDS;
+                if (soon < last_dump) last_dump = soon;
+            }
         }
         samples += (unsigned)got;
         ticks++;
@@ -478,9 +636,14 @@ int main(int argc, char **argv)
             ;
     }
 
+    /* dumps and exact_queries are in the trailer because a run's cost is
+     * dumps*2.4ms + exacts*3us. A monitor that ended up dumping every tick -- because
+     * the socket it followed kept being replaced -- should show up as a number here
+     * rather than as unexplained CPU.  */
     printf("{\"type\":\"end\",\"ticks\":%lu,\"samples\":%lu,\"seconds\":%.3f"
+           ",\"dumps\":%lu,\"exact_queries\":%lu,\"tracked\":%d"
            ",\"tcp_info_len\":%d}\n",
-           ticks, samples, now_monotonic() - t0, info_len);
+           ticks, samples, now_monotonic() - t0, dumps, exacts, g_ntracked, info_len);
     fflush(stdout);
 
     free(buf);

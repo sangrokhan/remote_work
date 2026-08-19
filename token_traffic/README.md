@@ -39,8 +39,10 @@ For every (provider, arm, turn):
   captures its blocking and streamed passes into separate `bytes` and `latency` pcaps,
   because the two interleave on one socket and a shared capture would verify neither.
 - **Optionally, the congestion window** — `snd_cwnd`, `snd_ssthresh` and `rtt` sampled
-  every 10 ms for the sockets talking to the API, by a small C helper reading netlink
-  `sock_diag`. This is the one thing no other column can show. An LLM turn uploads a
+  every 2 ms for the sockets talking to the API, by a small C helper reading netlink
+  `sock_diag`. The period is set by the path's RTT, not by the idle gap: the gap is
+  seconds long and easy to catch, but the reset is only visible until slow start
+  doubles the window back, which on a 3 ms path takes about 10 ms. This is the one thing no other column can show. An LLM turn uploads a
   prompt in milliseconds and then waits seconds for the model to think, and with
   `net.ipv4.tcp_slow_start_after_idle=1` — the Linux default — the kernel throws the
   window away once the idle gap exceeds one RTO. The next turn re-enters slow start and
@@ -321,7 +323,7 @@ here does not exist.
 | `TRAFFIC_PCAP_NO_OFFLOAD` | unset | `1` turns TSO/GSO/GRO off on the capture interface for the duration of each capture and restores them exactly afterwards, so the pcap holds real wire frames. Off by default because segmenting in software costs CPU per packet and shifts pacing — a latency arm captured this way is not the same experiment. Needs `ethtool` and `CAP_NET_ADMIN` (the compose file already grants it); where it cannot be done, the run says so and proceeds |
 | `TRAFFIC_PCAP_IFACE` | `any` | the interface tcpdump listens on |
 | `TRAFFIC_CWND_BIN` | `native/cwnd_monitor` | the compiled congestion-window helper. `make cwnd` builds it; `core.cwnd` builds it on demand if it is missing and a compiler is present |
-| `TRAFFIC_CWND_INTERVAL_MS` | `10` | sampling period. The helper does a full netlink dump per tick, so on a busy box the practical floor is a few milliseconds — asking for 1 ms gets roughly 4 ms and says so in the sample timestamps |
+| `TRAFFIC_CWND_INTERVAL_MS` | `2` | sampling period. The helper dumps the socket table only to discover its sockets, then queries them by 4-tuple — a hash lookup rather than a walk of every bucket — so 2 ms costs about 7% of a core against 100% for the dump-per-tick approach, which could not hold 2 ms at all. 1 ms is affordable too |
 | `TRAFFIC_CWND_MAX_SAMPLES` | `400000` | ceiling per arm, because the samples ride in the run document. An arm that hits it sets `truncated` rather than dropping the tail quietly |
 | `TRAFFIC_CWND_DISABLE` | unset | `1` reports the monitor unavailable without probing for it |
 | `TRAFFIC_PCAP_SNAPLEN` | `100` | bytes kept per packet. The TLS payload is encrypted and useless to store; the L2–L4 and TLS record headers are not. Each frame still records its original on-wire length, so packet sizes stay exact, and truncating slashes the disk I/O that causes kernel drops |

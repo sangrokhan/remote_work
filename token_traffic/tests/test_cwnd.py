@@ -112,14 +112,16 @@ def test_probe_is_cached_until_reset(monkeypatch, tmp_path):
 
 
 def test_interval_default_and_override(monkeypatch):
-    assert cwnd.interval_ms() == 10
+    """2 ms, chosen against the RTT of the paths this measures rather than against the
+    idle gap. A 10 ms default stepped over the reset entirely on a 3 ms path."""
+    assert cwnd.interval_ms() == 2
     monkeypatch.setenv("TRAFFIC_CWND_INTERVAL_MS", "25")
     assert cwnd.interval_ms() == 25
     # Nonsense falls back rather than raising: a bad knob must not kill a run.
     monkeypatch.setenv("TRAFFIC_CWND_INTERVAL_MS", "banana")
-    assert cwnd.interval_ms() == 10
+    assert cwnd.interval_ms() == 2
     monkeypatch.setenv("TRAFFIC_CWND_INTERVAL_MS", "0")
-    assert cwnd.interval_ms() == 10
+    assert cwnd.interval_ms() == 2
 
 
 # --- reset counting -------------------------------------------------------
