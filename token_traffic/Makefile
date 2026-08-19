@@ -1,7 +1,7 @@
 # Packaging and the pre-merge gate for the traffic lab.
 # Nothing in this file may reach a paid API: every target that runs code runs it
 # with TRAFFIC_MOCK=1.
-.PHONY: venv test run docker smoke preflight clean
+.PHONY: venv cwnd test run docker smoke preflight clean
 
 VENV    := .venv
 PY      := $(VENV)/bin/python
@@ -17,6 +17,13 @@ $(VENV)/.stamp: requirements.txt
 	$(PIP) -q install -r requirements.txt pytest
 	touch $@
 
+# The netlink helper that reads congestion state. Built here as well as on demand by
+# core.cwnd, so a checkout can be prepared without starting a run -- and so a compiler
+# error shows up in the build rather than three seconds before an arm.
+cwnd: native/cwnd_monitor
+native/cwnd_monitor: native/cwnd_monitor.c
+	cc -O2 -Wall -o $@ $<
+
 # The suite is offline: no API key, no network, no docker. It runs in mock mode.
 #
 # The collection guard is not paranoia. The previous lab's gate ran
@@ -24,7 +31,7 @@ $(VENV)/.stamp: requirements.txt
 # skipped the ~230 pytest-function tests, reported "1 test OK", and passed --
 # a green gate that tested nothing is worse than no gate. So: count what pytest
 # collects, and refuse to proceed on zero.
-test: venv
+test: venv cwnd
 	@n=$$($(PY) -m pytest tests -q --collect-only 2>/dev/null | grep -c '::' || true); \
 	if [ "$$n" -lt 1 ]; then \
 	  echo "FAIL: pytest collected $$n tests from tests/ -- collection is broken."; \
@@ -50,6 +57,7 @@ preflight:
 	./preflight.sh
 
 clean:
+	rm -f native/cwnd_monitor
 	rm -rf $(VENV) .pytest_cache tests/__pycache__ core/__pycache__ providers/__pycache__
 	-docker rm -f $(CONTAINER) 2>/dev/null
 	-docker rmi $(IMAGE) 2>/dev/null

@@ -35,6 +35,14 @@ For every (provider, arm, turn):
   byte count can be checked by somebody who does not trust this code. A `measure=both` run
   captures its blocking and streamed passes into separate `bytes` and `latency` pcaps,
   because the two interleave on one socket and a shared capture would verify neither.
+- **Optionally, the congestion window** — `snd_cwnd`, `snd_ssthresh` and `rtt` sampled
+  every 10 ms for the sockets talking to the API, by a small C helper reading netlink
+  `sock_diag`. This is the one thing no other column can show. An LLM turn uploads a
+  prompt in milliseconds and then waits seconds for the model to think, and with
+  `net.ipv4.tcp_slow_start_after_idle=1` — the Linux default — the kernel throws the
+  window away once the idle gap exceeds one RTO. The next turn re-enters slow start and
+  spends round trips re-earning a window the connection had already been granted. The
+  bytes are identical either way; what changes is how many of them may be in flight.
 
 The scenario is one fixture (`fixtures/perf.json`): a 20,653-character system prompt
 (persona, tool descriptions, operating policy — over 4k tokens, so both implicit and
@@ -218,15 +226,36 @@ python cli.py --serve
 `cli.py` flags: `--providers`, `--arms` (of a single provider), `--measure`
 (`bytes`|`latency`|`both`), `--fixture`, `--turns` (truncates the thread — it never
 cycles: a repeated question is answered from context and costs nothing like a new one),
-`--capture`, `--pause SEC` (a gap between arms, to stay under a rate limit), `--go`,
-`--serve`. It exits non-zero if any record carried an error.
+`--capture`, `--cwnd` (sample the congestion window at 10 ms), `--pause SEC` (a gap
+between arms, to stay under a rate limit), `--go`, `--serve`. It exits non-zero if any record carried an error.
 
 The web UI is a thin skin over the same runner. `GET /api/config` is the preflight (what
-is ready, what capture would do, the retention limit); `POST /api/preflight` reports what
+is ready, what capture and the congestion monitor would do, the retention limit); `POST /api/preflight` reports what
 a specific selection would cost in calls and warnings before anything goes out;
 `POST /api/run/stream` runs it as server-sent events, because a ten-turn comparison
 across nine arms takes minutes and a UI with no progress is a UI the operator reloads
 mid-run — which abandons the request but not the calls.
+
+Congestion monitoring needs neither root nor a capability — netlink `sock_diag`
+reports a socket's congestion state to any process of the same uid in the same network
+namespace, which is how unprivileged `ss -ti` works. It needs the helper compiled
+(`make cwnd`, or `core.cwnd` builds it on first use), and a sandbox that permits
+`AF_NETLINK`; where it does not, `core.cwnd` reports itself unavailable with the reason
+and the run proceeds without the samples.
+
+To see the reset on its own, without a run:
+
+```sh
+python native/idle_reset_demo.py --host api.openai.com --idle 5
+```
+
+One TLS connection, one unauthenticated request (a 401 back is a fine answer, and is not
+billed), five seconds of silence, the same request again — and the window printed across
+the whole thing. On a path with a real RTT the climb and the reset each span many
+samples. On loopback they do not: the round trip is tens of microseconds, so a restarted
+window is back where it started inside a single 10 ms sample. That limit is stated in
+`native/cwnd_monitor.c` and is why `tests/test_cwnd_live.py` checks the monitor against
+`ss` rather than asserting the reset it cannot reliably resolve there.
 
 Packet capture needs the `tcpdump` binary and `NET_RAW`. Locally:
 `sudo setcap cap_net_raw,cap_net_admin+eip $(which tcpdump)`. In Docker:
@@ -260,6 +289,10 @@ here does not exist.
 | `TRAFFIC_PCAP_DIR` | `data/pcaps`, or a temp dir | where pcaps are written, re-read on every capture |
 | `TRAFFIC_PCAP_DISABLE` | unset | `1` reports capture unavailable without probing for it |
 | `TRAFFIC_PCAP_IFACE` | `any` | the interface tcpdump listens on |
+| `TRAFFIC_CWND_BIN` | `native/cwnd_monitor` | the compiled congestion-window helper. `make cwnd` builds it; `core.cwnd` builds it on demand if it is missing and a compiler is present |
+| `TRAFFIC_CWND_INTERVAL_MS` | `10` | sampling period. The helper does a full netlink dump per tick, so on a busy box the practical floor is a few milliseconds — asking for 1 ms gets roughly 4 ms and says so in the sample timestamps |
+| `TRAFFIC_CWND_MAX_SAMPLES` | `400000` | ceiling per arm, because the samples ride in the run document. An arm that hits it sets `truncated` rather than dropping the tail quietly |
+| `TRAFFIC_CWND_DISABLE` | unset | `1` reports the monitor unavailable without probing for it |
 | `TRAFFIC_PCAP_SNAPLEN` | `100` | bytes kept per packet. The TLS payload is encrypted and useless to store; the L2–L4 and TLS record headers are not. Each frame still records its original on-wire length, so packet sizes stay exact, and truncating slashes the disk I/O that causes kernel drops |
 | `TRAFFIC_HOST` | `127.0.0.1` | `--serve` bind address |
 | `TRAFFIC_PORT` | `8080` | `--serve` port. (The container's gunicorn uses `PORT` instead) |
@@ -283,7 +316,11 @@ parameter must not be sent at all to a non-reasoning model, or the call 400s),
 ## What a run produces
 
 One JSON document per run, `records.csv`, `summary.csv`, and optionally one pcap per
-(arm, kind) — two per arm on a `both` run, `bytes` and `latency`.
+(arm, kind) — two per arm on a `both` run, `bytes` and `latency`. A run with congestion
+monitoring on also produces `cwnd.csv` (the raw series, one row per arm per 10 ms tick
+per socket) and `cwnd_summary.csv` (one row per arm: peak window, final window, and how
+many times a grown window was reset after idle). Every one of them is in the run's
+`bundle.zip`, and the UI links them individually.
 A mock run is stored in its own bucket, listed separately, tagged in its CSV filename,
 and is never charted or averaged with a live one. See `docs/outputs.md`.
 
@@ -350,15 +387,19 @@ token_traffic/
     metrics.py       per-(provider, arm) series and totals; prep never folded in
     store.py         one run, one JSON file; retention; a wall between live and mock
     capture.py       tcpdump around one arm's steady stage
+    cwnd.py          the congestion monitor's lifecycle, and the reset count
     runner.py        the plan, the fresh connection, the measurement window
     scenario.py      the fixture every arm replays
-    export.py        records.csv and summary.csv
+    export.py        records.csv, summary.csv, cwnd.csv, cwnd_summary.csv
     app.py           Flask: preflight, run, history, download
   providers/
     base.py          the Provider protocol; get(name) is the only way to reach one
     gemini.py        stateless, nocontext, cached, interaction, interaction_inline,
                      interaction_stateless
     openai.py        chat_stateless, responses_stateless, responses, responses_inline
+  native/
+    cwnd_monitor.c     netlink sock_diag sampler: cwnd, ssthresh, RTT per socket
+    idle_reset_demo.py one connection, one idle gap, the window before and after
   fixtures/perf.json the shared scenario
   docs/
     core-contracts.md  what every provider may rely on, and must supply

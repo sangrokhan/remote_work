@@ -35,6 +35,10 @@
       <div id="cfgCapture" class="kv">loading…</div>
     </div>
     <div>
+      <h3>Congestion window</h3>
+      <div id="cfgCwnd" class="kv">loading…</div>
+    </div>
+    <div>
       <h3>Scenario</h3>
       <div id="cfgFixture" class="kv">loading…</div>
     </div>
@@ -60,6 +64,7 @@
       <input id="pause" type="number" min="0" step="1" value="0">
     </label>
     <label class="cap"><input id="capture" type="checkbox"> capture pcap</label>
+    <label class="cap" title="Sample the kernel's congestion window, slow-start threshold and RTT every 10ms for the sockets talking to the API, over netlink — the same interface ss -ti uses, so the client is not touched. Shows whether an idle gap waiting for the model resets cwnd back to the initial 10 segments, which makes the next turn re-enter slow start."><input id="cwnd" type="checkbox"> monitor cwnd (10ms)</label>
     <label class="cap" title="Prepend a per-run, per-arm marker to the system prompt so no arm is answered from the prefix cache another arm — or another run — left warm."><input id="cacheBust" type="checkbox" checked> cold prefix per arm</label>
     <label class="cap" title="Negative control: put a turn counter in front of the system prompt so the prefix moves every turn. The KV cache then misses every turn and the server re-prefills the whole prompt and history. Shows what a system prompt that changes mid-task costs."><input id="prefixDrift" type="checkbox"> drift prefix per turn (cache-miss control)</label>
     <span class="spacer"></span>
@@ -112,6 +117,7 @@
   <h3>Downloads</h3>
   <div id="downloads" class="downloads"></div>
   <div id="pcapList" class="pcaps"></div>
+  <div id="cwndList" class="pcaps"></div>
 </section>
 
 <!-- 5. History --------------------------------------------------------------- -->

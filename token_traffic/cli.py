@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import capture as pcap        # noqa: E402
+from core import cwnd as cwndmon        # noqa: E402
 from core import config, metrics, runner, scenario, store  # noqa: E402
 from providers import base              # noqa: E402
 
@@ -87,6 +88,9 @@ def main(argv=None) -> int:
     ap.add_argument("--fixture", default=scenario.DEFAULT, choices=scenario.names())
     ap.add_argument("--turns", type=int, help="truncate the thread")
     ap.add_argument("--capture", action="store_true", help="pcap per arm (needs tcpdump)")
+    ap.add_argument("--cwnd", action="store_true",
+                    help="sample the kernel congestion window, ssthresh and RTT every "
+                         "10ms per arm (netlink; no root needed)")
     ap.add_argument("--prefix-drift", action="store_true",
                     help="put a turn counter in front of the system prompt so the KV "
                          "cache misses every turn (the negative control)")
@@ -131,6 +135,9 @@ def main(argv=None) -> int:
     if args.capture:
         ok, reason = pcap.available()
         print(f"capture: {'ready' if ok else f'unavailable — {reason}'}")
+    if args.cwnd:
+        ok, reason = cwndmon.available()
+        print(f"cwnd monitor: {'ready' if ok else f'unavailable — {reason}'}")
 
     if not args.go:
         print("\nDry run. Nothing was called. Add --go to run it.")
@@ -139,6 +146,7 @@ def main(argv=None) -> int:
     timestamp = datetime.now(timezone.utc).isoformat()
     run = runner.run(providers, system=fixture["system"], steps=fixture["steps"],
                      measure=args.measure, want_capture=args.capture,
+                     want_cwnd=args.cwnd,
                      pause_seconds=args.pause, timestamp=timestamp,
                      cache_bust=args.cache_bust, prefix_drift=args.prefix_drift,
                      on_progress=_progress)

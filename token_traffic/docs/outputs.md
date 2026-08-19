@@ -1,9 +1,13 @@
 # What a run produces
 
-A run leaves behind one JSON document, two CSVs derived from it on demand, and — if
-capture was asked for and was available — one pcap per (arm, kind). Nothing else. There is no
+A run leaves behind one JSON document, CSVs derived from it on demand, and — if capture
+was asked for and was available — one pcap per (arm, kind). Nothing else. There is no
 second datastore: a run is a few hundred kilobytes and this experiment runs on one
 machine.
+
+The CSVs are `records.csv` and `summary.csv` always, plus `cwnd.csv` and
+`cwnd_summary.csv` when congestion monitoring was on. All of them, the run document, and
+every pcap are in `GET /api/runs/<exec_id>/bundle.zip`.
 
 ## The run document
 
@@ -29,6 +33,7 @@ random bytes.
 | `records` | one row per (provider, arm, turn, pass), including prep. See below |
 | `summary` | `core.metrics.summarize()`, computed once, at save time, and stored |
 | `pcaps` | keyed `provider:arm`; what each capture actually got |
+| `cwnd` | keyed `provider:arm`, then kind; the congestion samples and what they add up to. Absent unless monitoring was on |
 | `wall_ms` | keyed `provider:arm`; how long the arm's steady stage took, start to finish — the same window the pcap covers, so the two can be read against each other |
 
 The summary is computed **before** saving rather than per page view, because recomputing
@@ -126,6 +131,46 @@ three `prep_*` columns are for.
 The run's `summary` also carries a `failures` list, naming every record with an error. A
 run with a broken arm still produces plausible numbers, and a number from a failed call is
 shaped exactly like a number from a good one.
+
+## `cwnd.csv` and `cwnd_summary.csv`
+
+`GET /api/runs/<exec_id>/cwnd.csv` and `.../cwnd_summary.csv`, or
+`core.export.cwnd_csv(run)` / `cwnd_summary_csv(run)`. Present only when the run was
+asked to monitor; an unmonitored run returns a header and no rows, which says "monitored
+nothing" rather than "saw nothing".
+
+`cwnd.csv` is the raw series: one row per (arm, tick, socket), a hundred rows a second
+per socket. It is meant to be plotted, not read. `snd_cwnd` against `t_ms` is the
+picture; `snd_ssthresh` says where slow start hands off to congestion avoidance, and
+`rtt_us` says what one re-earned round trip is worth in milliseconds. `ca_state` is the
+column that keeps the reading honest — a window that shrank while it says `recovery`
+shrank because of loss, which is a different finding with a different fix.
+
+`cwnd_summary.csv` is one row per monitored arm:
+
+| column | what it is |
+|---|---|
+| `interval_ms` | the sampling period actually requested |
+| `samples`, `ticks`, `seconds` | how much was collected, over how long. `ticks` well below `seconds × 1000 / interval_ms` means the box could not keep up |
+| `sockets` | every local `ip:port` that matched the API host. More than one is normal: a pooled client may open several |
+| `peak_cwnd`, `final_cwnd` | the widest window the arm earned, and where it ended |
+| `idle_resets` | how many times a window that had grown past 10 segments went back to 10 or below while `ca_state` was `open`. This is the number the monitoring exists to produce |
+| `truncated` | the arm hit `TRAFFIC_CWND_MAX_SAMPLES` and the tail is missing. Reported, never silent |
+| `error` | why the arm has no samples, when it has none |
+
+`peak_cwnd` well above 10 with `idle_resets` at zero is a real result too: on that path,
+the idle gaps cost nothing.
+
+Samples come from `native/cwnd_monitor`, a C helper reading netlink `sock_diag` —
+unprivileged, the same interface `ss -ti` uses, and it never touches the client's
+sockets. Sampling at 10 ms resolves an idle gap of one RTO (200 ms and up) into dozens
+of points; it cannot resolve an event shorter than a tick, which is why the loopback
+tests check the monitor against `ss` instead of asserting a reset that completes in
+microseconds there.
+
+A mock run produces no traffic to the API host, so its monitor comes back with zero
+samples and no error — the same shape as a live arm whose connection went somewhere
+else.
 
 ## The pcaps
 

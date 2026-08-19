@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from flask import Flask, Response, jsonify, render_template, request, send_file
 
 from core import capture as pcap
+from core import cwnd as cwndmon
 from core import config, export, metrics, runner, scenario, store
 from providers import base
 
@@ -79,6 +80,7 @@ def api_config():
     into an AttributeError on a Flask view.
     """
     cap_ok, cap_reason = pcap.available()
+    cwnd_ok, cwnd_reason = cwndmon.available()
     fixture = scenario.load()
     return jsonify({
         "mock": mock_mode(),
@@ -86,6 +88,8 @@ def api_config():
         "measures": list(runner.MEASURES),
         "capture": {"available": cap_ok, "reason": cap_reason,
                     "dir": str(pcap.pcap_dir())},
+        "cwnd": {"available": cwnd_ok, "reason": cwnd_reason,
+                 "interval_ms": cwndmon.interval_ms()},
         "fixtures": scenario.names(),
         "fixture": {"name": fixture["name"], "description": fixture["description"],
                     "turns": len(fixture["steps"])},
@@ -104,6 +108,7 @@ def _selection(payload: dict) -> tuple[dict, dict]:
         "measure": payload.get("measure") or "bytes",
         "models": payload.get("models") or {},
         "want_capture": bool(payload.get("capture")),
+        "want_cwnd": bool(payload.get("cwnd")),
         "pause_seconds": float(payload.get("pause_seconds") or 0),
         "fixture": payload.get("fixture") or scenario.DEFAULT,
         "turns": payload.get("turns"),
@@ -158,6 +163,7 @@ def _execute(providers: dict | None, opts: dict, on_progress=None) -> dict:
         measure=opts["measure"],
         models=opts["models"],
         want_capture=opts["want_capture"],
+        want_cwnd=opts["want_cwnd"],
         pause_seconds=opts["pause_seconds"],
         timestamp=timestamp,
         cache_bust=opts["cache_bust"],
@@ -253,7 +259,12 @@ def _csv(exec_id: str, kind: str):
     doc = store.get_run(exec_id)
     if doc is None:
         return jsonify({"ok": False, "error": "not_found"}), 404
-    body = (export.records_csv if kind == "records" else export.summary_csv)(doc)
+    body = {
+        "records": export.records_csv,
+        "summary": export.summary_csv,
+        "cwnd": export.cwnd_csv,
+        "cwnd_summary": export.cwnd_summary_csv,
+    }[kind](doc)
     # A mock run's CSV says so in its filename. A number lifted out of a spreadsheet
     # has no other way of remembering it was never measured.
     tag = "mock_" if doc.get("mock") else ""
@@ -270,6 +281,18 @@ def records_csv(exec_id: str):
 @app.get("/api/runs/<exec_id>/summary.csv")
 def summary_csv(exec_id: str):
     return _csv(exec_id, "summary")
+
+
+@app.get("/api/runs/<exec_id>/cwnd.csv")
+def cwnd_csv(exec_id: str):
+    """The raw congestion series: one row per (arm, 10 ms tick, socket)."""
+    return _csv(exec_id, "cwnd")
+
+
+@app.get("/api/runs/<exec_id>/cwnd_summary.csv")
+def cwnd_summary_csv(exec_id: str):
+    """One row per monitored arm, including how many times a grown window was reset."""
+    return _csv(exec_id, "cwnd_summary")
 
 
 @app.get("/api/pcaps/<name>")
@@ -309,6 +332,11 @@ def bundle(exec_id: str):
         z.writestr(f"{tag}records_{exec_id}.csv", export.records_csv(doc))
         z.writestr(f"{tag}summary_{exec_id}.csv", export.summary_csv(doc))
         z.writestr(f"{tag}run_{exec_id}.json", json.dumps(doc, indent=2))
+        # Only when something was monitored. An empty cwnd.csv in every bundle would
+        # read as "monitored, saw nothing", which is the opposite of "not monitored".
+        if doc.get("cwnd"):
+            z.writestr(f"{tag}cwnd_{exec_id}.csv", export.cwnd_csv(doc))
+            z.writestr(f"{tag}cwnd_summary_{exec_id}.csv", export.cwnd_summary_csv(doc))
         for name in _pcap_names(doc):
             # safe_pcap_path validates the name and confirms the file is inside the pcap
             # directory: a run document is trusted, but the filename still goes through

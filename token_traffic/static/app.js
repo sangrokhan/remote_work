@@ -121,6 +121,18 @@ function renderConfig(cfg) {
   c.appendChild(crow);
   if (!cfg.capture.available) $('capture').disabled = true;
 
+  // Same shape as capture, and for the same reason: an operator about to spend money
+  // should learn that a column will be empty before the run, not after it.
+  const w = $('cfgCwnd');
+  clear(w);
+  const wrow = el('div', 'row');
+  wrow.appendChild(el('span', 'badge ' + (cfg.cwnd.available ? 'ok' : 'warn'),
+                      cfg.cwnd.available ? 'AVAILABLE' : 'UNAVAILABLE'));
+  wrow.appendChild(el('span', 'why', cfg.cwnd.reason || ''));
+  wrow.appendChild(el('span', 'why', 'interval: ' + cfg.cwnd.interval_ms + 'ms'));
+  w.appendChild(wrow);
+  if (!cfg.cwnd.available) $('cwnd').disabled = true;
+
   const x = $('cfgFixture');
   clear(x);
   const r1 = el('div', 'row');
@@ -188,6 +200,7 @@ function selectionPayload() {
     turns: turns === '' ? null : Number(turns),
     fixture: $('fixture').value,
     capture: $('capture').checked,
+    cwnd: $('cwnd').checked,
     cache_bust: $('cacheBust').checked,
     prefix_drift: $('prefixDrift').checked,
     pause_seconds: Number($('pause').value || 0),
@@ -203,7 +216,7 @@ function invalidatePreflight() {
   $('runBtn').classList.remove('billable');
   $('preflightOut').hidden = true;
 }
-for (const id of ['measure', 'turns', 'fixture', 'capture', 'cacheBust',
+for (const id of ['measure', 'turns', 'fixture', 'capture', 'cwnd', 'cacheBust',
                   'prefixDrift', 'pause']) {
   // listener attached after DOM parse; ids exist because the script is at body end
   $(id).addEventListener('change', invalidatePreflight);
@@ -446,6 +459,7 @@ function showRun(run) {
     ['fixture', p.fixture || '—'],
     ['turns', p.turns],
     ['capture', p.capture ? 'on' : 'off'],
+    ['cwnd', p.cwnd ? 'on' : 'off'],
     ['models', Object.entries(p.models || {}).map(([k, v]) => k + '=' + v).join(' ')],
   ];
   for (const [k, v] of bits) {
@@ -653,10 +667,17 @@ function renderDownloads(run) {
   all.setAttribute('download', '');
   host.appendChild(all);
 
-  for (const [label, href] of [
+  // cwnd links only when the run monitored something. An always-present link to an
+  // empty CSV would read as "monitored, saw nothing", which is a different claim.
+  const csvs = [
     ['records.csv', `/api/runs/${id}/records.csv`],
     ['summary.csv', `/api/runs/${id}/summary.csv`],
-  ]) {
+  ];
+  if (run.cwnd && Object.keys(run.cwnd).length) {
+    csvs.push(['cwnd.csv', `/api/runs/${id}/cwnd.csv`]);
+    csvs.push(['cwnd_summary.csv', `/api/runs/${id}/cwnd_summary.csv`]);
+  }
+  for (const [label, href] of csvs) {
     const a = el('a', 'dl', (run.mock ? 'MOCK ' : '') + label);
     a.href = href;
     a.setAttribute('download', '');
@@ -671,6 +692,8 @@ function renderDownloads(run) {
   j.href = URL.createObjectURL(blob);
   j.download = `${tag}run_${id}.json`;
   host.appendChild(j);
+
+  renderCwndList(run);
 
   const pl = $('pcapList');
   clear(pl);
@@ -700,6 +723,45 @@ function renderDownloads(run) {
         pl.appendChild(el('span', 'dl dead',
           `${label} failed: ${c.error || c.note || 'empty capture'}`));
       }
+    }
+  }
+}
+
+/* One line per monitored arm: what the window reached, where it ended, and how many
+ * times it went back to the initial 10 after having been larger.
+ *
+ * `peak → final` with a reset count above zero is the finding. It says the connection
+ * had earned a wide window, went quiet while the model was thinking, and had it taken
+ * away — so the next turn re-entered slow start and paid round trips to get back what
+ * it already had. A peak well above 10 with zero resets is the opposite finding, and
+ * worth just as much: on this path, the idle gaps did not cost anything. */
+function renderCwndList(run) {
+  const cl = $('cwndList');
+  clear(cl);
+  const cwnd = run.cwnd || {};
+  const keys = Object.keys(cwnd);
+  if (!keys.length) {
+    if (run.params && run.params.cwnd) {
+      cl.appendChild(el('span', 'note', 'cwnd monitoring was on but produced no samples.'));
+    }
+    return;
+  }
+  for (const key of keys) {
+    const byKind = cwnd[key] || {};
+    for (const kind of Object.keys(byKind)) {
+      const m = byKind[kind] || {};
+      const label = `cwnd ${key} · ${kind}`;
+      if (m.error) {
+        cl.appendChild(el('span', 'dl dead', `${label} failed: ${m.error}`));
+        continue;
+      }
+      const bits = [
+        `${m.sample_count || 0} samples`,
+        `peak ${m.peak_cwnd || 0} → final ${m.final_cwnd || 0}`,
+        `${m.idle_resets || 0} idle resets`,
+      ];
+      if (m.truncated) bits.push('TRUNCATED');
+      cl.appendChild(el('span', 'dl', `${label} · ${bits.join(' · ')}`));
     }
   }
 }

@@ -21,17 +21,27 @@ ARG APT_MIRROR=
 # tcpdump for optional packet capture (needs --cap-add=NET_RAW at run time;
 # see docker-compose.yml. Where raw sockets are unavailable, core.capture
 # reports it and the run proceeds without a pcap).
+#
+# gcc for the netlink congestion-window helper, which is compiled from source at
+# image build time. It needs no capability at run time -- sock_diag reports the
+# container's own sockets to its own uid -- but a sandbox that blocks AF_NETLINK
+# (gVisor, a restrictive seccomp profile) makes core.cwnd report itself
+# unavailable and the run proceeds without the samples.
 RUN if [ -n "$APT_MIRROR" ]; then \
       sed -i "s|https\?://deb.debian.org|$APT_MIRROR|g" \
         /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
     fi && \
-    apt-get update && apt-get install -y --no-install-recommends tcpdump \
+    apt-get update && apt-get install -y --no-install-recommends tcpdump gcc \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
+# Built here rather than on first use: an image that discovers it has no compiler
+# halfway through a paid run is an image that reports a missing column as a failure.
+RUN cc -O2 -Wall -o native/cwnd_monitor native/cwnd_monitor.c
 
 ENV PORT=8080
 EXPOSE 8080

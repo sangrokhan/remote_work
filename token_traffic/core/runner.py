@@ -35,6 +35,7 @@ import time
 
 from core import cachebust
 from core import capture as pcap
+from core import cwnd as cwndmon
 from core import wire
 from providers import base
 
@@ -93,12 +94,13 @@ def warnings_for(pairs: list[tuple[str, str]], measure: str) -> list[str]:
 
 def run(providers: dict | None = None, *, system: str, steps: list[str],
         measure: str = "bytes", models: dict | None = None,
-        want_capture: bool = False, pause_seconds: float = 0,
+        want_capture: bool = False, want_cwnd: bool = False,
+        pause_seconds: float = 0,
         timestamp: str = "", cache_bust: bool | None = None,
         prefix_drift: bool = False, on_progress=None) -> dict:
     """Replay `steps` across every (provider, arm) pair and return the run document.
 
-    Returns {params, records, pcaps, wall_ms}. Records carry provider and arm, so one
+    Returns {params, records, pcaps, cwnd, wall_ms}. Records carry provider and arm, so one
     run holds both vendors and a reader can group either way.
 
     `cache_bust=None` defers to TRAFFIC_CACHE_BUST (on unless set to 0). False makes
@@ -150,8 +152,18 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
             want_capture = False
             warnings.append(f"capture unavailable, running without it: {reason}")
 
+    # Same contract for the congestion monitor, and the same reason: cwnd is evidence
+    # about the arms, not a precondition for running them. A box that cannot read
+    # netlink still produces every byte count and every mark.
+    if want_cwnd:
+        ok, reason = cwndmon.available()
+        if not ok:
+            want_cwnd = False
+            warnings.append(f"cwnd monitor unavailable, running without it: {reason}")
+
     records: list[dict] = []
     pcaps: dict = {}
+    cwnd: dict = {}
     wall_ms: dict = {}
 
     # Anything the probe or the model list left pooled would otherwise put its FIN in
@@ -193,7 +205,7 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
             sweeps = {}
             for kind in ("bytes", "latency"):
                 window = _Window(provider, arm, host, timestamp or "0",
-                                 want_capture, on_progress, kind=kind)
+                                 want_capture, want_cwnd, on_progress, kind=kind)
                 try:
                     sweeps[kind] = mod.run_arm(arm, model, prompt, steps, kind,
                                                window.tick)
@@ -201,6 +213,8 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
                     window.close()
                 if window.pcap is not None:
                     pcaps.setdefault(key, {})[kind] = window.pcap
+                if window.cwnd is not None:
+                    cwnd.setdefault(key, {})[kind] = window.cwnd
                 # The latency sweep is the one whose clock the marks come from, so its
                 # wall is the arm's wall; the bytes sweep's is kept for its own pcap.
                 wall_ms[key] = window.wall_ms
@@ -209,7 +223,7 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
             # Single kind: the capture, if any, is labelled with the measure it holds.
             kind = measure if measure in ("bytes", "latency") else "bytes"
             window = _Window(provider, arm, host, timestamp or "0",
-                             want_capture, on_progress, kind=kind)
+                             want_capture, want_cwnd, on_progress, kind=kind)
             try:
                 arm_records = mod.run_arm(arm, model, prompt, steps, measure,
                                           window.tick)
@@ -218,6 +232,8 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
             wall_ms[key] = window.wall_ms
             if window.pcap is not None:
                 pcaps.setdefault(key, {})[kind] = window.pcap
+            if window.cwnd is not None:
+                cwnd.setdefault(key, {})[kind] = window.cwnd
 
         records.extend(arm_records)
 
@@ -231,6 +247,7 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
                        for p, _ in pairs},
             "turns": len(steps),
             "capture": bool(want_capture),
+            "cwnd": bool(want_cwnd),
             # The tags, not just the flag: a run whose arms came back suspiciously warm
             # can only be explained if the prefixes it actually sent are recoverable.
             "cache_bust": {"enabled": cachebust.enabled(),
@@ -240,6 +257,7 @@ def run(providers: dict | None = None, *, system: str, steps: list[str],
         },
         "records": records,
         "pcaps": pcaps,
+        "cwnd": cwnd,
         "wall_ms": wall_ms,
     }
 
@@ -296,10 +314,11 @@ class _Window:
     """
 
     def __init__(self, provider: str, arm: str, host: str, timestamp: str,
-                 want_capture: bool, on_progress, kind: str = ""):
+                 want_capture: bool, want_cwnd: bool, on_progress, kind: str = ""):
         self.provider, self.arm, self.host = provider, arm, host
         self.timestamp = timestamp
         self.want_capture = want_capture
+        self.want_cwnd = want_cwnd
         self.on_progress = on_progress
         # Which pass this window captures -- "bytes" or "latency". It rides into the pcap
         # filename so a `both` run's two sweeps do not collide and a reader can tell the
@@ -307,6 +326,8 @@ class _Window:
         self.kind = kind
         self.cap: pcap.Capture | None = None
         self.pcap: dict | None = None
+        self.mon: cwndmon.Monitor | None = None
+        self.cwnd: dict | None = None
         self.wall_ms = 0
         self._t0: float | None = None
 
@@ -325,6 +346,13 @@ class _Window:
         # FIN/ACK too, because that round trip would otherwise land inside it. The wait
         # is only worth its second when something is watching the wire.
         wire.reset_session()
+        # Before the settle sleep and before anything reconnects, so the monitor is
+        # already ticking when the SYN goes out. A window it joins halfway through has
+        # no starting value to be reset *from*, which is the whole comparison.
+        if self.want_cwnd:
+            self.mon = cwndmon.Monitor(self.provider, self.arm, self.host,
+                                       kind=self.kind)
+            self.mon.__enter__()
         if self.want_capture:
             time.sleep(_SETTLE_SECONDS)
             self.cap = pcap.Capture(self.timestamp, self.provider, self.arm, self.host,
@@ -346,3 +374,11 @@ class _Window:
             self.cap.__exit__(None, None, None)
             self.pcap = self.cap.result()
             self.cap = None
+        # Stopped last, so whatever the capture teardown did to the socket is in the
+        # samples too. Not preceded by a reset_session of its own: an arm running
+        # without capture would then be closing its connection for the monitor's
+        # benefit, and a measurement that changes the thing measured is not one.
+        if self.mon is not None:
+            self.mon.stop()
+            self.cwnd = self.mon.result()
+            self.mon = None
