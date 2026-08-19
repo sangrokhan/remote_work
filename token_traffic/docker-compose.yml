@@ -8,8 +8,11 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
         PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
         APT_MIRROR: ${APT_MIRROR:-}
+    # Host port is a variable because 8080 is the most contended port on a dev box and
+    # a hardcoded one turns "start the lab" into "find out what else is listening".
+    # The container always serves 8080; TRAFFIC_HOST_PORT moves only the outside.
     ports:
-      - "8080:8080"
+      - "${TRAFFIC_HOST_PORT:-8080}:8080"
     # The reason this file exists: the optional packet-capture toggle runs
     # tcpdump, which needs raw sockets. Drop these and capture reports itself
     # unavailable; everything else still runs.
