@@ -14,6 +14,7 @@ than no test.
 """
 
 import json
+import re
 import subprocess
 
 import pytest
@@ -85,6 +86,27 @@ def test_helper_with_a_trailer_is_available(monkeypatch, tmp_path):
     ok, reason = cwnd.available()
     assert ok is True
     assert str(binary) in reason
+
+
+def test_no_interface_hardcodes_the_sampling_period():
+    """The period is a default in one module and is shown in three places. It was
+    written out by hand in the checkbox label and the CLI help, and when the default
+    moved from 10ms to 2ms both went on claiming 10 -- a control that lies about what
+    it does is worse than one that says nothing. So: nobody spells a period."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for name in ("templates/index.html", "static/app.js", "cli.py"):
+        text = (root / name).read_text()
+        for line in text.splitlines():
+            if "cwnd" not in line.lower():
+                continue
+            # The comments explaining this rule are allowed to name the old value.
+            if line.lstrip().startswith(("#", "//", "*", "<!--")) or "written here once" in line:
+                continue
+            assert not re.search(r"\b\d+\s?ms\b", line), (
+                f"{name} spells a sampling period: {line.strip()!r}. Read it from "
+                f"cwnd.interval_ms() or /api/config instead.")
 
 
 def test_probe_is_cached_until_reset(monkeypatch, tmp_path):

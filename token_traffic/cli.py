@@ -89,8 +89,8 @@ def main(argv=None) -> int:
     ap.add_argument("--turns", type=int, help="truncate the thread")
     ap.add_argument("--capture", action="store_true", help="pcap per arm (needs tcpdump)")
     ap.add_argument("--cwnd", action="store_true",
-                    help="sample the kernel congestion window, ssthresh and RTT every "
-                         "10ms per arm (netlink; no root needed)")
+                    help=f"sample the kernel congestion window, ssthresh and RTT every "
+                         f"{cwndmon.interval_ms()}ms per arm (netlink; no root needed)")
     ap.add_argument("--prefix-drift", action="store_true",
                     help="put a turn counter in front of the system prompt so the KV "
                          "cache misses every turn (the negative control)")

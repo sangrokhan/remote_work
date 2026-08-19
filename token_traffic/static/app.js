@@ -147,6 +147,9 @@ function renderConfig(cfg) {
   wrow.appendChild(el('span', 'why', 'interval: ' + cfg.cwnd.interval_ms + 'ms'));
   w.appendChild(wrow);
   if (!cfg.cwnd.available) $('cwnd').disabled = true;
+  // The checkbox says what the sampler will actually do, taken from the same place the
+  // sampler takes it from. A hardcoded period drifted from the real one once already.
+  $('cwndInterval').textContent = `(${cfg.cwnd.interval_ms}ms)`;
 
   const x = $('cfgFixture');
   clear(x);
