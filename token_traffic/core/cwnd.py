@@ -47,6 +47,7 @@ import threading
 from pathlib import Path
 
 from core import config
+from core import wire
 
 # 2 ms. Not chosen against the idle gap -- that is seconds long and a slow sampler
 # would find it -- but against the path's RTT, because the reset is only visible until
@@ -233,6 +234,9 @@ class Monitor:
         self.truncated = False
         self._reader: threading.Thread | None = None
         self._stderr: list[str] = []
+        self._unwatch = None
+        self._announce_lock = threading.Lock()
+        self.announced = 0
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -251,8 +255,8 @@ class Monitor:
 
         try:
             self.proc = subprocess.Popen(
-                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1)
+                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, bufsize=1)
         except Exception as exc:
             self.error = f"monitor would not start: {exc}"
             return self
@@ -260,6 +264,10 @@ class Monitor:
         self._reader = threading.Thread(target=self._drain, daemon=True,
                                         name=f"cwnd:{self.label}")
         self._reader.start()
+        # From here on the client tells us about its sockets as it opens them, instead
+        # of the helper finding them on its own a discovery-timer later. That timer
+        # remains as a backstop for anything opened outside core.wire.
+        self._unwatch = wire.watch_connections(self._on_connect)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -270,9 +278,17 @@ class Monitor:
         and the trailer is how we learn how many ticks it actually managed -- which is
         the only way to tell a monitor that watched an idle socket from one that was
         never running."""
+        if self._unwatch is not None:
+            self._unwatch()
+            self._unwatch = None
         proc, self.proc = self.proc, None
         if proc is None:
             return
+        try:
+            if proc.stdin:
+                proc.stdin.close()      # EOF: no more announcements are coming
+        except Exception:
+            pass
         try:
             proc.send_signal(signal.SIGTERM)
         except Exception:
@@ -294,12 +310,45 @@ class Monitor:
             err = ""
         if err:
             self._stderr.append(err)
-        for f in (proc.stdout, proc.stderr):
+        for f in (proc.stdin, proc.stdout, proc.stderr):
             try:
                 if f:
                     f.close()
             except Exception:
                 pass
+
+    def _on_connect(self, sock) -> None:
+        """Tell the helper about a socket the client just opened.
+
+        Runs on whichever thread made the connection, so the write is serialised. Only
+        sockets going to the port being monitored are announced: the client may talk to
+        other things, and a monitor that followed all of them would fill the CSV with
+        traffic the arm did not produce.
+        """
+        proc = self.proc
+        if proc is None or proc.stdin is None:
+            return
+        try:
+            local_ip, local_port = sock.getsockname()[:2]
+            peer_ip, peer_port = sock.getpeername()[:2]
+        except Exception:
+            return
+        if peer_port != self.port:
+            return
+        # v4-mapped v6 (::ffff:a.b.c.d) is spelled back as v4, because that is the
+        # family the socket is really in and what the helper will match against.
+        local_ip = local_ip.replace("::ffff:", "")
+        peer_ip = peer_ip.replace("::ffff:", "")
+        line = f"track {local_ip} {local_port} {peer_ip} {peer_port}\n"
+        try:
+            with self._announce_lock:
+                proc.stdin.write(line)
+                proc.stdin.flush()
+                self.announced += 1
+        except Exception:
+            # A dead helper is not a reason to fail a request. The samples are
+            # best-effort; the turn being measured is not.
+            pass
 
     def _drain(self) -> None:
         """Read the helper's NDJSON until it closes. Runs on the reader thread.
@@ -370,6 +419,10 @@ class Monitor:
             "dumps": self.end.get("dumps", 0),
             "exact_queries": self.end.get("exact_queries", 0),
             "tracked": self.end.get("tracked", 0),
+            # How many sockets the client named for us, versus how many the helper had
+            # to go looking for. A run where these differ has connections opening
+            # outside core.wire, and those are the ones whose first window is missed.
+            "announced": self.announced,
             "sockets": sockets,
             "truncated": self.truncated,
             "error": err,

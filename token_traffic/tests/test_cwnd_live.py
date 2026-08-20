@@ -32,6 +32,7 @@ import time
 import pytest
 
 from core import cwnd
+from core import wire
 
 BLOB = b"x" * (1 << 20)
 BURST = 12
@@ -225,6 +226,66 @@ def test_it_stops_dumping_once_it_knows_which_socket_to_watch(sink):
         f"{dumps} dumps in {result['ticks']} ticks -- expected a dump only every "
         f"100ms, not per tick")
     assert result["tracked"] >= 1
+
+
+def test_a_connection_announced_by_the_client_is_sampled_from_its_first_window(sink):
+    """The initial congestion window, recorded -- which discovery-by-dump could not do.
+
+    A connection opens at cwnd=10 and, once data flows, is past 60 within a few round
+    trips. Waiting for the next rediscovery dump to notice it meant arriving 4-22ms
+    late with the window already at 48-75: measured, five connections in a row, initial
+    window missed on every one. That is a pcap with a three-way handshake in it beside
+    a cwnd log that starts mid-flight.
+
+    core.wire announces each socket the instant connect() returns, so the helper
+    queries it on the next tick instead.
+    """
+    # The monitor starts with nothing to watch, and the connection is opened after it
+    # is already running -- the case discovery-by-dump arrived too late for. Only one
+    # connection, because the sink fixture accepts exactly one: a second would never be
+    # drained and sendall would block forever.
+    monitor = cwnd.Monitor("test", "announced", "127.0.0.1", port=sink)
+    monitor.__enter__()
+    client = None
+    try:
+        time.sleep(0.2)
+        connected_at = time.time()
+        client = socket.create_connection(("127.0.0.1", sink))
+        wire._announce(client)          # what _CountingConnection.connect() does
+        local = f"127.0.0.1:{client.getsockname()[1]}"
+        for _ in range(BURST):
+            client.sendall(BLOB)
+        time.sleep(0.2)
+    finally:
+        monitor.stop()
+        if client is not None:
+            client.close()
+
+    result = monitor.result()
+    assert result["announced"] >= 1, "the connection was never announced"
+
+    mine = sorted((s for s in result["samples"] if s["local"] == local),
+                  key=lambda s: s["t_ms"])
+    assert mine, f"{local} was announced but never sampled"
+
+    # The claim, and the only one loopback can make honestly: the socket was picked up
+    # because the client said so, not because a dump happened to come round. The
+    # rediscovery timer is 100ms, so anything under a few milliseconds could not have
+    # come from it.
+    #
+    # What is NOT asserted is that cwnd=10 was recorded. On loopback the RTT is tens of
+    # microseconds and the window is past 10 before the next 2ms tick, so that check
+    # would be a coin toss -- the same sampling limit this file explains at the top. On
+    # a real path there are milliseconds of slow start to land in, and the lag asserted
+    # here is what buys them.
+    lag_ms = (mine[0]["wall"] - connected_at) * 1000
+    assert lag_ms < 25, (
+        f"first sample of {local} arrived {lag_ms:.1f}ms after connect -- that is "
+        f"discovery-by-dump timing, not an announcement")
+
+    # And it is a real transfer, so the samples describe congestion control rather than
+    # an idle socket parked at its initial window.
+    assert max(s["snd_cwnd"] for s in mine) > cwnd.INIT_CWND
 
 
 def test_the_helper_emits_every_field_the_csv_promises(sink):

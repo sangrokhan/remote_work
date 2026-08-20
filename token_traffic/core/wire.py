@@ -182,6 +182,41 @@ class _CountingSocket:
         return getattr(self._sock, name)
 
 
+# Called with each socket the moment it is connected, before a byte moves.
+#
+# This exists for the congestion monitor, which watches from another process and would
+# otherwise have to discover new sockets by dumping the kernel's socket table on a
+# timer. That discovery is too slow to see what it most needs to: a connection opens at
+# cwnd=10 and, on a 3 ms path, is past 60 within about ten milliseconds. Measured with
+# a 100 ms rediscovery timer, five connections in a row had their initial window missed
+# entirely. Here, the four-tuple is known the instant connect() returns.
+#
+# A list rather than a single slot, because the alternative is one subscriber silently
+# replacing another. Exceptions are swallowed: nothing a watcher does may break the
+# connection it is watching.
+_connect_watchers: list = []
+
+
+def watch_connections(fn):
+    """Register `fn(sock)`, called on every new connection. Returns an unsubscribe."""
+    _connect_watchers.append(fn)
+
+    def stop():
+        try:
+            _connect_watchers.remove(fn)
+        except ValueError:
+            pass
+    return stop
+
+
+def _announce(sock) -> None:
+    for fn in list(_connect_watchers):
+        try:
+            fn(sock)
+        except Exception:
+            pass
+
+
 class _CountingConnection:
     """Swaps in a counting socket once the connection is up.
 
@@ -192,6 +227,10 @@ class _CountingConnection:
 
     def connect(self):
         super().connect()
+        # Before wrapping, and before the TLS handshake this connection is about to do:
+        # the handshake is already traffic, and a monitor told about the socket after
+        # it has run has missed the window it opened with.
+        _announce(self.sock)
         self.sock = _CountingSocket(self.sock)
 
 

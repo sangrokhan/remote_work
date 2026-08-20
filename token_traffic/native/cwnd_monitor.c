@@ -50,6 +50,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/sock_diag.h>
 #include <linux/tcp.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -265,10 +266,36 @@ static int dst_matches(int family, const unsigned char *addr, unsigned port)
 struct tracked {
     int family;
     struct inet_diag_sockid id;
+    int have_cookie;    /* the kernel's, learned from the first reply */
 };
 
 static struct tracked g_tracked[MAX_TRACKED];
 static int g_ntracked = 0;
+static unsigned long g_announced = 0;   /* four-tuples the client handed us */
+
+/* Sockets announced on stdin, before the kernel has been asked about anything.
+ *
+ * Discovery by dump has a floor: a socket born after the last dump is invisible until
+ * the next one. Measured with a 100 ms rediscovery timer, five connections that pushed
+ * data as soon as they opened: every one of them was noticed between 4 and 22 ms late,
+ * and by then the window had already climbed from 10 to somewhere between 48 and 75.
+ * The initial congestion window -- the thing a reset returns the connection *to* -- was
+ * never once recorded. A pcap holding the three-way handshake beside a cwnd log holding
+ * nothing is what that looks like from the outside.
+ *
+ * Shortening the timer does not fix it: a dump costs 2.4 ms, so a 10 ms timer spends a
+ * quarter of a core and still arrives late on a 3 ms path.
+ *
+ * The client, though, knows the four-tuple the instant connect() returns -- core.wire
+ * already wraps the socket to count its bytes. So it says so, on this process's stdin,
+ * and the very next tick queries the new socket directly. No dump, no lag.
+ *
+ * Announced sockets carry no cookie: the client knows the addresses, not the kernel's
+ * instance id. INET_DIAG_NOCOOKIE tells the kernel to match on the four-tuple alone,
+ * and the first reply carries the real cookie, which is kept from then on -- so the
+ * window where a recycled port could alias is one query wide, not the whole run.
+ */
+static void track_add_announced(int family, const struct inet_diag_sockid *id);
 
 static void track_add(int family, const struct inet_diag_sockid *id)
 {
@@ -285,7 +312,90 @@ static void track_add(int family, const struct inet_diag_sockid *id)
     if (g_ntracked >= MAX_TRACKED) return;
     g_tracked[g_ntracked].family = family;
     g_tracked[g_ntracked].id = *id;
+    g_tracked[g_ntracked].have_cookie = 1;   /* a dump answer carries the real one */
     g_ntracked++;
+}
+
+static void track_add_announced(int family, const struct inet_diag_sockid *id)
+{
+    int before = g_ntracked;
+    track_add(family, id);
+    if (g_ntracked > before) {
+        g_tracked[g_ntracked - 1].have_cookie = 0;
+        g_announced++;
+    }
+}
+
+/* Parse one announcement: "track <src-ip> <sport> <dst-ip> <dport>".
+ *
+ * Deliberately dumb. This reads a pipe from the process that started it, not a network,
+ * and a line it cannot parse is dropped with a note rather than treated as an attack or
+ * as a reason to stop sampling.
+ */
+static void handle_command(char *line)
+{
+    char verb[16], src[64], dst[64];
+    unsigned sport, dport;
+    if (sscanf(line, "%15s %63s %u %63s %u", verb, src, &sport, dst, &dport) != 5) {
+        fprintf(stderr, "cwnd_monitor: cannot parse command: %s\n", line);
+        return;
+    }
+    if (strcmp(verb, "track") != 0) {
+        fprintf(stderr, "cwnd_monitor: unknown command: %s\n", verb);
+        return;
+    }
+
+    struct inet_diag_sockid id;
+    memset(&id, 0, sizeof id);
+    int family;
+    if (inet_pton(AF_INET, src, id.idiag_src) == 1 &&
+        inet_pton(AF_INET, dst, id.idiag_dst) == 1) {
+        family = AF_INET;
+    } else if (inet_pton(AF_INET6, src, id.idiag_src) == 1 &&
+               inet_pton(AF_INET6, dst, id.idiag_dst) == 1) {
+        family = AF_INET6;
+    } else {
+        fprintf(stderr, "cwnd_monitor: not an address pair: %s / %s\n", src, dst);
+        return;
+    }
+    id.idiag_sport = htons((uint16_t)sport);
+    id.idiag_dport = htons((uint16_t)dport);
+    id.idiag_cookie[0] = INET_DIAG_NOCOOKIE;
+    id.idiag_cookie[1] = INET_DIAG_NOCOOKIE;
+    track_add_announced(family, &id);
+}
+
+/* Drain whatever announcements are waiting, without blocking.
+ *
+ * Called once per tick. Blocking here would hand the client the power to stall the
+ * sampler by not writing, which is the opposite of the arrangement: the client is
+ * being measured, not trusted to keep time. */
+static void read_commands(void)
+{
+    static char pending[512];
+    static size_t plen = 0;
+
+    for (;;) {
+        struct pollfd pfd = {.fd = STDIN_FILENO, .events = POLLIN};
+        if (poll(&pfd, 1, 0) <= 0) return;
+        if (!(pfd.revents & POLLIN)) return;
+
+        char buf[512];
+        ssize_t n = read(STDIN_FILENO, buf, sizeof buf);
+        if (n <= 0) return;                  /* EOF: the client said all it will say */
+
+        for (ssize_t i = 0; i < n; i++) {
+            if (buf[i] == '\n') {
+                pending[plen] = '\0';
+                if (plen) handle_command(pending);
+                plen = 0;
+            } else if (plen + 1 < sizeof pending) {
+                pending[plen++] = buf[i];
+            } else {
+                plen = 0;                    /* overlong line: drop it whole */
+            }
+        }
+    }
 }
 
 /* --- netlink -------------------------------------------------------------- */
@@ -418,7 +528,8 @@ static void emit_sample(double t_rel, double wall, int family,
  * when the answer could not be read at all.
  */
 static int diag_drain(int fd, int family, double t_rel, double wall,
-                      char *buf, size_t buflen, int *info_len_out, int is_dump)
+                      char *buf, size_t buflen, int *info_len_out, int is_dump,
+                      struct tracked *asked_about)
 {
     int emitted = 0;
 
@@ -449,6 +560,14 @@ static int diag_drain(int fd, int family, double t_rel, double wall,
             }
 
             struct inet_diag_msg *m = (struct inet_diag_msg *)NLMSG_DATA(h);
+            if (!is_dump && asked_about && !asked_about->have_cookie) {
+                /* An announced socket was matched on its four-tuple alone. Now that
+                 * the kernel has named the instance, keep the name: a later query
+                 * then cannot be answered by whatever inherits the port. */
+                memcpy(asked_about->id.idiag_cookie, m->id.idiag_cookie,
+                       sizeof m->id.idiag_cookie);
+                asked_about->have_cookie = 1;
+            }
             if (is_dump) {
                 unsigned dport = ntohs(m->id.idiag_dport);
                 if (!dst_matches(family, (const unsigned char *)m->id.idiag_dst, dport))
@@ -569,6 +688,11 @@ int main(int argc, char **argv)
         double t_rel = t - t0;
         if (max_seconds > 0 && t_rel >= max_seconds) break;
 
+        /* Announcements first, so a socket the client just opened is queried on
+         * this tick rather than after the next dump. That gap is where the initial
+         * congestion window lives. */
+        read_commands();
+
         double wall = now_realtime();
         int got = 0;
 
@@ -587,7 +711,7 @@ int main(int argc, char **argv)
                 int family = fi == 0 ? AF_INET : AF_INET6;
                 if (diag_request(fd, family, seq++, NULL) < 0) continue;
                 int n = diag_drain(fd, family, t_rel, wall, buf, RECV_BUF,
-                                   &info_len, 1);
+                                   &info_len, 1, NULL);
                 if (n > 0) got += n;
             }
             last_dump = t;
@@ -602,7 +726,7 @@ int main(int argc, char **argv)
                                  &g_tracked[i].id) < 0)
                     continue;
                 int n = diag_drain(fd, g_tracked[i].family, t_rel, wall, buf,
-                                   RECV_BUF, &info_len, 0);
+                                   RECV_BUF, &info_len, 0, &g_tracked[i]);
                 exacts++;
                 if (n > 0) {
                     got += n;
@@ -642,8 +766,10 @@ int main(int argc, char **argv)
      * rather than as unexplained CPU.  */
     printf("{\"type\":\"end\",\"ticks\":%lu,\"samples\":%lu,\"seconds\":%.3f"
            ",\"dumps\":%lu,\"exact_queries\":%lu,\"tracked\":%d"
+           ",\"announced\":%lu"
            ",\"tcp_info_len\":%d}\n",
-           ticks, samples, now_monotonic() - t0, dumps, exacts, g_ntracked, info_len);
+           ticks, samples, now_monotonic() - t0, dumps, exacts, g_ntracked,
+           g_announced, info_len);
     fflush(stdout);
 
     free(buf);
