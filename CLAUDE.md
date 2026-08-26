@@ -17,7 +17,7 @@ This is a monorepo containing multiple independent projects.
 | `graph_pdf/` | PDF graph tooling |
 | `scm/` | SCM tooling |
 | `spar/` | SPAR project |
-| `token_traffic/` | LLM API traffic/latency lab (Gemini + OpenAI) |
+| `AIPT/` | AI Protocol Traffic lab — merged token_traffic + tcp_congestion (3-backend: public_ai/mock/local_llm + Network Gateway) |
 | `transfer_learning/` | Transfer learning experiments |
 | `yang_param/` | YANG parameter tooling |
 
