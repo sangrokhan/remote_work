@@ -84,8 +84,7 @@ flowchart TB
     style Records fill:#3a3020,stroke:#e0a030,stroke-width:2px,color:#fff
 ```
 
-> **구현 상태 (2026-08-26 갱신)**: Gateway는 이제 **실제 동작하는 L3 IP
-> 포워딩 컨테이너**다 — `web`은 `net-client`(172.28.1.0/24), `mock-server`는
+> **Gateway는 L3 IP 포워딩 컨테이너다**: `web`은 `net-client`(172.28.1.0/24), `mock-server`는
 > `net-backend`(172.28.2.0/24)에 각각 격리되어 있고, Gateway만 두 네트워크
 > 모두에 속해 커널(`net.ipv4.ip_forward=1`)로 그 사이를 라우팅한다. 컨테이너
 > 시작 시 `entrypoint_web.py`/`entrypoint_mockserver.py`가 상대 서브넷으로
@@ -96,7 +95,7 @@ flowchart TB
 > TCP 상태를 전혀 보지 않는 순수 L3 라우팅이며, 애플리케이션 레벨 프록시
 > 코드는 없다.
 
-> 실행 결과 저장은 §3.1에서 자세히 다루지만 다이어그램에도 반영했다:
+> 실행 결과 저장 범위는 §3.1에서 자세히 다룬다:
 > **Public AI(상용 API) 요청/응답 JSON만** `data/public_ai_records/`에
 > 자동으로 영속 저장되고, 그 외 산출물(cwnd/pcap/mock/local_llm 턴 기록)은
 > 인메모리에만 있다가 `bundle.zip`으로 사용자가 직접 받아서 관리한다.
@@ -114,8 +113,8 @@ AIPT/
 │
 ├── aipt/                          # 설치 가능한 패키지 루트
 │   ├── core/                      # ★ 3-backend 공통 계측 계층
-│   │   ├── cwnd.py                 #   netlink 연속 cwnd 모니터 (+ B12 적응형 주기)
-│   │   ├── capture.py              #   tcpdump 캡처 (+ B13 timestamp_source)
+│   │   ├── cwnd.py                 #   netlink 연속 cwnd 모니터 (+ 적응형 샘플링 주기)
+│   │   ├── capture.py              #   tcpdump 캡처 (+ timestamp_source)
 │   │   ├── offload.py              #   NIC TSO/GSO 토글
 │   │   ├── netem.py                #   tc netem 저수준 wrapper (gateway가 승격 사용)
 │   │   ├── wire.py                 #   소켓 바이트 카운터
@@ -128,12 +127,12 @@ AIPT/
 │   │   ├── record.py               #   turn_record() 공통 스키마
 │   │   ├── public_ai/              #   ① Public AI backend
 │   │   │   ├── gemini.py / openai.py   (6+4 arm)
-│   │   │   ├── recorder.py             (B2: 실측 캡처→fixture)
+│   │   │   ├── recorder.py             (실측 캡처→fixture)
 │   │   │   └── _call.py / _cachebust.py
 │   │   ├── mock/                   #   ② Mock backend
 │   │   │   ├── server.py               (keep-alive HTTP mock 서버)
-│   │   │   ├── fixtures.py             (B1: Q&A JSON / byte-sweep)
-│   │   │   ├── replay.py               (B3: 실측 재생, 바이트만)
+│   │   │   ├── fixtures.py             (Q&A JSON / byte-sweep)
+│   │   │   ├── replay.py               (실측 재생, 바이트만)
 │   │   │   ├── conversation.py         (MockBackend, core 연동)
 │   │   │   └── probe.py                (idle RTT probe)
 │   │   └── local_llm/              #   ③ Local LLM backend
@@ -188,7 +187,7 @@ AIPT/
   각 arm은 "대화 히스토리를 누가/어떻게 들고 있는가"가 다른 실험 조건이다.
 - **측정 수단**: `requests` 기반 소켓 카운팅 세션(`aipt.core.wire`) — 공식
   SDK(httpx 기반)는 소켓 레벨 계측 훅을 걸 수 없어 의도적으로 배제.
-- **recorder.py (B2)**: 실제 API 호출의 request/response 원문을 캡처해서
+- **recorder.py**: 실제 API 호출의 request/response 원문을 캡처해서
   `MockBackend`의 replay fixture 포맷으로 저장. API 키 등은 저장 전
   재귀적으로 마스킹.
 - **네트워크 경로**: Gateway를 거치지 않고 실제 인터넷으로 직행 — 이미
@@ -198,12 +197,12 @@ AIPT/
 
 로컬에서 재현 가능한 고정 트래픽 패턴을 만든다.
 
-- **fixtures.py (B1)**: 두 가지 입력 방식 — (a) 고정 byte-size 스윕(순수
+- **fixtures.py**: 두 가지 입력 방식 — (a) 고정 byte-size 스윕(순수
   페이로드 크기 실험용), (b) Q&A JSON fixture(`{system_prompt, turns:
   [{question, answer}]}`, `token_traffic`의 fixture 개념 확장).
 - **server.py**: HTTP/1.1 keep-alive mock 서버. fixture의 답변 텍스트
   또는 지정된 byte 크기로 응답.
-- **replay.py (B3)**: `recorder.py`가 캡처한 실측 데이터를 재생하되
+- **replay.py**: `recorder.py`가 캡처한 실측 데이터를 재생하되
   **바이트 패턴만 재현**한다 — 지연시간은 재현하지 않고 `inference_delay_ms`
   설정값으로 별도 제어 (설계 결정: 구현 복잡도보다 명료성 우선).
 - **conversation.py**: 누적 컨텍스트 멀티턴 시나리오 + `aipt.core.cwnd`/
@@ -362,7 +361,7 @@ sequenceDiagram
     U->>W: POST /api/run {backend: mock, arm: fixture, turns}
     Note over K: 사전에 POST /gateway/profile 로<br/>양쪽 인터페이스에 지연/손실 프로파일 적용됨<br/>(apply_profile_both)
     W->>B: connect(arm)
-    B->>Core: cwnd.Monitor 시작 (2ms 또는 B12 적응형 주기), capture 시작(옵션)
+    B->>Core: cwnd.Monitor 시작 (2ms 또는 적응형 주기), capture 시작(옵션)
     loop 각 turn (누적 컨텍스트)
         B->>K: TCP 연결 (entrypoint가 추가한 라우트로 Gateway를 next-hop 경유)
         K->>M: 커널 IP 포워딩 (TCP 페이로드 미검사, netem 지연/손실 적용됨)
@@ -473,7 +472,7 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
   자체를 왜곡시키면 "idle 후 cwnd가 IW로 리셋되는 정확한 시점"을 놓치기
   때문 — Python 프로세스가 바쁘면 샘플링도 밀리는 구조로는 이 실험이
   성립하지 않는다.
-- 샘플링 주기는 **적응형(B12)**이다: 고정 2ms가 아니라 경로 RTT에 비례해
+- 샘플링 주기는 **적응형**이다: 고정 2ms가 아니라 경로 RTT에 비례해
   `interval_ms = max(1, rtt_ms / K)`로 계산한다. 짧은 RTT 경로(예: Mock
   backend, Gateway `clean` 프로파일)에서 고정 주기를 쓰면 슬로우스타트
   burst 자체를 샘플러가 건너뛸 수 있기 때문이다. 물리적 하한(1ms) 아래로
@@ -490,7 +489,7 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
   `aipt.core.offload`로 캡처 구간 동안 오프로드를 끌 수 있는 옵션을
   제공하되 기본은 off(끄면 CPU 비용 증가, 타이밍 자체가 바뀜) — 상태를
   항상 결과에 기록해 어떤 상태로 캡처됐는지 사후에 구분 가능하게 한다.
-- **타임스탬프 정밀도(B13)**: `timestamp_source(iface)`가 `ethtool -T`로
+- **타임스탬프 정밀도**: `timestamp_source(iface)`가 `ethtool -T`로
   하드웨어/소프트웨어 타임스탬프 지원 여부를 판별해 결과에 포함한다.
   `aipt.export.packets.gap_confidence_summary()`가 이 정보와 실제
   inter-arrival gap 중앙값을 조합해, "소프트웨어 타임스탬프 + 짧은 gap"
@@ -505,7 +504,7 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 `aipt/export/turns.py`가 각 turn의 `wire_recv`(또는 `resp_payload_bytes`
 폴백)와 `(turn_end_ms − req_sent_ms)` 구간으로 `goodput_bps`를 산출한다.
 0-나눗셈 가드 포함. byte 카운트만으로는 "실제로 유효하게 전달된 처리량"을
-알 수 없다는 문제의식에서 신규 추가된 지표(B7).
+알 수 없다는 문제의식에서 신규 추가된 지표.
 
 ---
 
@@ -553,26 +552,13 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 
 ## 7. 아직 열려 있는 것
 
-**완료됨 (2026-08-26 갱신, 참고로 남김)**: ~~Gateway의 mock-server/local-llm으로의
-실제 L3/L4 forwarding~~ → **L3 IP 포워딩으로 구현 완료** (커널
-`net.ipv4.ip_forward` + 분리 네트워크 + 양방향 `apply_profile_both`).
-~~실행 결과의 디스크 영속화~~ → **정책 확정 및 구현 완료**: Public AI
-요청/응답 JSON만 자동 영속 저장, 나머지는 의도적으로 비영속(§4.7.1).
-
-**남은 것**:
-
 - **QUIC/HTTP 신기능 실험** — `LocalLLMBackend`의 engine gateway에
   `transport` 슬롯(현재 `X-AIPT-Transport` 헤더로 반영되는 것까지만)만
   마련되어 있고, 실제 QUIC 구현이나 신규 HTTP 기능 실험 로직은 아직 없다.
-  다음 작업으로 예정.
 - **local-llm 서빙 엔진의 docker-compose 서비스화** — 현재는 외부에서 실행
   중인 엔진에 `LOCAL_LLM_ENGINE_URL`로 연결하는 방식만 지원한다. 실제
   llama.cpp/vLLM 컨테이너를 compose에 포함시키는 건 무겁다는 이유로 범위
   밖에 두었다.
-- **실제 트래픽으로 L3 라우팅/netem 효과 실측** — `docker compose config`
-  문법 검증과 개별 이미지 빌드까지는 확인됐지만, `docker compose up`으로
-  풀스택을 띄워서 실제로 지연/손실이 mock-server 왕복 트래픽에 반영되는지,
-  브라우저로 실험을 끝까지 돌려보는 건 사용자가 직접 확인 예정.
 - **웹 UI 결과 시각화** — 현재 텍스트/테이블 렌더링만 있고 cwnd 곡선 차트
   등은 없다 (tcp_congestion 원본에 있던 기능, 범위 밖으로 명시).
 - **Gateway↔backend 구간의 별도 계측** — 지금은 client↔Gateway 구간만
