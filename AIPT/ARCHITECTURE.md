@@ -28,6 +28,7 @@ flowchart TB
         Capture["capture.py (tcpdump + timestamp_source)"]
         Wire["wire.py / streaming.py"]
         Offload["offload.py"]
+        Cwnd ~~~ Capture ~~~ Wire ~~~ Offload
     end
 
     subgraph BACKENDS["aipt/backends — Backend 프로토콜 (컴포넌트 ①②③)"]
@@ -35,6 +36,7 @@ flowchart TB
         PublicAI["① PublicAIBackend<br/>gemini.py / openai.py"]
         Mock["② MockBackend<br/>server.py / fixtures.py / replay.py"]
         LocalLLM["③ LocalLLMBackend<br/>engine_adapter.py / gateway.py(engine gateway)"]
+        PublicAI ~~~ Mock ~~~ LocalLLM
     end
 
     subgraph GATEWAY["aipt/gateway — Network Gateway (컴포넌트 ④, L3 IP 포워딩)"]
@@ -42,6 +44,7 @@ flowchart TB
         Forward["forwarding.py<br/>ip_forward=1 확인"]
         Netem["netem_control.py<br/>apply_profile_both()"]
         ProfileAPI["app.py<br/>/gateway/profile"]
+        Forward ~~~ Netem ~~~ ProfileAPI
     end
 
     subgraph TARGETS["연결 대상"]
@@ -50,6 +53,7 @@ flowchart TB
         Engine["로컬 서빙 엔진<br/>llama.cpp / vLLM (외부 실행)"]
         Gemini["Gemini API"]
         OpenAI["OpenAI API"]
+        MockNet ~~~ Engine ~~~ Gemini ~~~ OpenAI
     end
 
     subgraph EXPORT["aipt/export — 3-레이어 산출물 (다운로드 전용, 비영속)"]
@@ -58,6 +62,7 @@ flowchart TB
         Turns["turns.py → turns.csv (+goodput_bps)"]
         Packets["packets.py → packets.csv"]
         Bundle["bundle.py → bundle.zip"]
+        Connection ~~~ Turns ~~~ Packets ~~~ Bundle
     end
 
     Browser <--> Routes
