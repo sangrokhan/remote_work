@@ -20,7 +20,14 @@ flowchart TB
         Routes["routes_config / routes_run / routes_runs"]
         Store["store.py (인메모리, 최근 50개)"]
         Records["data/public_ai_records/*.json<br/>(Public AI 요청/응답, 유일한 영속 저장)"]
-        Templates["templates + static"]
+    end
+
+    subgraph CORE["aipt/core — 3-backend 공통 계측 (모든 backend가 공유)"]
+        direction LR
+        Cwnd["cwnd.py + native/cwnd_monitor.c<br/>(별도 프로세스)"]
+        Capture["capture.py (tcpdump + timestamp_source)"]
+        Wire["wire.py / streaming.py"]
+        Offload["offload.py"]
     end
 
     subgraph BACKENDS["aipt/backends — Backend 프로토콜 (컴포넌트 ①②③)"]
@@ -30,34 +37,19 @@ flowchart TB
         LocalLLM["③ LocalLLMBackend<br/>engine_adapter.py / gateway.py(engine gateway)"]
     end
 
-    subgraph GATEWAY["aipt/gateway — Network Gateway 컨테이너 (컴포넌트 ④, L3 IP 포워딩)"]
-        Forward["forwarding.py<br/>net.ipv4.ip_forward=1 확인"]
-        Netem["netem_control.py<br/>apply_profile_both() — 양쪽 인터페이스"]
-        ProfileAPI["profiles.py + app.py<br/>/gateway/profile API"]
-    end
-
-    subgraph NETCLIENT["net-client (172.28.1.0/24)"]
-        WebNet["web"]
-    end
-    subgraph NETBACKEND["net-backend (172.28.2.0/24)"]
-        MockNet["mock-server"]
-    end
-
-    subgraph EXT["실제 인터넷"]
-        Gemini["generativelanguage.googleapis.com"]
-        OpenAI["api.openai.com"]
-    end
-
-    subgraph LLMSRV["로컬 서빙 엔진 (외부 실행)"]
-        Engine["llama.cpp / vLLM"]
-    end
-
-    subgraph CORE["aipt/core — 3-backend 공통 계측"]
+    subgraph GATEWAY["aipt/gateway — Network Gateway (컴포넌트 ④, L3 IP 포워딩)"]
         direction LR
-        Cwnd["cwnd.py + native/cwnd_monitor.c<br/>(별도 프로세스)"]
-        Capture["capture.py (tcpdump + timestamp_source)"]
-        Offload["offload.py"]
-        Wire["wire.py / streaming.py"]
+        Forward["forwarding.py<br/>ip_forward=1 확인"]
+        Netem["netem_control.py<br/>apply_profile_both()"]
+        ProfileAPI["app.py<br/>/gateway/profile"]
+    end
+
+    subgraph TARGETS["연결 대상"]
+        direction LR
+        MockNet["mock-server<br/>(net-backend 172.28.2.0/24)"]
+        Engine["로컬 서빙 엔진<br/>llama.cpp / vLLM (외부 실행)"]
+        Gemini["Gemini API"]
+        OpenAI["OpenAI API"]
     end
 
     subgraph EXPORT["aipt/export — 3-레이어 산출물 (다운로드 전용, 비영속)"]
@@ -69,7 +61,6 @@ flowchart TB
     end
 
     Browser <--> Routes
-    Routes --> Templates
     Routes --> Store
     Routes -->|"public_ai 실행만"| Records
     Routes --> PublicAI
@@ -77,27 +68,24 @@ flowchart TB
     Routes --> LocalLLM
     Routes -.->|"POST /gateway/profile"| ProfileAPI
 
-    PublicAI <-->|"실제 네트워크 (Gateway 미경유)"| Gemini
-    PublicAI <-->|"실제 네트워크"| OpenAI
-
-    Mock -.->|"연결: web은 net-client에만 속함"| WebNet
-    WebNet ==>|"L3 forward<br/>(커널 IP 포워딩,<br/>TCP 페이로드 안 봄)"| GATEWAY
-    GATEWAY ==>|"L3 forward"| MockNet
-    MockNet -.-> Mock
-    LocalLLM -.->|"engine gateway 경유"| GATEWAY
-    GATEWAY <--> Engine
-
     PublicAI -. 계측 훅 .- CORE
     Mock -. 계측 훅 .- CORE
     LocalLLM -. 계측 훅 .- CORE
-
     CORE --> EXPORT
     EXPORT --> Routes
+
+    PublicAI <-->|"실제 네트워크<br/>(Gateway 미경유)"| Gemini
+    PublicAI <-->|"실제 네트워크"| OpenAI
+
+    Mock ==>|"web은 net-client(172.28.1.0/24)에만 속함<br/>L3 forward(커널 IP 포워딩, TCP 미검사)"| GATEWAY
+    GATEWAY ==> MockNet
+    LocalLLM -.->|"engine gateway 경유"| GATEWAY
+    GATEWAY <--> Engine
 
     style GATEWAY fill:#2d2d3a,stroke:#e0a030,stroke-width:2px,color:#fff
     style CORE fill:#243447,stroke:#4a90d9,stroke-width:2px,color:#fff
     style EXPORT fill:#2f3b2f,stroke:#5cb85c,stroke-width:2px,color:#fff
-    style EXT fill:#3a2626,stroke:#c0392b,stroke-width:1px,color:#fff
+    style TARGETS fill:#3a2626,stroke:#c0392b,stroke-width:1px,color:#fff
     style Records fill:#3a3020,stroke:#e0a030,stroke-width:2px,color:#fff
 ```
 
