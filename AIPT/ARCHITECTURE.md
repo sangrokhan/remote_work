@@ -66,26 +66,16 @@ flowchart TB
     end
 
     Browser <--> Routes
-    Routes --> Store
-    Routes -->|"public_ai 실행만"| Records
-    Routes --> PublicAI
-    Routes --> Mock
-    Routes --> LocalLLM
-    Routes -.->|"POST /gateway/profile"| ProfileAPI
 
-    PublicAI -. 계측 훅 .- CORE
-    Mock -. 계측 훅 .- CORE
-    LocalLLM -. 계측 훅 .- CORE
+    WEBAPP <--> BACKENDS
+    WEBAPP -.->|"POST /gateway/profile"| GATEWAY
+    BACKENDS -. 계측 훅 .- CORE
     CORE --> EXPORT
-    EXPORT --> Routes
+    EXPORT --> WEBAPP
 
-    PublicAI <-->|"실제 네트워크<br/>(Gateway 미경유)"| Gemini
-    PublicAI <-->|"실제 네트워크"| OpenAI
-
-    Mock ==>|"web은 net-client(172.28.1.0/24)에만 속함<br/>L3 forward(커널 IP 포워딩, TCP 미검사)"| GATEWAY
-    GATEWAY ==> MockNet
-    LocalLLM -.->|"engine gateway 경유"| GATEWAY
-    GATEWAY <--> Engine
+    BACKENDS <-->|"public_ai만 — 실제 인터넷,<br/>Gateway 미경유"| TARGETS
+    BACKENDS ==>|"mock/local_llm — L3 forward<br/>(커널 IP 포워딩, TCP 미검사)"| GATEWAY
+    GATEWAY ==> TARGETS
 
     style GATEWAY fill:#2d2d3a,stroke:#e0a030,stroke-width:2px,color:#fff
     style CORE fill:#243447,stroke:#4a90d9,stroke-width:2px,color:#fff
