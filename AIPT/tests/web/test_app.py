@@ -96,14 +96,14 @@ def test_api_run_mock_backend_dummy_mode_round_trips_and_lists(client):
     assert client.get(f"/api/runs/{exec_id}").status_code == 404
 
 
-def test_api_run_mock_backend_fixed_mode_uses_fixture(client):
+def test_api_run_mock_backend_replay_mode_uses_fixture(client):
     resp = client.post(
         "/api/run",
         json={
             "backend": "mock",
             "arm": "fixture",
-            "input_mode": "fixed",
-            "fixture_name": "smoke",
+            "input_mode": "replay",
+            "replay_source": "fixture:smoke",
             "measure": "bytes",
         },
     )
@@ -140,7 +140,7 @@ def test_api_run_local_llm_does_not_500(client):
         "/api/run",
         json={
             "backend": "local_llm", "arm": "chat",
-            "input_mode": "fixed", "fixture_name": "smoke",
+            "input_mode": "replay", "replay_source": "fixture:smoke",
         },
     )
     assert resp.status_code in (200, 501, 502)

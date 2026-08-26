@@ -94,6 +94,46 @@ def test_get_public_ai_record_rejects_path_traversal(client):
     assert resp.status_code == 404
 
 
+def test_mock_run_replays_a_public_ai_record(client):
+    """input_mode='replay', replay_source='record:<exec_id>' -- the mock
+    backend actually serves the captured record's answer bytes (byte-
+    pattern-only placeholder, per aipt.backends.mock.replay), and the
+    question text sent is the record's real captured question."""
+    c, records_dir = client
+    records_dir.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "schema_version": 1,
+        "system": "sys prompt",
+        "steps": [{"text": "hi"}],
+        "turns": [
+            {
+                "backend": "public_ai", "engine": "gemini", "arm": "stateless",
+                "turn": 0, "phase": "steady", "question": "what is TCP?",
+                "measure": "bytes", "request_headers": {}, "request_json": None,
+                "response_json": None, "response_text": "TCP is a protocol.",
+                "status": 200, "error": None, "wire_sent": 12, "wire_recv": 18,
+                "recorded_at": 0.0,
+            },
+        ],
+    }
+    (records_dir / "rec001.json").write_text(json.dumps(doc))
+
+    resp = c.post(
+        "/api/run",
+        json={
+            "backend": "mock", "arm": "replay",
+            "input_mode": "replay", "replay_source": "record:rec001",
+            "measure": "bytes",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True, body
+    turns = body["run"]["turns"]
+    assert len(turns) == 1
+    assert turns[0]["question"] == "what is TCP?"
+
+
 # ---------------------------------------------------------------------------
 # Unit-level: recorder.recording_backend actually writes a masked JSON file.
 # No live API key is available in this environment, so the wrapped "backend"

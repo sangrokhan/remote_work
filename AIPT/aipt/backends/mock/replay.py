@@ -84,3 +84,38 @@ def from_capture_file(path: str | Path) -> Fixture:
     p = Path(path)
     doc = json.loads(p.read_text())
     return from_capture_doc(doc, name=p.stem)
+
+
+def from_public_ai_record_doc(doc: dict, *, name: str = "replay") -> Fixture:
+    """Build a byte-pattern-only :class:`Fixture` from a
+    ``aipt.backends.public_ai.recorder.FixtureWriter`` document -- the
+    ``data/public_ai_records/<exec_id>.json`` schema (DESIGN.md 4.7.1),
+    which is *not* quite the plain ``{"turns": [{"question", "answer"}]}``
+    shape :func:`from_capture_doc` expects: turns carry ``response_text``
+    (the real model's answer text, already recorded per DESIGN.md B2) and
+    a wealth of other request/response detail this replay never needs.
+
+    Same byte-pattern-only contract as :func:`from_capture_doc`: keep the
+    real question (it drove real request-size behaviour and should drive
+    the same request size again), replace the real answer text with a
+    same-length placeholder (replaying byte-identical *content* from a
+    call that is not this run would be misleading; byte-identical *size*
+    is exactly what a "was this run's TCP behaviour representative"
+    experiment needs).
+    """
+    turns = []
+    for i, raw in enumerate(doc.get("turns") or []):
+        if not isinstance(raw, dict):
+            raise ValueError(f"record turn {i} is not an object: {type(raw).__name__}")
+        question = raw.get("question")
+        if not isinstance(question, str):
+            raise ValueError(f"record turn {i} needs a string 'question' field")
+        answer = raw.get("response_text") or ""
+        turns.append(Turn(question=question, answer=_placeholder(len(answer.encode()))))
+    system_prompt = doc.get("system", "") or ""
+    return Fixture(
+        name=doc.get("name", name),
+        system_prompt=_placeholder(len(system_prompt.encode())) if system_prompt else "",
+        description=f"replay of public_ai record {name} (bytes only, no timing)",
+        turns=turns,
+    )
