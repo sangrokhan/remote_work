@@ -95,10 +95,10 @@ def test_get_public_ai_record_rejects_path_traversal(client):
 
 
 def test_mock_run_replays_a_public_ai_record(client):
-    """input_mode='replay', replay_source='record:<exec_id>' -- the mock
-    backend actually serves the captured record's answer bytes (byte-
-    pattern-only placeholder, per aipt.backends.mock.replay), and the
-    question text sent is the record's real captured question."""
+    """input_mode='record', record_id='<exec_id>' -- the mock backend
+    actually serves the captured record's answer bytes (byte-pattern-only
+    placeholder, per aipt.backends.mock.replay), and the question text
+    sent is the record's real captured question."""
     c, records_dir = client
     records_dir.mkdir(parents=True, exist_ok=True)
     doc = {
@@ -121,8 +121,8 @@ def test_mock_run_replays_a_public_ai_record(client):
     resp = c.post(
         "/api/run",
         json={
-            "backend": "mock", "arm": "replay",
-            "input_mode": "replay", "replay_source": "record:rec001",
+            "backend": "mock", "arm": "record",
+            "input_mode": "record", "record_id": "rec001",
             "measure": "bytes",
         },
     )

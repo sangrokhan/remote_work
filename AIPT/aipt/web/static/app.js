@@ -44,15 +44,15 @@
 
   // "dummy" input mode is mock-only (byte-size filler, no real content --
   // meaningless for a backend that talks to a real model/engine). Public
-  // AI/Local LLM never show it: force "replay" and hide the mode switch
+  // AI/Local LLM never show it: force "record" and hide the mode switch
   // itself rather than leaving a dead option in the dropdown.
   function applyInputModeAvailability(key) {
     const dummyAllowed = key === "mock";
     if (!dummyAllowed && inputModeSelect.value === "dummy") {
-      inputModeSelect.value = "replay";
+      inputModeSelect.value = "record";
     }
     inputModeField.style.display = dummyAllowed ? "block" : "none";
-    toggleInputModeFields(dummyAllowed ? inputModeSelect.value : "replay");
+    toggleInputModeFields(dummyAllowed ? inputModeSelect.value : "record");
   }
 
   function toggleInputModeFields(mode) {
@@ -154,17 +154,17 @@
     // carry its own placeholder/default without one shared "model" field
     // silently applying the wrong vendor's model name.
     const model = fd.get(`${key}_model`) || "";
-    const inputMode = key === "mock" ? (fd.get("input_mode") || "replay") : "replay";
+    const inputMode = key === "mock" ? (fd.get("input_mode") || "record") : "record";
 
     const body = {
       backend,
       engine,
       arm: armSelect.value,
       model,
-      system: "", // resolved server-side from the replay source (fixture/record) or left blank (dummy)
+      system: "", // resolved server-side from the record or left blank (dummy)
       measure: fd.get("measure") || "bytes",
       input_mode: inputMode,
-      replay_source: fd.get("replay_source") || "",
+      record_id: fd.get("record_id") || "",
       system_prompt_bytes: Number(fd.get("system_prompt_bytes") || 0),
       turn_user_msg_bytes: Number(fd.get("turn_user_msg_bytes") || 0),
       num_turns: Number(fd.get("num_turns") || 3),

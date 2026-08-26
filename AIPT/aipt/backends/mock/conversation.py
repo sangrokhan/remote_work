@@ -300,8 +300,13 @@ class MockBackend:
 
     NAME = "mock"
     DEFAULT_MODEL = "mock-fixture"
-    ARMS = ("dummy", "fixture", "replay")
-    HEADLINE_ARMS = ("dummy", "fixture")
+    # Display-only labels the web UI's arm dropdown offers -- MockBackend
+    # never validates ``arm`` against this list (unlike public_ai/
+    # local_llm), since what actually drives its behaviour is
+    # aipt.web.routes_run.RunRequest.input_mode ("dummy" vs "record") plus
+    # whichever Fixture (if any) gets bound at construction time.
+    ARMS = ("dummy", "record")
+    HEADLINE_ARMS = ("dummy", "record")
 
     def __init__(
         self,

@@ -34,7 +34,6 @@ from pydantic import BaseModel, Field
 
 import aipt.backends as backends_registry
 from aipt.backends.mock import conversation as mock_conversation
-from aipt.backends.mock import fixtures as mock_fixtures
 from aipt.backends.mock import replay as mock_replay
 from aipt.backends.record import turn_record
 from aipt.backends.public_ai import recorder as public_ai_recorder
@@ -57,9 +56,9 @@ def public_ai_records_dir() -> Path:
 
 class RunRequest(BaseModel):
     """One experiment's parameters. Only ``backend`` and ``arm`` are
-    required beyond the fixture -- everything else has a default matching
-    a small, fast smoke run so the "just try it" path from the landing page
-    needs no configuration.
+    required beyond the input mode -- everything else has a default
+    matching a small, fast smoke run so the "just try it" path from the
+    landing page needs no configuration.
     """
 
     backend: str = Field(..., description="public_ai | mock | local_llm")
@@ -88,40 +87,38 @@ class RunRequest(BaseModel):
     algorithm: str | None = None
 
     # --- input mode ---------------------------------------------------
-    # Two modes, per DESIGN.md (user decision): "dummy" and "replay" --
-    # the third original arm ("fixture", a hand-authored Q&A JSON with no
-    # connection to any real capture) is folded into "replay" below rather
-    # than kept as a separate mode, since both are "load a JSON of
-    # question/answer turns and drive the run from it" -- they only differ
-    # in *where* the JSON came from.
+    # Two modes, per user decision: "dummy" and "record". The original
+    # three mock arms (dummy/fixture/replay) collapsed to two -- a
+    # hand-authored Q&A fixture and a captured real run are the same
+    # concept (a JSON of question/answer turns to replay), so there is
+    # only one "record" source now: data/public_ai_records/<record_id>.json
+    # (DESIGN.md 4.7.1). A hand-written scenario just gets dropped into
+    # that same directory in the same schema instead of living in a
+    # separate "fixtures/" tree with its own loader.
     #
-    # "dummy": mock-only. No fixture, no real question text -- the caller
+    # "dummy": mock-only. No record, no real question text -- the caller
     #   picks byte sizes and a turn count, and the size of the request
     #   text is computed per turn (system prompt once, own message every
     #   turn, PLUS everything already exchanged so far -- the same
     #   cumulative-context growth a real stateless multi-turn chat client
     #   produces) via aipt.backends.mock.conversation.build_turns().
-    # "replay": every backend supports this; it's the *only* mode
+    # "record": every backend supports this; it's the *only* mode
     #   public_ai/local_llm expose (they talk to a real model/engine, so
-    #   there's no "dummy byte size" concept for them). Loads a Q&A JSON
-    #   from one of two sources (``replay_source``, "kind:name"):
-    #     - "fixture:<name>" -- a hand-authored fixture under
-    #       aipt/backends/mock/fixtures.FIXTURE_DIR (mock_fixtures.load).
-    #     - "record:<exec_id>" -- a real captured public_ai run from
-    #       data/public_ai_records/<exec_id>.json (DESIGN.md 4.7.1),
-    #       rebuilt via aipt.backends.mock.replay.from_public_ai_record_doc.
-    #   Real-model backends (public_ai/local_llm) only ever send the
-    #   *question* half of each turn -- they're actually calling a live
-    #   model/engine and need its real answer back, so a fixture/record's
-    #   ``answer`` field is never sent to them, only used by the mock
-    #   backend (which has no real model to ask).
+    #   there's no "dummy byte size" concept for them). Loads
+    #   data/public_ai_records/<record_id>.json via
+    #   aipt.backends.mock.replay.from_public_ai_record_doc. Real-model
+    #   backends (public_ai/local_llm) only ever send the *question* half
+    #   of each turn -- they're actually calling a live model/engine and
+    #   need its real answer back, so a record's ``response_text`` is
+    #   never sent to them, only used by the mock backend (which has no
+    #   real model to ask).
     input_mode: str = Field(
-        default="replay",
-        description="'dummy' (mock-only, byte-size knobs) or 'replay' (load a Q&A JSON, fixture or captured record).",
+        default="record",
+        description="'dummy' (mock-only, byte-size knobs) or 'record' (replay data/public_ai_records/<record_id>.json).",
     )
-    replay_source: str = Field(
+    record_id: str = Field(
         default="",
-        description="input_mode='replay': 'fixture:<name>' or 'record:<exec_id>'.",
+        description="input_mode='record': exec_id under data/public_ai_records/ (no .json).",
     )
     # input_mode='dummy' (mock-only) knobs. Every byte-size input the user
     # sees maps 1:1 onto conversation.build_turns()'s own parameter names.
@@ -130,40 +127,34 @@ class RunRequest(BaseModel):
     num_turns: int = 3
 
 
-def _load_replay_fixture(replay_source: str):
-    """Parses ``replay_source`` ("fixture:<name>" or "record:<exec_id>")
-    and returns the loaded :class:`~aipt.backends.mock.fixtures.Fixture`.
-    Raises ``ValueError``/``KeyError``/``OSError`` on a bad source --
-    callers turn that into a normal run failure, never a raw 500.
+def _load_record_fixture(record_id: str):
+    """Loads ``data/public_ai_records/<record_id>.json`` and rebuilds it as
+    a byte-pattern-only replay :class:`~aipt.backends.mock.fixtures.Fixture`
+    (question verbatim, answer -> same-length placeholder). Raises
+    ``ValueError``/``OSError`` on a bad/missing record -- callers turn that
+    into a normal run failure, never a raw 500.
     """
-    if ":" not in replay_source:
-        raise ValueError(
-            f"replay_source must be 'fixture:<name>' or 'record:<exec_id>', got {replay_source!r}"
-        )
-    kind, _, name = replay_source.partition(":")
-    if kind == "fixture":
-        return mock_fixtures.load(name)
-    if kind == "record":
-        path = public_ai_records_dir() / f"{name}.json"
-        doc = json.loads(path.read_text())
-        return mock_replay.from_public_ai_record_doc(doc, name=name)
-    raise ValueError(f"unknown replay_source kind: {kind!r} (want 'fixture' or 'record')")
+    if not record_id:
+        raise ValueError("record_id is required")
+    path = public_ai_records_dir() / f"{record_id}.json"
+    doc = json.loads(path.read_text())
+    return mock_replay.from_public_ai_record_doc(doc, name=record_id)
 
 
 def _resolve_turns(req: RunRequest) -> tuple[list[str], str, str | None]:
     """Returns ``(question_texts, system_prompt, error)``. ``error`` is set
     (and the other two are empty/``""``) when the requested input mode
-    can't be satisfied -- an unknown/missing replay source, or ``dummy``
+    can't be satisfied -- an unknown/missing record, or ``dummy``
     requested for a backend that doesn't support it -- so the caller can
     surface it as a normal run failure rather than a raw 500.
 
-    ``dummy`` mode never touches a fixture/record at all: it synthesizes
-    filler question text (and reuses conversation.build_turns()'s existing
+    ``dummy`` mode never touches a record at all: it synthesizes filler
+    question text (and reuses conversation.build_turns()'s existing
     cumulative-context growth math) purely from byte-size knobs, and is
     only meaningful for the mock backend (public_ai/local_llm always talk
     to a real model/engine, so there is no filler-byte concept for them).
 
-    ``replay`` mode only ever surfaces the *question* half of each loaded
+    ``record`` mode only ever surfaces the *question* half of each loaded
     turn here -- the answer half is a separate concern MockBackend alone
     consumes (see ``_build_backend``), since a real-model backend needs
     its own live answer, not a replayed one.
@@ -190,13 +181,13 @@ def _resolve_turns(req: RunRequest) -> tuple[list[str], str, str | None]:
         questions = ["x" * spec["prompt_bytes"] for spec in specs]
         return questions, "", None
 
-    # "replay": every backend reads the same Q&A shape, whichever source.
-    if not req.replay_source:
-        return [], "", "input_mode='replay' requires replay_source"
+    # "record": every backend replays the same recorded-run schema.
+    if not req.record_id:
+        return [], "", "input_mode='record' requires record_id"
     try:
-        fixture = _load_replay_fixture(req.replay_source)
-    except (KeyError, ValueError, OSError) as exc:
-        return [], "", f"failed to load replay_source {req.replay_source!r}: {exc}"
+        fixture = _load_record_fixture(req.record_id)
+    except (ValueError, OSError) as exc:
+        return [], "", f"failed to load record_id {req.record_id!r}: {exc}"
     questions = [t.question for t in fixture.turns]
     return questions, fixture.system_prompt, None
 
@@ -212,21 +203,21 @@ def _build_backend(name: str, engine: str | None = None, *, req: "RunRequest | N
     If/when it lands as a real ``LocalLLMBackend``, this branch picks it up
     automatically (same attribute lookup pattern as public_ai/mock).
 
-    ``mock`` + ``input_mode='replay'``: the loaded Fixture (question AND
+    ``mock`` + ``input_mode='record'``: the loaded Fixture (question AND
     answer) is bound to MockBackend so its own server actually serves the
-    fixture/record's answer text for each turn -- unlike public_ai/
-    local_llm, mock has no real model to ask, so replaying the recorded
-    answer bytes IS the point.
+    record's answer text for each turn -- unlike public_ai/local_llm, mock
+    has no real model to ask, so replaying the recorded answer bytes IS
+    the point.
     """
     module = backends_registry.get(name)
     if name == "public_ai":
         return module.PublicAIBackend(engine=engine) if engine else module.PublicAIBackend()
     if name == "mock":
         fixture = None
-        if req is not None and req.input_mode == "replay" and req.replay_source:
+        if req is not None and req.input_mode == "record" and req.record_id:
             try:
-                fixture = _load_replay_fixture(req.replay_source)
-            except (KeyError, ValueError, OSError):
+                fixture = _load_record_fixture(req.record_id)
+            except (ValueError, OSError):
                 fixture = None  # _resolve_turns() already reports this as a run failure
         return module.MockBackend(fixture=fixture)
     if name == "local_llm":

@@ -16,7 +16,6 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 import aipt.backends as backends_registry
-from aipt.backends.mock import fixtures as mock_fixtures
 from aipt.backends.public_ai import gemini as _gemini
 from aipt.backends.public_ai import openai as _openai
 from aipt.core import capture as capture_mod
@@ -237,7 +236,6 @@ def config_payload() -> dict:
     return {
         "backends": backends_view(),
         "ui_backends": ui_backends(),
-        "fixtures": mock_fixtures.names(),
         "public_ai_records": public_ai_record_names(),
         "congestion_algorithms": list(CONGESTION_ALGORITHMS),
         "cwnd": {

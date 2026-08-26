@@ -19,36 +19,29 @@
     <label><input type="checkbox" id="capture" name="capture"> Capture packets (tcpdump)</label>
   </div>
 
-  <!-- Input mode: every backend has "replay" (a Q&A JSON -- either a
-       hand-authored fixture or a captured real public_ai run); only mock
-       additionally has "dummy" (byte-size knobs, no real content). The
-       mode switch itself is hidden entirely for public_ai/local_llm --
-       app.js forces "replay" and hides #input-mode-field for them. -->
+  <!-- Input mode: every backend has "record" (replay a captured/recorded
+       Q&A JSON from data/public_ai_records/); only mock additionally has
+       "dummy" (byte-size knobs, no real content). The mode switch itself
+       is hidden entirely for public_ai/local_llm -- app.js forces
+       "record" and hides #input-mode-field for them. -->
   <div class="field" id="input-mode-field">
     <label for="input-mode-select">Input</label>
     <select id="input-mode-select" name="input_mode">
-      <option value="replay">재생 (fixture / 실측 record)</option>
+      <option value="record">Record (실측/작성된 캡처)</option>
       <option value="dummy">더미 (byte-size 파라미터)</option>
     </select>
   </div>
 
-  <fieldset id="replay-fields" class="input-mode-fields" data-mode="replay">
-    <legend>Replay source</legend>
+  <fieldset id="record-fields" class="input-mode-fields" data-mode="record">
+    <legend>Record</legend>
     <div class="field">
-      <label for="replay-source-select">Source</label>
-      <select id="replay-source-select" name="replay_source">
-        <optgroup label="Fixture (hand-authored)">
-          {% for name in config.fixtures %}
-          <option value="fixture:{{ name }}">fixture: {{ name }}</option>
-          {% endfor %}
-        </optgroup>
-        <optgroup label="Record (실제 Gemini/ChatGPT 캡처)">
-          {% for exec_id in config.public_ai_records %}
-          <option value="record:{{ exec_id }}">record: {{ exec_id }}</option>
-          {% endfor %}
-        </optgroup>
+      <label for="record-select">Record</label>
+      <select id="record-select" name="record_id">
+        {% for exec_id in config.public_ai_records %}
+        <option value="{{ exec_id }}">{{ exec_id }}</option>
+        {% endfor %}
       </select>
-      <p class="hint">question은 그대로 전송된다. Gemini/ChatGPT/Local LLM은 question만 실제로 보내 진짜 응답을 받고(answer는 무시), Mock은 answer(또는 record의 응답 바이트 길이만 보존한 placeholder)를 그대로 돌려준다.</p>
+      <p class="hint">question은 그대로 전송된다. Gemini/ChatGPT/Local LLM은 question만 실제로 보내 진짜 응답을 받고(response_text는 무시), Mock은 응답 바이트 길이만 보존한 placeholder를 그대로 돌려준다. data/public_ai_records/에 있는 모든 캡처(실제 API 호출 결과, 또는 같은 스키마로 직접 작성한 파일)가 여기 뜬다.</p>
     </div>
   </fieldset>
 

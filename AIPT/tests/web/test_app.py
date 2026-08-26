@@ -6,20 +6,45 @@ run round-trips through /api/run and /api/runs, and local_llm surfaces as
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
+from aipt.web import routes_run
 from aipt.web import store as run_store
 from aipt.web.app import create_app
 
 
 @pytest.fixture()
-def client():
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv(routes_run.PUBLIC_AI_RECORDS_DIR_ENV, str(tmp_path / "public_ai_records"))
     run_store.clear()
     app = create_app()
     with TestClient(app) as c:
         yield c
     run_store.clear()
+
+
+def _write_record(records_dir, record_id: str, questions: list[str]) -> None:
+    records_dir.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "schema_version": 1,
+        "system": "",
+        "steps": [],
+        "turns": [
+            {
+                "backend": "public_ai", "engine": "gemini", "arm": "stateless",
+                "turn": i, "phase": "steady", "question": q,
+                "measure": "bytes", "request_headers": {}, "request_json": None,
+                "response_json": None, "response_text": "ok",
+                "status": 200, "error": None, "wire_sent": 0, "wire_recv": 0,
+                "recorded_at": 0.0,
+            }
+            for i, q in enumerate(questions)
+        ],
+    }
+    (records_dir / f"{record_id}.json").write_text(json.dumps(doc))
 
 
 def test_index_ok(client):
@@ -96,14 +121,15 @@ def test_api_run_mock_backend_dummy_mode_round_trips_and_lists(client):
     assert client.get(f"/api/runs/{exec_id}").status_code == 404
 
 
-def test_api_run_mock_backend_replay_mode_uses_fixture(client):
+def test_api_run_mock_backend_record_mode_replays_a_record(client, tmp_path):
+    _write_record(tmp_path / "public_ai_records", "rec-smoke", ["what is 2+2?"])
     resp = client.post(
         "/api/run",
         json={
             "backend": "mock",
-            "arm": "fixture",
-            "input_mode": "replay",
-            "replay_source": "fixture:smoke",
+            "arm": "record",
+            "input_mode": "record",
+            "record_id": "rec-smoke",
             "measure": "bytes",
         },
     )
@@ -129,18 +155,19 @@ def test_api_run_unknown_backend_is_400(client):
     assert resp.status_code == 400
 
 
-def test_api_run_local_llm_does_not_500(client):
+def test_api_run_local_llm_does_not_500(client, tmp_path):
     """local_llm (DESIGN.md 5 B4) may be a NotImplementedError stub (-> 501)
     or, once a parallel work stream lands it, a real backend that simply
     can't reach a live engine in this test environment (-> 200 with
     ok:false, or a connection-error 5xx from the run itself) -- either way
     the route must never leak a raw unhandled traceback (500 with no JSON
     'error' key)."""
+    _write_record(tmp_path / "public_ai_records", "rec-smoke", ["hi"])
     resp = client.post(
         "/api/run",
         json={
             "backend": "local_llm", "arm": "chat",
-            "input_mode": "replay", "replay_source": "fixture:smoke",
+            "input_mode": "record", "record_id": "rec-smoke",
         },
     )
     assert resp.status_code in (200, 501, 502)
