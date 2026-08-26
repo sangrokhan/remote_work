@@ -1,22 +1,9 @@
 <form id="experiment-form">
-  <div class="field">
-    <label for="backend-select">Backend</label>
-    <select id="backend-select" name="backend">
-      {% for b in config.backends %}
-      <option value="{{ b.name }}" {{ 'disabled' if not b.implemented else '' }}>{{ b.label }}</option>
-      {% endfor %}
-    </select>
-  </div>
+  <input type="hidden" id="backend-select" name="backend_key">
 
   <div class="field">
     <label for="arm-select">Arm</label>
     <select id="arm-select" name="arm"></select>
-  </div>
-
-  <div class="field">
-    <label for="turns">Turns (one question per line)</label>
-    <textarea id="turns" name="turns" rows="4">Hello, how are you?
-Tell me a fun fact about TCP.</textarea>
   </div>
 
   <div class="field">
@@ -32,16 +19,58 @@ Tell me a fun fact about TCP.</textarea>
     <label><input type="checkbox" id="capture" name="capture"> Capture packets (tcpdump)</label>
   </div>
 
-  <fieldset id="mock-fields" class="backend-fields" data-backend="mock">
-    <legend>Mock options</legend>
+  <!-- Input mode: every backend has "fixed" (a Q&A JSON fixture); only
+       mock additionally has "dummy" (byte-size knobs, no real content).
+       #dummy-mode-field itself is hidden entirely for public_ai/local_llm
+       -- app.js toggles it alongside the backend fieldsets below. -->
+  <div class="field" id="input-mode-field">
+    <label for="input-mode-select">Input</label>
+    <select id="input-mode-select" name="input_mode">
+      <option value="fixed">고정 (JSON fixture)</option>
+      <option value="dummy">더미 (byte-size 파라미터)</option>
+    </select>
+  </div>
+
+  <fieldset id="fixed-fields" class="input-mode-fields" data-mode="fixed">
+    <legend>Fixed fixture</legend>
     <div class="field">
-      <label for="mock_response_bytes">Response bytes</label>
+      <label for="fixture-select">Fixture</label>
+      <select id="fixture-select" name="fixture_name">
+        {% for name in config.fixtures %}
+        <option value="{{ name }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">system_prompt + turns[{question, answer}] JSON. mock은 answer를 그대로 응답, public_ai/local_llm은 question만 실제로 보내고 진짜 응답을 받는다.</p>
+    </div>
+  </fieldset>
+
+  <fieldset id="dummy-fields" class="input-mode-fields" data-mode="dummy">
+    <legend>Dummy (byte-size sweep)</legend>
+    <div class="field">
+      <label for="system_prompt_bytes">System prompt 크기 (bytes)</label>
+      <input type="number" id="system_prompt_bytes" name="system_prompt_bytes" value="0" min="0">
+    </div>
+    <div class="field">
+      <label for="turn_user_msg_bytes">사용자 입력 크기 (bytes, 매 턴)</label>
+      <input type="number" id="turn_user_msg_bytes" name="turn_user_msg_bytes" value="100" min="0">
+    </div>
+    <div class="field">
+      <label for="mock_response_bytes">응답 크기 (bytes, 매 턴)</label>
       <input type="number" id="mock_response_bytes" name="mock_response_bytes" value="400" min="0">
     </div>
     <div class="field">
-      <label for="inference_delay_ms">Inference delay (ms)</label>
+      <label for="num_turns">Multi-turn 횟수</label>
+      <input type="number" id="num_turns" name="num_turns" value="3" min="1">
+    </div>
+    <div class="field">
+      <label for="inference_delay_ms">추론 시간 (ms)</label>
       <input type="number" id="inference_delay_ms" name="inference_delay_ms" value="0" min="0">
     </div>
+    <p class="hint">turn마다 이전 turn까지의 요청+응답이 누적되어(stateless 재전송) 요청 크기가 커진다.</p>
+  </fieldset>
+
+  <fieldset id="mock-fields" class="backend-fields" data-key="mock">
+    <legend>Mock options</legend>
     <div class="field">
       <label for="algorithm">Congestion algorithm</label>
       <select id="algorithm" name="algorithm">
@@ -53,21 +82,28 @@ Tell me a fun fact about TCP.</textarea>
     </div>
   </fieldset>
 
-  <fieldset id="public_ai-fields" class="backend-fields" data-backend="public_ai">
-    <legend>Public AI options</legend>
+  <fieldset id="gemini-fields" class="backend-fields" data-key="gemini">
+    <legend>Gemini options</legend>
     <div class="field">
-      <label for="model">Model (optional)</label>
-      <input type="text" id="model" name="model" placeholder="defaults to backend's DEFAULT_MODEL">
-    </div>
-    <div class="field">
-      <label for="system">System prompt (optional)</label>
-      <input type="text" id="system" name="system">
+      <label for="gemini_model">Model (optional)</label>
+      <input type="text" id="gemini_model" name="gemini_model" placeholder="defaults to gemini-2.0-flash-exp">
     </div>
   </fieldset>
 
-  <fieldset id="local_llm-fields" class="backend-fields" data-backend="local_llm">
-    <legend>Local LLM <span class="badge">구현 예정</span></legend>
-    <p>이 backend는 아직 구현되지 않았습니다.</p>
+  <fieldset id="openai-fields" class="backend-fields" data-key="openai">
+    <legend>ChatGPT options</legend>
+    <div class="field">
+      <label for="openai_model">Model (optional)</label>
+      <input type="text" id="openai_model" name="openai_model" placeholder="defaults to gpt-4o-mini">
+    </div>
+  </fieldset>
+
+  <fieldset id="local_llm-fields" class="backend-fields" data-key="local_llm">
+    <legend>Local LLM options</legend>
+    <div class="field">
+      <label for="local_llm_model">Model (optional)</label>
+      <input type="text" id="local_llm_model" name="local_llm_model" placeholder="engine-reported default">
+    </div>
   </fieldset>
 
   <button type="submit" id="run-button">Run</button>

@@ -16,6 +16,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 import aipt.backends as backends_registry
+from aipt.backends.mock import fixtures as mock_fixtures
+from aipt.backends.public_ai import gemini as _gemini
+from aipt.backends.public_ai import openai as _openai
 from aipt.core import capture as capture_mod
 from aipt.core import cwnd as cwndmon
 
@@ -100,6 +103,90 @@ def _backend_arms(name: str) -> list[str]:
         return []
 
 
+#: DESIGN.md 4.5 groups Gemini/ChatGPT under one registry slot
+#: ("public_ai") because they share one Backend-protocol facade
+#: (``PublicAIBackend(engine=...)``), but a user picking a backend from
+#: the landing page thinks in terms of "which vendor", not "which
+#: registry slot" -- Gemini and ChatGPT have entirely disjoint arm sets
+#: (6 vs 4) and mixing them into one dropdown makes the arm list look
+#: like one incoherent pile of 10 options. ``ui_backends()`` below is
+#: the UI-facing view: it splits public_ai into two cards (one per
+#: engine) so each gets its own arm dropdown, while ``backends_view()``
+#: (registry-name-keyed) stays intact for anything that still needs the
+#: 3-way public_ai/mock/local_llm split (POST /api/run's ``backend``
+#: field, for one -- it still only knows 3 names; the UI card carries
+#: the extra ``engine`` value that resolves back to one of them).
+_PUBLIC_AI_ENGINE_DISPLAY = {
+    "gemini": {
+        "label": "Gemini",
+        "description": "Google Gemini API -- stateless/stateful-pointer/explicit-cache arms.",
+    },
+    "openai": {
+        "label": "ChatGPT",
+        "description": "OpenAI Chat/Responses API -- stateless/stateful-pointer arms.",
+    },
+}
+
+
+def _public_ai_engine_arms(engine: str) -> list[str]:
+    module = {"gemini": _gemini, "openai": _openai}[engine]
+    return list(getattr(module, "ARMS", ()))
+
+
+def _public_ai_engine_ready(engine: str) -> tuple[bool, str]:
+    module = {"gemini": _gemini, "openai": _openai}[engine]
+    try:
+        return module.ready()
+    except Exception as exc:  # never let a landing page 500 on a bad engine
+        return False, f"error checking readiness: {exc}"
+
+
+def public_ai_engine_cards() -> list[dict]:
+    """One card per Public AI engine (Gemini, ChatGPT) -- each with its own
+    arm list, so the form's arm dropdown is never a merged pile of both
+    vendors' arms at once."""
+    out = []
+    for engine, display in _PUBLIC_AI_ENGINE_DISPLAY.items():
+        ok, reason = _public_ai_engine_ready(engine)
+        out.append({
+            "key": engine,
+            "backend": "public_ai",
+            "engine": engine,
+            "label": display["label"],
+            "description": display["description"],
+            "implemented": True,
+            "ready": ok,
+            "reason": "준비됨" if ok else reason,
+            "arms": _public_ai_engine_arms(engine),
+        })
+    return out
+
+
+def ui_backends() -> list[dict]:
+    """The landing page's actual card list: Gemini, ChatGPT, then every
+    other registered backend (mock, local_llm, ...) one card each. Each
+    entry carries ``backend`` (the registry name POST /api/run expects)
+    and ``engine`` (``None`` unless the card is a Public AI engine split)
+    so the frontend never has to know which backends happen to share a
+    registry slot."""
+    cards = public_ai_engine_cards()
+    for b in backends_view():
+        if b["name"] == "public_ai":
+            continue  # already represented by its two engine cards above
+        cards.append({
+            "key": b["name"],
+            "backend": b["name"],
+            "engine": None,
+            "label": b["label"],
+            "description": b["description"],
+            "implemented": b["implemented"],
+            "ready": b["ready"],
+            "reason": "준비됨" if b["ready"] else b["reason"],
+            "arms": b["arms"],
+        })
+    return cards
+
+
 def backends_view() -> list[dict]:
     """One entry per registered backend name, for both the landing page and
     /api/config -- the same list, so the UI's cards and the JSON contract
@@ -126,11 +213,16 @@ def backends_view() -> list[dict]:
 
 def config_payload() -> dict:
     """The single dict both GET /api/config and the landing page template
-    context are built from."""
+    context are built from. ``backends`` stays the 3-way registry view
+    (POST /api/run's ``backend`` field only knows public_ai/mock/
+    local_llm); ``ui_backends`` is the 4-card view the landing page and
+    the form actually render (public_ai split into Gemini/ChatGPT)."""
     cwnd_ok, cwnd_reason = cwndmon.available()
     cap_ok, cap_reason = capture_mod.available()
     return {
         "backends": backends_view(),
+        "ui_backends": ui_backends(),
+        "fixtures": mock_fixtures.names(),
         "congestion_algorithms": list(CONGESTION_ALGORITHMS),
         "cwnd": {
             "available": cwnd_ok,

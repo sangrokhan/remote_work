@@ -15,16 +15,16 @@
     <section id="backend-cards">
       <h2>1. Choose a backend</h2>
       <div class="cards">
-        {% for b in config.backends %}
-        <div class="card {{ 'disabled' if not b.implemented else '' }}" data-backend="{{ b.name }}">
+        {% for b in config.ui_backends %}
+        <div class="card {{ 'disabled' if not b.implemented else '' }}" data-key="{{ b.key }}">
           <h3>{{ b.label }}
             {% if not b.implemented %}<span class="badge">구현 예정</span>{% endif %}
           </h3>
           <p>{{ b.description }}</p>
           <p class="status {{ 'ok' if b.ready else 'warn' }}">
-            {{ '준비됨' if b.ready else b.reason }}
+            {{ b.reason }}
           </p>
-          <button type="button" class="select-backend" data-backend="{{ b.name }}"
+          <button type="button" class="select-backend" data-key="{{ b.key }}"
                   {{ 'disabled' if not b.implemented else '' }}>
             선택
           </button>
@@ -35,6 +35,7 @@
 
     <section id="experiment-form-section">
       <h2>2. Configure the run</h2>
+      <p class="hint">위에서 선택한 backend에 맞춰 아래 옵션이 자동으로 바뀝니다.</p>
       {% include "_experiment_form.html" %}
     </section>
 

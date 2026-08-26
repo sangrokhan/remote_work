@@ -32,6 +32,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 import aipt.backends as backends_registry
+from aipt.backends.mock import conversation as mock_conversation
+from aipt.backends.mock import fixtures as mock_fixtures
 from aipt.backends.record import turn_record
 from aipt.backends.public_ai import recorder as public_ai_recorder
 from aipt.web import store as run_store
@@ -59,6 +61,14 @@ class RunRequest(BaseModel):
     """
 
     backend: str = Field(..., description="public_ai | mock | local_llm")
+    engine: str | None = Field(
+        default=None,
+        description=(
+            "public_ai only: 'gemini' or 'openai'. Lets the UI's Gemini/"
+            "ChatGPT cards (which both map to backend='public_ai') pin the "
+            "engine explicitly instead of relying on arm-name inference."
+        ),
+    )
     arm: str = Field(..., description="Backend-specific arm name.")
     model: str = ""
     system: str = ""
@@ -74,6 +84,79 @@ class RunRequest(BaseModel):
     mock_response_bytes: int = 400
     inference_delay_ms: int = 0
     algorithm: str | None = None
+
+    # --- input mode ---------------------------------------------------
+    # "fixed": read a Q&A JSON fixture (aipt.backends.mock.fixtures schema
+    #   -- system_prompt + turns[{question,answer}]) and drive the
+    #   conversation from its questions. Every backend supports this; it
+    #   is the *only* mode public_ai/local_llm expose (they talk to a real
+    #   model/engine, so there is no "dummy byte size" concept for them --
+    #   only mock can synthesize filler text that means nothing).
+    # "dummy": mock-only. No fixture, no real question text -- the caller
+    #   picks byte sizes and a turn count, and the size of the request
+    #   text is computed per turn (system prompt once, own message every
+    #   turn, PLUS everything already exchanged so far -- the same
+    #   cumulative-context growth a real stateless multi-turn chat client
+    #   produces) via aipt.backends.mock.conversation.build_turns().
+    input_mode: str = Field(
+        default="fixed",
+        description="'fixed' (load a Q&A JSON fixture) or 'dummy' (mock-only, byte-size knobs).",
+    )
+    fixture_name: str = Field(
+        default="",
+        description="input_mode='fixed': name under aipt/backends/mock/fixtures.FIXTURE_DIR (no .json).",
+    )
+    # input_mode='dummy' (mock-only) knobs. Every byte-size input the user
+    # sees maps 1:1 onto conversation.build_turns()'s own parameter names.
+    system_prompt_bytes: int = 0
+    turn_user_msg_bytes: int = 0
+    num_turns: int = 3
+
+
+def _resolve_turns(req: RunRequest) -> tuple[list[str], str, str | None]:
+    """Returns ``(question_texts, system_prompt, error)``. ``error`` is set
+    (and the other two are empty/``""``) when the requested input mode
+    can't be satisfied -- an unknown fixture name, or ``dummy`` requested
+    for a backend that doesn't support it -- so the caller can surface it
+    as a normal run failure rather than a raw 500.
+
+    ``dummy`` mode never touches a fixture file at all: it synthesizes
+    filler question text (and reuses conversation.build_turns()'s existing
+    cumulative-context growth math) purely from byte-size knobs, and is
+    only meaningful for the mock backend (public_ai/local_llm always talk
+    to a real model/engine, so there is no filler-byte concept for them).
+    """
+    if req.input_mode == "dummy":
+        if req.backend != "mock":
+            return [], "", f"input_mode='dummy' is mock-only, not {req.backend!r}"
+        try:
+            specs = mock_conversation.build_turns(
+                num_turns=req.num_turns,
+                system_prompt_bytes=req.system_prompt_bytes,
+                turn_user_msg_bytes=req.turn_user_msg_bytes,
+                mock_response_bytes=req.mock_response_bytes,
+                inference_delay_ms=req.inference_delay_ms,
+                idle_duration_ms=0,
+            )
+        except ValueError as exc:
+            return [], "", str(exc)
+        # build_turns() returns each turn's *total* prompt_bytes (system
+        # prompt folded into turn 0, cumulative history folded into every
+        # turn after) -- that IS the filler text to send; MockBackend has
+        # no separate "history" concept of its own; the request body sent
+        # each turn simply has to already be that size.
+        questions = ["x" * spec["prompt_bytes"] for spec in specs]
+        return questions, "", None
+
+    # "fixed": every backend reads the same Q&A fixture schema.
+    if not req.fixture_name:
+        return [], "", "input_mode='fixed' requires fixture_name"
+    try:
+        fixture = mock_fixtures.load(req.fixture_name)
+    except (KeyError, ValueError, OSError) as exc:
+        return [], "", f"failed to load fixture {req.fixture_name!r}: {exc}"
+    questions = [t.question for t in fixture.turns]
+    return questions, fixture.system_prompt, None
 
 
 def _build_backend(name: str, engine: str | None = None):
@@ -115,7 +198,7 @@ def _run_conversation(req: RunRequest) -> dict:
     on-disk artifact this app produces. mock/local_llm runs never touch
     this path; their turns live only in the in-memory store (Phase 1).
     """
-    backend = _build_backend(req.backend)
+    backend = _build_backend(req.backend, engine=req.engine)
     ok, reason = backend.ready()
     if not ok:
         return {
@@ -125,6 +208,17 @@ def _run_conversation(req: RunRequest) -> dict:
             "arm": req.arm,
             "turns": [],
         }
+
+    questions, resolved_system, resolve_error = _resolve_turns(req)
+    if resolve_error:
+        return {
+            "ok": False,
+            "error": resolve_error,
+            "backend": req.backend,
+            "arm": req.arm,
+            "turns": [],
+        }
+    system = req.system or resolved_system
 
     label = req.label or f"{req.backend}:{req.arm}"
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -142,19 +236,21 @@ def _run_conversation(req: RunRequest) -> dict:
 
     writer = None
     if req.backend == "public_ai":
-        try:
-            engine = backends_registry.get("public_ai").engine_for_arm(req.arm)
-        except ValueError:
-            engine = ""
-        writer = public_ai_recorder.FixtureWriter(system=req.system, steps=list(req.turns))
+        engine = req.engine or ""
+        if not engine:
+            try:
+                engine = backends_registry.get("public_ai").engine_for_arm(req.arm)
+            except ValueError:
+                engine = ""
+        writer = public_ai_recorder.FixtureWriter(system=system, steps=list(questions))
         backend = public_ai_recorder.recording_backend(backend, writer, engine=engine)
 
     records: list[dict] = []
     error = ""
     t0 = time.monotonic()
     try:
-        backend.connect(req.arm, req.model, req.system)
-        for i, question in enumerate(req.turns):
+        backend.connect(req.arm, req.model, system)
+        for i, question in enumerate(questions):
             exchange = backend.send_turn(i, question, req.measure)
             records.append(
                 turn_record(

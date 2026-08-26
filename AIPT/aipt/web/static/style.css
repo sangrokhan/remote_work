@@ -30,6 +30,17 @@ header .tagline {
   opacity: 0.6;
 }
 
+.card.selected {
+  border-color: #2a6fdb;
+  box-shadow: 0 0 0 2px rgba(42, 111, 219, 0.25);
+}
+
+.hint {
+  color: #666;
+  font-size: 0.85rem;
+  margin: 0.25rem 0 0;
+}
+
 .badge {
   display: inline-block;
   background: #eee;

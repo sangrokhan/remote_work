@@ -1,23 +1,26 @@
-// aipt/web/static/app.js -- backend-selection toggle, /api/run driver,
-// minimal result/recent-runs rendering. No chart library (DESIGN.md 5:
-// "차트는 이번 범위 밖으로 남겨도 됨") -- text/table output only.
+// aipt/web/static/app.js -- backend-selection toggle, fixed/dummy input
+// mode toggle, /api/run driver, minimal result/recent-runs rendering. No
+// chart library (DESIGN.md 5: "차트는 이번 범위 밖으로 남겨도 됨") -- text/
+// table output only.
 
 (function () {
   "use strict";
 
-  const CONFIG = window.__AIPT_CONFIG__ || { backends: [] };
-  const BACKENDS_BY_NAME = Object.fromEntries(
-    (CONFIG.backends || []).map((b) => [b.name, b])
+  const CONFIG = window.__AIPT_CONFIG__ || { ui_backends: [] };
+  const BACKENDS_BY_KEY = Object.fromEntries(
+    (CONFIG.ui_backends || []).map((b) => [b.key, b])
   );
 
-  const backendSelect = document.getElementById("backend-select");
+  const backendSelect = document.getElementById("backend-select"); // hidden input
   const armSelect = document.getElementById("arm-select");
+  const inputModeField = document.getElementById("input-mode-field");
+  const inputModeSelect = document.getElementById("input-mode-select");
   const form = document.getElementById("experiment-form");
   const output = document.getElementById("run-output");
   const runsTableBody = document.querySelector("#runs-table tbody");
 
-  function populateArms(backendName) {
-    const arms = (BACKENDS_BY_NAME[backendName] || {}).arms || [];
+  function populateArms(key) {
+    const arms = (BACKENDS_BY_KEY[key] || {}).arms || [];
     armSelect.innerHTML = "";
     for (const arm of arms) {
       const opt = document.createElement("option");
@@ -33,30 +36,52 @@
     }
   }
 
-  function toggleBackendFields(backendName) {
+  function toggleBackendFields(key) {
     document.querySelectorAll(".backend-fields").forEach((el) => {
-      el.style.display = el.dataset.backend === backendName ? "block" : "none";
+      el.style.display = el.dataset.key === key ? "block" : "none";
     });
   }
 
-  function selectBackend(name) {
-    backendSelect.value = name;
-    populateArms(name);
-    toggleBackendFields(name);
+  // "dummy" input mode is mock-only (byte-size filler, no real content --
+  // meaningless for a backend that talks to a real model/engine). Public
+  // AI/Local LLM never show it: force "fixed" and hide the mode switch
+  // itself rather than leaving a dead option in the dropdown.
+  function applyInputModeAvailability(key) {
+    const dummyAllowed = key === "mock";
+    if (!dummyAllowed && inputModeSelect.value === "dummy") {
+      inputModeSelect.value = "fixed";
+    }
+    inputModeField.style.display = dummyAllowed ? "block" : "none";
+    toggleInputModeFields(dummyAllowed ? inputModeSelect.value : "fixed");
   }
 
-  backendSelect.addEventListener("change", () => selectBackend(backendSelect.value));
+  function toggleInputModeFields(mode) {
+    document.querySelectorAll(".input-mode-fields").forEach((el) => {
+      el.style.display = el.dataset.mode === mode ? "block" : "none";
+    });
+  }
+
+  function selectBackend(key) {
+    backendSelect.value = key;
+    populateArms(key);
+    toggleBackendFields(key);
+    applyInputModeAvailability(key);
+  }
 
   document.querySelectorAll(".select-backend").forEach((btn) => {
     btn.addEventListener("click", () => {
       if (btn.disabled) return;
-      selectBackend(btn.dataset.backend);
+      selectBackend(btn.dataset.key);
+      document.querySelectorAll(".card").forEach((c) => c.classList.remove("selected"));
+      btn.closest(".card").classList.add("selected");
     });
   });
 
-  // Initial state: first implemented backend.
-  const firstImplemented = (CONFIG.backends || []).find((b) => b.implemented);
-  if (firstImplemented) selectBackend(firstImplemented.name);
+  inputModeSelect.addEventListener("change", () => toggleInputModeFields(inputModeSelect.value));
+
+  // Initial state: first implemented card (Gemini, if it's ready to run).
+  const firstImplemented = (CONFIG.ui_backends || []).find((b) => b.implemented);
+  if (firstImplemented) selectBackend(firstImplemented.key);
 
   function renderResult(payload) {
     if (!payload.ok) {
@@ -120,17 +145,29 @@
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const fd = new FormData(form);
-    const backend = fd.get("backend");
+    const key = backendSelect.value;
+    const card = BACKENDS_BY_KEY[key] || {};
+    const backend = card.backend || key;
+    const engine = card.engine || null;
+    // Model field is namespaced per engine/backend (gemini_model,
+    // openai_model, local_llm_model, ...) so each card's fieldset can
+    // carry its own placeholder/default without one shared "model" field
+    // silently applying the wrong vendor's model name.
+    const model = fd.get(`${key}_model`) || "";
+    const inputMode = key === "mock" ? (fd.get("input_mode") || "fixed") : "fixed";
+
     const body = {
       backend,
+      engine,
       arm: armSelect.value,
-      model: fd.get("model") || "",
-      system: fd.get("system") || "",
-      turns: (fd.get("turns") || "")
-        .split("\n")
-        .map((s) => s.trim())
-        .filter(Boolean),
+      model,
+      system: "", // resolved server-side from the fixture (fixed) or left blank (dummy)
       measure: fd.get("measure") || "bytes",
+      input_mode: inputMode,
+      fixture_name: fd.get("fixture_name") || "",
+      system_prompt_bytes: Number(fd.get("system_prompt_bytes") || 0),
+      turn_user_msg_bytes: Number(fd.get("turn_user_msg_bytes") || 0),
+      num_turns: Number(fd.get("num_turns") || 3),
       mock_response_bytes: Number(fd.get("mock_response_bytes") || 400),
       inference_delay_ms: Number(fd.get("inference_delay_ms") || 0),
       algorithm: fd.get("algorithm") || null,

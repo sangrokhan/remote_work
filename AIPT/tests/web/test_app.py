@@ -26,7 +26,8 @@ def test_index_ok(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "AIPT" in resp.text
-    assert "Public AI" in resp.text
+    assert "Gemini" in resp.text
+    assert "ChatGPT" in resp.text
     assert "Local LLM" in resp.text
 
 
@@ -49,13 +50,16 @@ def test_api_config_lists_all_three_backends(client):
     assert "cwnd" in body and "capture" in body
 
 
-def test_api_run_mock_backend_round_trips_and_lists(client):
+def test_api_run_mock_backend_dummy_mode_round_trips_and_lists(client):
     resp = client.post(
         "/api/run",
         json={
             "backend": "mock",
             "arm": "dummy",
-            "turns": ["hello", "again"],
+            "input_mode": "dummy",
+            "num_turns": 2,
+            "turn_user_msg_bytes": 20,
+            "system_prompt_bytes": 10,
             "measure": "bytes",
             "mock_response_bytes": 32,
         },
@@ -92,6 +96,34 @@ def test_api_run_mock_backend_round_trips_and_lists(client):
     assert client.get(f"/api/runs/{exec_id}").status_code == 404
 
 
+def test_api_run_mock_backend_fixed_mode_uses_fixture(client):
+    resp = client.post(
+        "/api/run",
+        json={
+            "backend": "mock",
+            "arm": "fixture",
+            "input_mode": "fixed",
+            "fixture_name": "smoke",
+            "measure": "bytes",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True, body
+    assert len(body["run"]["turns"]) > 0
+
+
+def test_api_run_dummy_mode_rejected_for_non_mock_backend(client):
+    resp = client.post(
+        "/api/run",
+        json={"backend": "local_llm", "arm": "chat", "input_mode": "dummy"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is False
+    assert "dummy" in body["run"]["error"]
+
+
 def test_api_run_unknown_backend_is_400(client):
     resp = client.post("/api/run", json={"backend": "nope", "arm": "x"})
     assert resp.status_code == 400
@@ -105,7 +137,11 @@ def test_api_run_local_llm_does_not_500(client):
     the route must never leak a raw unhandled traceback (500 with no JSON
     'error' key)."""
     resp = client.post(
-        "/api/run", json={"backend": "local_llm", "arm": "chat", "turns": ["hi"]}
+        "/api/run",
+        json={
+            "backend": "local_llm", "arm": "chat",
+            "input_mode": "fixed", "fixture_name": "smoke",
+        },
     )
     assert resp.status_code in (200, 501, 502)
     body = resp.json()

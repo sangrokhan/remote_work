@@ -40,7 +40,9 @@ def test_mock_run_writes_nothing_to_public_ai_records_dir(client):
         json={
             "backend": "mock",
             "arm": "dummy",
-            "turns": ["hello"],
+            "input_mode": "dummy",
+            "num_turns": 1,
+            "turn_user_msg_bytes": 10,
             "measure": "bytes",
             "mock_response_bytes": 16,
         },
