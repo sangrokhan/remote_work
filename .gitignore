@@ -159,3 +159,8 @@ outputs/
 chat_front/node_modules/
 chat_front/.playwright-mcp/
 .worktrees/
+
+# tcp_congestion pre-merge snapshot: captured pcaps are root-owned (tcpdump
+# ran as root) and unreadable by this user; excluded from the commit rather
+# than blocking it. Code/tests/docs are all readable and committed normally.
+tcp_congestion/data/pcaps/

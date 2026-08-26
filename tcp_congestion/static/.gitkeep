@@ -1,0 +1,2 @@
+# placeholder so `COPY static/` in Dockerfile.client does not fail on an
+# empty directory; served at /static by tcp_congestion/app.py when present.

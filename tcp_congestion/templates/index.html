@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>TCP Congestion — Multi-turn Idle Reset Lab</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    fieldset { display: grid; grid-template-columns: repeat(2, 1fr); gap: .75rem 1.5rem; border: 1px solid #ccc; border-radius: 8px; padding: 1rem; }
+    label { display: flex; flex-direction: column; font-size: .85rem; color: #333; }
+    input { margin-top: .25rem; padding: .35rem; }
+    button { margin-top: 1rem; padding: .6rem 1.2rem; font-size: 1rem; cursor: pointer; }
+    #status { margin: .75rem 0; font-weight: 600; }
+    #summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; margin: 1rem 0; }
+    .stat { background: #f5f5f5; border-radius: 6px; padding: .6rem; text-align: center; }
+    .stat .value { font-size: 1.4rem; font-weight: 700; }
+    .stat .label { font-size: .75rem; color: #666; }
+    canvas { max-height: 400px; }
+    .warn { color: #b00; }
+  </style>
+</head>
+<body>
+  <h1>TCP Congestion — Multi-turn Idle Reset Lab</h1>
+  <p id="capability"></p>
+
+  <form id="run-form">
+    <fieldset>
+      <label>Host <input name="host" value="server"></label>
+      <label>Port <input name="port" type="number" value="8888"></label>
+      <label>Turns <input name="num_turns" type="number" value="20" min="1"></label>
+      <label>System prompt (bytes, sent once on turn 1) <input name="system_prompt_bytes" type="number" value="20000"></label>
+      <label>Turn user message (bytes, sent every turn) <input name="turn_user_msg_bytes" type="number" value="1000"></label>
+      <label>Mock response size (bytes) <input name="mock_response_bytes" type="number" value="1000"></label>
+      <label>Inference delay per turn (ms) <input name="inference_delay_ms" type="number" value="1000"></label>
+      <label>Idle duration per turn (ms) <input name="idle_duration_ms" type="number" value="0"></label>
+      <label>Ping probe interval (ms) <input name="ping_interval_ms" id="ping-interval-input" type="number" value="1" min="0"></label>
+      <label>Label <input name="label" value="conversation"></label>
+      <label>Congestion algorithm
+        <select name="algorithm" id="algorithm-select">
+          <option value="">(socket default)</option>
+          <option value="cubic">cubic</option>
+          <option value="reno">reno</option>
+          <option value="bbr">bbr</option>
+          <option value="vegas">vegas</option>
+        </select>
+      </label>
+      <label style="flex-direction: row; align-items: center; gap: .4rem;">
+        <input name="capture" type="checkbox" style="margin: 0;"> Capture packets (tcpdump)
+      </label>
+      <label style="flex-direction: row; align-items: center; gap: .4rem;">
+        <input name="enable_ping_probes" id="enable-ping-probes" type="checkbox" checked style="margin: 0;"> Send HTTP PING during idle gap (RTT probe)
+      </label>
+    </fieldset>
+    <button type="submit">Run</button>
+  </form>
+
+  <div id="status"></div>
+  <div id="downloads" style="display:none; margin: .5rem 0;">
+    <a id="dl-cwnd" href="/api/download/cwnd.csv" download>cwnd.csv</a>
+    &nbsp;|&nbsp;
+    <a id="dl-turns" href="/api/download/turns.csv" download>turns.csv</a>
+    &nbsp;|&nbsp;
+    <a id="dl-pcap" href="/api/download/pcap" download style="display:none;">capture.pcap</a>
+    &nbsp;|&nbsp;
+    <a id="dl-zip" href="/api/download/bundle.zip" download>⬇ bundle.zip (all files, algorithm in name)</a>
+  </div>
+  <div id="summary"></div>
+  <canvas id="cwndChart"></canvas>
+
+  <script>
+    async function loadCapability() {
+      const res = await fetch('/api/config');
+      const data = await res.json();
+      const el = document.getElementById('capability');
+      const parts = [];
+      parts.push(data.cwnd_available
+        ? 'cwnd monitor: ready'
+        : '<span class="warn">cwnd monitor unavailable: ' + data.cwnd_reason + '</span>');
+      parts.push(data.capture_available
+        ? 'packet capture: ready'
+        : '<span class="warn">packet capture unavailable: ' + data.capture_reason + '</span>');
+
+      const cc = data.congestion || {};
+      if (cc.ready) {
+        parts.push('congestion control: all 4 algorithms (' + (cc.available || []).join(', ') +
+          ') loaded, qdisc=' + cc.qdisc + ' \u2713');
+      } else {
+        const missing = (cc.missing && cc.missing.length)
+          ? 'missing: ' + cc.missing.join(', ') : 'all algorithms present';
+        const qdiscMsg = cc.qdisc_ok ? ('qdisc=' + cc.qdisc + ' \u2713')
+          : ('qdisc=' + (cc.qdisc || 'unknown') + ' (want fq) \u2717');
+        let msg = '<span class="warn">congestion control NOT ready \u2014 ' + missing +
+          '; ' + qdiscMsg + '</span>';
+        if (cc.guidance && cc.guidance.length) {
+          msg += '<pre style="background:#fdf0f0; padding:.5rem; border-radius:6px; ' +
+            'white-space:pre-wrap; font-size:.8rem;">' +
+            cc.guidance.map(g => g.replace(/</g, '&lt;')).join('\n') + '</pre>';
+        }
+        parts.push(msg);
+      }
+
+      const off = cc.offload || {};
+      if (off.available) {
+        const featStr = Object.entries(off.features || {}).map(([k, v]) => k + '=' + v).join(' ');
+        parts.push('NIC offload: ' + featStr + (off.all_off ? ' (all off \u2713)' : ' (not all off)'));
+      } else if (off.reason) {
+        parts.push('<span class="warn">NIC offload status unknown: ' + off.reason + '</span>');
+      }
+      el.innerHTML = parts.join(' &nbsp;|&nbsp; ');
+
+      // Grey out (but do not hide) algorithm options the kernel does not
+      // currently have loaded, so a run's algorithm selection is honest
+      // about what will actually happen.
+      const avail = new Set(cc.available || []);
+      const select = document.getElementById('algorithm-select');
+      if (select) {
+        Array.from(select.options).forEach(opt => {
+          if (!opt.value) return;  // "(socket default)"
+          if (!avail.has(opt.value)) {
+            opt.disabled = true;
+            opt.textContent = opt.value + ' (not loaded)';
+          }
+        });
+      }
+    }
+    loadCapability();
+
+    // The ping-interval field only matters while probes are being sent;
+    // grey it out (and stop asking for a >=1 value) when the checkbox is
+    // off, so it's visually obvious 0/whatever left in the box is ignored.
+    function syncPingIntervalState() {
+      const enabled = document.getElementById('enable-ping-probes').checked;
+      const input = document.getElementById('ping-interval-input');
+      input.disabled = !enabled;
+      input.required = enabled;
+    }
+    document.getElementById('enable-ping-probes').addEventListener('change', syncPingIntervalState);
+    syncPingIntervalState();
+
+    let chart = null;
+
+    function renderChart(result) {
+      const ctx = document.getElementById('cwndChart').getContext('2d');
+      const points = result.samples.map(s => ({ x: s.t_ms, y: s.snd_cwnd }));
+      const resetPoints = (result.reset_events || []).map(e => ({ x: e.t_ms, y: e.to }));
+
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          datasets: [
+            {
+              label: 'snd_cwnd (segments)',
+              data: points,
+              borderColor: '#2563eb',
+              pointRadius: 0,
+              borderWidth: 1.5,
+              tension: 0,
+            },
+            {
+              label: 'idle reset',
+              data: resetPoints,
+              borderColor: '#dc2626',
+              backgroundColor: '#dc2626',
+              pointRadius: 5,
+              showLine: false,
+            },
+          ],
+        },
+        options: {
+          parsing: false,
+          scales: {
+            x: { type: 'linear', title: { display: true, text: 't (ms)' } },
+            y: { title: { display: true, text: 'cwnd (segments)' } },
+          },
+        },
+      });
+    }
+
+    function renderSummary(result) {
+      const el = document.getElementById('summary');
+      const stats = [
+        ['algorithm', result.algorithm || '(default)'],
+        ['idle_resets', result.idle_resets],
+        ['peak_cwnd', result.peak_cwnd],
+        ['final_cwnd', result.final_cwnd],
+        ['sample_count', result.sample_count],
+        ['turns', result.turns ? result.turns.length : 0],
+        ['sockets', (result.sockets || []).length],
+      ];
+      el.innerHTML = stats.map(([label, value]) =>
+        `<div class="stat"><div class="value">${value}</div><div class="label">${label}</div></div>`
+      ).join('');
+      if (result.algorithm_requested && result.algorithm_requested !== result.algorithm) {
+        el.innerHTML += '<div class="stat" style="grid-column: 1 / -1;">' +
+          '<span class="warn">requested "' + result.algorithm_requested +
+          '" but kernel used "' + (result.algorithm || '?') + '"' +
+          (result.algorithm_error ? ' (' + result.algorithm_error + ')' : '') +
+          '</span></div>';
+      }
+    }
+
+    document.getElementById('run-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      const payload = Object.fromEntries(form.entries());
+      payload.capture = document.querySelector('input[name="capture"]').checked;
+      payload.enable_ping_probes = document.querySelector('input[name="enable_ping_probes"]').checked;
+      const statusEl = document.getElementById('status');
+      const downloadsEl = document.getElementById('downloads');
+      const pcapLink = document.getElementById('dl-pcap');
+      const zipLink = document.getElementById('dl-zip');
+      statusEl.textContent = 'Running...';
+      downloadsEl.style.display = 'none';
+
+      try {
+        const res = await fetch('/api/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.innerHTML = '<span class="warn">Error: ' + data.error + '</span>';
+          return;
+        }
+        statusEl.textContent = data.error ? ('Error: ' + data.error) : 'Done.';
+        renderSummary(data);
+        renderChart(data);
+        downloadsEl.style.display = 'block';
+        pcapLink.style.display = (data.pcap && data.pcap.ok) ? 'inline' : 'none';
+        // cache-bust so re-clicking after a new run doesn't serve a stale
+        // browser-cached zip from before the algorithm/label changed
+        zipLink.href = '/api/download/bundle.zip?t=' + Date.now();
+      } catch (err) {
+        statusEl.innerHTML = '<span class="warn">Request failed: ' + err + '</span>';
+      }
+    });
+  </script>
+</body>
+</html>
