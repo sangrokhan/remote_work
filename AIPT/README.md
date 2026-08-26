@@ -1,43 +1,62 @@
 # AIPT
 
-**AI Protocol Traffic lab** — LLM 트래픽이 TCP 프로토콜에 미치는 영향을 두 각도에서
-측정하는 실험실. `token_traffic`과 `tcp_congestion`, 두 개의 독립 프로젝트를 하나로
-병합하는 작업이 진행 중이다.
+**AI Protocol Traffic lab** — LLM 트래픽이 TCP/네트워크 프로토콜에 미치는 영향을
+측정하는 실험실. 이전에 별도 프로젝트였던 `token_traffic`(실제 Gemini/OpenAI API
+대상 byte/token/latency 측정)과 `tcp_congestion`(idle-reset cwnd 측정, 애초에
+`token_traffic`의 코어에서 파생됨)을 하나로 병합해서 만들어졌다.
 
-- **external_api lab** (구 `token_traffic`): 실제 Gemini/OpenAI API를 상대로,
-  대화 히스토리를 유지하는 방식(client-resend / server-side pointer / explicit
-  cache / stateless)에 따라 업로드 바이트·과금 토큰·지연시간이 어떻게 달라지는지
-  측정.
-- **synthetic_mock lab** (구 `tcp_congestion`): 로컬 mock 서버를 상대로, 멀티턴
-  대화의 idle 구간(추론 대기) 이후 TCP congestion window가 slow-start-after-idle로
-  리셋되는 현상을 netlink 연속 모니터링으로 실측.
+## 무엇을 측정하는가
 
-두 lab은 공통 코어(`aipt/core/`: netlink cwnd 모니터, tcpdump 캡처, NIC offload
-제어)를 공유한다 — 실제로 `tcp_congestion`은 애초에 `token_traffic`의 코어 모듈을
-이식해서 만들어진 프로젝트였다.
+클라이언트가 **3개의 backend 중 하나**를 상대로 멀티턴 대화를 재생하면서,
+동일한 계측 계층(`aipt/core`)으로 TCP/네트워크 동작을 실측한다.
 
-## 현재 상태
+| Backend | 상대 | 측정 초점 |
+|---|---|---|
+| **Public AI** (`public_ai`) | 실제 Gemini/OpenAI API (과금) | 대화 히스토리 유지 방식(stateless/stateful-pointer/explicit-cache)별 업로드 바이트·과금 토큰·지연시간 |
+| **Mock** (`mock`) | 로컬 mock 서버 | 고정 byte 또는 fixture 재생 트래픽에서 idle 구간 후 TCP congestion window의 slow-start-after-idle 리셋 |
+| **Local LLM** (`local_llm`) | 표준 서빙엔진(llama.cpp/vLLM) + 자체 프록시 | 서버측 HTTP 신기능/프로토콜 실험을 위한 실 LLM 트래픽 발생 |
 
-**설계 단계.** 아래 문서를 먼저 검토하라:
+Mock/Local LLM 경로는 **Network Gateway** 컨테이너(`aipt/gateway`, `tc netem`
+기반)를 거쳐 지연·지터·손실·재정렬을 주입할 수 있다 — Public AI는 이미 실제
+인터넷을 거치므로 Gateway를 경유하지 않는다.
 
-- [`DESIGN.md`](./DESIGN.md) — 현황 분석, 목표 폴더 구조, 웹 UI(FastAPI 단일화)/
-  Docker 통합 방침, 미해결 결정 사항
-- [`MIGRATION.md`](./MIGRATION.md) — 파일 단위 이관 체크리스트 (Phase 1~6)
+## 문서
 
-원본 프로젝트는 아직 이동하지 않았다:
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — **최종 아키텍처 레퍼런스**. 컴포넌트
+  5개(PublicAI/Mock/LocalLLM/Gateway/프론트) 구조, 폴더 구조, 데이터 흐름 +
+  backend별 시퀀스 다이어그램, API 설계, 성능 설계(적응형 cwnd 샘플링, pcap
+  운영), 테스트 설계. **먼저 이 문서를 읽을 것.**
+- [`DESIGN.md`](./DESIGN.md) — 설계 결정의 근거와 이력(왜 이렇게 정했는지,
+  검토했던 대안, 아직 열려 있는 이슈).
+- [`MIGRATION.md`](./MIGRATION.md) — token_traffic/tcp_congestion → AIPT
+  파일 단위 이관 기록.
 
-- `../token_traffic/` — external_api lab 원본
-- `../tcp_congestion/` — synthetic_mock lab 원본
+## 빠른 시작
 
-코드 이관은 설계 리뷰 완료 후 Phase 1부터 순서대로 진행한다.
+### 로컬 (Docker 없이)
 
-## Docker로 실행하기
+```bash
+cd AIPT
+python3 -m venv .venv && .venv/bin/pip install -e ".[web,export,dev]"
 
-`docker-compose.yml`은 DESIGN.md 4.7(Network Gateway)/B10 방침에 따라
-`web` → `gateway` → `mock-server` 3-service 토폴로지로 구성되어 있다
-(`local-llm` 엔진 컨테이너는 무거워서 이번 phase에서는 생략 — 대신
-`LOCAL_LLM_ENGINE_URL`로 외부에서 실행 중인 llama-server/vLLM을 가리키면
-`local_llm` backend를 그대로 사용할 수 있다).
+# native cwnd 모니터 빌드 (netlink 연속 샘플링, 리눅스 전용)
+cc -O2 -Wall -o native/cwnd_monitor native/cwnd_monitor.c
+
+.venv/bin/pytest tests/ -q -m "not live"   # 410 passed, 1 skipped, 12 deselected
+
+.venv/bin/uvicorn aipt.web.app:create_app --factory --host 0.0.0.0 --port 10000
+# → http://localhost:10000
+```
+
+`-m "not live"`를 빼면 실제 소켓/커널 netlink/tcpdump가 필요한 테스트도 함께
+돌아간다(환경에 따라 skip 처리됨).
+
+### Docker
+
+`docker-compose.yml`은 `web` → `gateway` → `mock-server` 3-service 토폴로지로
+구성되어 있다(`local-llm` 엔진 컨테이너는 무거워서 기본 compose에는 포함하지
+않음 — 대신 `LOCAL_LLM_ENGINE_URL`로 외부에서 실행 중인 llama-server/vLLM을
+가리키면 `local_llm` backend를 그대로 사용할 수 있다).
 
 ```bash
 cd AIPT
@@ -47,17 +66,56 @@ docker compose up --build
 
 기동 후 웹 UI: <http://localhost:10000>
 
-- `web`: FastAPI 앱(`aipt.web.app:create_app`), `NET_ADMIN`/`NET_RAW`
+- `web`: FastAPI 앱(`aipt.web.app:create_app`). `NET_ADMIN`/`NET_RAW`
   capability로 cwnd 모니터/tcpdump 캡처/NIC offload 제어. `./data/pcaps`가
   호스트에 볼륨 마운트된다.
 - `gateway`: `aipt/gateway/` 기반 Network Gateway 컨테이너, `NET_ADMIN`
-  capability로 `tc netem` 프로파일 제어(`/gateway/profile`). 현재는 컨테이너
-  토폴로지 수준까지만 배선되어 있고, `gateway`→`mock-server` 실제 L3/L4
-  포워딩은 TODO (DESIGN.md 4.7 "미해결 세부사항 1" 참고, `docker-compose.yml`
-  상단 주석에도 명시).
+  capability로 `tc netem` 프로파일 제어(`GET`/`POST /gateway/profile`,
+  프리셋: `clean`/`broadband`/`3g`/`satellite`/`lossy`/`custom`). 현재는
+  컨테이너 토폴로지 수준까지만 배선되어 있고, `gateway`→`mock-server` 실제
+  L3/L4 포워딩은 아직 미구현이다 (ARCHITECTURE.md §1.1, §7 참고).
 - `mock-server`: `aipt.backends.mock.server`를 구동하는 경량 컨테이너.
   호스트에 포트를 노출하지 않고 compose 네트워크 내부(`mock-server:8888`)에서만
   접근 가능하다.
 
 개별 서비스만 빌드/재기동하려면 `docker compose build web`,
 `docker compose up -d gateway mock-server` 처럼 서비스명을 지정한다.
+
+## 폴더 구조 (요약)
+
+```
+AIPT/
+├── aipt/
+│   ├── core/       # 3-backend 공통 계측: cwnd, capture, offload, wire, streaming, netem
+│   ├── backends/   # Backend 프로토콜 + public_ai / mock / local_llm 구현체
+│   ├── gateway/    # Network Gateway (tc netem 제어 + 프로파일 API, 별도 컨테이너)
+│   ├── export/     # connection.csv / turns.csv(+goodput_bps) / packets.csv / bundle.zip
+│   └── web/        # FastAPI 단일 앱 (backend 선택형 실험 UI)
+├── native/         # cwnd_monitor.c — netlink 연속 샘플링, 별도 프로세스
+├── docker/          # Dockerfile.{web,gateway,mockserver}
+├── docker-compose.yml
+├── tests/           # core / backends / export / web / gateway — 410 tests
+├── ARCHITECTURE.md  # 최종 아키텍처 레퍼런스 (다이어그램 포함)
+├── DESIGN.md        # 설계 결정 이력
+└── MIGRATION.md     # 이관 기록
+```
+
+전체 트리와 각 모듈의 역할은 `ARCHITECTURE.md` §1.2를 참고.
+
+## 테스트
+
+```bash
+.venv/bin/pytest tests/ -q -m "not live"
+```
+
+`@pytest.mark.live`가 붙은 테스트는 실제 소켓/커널 netlink/tcpdump 등 이
+프로세스가 실행 중인 환경의 실제 자원이 필요하다 — 없는 환경에서는 정직하게
+skip되고(예외로 죽지 않음), 있는 환경(예: Docker `web` 컨테이너)에서는 마커를
+빼고 전체 실행하면 함께 돌아간다.
+
+## 원본 프로젝트 (참고)
+
+`token_traffic/`, `tcp_congestion/`는 이 병합 작업 완료 후 저장소에서
+제거되었다. 각 프로젝트의 마지막 상태는 git 히스토리에 남아 있다
+(`git log --oneline -- token_traffic`, 병합 직전 커밋에서 `tcp_congestion`도
+동일하게 확인 가능).
