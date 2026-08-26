@@ -20,6 +20,20 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# iproute2 provides the `ip` binary entrypoint_mockserver.py needs for
+# `ip route add <net-client subnet> via <gateway IP>` (DESIGN.md 4.7 확정
+# 설계 1). Without it, the route-add step silently no-ops (entrypoint
+# treats a missing `ip` binary as non-fatal, matching the "report, don't
+# crash" contract) and mock-server's replies never make it back through
+# `gateway` -- this was caught by an actual `docker compose up` run: `ip`
+# was missing from this image, the route was never added, and the
+# response leg used the network's own kernel default route (out via the
+# net-backend gateway's own IP) instead of being forced through the AIPT
+# `gateway` service.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml ./
 COPY aipt ./aipt
 

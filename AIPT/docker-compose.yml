@@ -56,7 +56,15 @@ services:
     cap_add:
       - NET_ADMIN
     networks:
-      - net-backend
+      net-backend:
+        # Fixed IP so mock-server never grabs 172.28.2.2, which gateway
+        # itself pins on net-backend below -- Docker's dynamic IPAM
+        # allocates addresses in join order, and mock-server starts first
+        # (it's gateway's dependency), so without a fixed address here it
+        # non-deterministically wins the race for gateway's own address
+        # and gateway's `docker compose up` fails with "Address already
+        # in use".
+        ipv4_address: ${MOCK_SERVER_IP:-172.28.2.3}
     environment:
       - MOCK_HOST=0.0.0.0
       - MOCK_PORT=8888
