@@ -1,0 +1,43 @@
+# docker/Dockerfile.mockserver -- AIPT mock-server container (DESIGN.md 4,
+# 4.7 B10). Lightweight standalone process running
+# aipt.backends.mock.server.Server (HTTP/1.1 keep-alive inference-mock,
+# stdlib http.server only -- no FastAPI/uvicorn needed here, unlike
+# Dockerfile.web/Dockerfile.gateway).
+#
+# aipt.backends.mock.server has no __main__ entrypoint of its own (it's
+# designed to be started in-process by MockBackend for the non-Docker run
+# path) -- docker/entrypoint_mockserver.py supplies the standalone
+# Server(host="0.0.0.0", port=8888).serve_forever() equivalent for this
+# container.
+#
+# Per DESIGN.md 4.7's topology decision, this service is NOT exposed to the
+# host network directly -- it's reachable only via the `gateway` service
+# (see docker-compose.yml's port mapping / TODO comments), which is where
+# tc netem delay/jitter/loss/reorder injection happens (aipt/gateway/,
+# Dockerfile.gateway) for the client<->mock-server path.
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY aipt ./aipt
+
+# aipt.backends.mock.server itself is stdlib-only, but importing the aipt
+# package pulls in aipt.core.wire, which imports `requests` unconditionally
+# (see pyproject.toml's own comment on this) -- so requests (a base,
+# non-optional dependency) must still be installed even for this minimal
+# image. No [web]/[export] extras needed: this container never touches
+# FastAPI, uvicorn, or pcap parsing.
+RUN pip install --no-cache-dir .
+
+COPY docker/entrypoint_mockserver.py ./entrypoint_mockserver.py
+
+# MOCK_HOST/MOCK_PORT: entrypoint_mockserver.py's bind address (8888, the
+# synthetic_mock/tcp_congestion convention preserved by DESIGN.md 4).
+ENV MOCK_HOST=0.0.0.0 \
+    MOCK_PORT=8888
+
+EXPOSE 8888
+
+CMD ["python", "entrypoint_mockserver.py"]

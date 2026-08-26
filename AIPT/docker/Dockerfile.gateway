@@ -1,0 +1,49 @@
+# docker/Dockerfile.gateway -- AIPT Network Gateway container (DESIGN.md
+# 4.7, B9/B10). A standalone container running aipt.gateway.app, sitting
+# on the network path between the client and mock-server/local-llm so it
+# can inject L3/L4 traffic characteristics (tc netem: delay/jitter/loss/
+# reorder/duplicate) via runtime profile switches
+# (POST /gateway/profile). Not aipt/web -- that stays a separate image.
+#
+# *** REQUIRES CAP_NET_ADMIN AT RUNTIME ***
+# `tc qdisc` commands need NET_ADMIN inside the container's network
+# namespace. This Dockerfile only installs the tooling (iproute2) --
+# granting the capability is a docker run/compose concern:
+#   docker run --cap-add=NET_ADMIN ...
+#   docker-compose.yml:  cap_add: ["NET_ADMIN"]
+# Without it, aipt.gateway.netem_control reports {"ok": false, "reason":
+# "... CAP_NET_ADMIN ..."} rather than crashing (see that module's
+# docstring) -- so the image itself always builds and runs; only actual
+# netem application needs the grant. Wiring that into docker-compose.yml
+# is DESIGN.md B10, a separate task, out of scope here.
+
+FROM python:3.12-slim
+
+# iproute2 provides the `tc` binary this whole container exists to call.
+# fq (the child qdisc aipt.gateway.netem_control chains under netem for
+# BBR pacing) ships in the kernel, not a userspace package -- nothing
+# extra needed for it here.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY aipt ./aipt
+
+# `web` extra brings in fastapi/uvicorn, reused here rather than defining
+# a separate `gateway` extra (see pyproject.toml's own comment on this
+# choice) -- the gateway app has no dependency the web app doesn't already
+# declare.
+RUN pip install --no-cache-dir ".[web]"
+
+# GATEWAY_IFACE: interface tc commands target (default eth0, see
+# aipt.gateway.netem_control.DEFAULT_IFACE).
+# GATEWAY_PROFILE / GATEWAY_DELAY_MS / GATEWAY_JITTER_MS / GATEWAY_LOSS_PCT
+# / GATEWAY_REORDER_PCT: startup preset (aipt.gateway.profiles.from_env).
+ENV GATEWAY_IFACE=eth0
+
+EXPOSE 8080
+
+CMD ["uvicorn", "aipt.gateway.app:app", "--host", "0.0.0.0", "--port", "8080"]

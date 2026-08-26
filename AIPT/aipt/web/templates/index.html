@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AIPT — AI Protocol Traffic lab</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>AIPT</h1>
+    <p class="tagline">Pick a backend, run a conversation, measure the TCP behaviour underneath it.</p>
+  </header>
+
+  <main>
+    <section id="backend-cards">
+      <h2>1. Choose a backend</h2>
+      <div class="cards">
+        {% for b in config.backends %}
+        <div class="card {{ 'disabled' if not b.implemented else '' }}" data-backend="{{ b.name }}">
+          <h3>{{ b.label }}
+            {% if not b.implemented %}<span class="badge">구현 예정</span>{% endif %}
+          </h3>
+          <p>{{ b.description }}</p>
+          <p class="status {{ 'ok' if b.ready else 'warn' }}">
+            {{ '준비됨' if b.ready else b.reason }}
+          </p>
+          <button type="button" class="select-backend" data-backend="{{ b.name }}"
+                  {{ 'disabled' if not b.implemented else '' }}>
+            선택
+          </button>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section id="experiment-form-section">
+      <h2>2. Configure the run</h2>
+      {% include "_experiment_form.html" %}
+    </section>
+
+    <section id="result">
+      <h2>3. Result</h2>
+      <div id="run-output">아직 실행한 run이 없습니다.</div>
+    </section>
+
+    <section id="recent-runs">
+      <h2>Recent runs</h2>
+      <table id="runs-table">
+        <thead>
+          <tr><th>exec_id</th><th>backend</th><th>arm</th><th>turns</th><th>mock</th><th>error</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    window.__AIPT_CONFIG__ = {{ config | tojson }};
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

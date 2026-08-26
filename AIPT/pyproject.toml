@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aipt"
+version = "0.1.0"
+description = "AI Protocol Traffic lab -- merged token_traffic + tcp_congestion"
+requires-python = ">=3.10"
+# aipt/backends/public_ai/* (DESIGN.md 5, A2/B2) makes real HTTP calls to the
+# Gemini/OpenAI APIs through aipt.core.wire's socket-counting requests
+# Session -- never the official SDKs, which ride on httpx and cannot be
+# instrumented that way (see aipt/backends/public_ai/openai.py's module
+# docstring). requests is needed to import aipt.backends.public_ai.{gemini,
+# openai} at all (even in mock mode, since aipt.core.wire imports it at
+# module load), so it is a base dependency, not optional.
+dependencies = ["requests"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+# aipt/export/packets.py (DESIGN.md 4.6 B6) parses pcaps with dpkt when it is
+# installed, and falls back to a small pure-stdlib classic-pcap reader
+# otherwise -- so this group is optional, not required to run the test
+# suite or produce packets.csv.
+export = ["dpkt"]
+# aipt/web/* (DESIGN.md 5, "웹 UI FastAPI 통합 방침"): the single FastAPI
+# app, backend-selection landing page + JSON API. python-multipart is
+# FastAPI's own requirement for form/multipart request bodies (unused by
+# this phase's JSON-only routes, but harmless to have and avoids a runtime
+# surprise the moment a future route accepts an upload).
+web = ["fastapi", "uvicorn", "jinja2", "python-multipart", "httpx"]
+
+[tool.setuptools.packages.find]
+include = ["aipt*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: requires real sockets/kernel netlink support (not run by default)",
+]

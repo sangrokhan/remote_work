@@ -1,0 +1,10 @@
+{
+  "name": "smoke",
+  "description": "Small fixed Q&A fixture for aipt.backends.mock unit tests.",
+  "system_prompt": "You are a terse test assistant.",
+  "turns": [
+    {"question": "What is 2+2?", "answer": "4"},
+    {"question": "What is the capital of France?", "answer": "Paris"},
+    {"question": "Summarize the incident so far.", "answer": "Latency regressed on payments-api after a pool exhaustion; mitigated by raising the pool size and shifting a small percentage of traffic to us-west-2."}
+  ]
+}

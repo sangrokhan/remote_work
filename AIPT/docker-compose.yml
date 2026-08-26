@@ -1,0 +1,114 @@
+# docker-compose.yml -- AIPT container topology (DESIGN.md 4, 4.7 B10).
+#
+# 3-service topology this phase actually stands up: web -> gateway ->
+# mock-server. `local-llm` is intentionally NOT included as a built service
+# here (a real llama.cpp/vLLM engine container is heavy and out of scope for
+# this phase) -- see the `LOCAL_LLM_ENGINE_URL` note below to point the web
+# service at an externally-run engine instead.
+#
+# DESIGN.md 4.7 decision: MockBackend/LocalLLMBackend traffic must go via the
+# `gateway` service (tc netem delay/jitter/loss/reorder injection into that
+# path); PublicAIBackend (Gemini/OpenAI) goes straight to the real internet
+# and never touches `gateway`.
+#
+# IMPORTANT / TODO (DESIGN.md 4.7 "미해결 세부사항 1"): whether `gateway`
+# acts as an L4 TCP proxy (application-level forward) or an L3 routing hop
+# (pure netem on an interface, no proxying) is still UNDECIDED in the design
+# doc itself. This compose file only establishes the *container topology*
+# (service names, depends_on ordering, network membership, mock-server not
+# published to the host) -- it does NOT implement actual L3/L4 forwarding
+# from `gateway` to `mock-server`/`local-llm`. Until that is implemented,
+# `aipt.gateway.app` only exposes the netem profile-control API
+# (`/gateway/profile`); it does not yet relay `web`'s HTTP requests through
+# to `mock-server`. Wiring real forwarding is left as a follow-up (B10
+# continuation / a later phase), same scope boundary the task description
+# for this compose file draws.
+
+services:
+
+  mock-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mockserver
+    environment:
+      - MOCK_HOST=0.0.0.0
+      - MOCK_PORT=8888
+    # No `ports:` mapping on purpose -- DESIGN.md 4.7's topology requires
+    # mock-server to be reachable only through `gateway` (and, from the
+    # host's point of view, not at all). Other services reach it at
+    # mock-server:8888 over the default compose network.
+    expose:
+      - "8888"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gateway
+    # NET_ADMIN: tc qdisc netem (aipt/gateway/netem_control.py) targeting
+    # GATEWAY_IFACE inside this container's network namespace.
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - GATEWAY_IFACE=${GATEWAY_IFACE:-eth0}
+      - GATEWAY_PROFILE=${GATEWAY_PROFILE:-clean}
+      - GATEWAY_DELAY_MS=${GATEWAY_DELAY_MS:-0}
+      - GATEWAY_JITTER_MS=${GATEWAY_JITTER_MS:-0}
+      - GATEWAY_LOSS_PCT=${GATEWAY_LOSS_PCT:-0}
+      - GATEWAY_REORDER_PCT=${GATEWAY_REORDER_PCT:-0}
+      # Forwarding targets for a future L3/L4 relay implementation (see the
+      # TODO above) -- read by aipt/gateway code once that lands, harmless
+      # env-only documentation until then.
+      - MOCK_SERVER_HOST=mock-server
+      - MOCK_SERVER_PORT=8888
+    expose:
+      - "8080"
+    depends_on:
+      - mock-server
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    # NET_RAW: tcpdump packet capture (aipt.core.capture).
+    # NET_ADMIN: netlink cwnd monitor (aipt.core.cwnd) + NIC offload toggle
+    # (aipt.core.offload).
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - WEB_HOST=0.0.0.0
+      - WEB_PORT=10000
+      - TRAFFIC_PCAP_DIR=/app/data/pcaps
+      # PublicAIBackend credentials -- passed through from the host/.env,
+      # never baked into the image. Empty is fine; that backend's own
+      # ready() check reports "not ready" rather than crashing (see
+      # aipt/backends/public_ai/*).
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # DESIGN.md 4.7: Mock/LocalLLM traffic must be addressed via the
+      # gateway service, not mock-server directly, once gateway forwarding
+      # is implemented (see TODO above) -- these env vars document/reserve
+      # that target for when aipt.backends.mock / aipt.backends.local_llm
+      # read a gateway-aware base URL instead of talking to mock-server or
+      # LOCAL_LLM_ENGINE_URL directly.
+      - GATEWAY_HOST=gateway
+      - GATEWAY_PORT=8080
+      # LocalLLMBackend (aipt/backends/local_llm/engine_adapter.py) targets
+      # this URL directly (DEFAULT_ENGINE_URL is http://127.0.0.1:8080,
+      # only correct for a bare-metal run) -- no `local-llm` service is
+      # built in this compose file (a real llama.cpp/vLLM container is
+      # heavy and out of scope for this phase). Point this at an externally
+      # running llama-server/vLLM OpenAI-compatible endpoint to exercise the
+      # local_llm backend from this stack, e.g.:
+      #   LOCAL_LLM_ENGINE_URL=http://host.docker.internal:8080
+      - LOCAL_LLM_ENGINE_URL=${LOCAL_LLM_ENGINE_URL:-}
+      - LOCAL_LLM_ENGINE_KIND=${LOCAL_LLM_ENGINE_KIND:-llama_cpp}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
+    ports:
+      - "${WEB_HOST_PORT:-10000}:10000"
+    volumes:
+      # Captured pcaps persist across container restarts and stay
+      # inspectable on the host with Wireshark (tcp_congestion convention).
+      - ./data/pcaps:/app/data/pcaps
+    depends_on:
+      - gateway

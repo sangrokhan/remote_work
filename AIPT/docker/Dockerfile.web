@@ -1,0 +1,70 @@
+# docker/Dockerfile.web -- AIPT web/client container (DESIGN.md 4, 4.7 B10).
+#
+# Runs the single FastAPI app (aipt.web.app:create_app) that drives all
+# three backends (PublicAI/Mock/LocalLLM, DESIGN.md 4.5) and the shared
+# measurement core (aipt/core: netlink cwnd monitor, tcpdump capture, NIC
+# offload toggling). Multi-stage build: native/cwnd_monitor.c is compiled
+# once in a throwaway builder stage (tcp_congestion's `b7cf75cb fix(docker)`
+# lesson -- do not recompile it in the runtime image / on every request) and
+# only the resulting binary is copied into the slim runtime stage.
+#
+# *** REQUIRES CAP_NET_ADMIN AND CAP_NET_RAW AT RUNTIME ***
+#   - NET_ADMIN: aipt.core.cwnd's netlink (NETLINK_SOCK_DIAG) cwnd monitor,
+#     and aipt.core.offload's ethtool -K TSO/GSO/SG/GRO/LRO toggling.
+#   - NET_RAW:   aipt.core.capture's tcpdump packet capture.
+#   docker run --cap-add=NET_ADMIN --cap-add=NET_RAW ...
+#   docker-compose.yml:  cap_add: ["NET_ADMIN", "NET_RAW"]
+# Without these grants the affected feature reports its own "not available/
+# permission denied" reason rather than crashing the whole app (same
+# honesty-over-silent-failure contract as docker/Dockerfile.gateway) -- so
+# the image always builds and runs; only the actual netlink/raw-socket
+# operations need the grant.
+
+# ---- builder stage: compile native/cwnd_monitor.c only -------------------
+FROM python:3.12-slim AS builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY native/ ./native/
+RUN cc -O2 -Wall -o native/cwnd_monitor native/cwnd_monitor.c
+
+# ---- runtime stage ---------------------------------------------------------
+FROM python:3.12-slim
+
+# iproute2: `tc`/`ip` (netem passthrough config, offload's ip link queries)
+# tcpdump:  aipt.core.capture's packet capture (needs NET_RAW at runtime)
+# No gcc/build-essential here -- native/cwnd_monitor is already built above,
+# this stage never compiles anything (the exact lesson the module docstring
+# references).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iproute2 tcpdump \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY aipt ./aipt
+COPY --from=builder /build/native ./native
+
+# web extra: fastapi/uvicorn/jinja2/python-multipart/httpx (aipt/web/*).
+# export extra: dpkt for aipt/export/packets.py's pcap parsing (optional at
+# import time, but this is the image that actually produces/reads pcaps, so
+# install it here rather than relying on the pure-stdlib fallback reader).
+RUN pip install --no-cache-dir ".[web,export]"
+
+# WEB_HOST/WEB_PORT: uvicorn bind (tcp_congestion's port-10000 convention,
+# DESIGN.md 4). TRAFFIC_PCAP_DIR: aipt.core.capture output dir, matches the
+# ./data/pcaps volume mount in docker-compose.yml. GATEWAY_HOST/GATEWAY_PORT:
+# where MockBackend/LocalLLMBackend traffic is expected to be routed via
+# (DESIGN.md 4.7 -- actual L3/L4 forwarding wiring is still a TODO in
+# docker-compose.yml/aipt/gateway, this only documents the intended target).
+ENV WEB_HOST=0.0.0.0 \
+    WEB_PORT=10000 \
+    TRAFFIC_PCAP_DIR=/app/data/pcaps
+
+EXPOSE 10000
+
+CMD ["uvicorn", "aipt.web.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "10000"]

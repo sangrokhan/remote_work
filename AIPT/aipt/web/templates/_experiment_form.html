@@ -1,0 +1,74 @@
+<form id="experiment-form">
+  <div class="field">
+    <label for="backend-select">Backend</label>
+    <select id="backend-select" name="backend">
+      {% for b in config.backends %}
+      <option value="{{ b.name }}" {{ 'disabled' if not b.implemented else '' }}>{{ b.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="arm-select">Arm</label>
+    <select id="arm-select" name="arm"></select>
+  </div>
+
+  <div class="field">
+    <label for="turns">Turns (one question per line)</label>
+    <textarea id="turns" name="turns" rows="4">Hello, how are you?
+Tell me a fun fact about TCP.</textarea>
+  </div>
+
+  <div class="field">
+    <label for="measure">Measure</label>
+    <select id="measure" name="measure">
+      <option value="bytes">bytes</option>
+      <option value="latency">latency</option>
+      <option value="both">both</option>
+    </select>
+  </div>
+
+  <div class="field checkbox">
+    <label><input type="checkbox" id="capture" name="capture"> Capture packets (tcpdump)</label>
+  </div>
+
+  <fieldset id="mock-fields" class="backend-fields" data-backend="mock">
+    <legend>Mock options</legend>
+    <div class="field">
+      <label for="mock_response_bytes">Response bytes</label>
+      <input type="number" id="mock_response_bytes" name="mock_response_bytes" value="400" min="0">
+    </div>
+    <div class="field">
+      <label for="inference_delay_ms">Inference delay (ms)</label>
+      <input type="number" id="inference_delay_ms" name="inference_delay_ms" value="0" min="0">
+    </div>
+    <div class="field">
+      <label for="algorithm">Congestion algorithm</label>
+      <select id="algorithm" name="algorithm">
+        <option value="">(kernel default)</option>
+        {% for algo in config.congestion_algorithms %}
+        <option value="{{ algo }}">{{ algo }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </fieldset>
+
+  <fieldset id="public_ai-fields" class="backend-fields" data-backend="public_ai">
+    <legend>Public AI options</legend>
+    <div class="field">
+      <label for="model">Model (optional)</label>
+      <input type="text" id="model" name="model" placeholder="defaults to backend's DEFAULT_MODEL">
+    </div>
+    <div class="field">
+      <label for="system">System prompt (optional)</label>
+      <input type="text" id="system" name="system">
+    </div>
+  </fieldset>
+
+  <fieldset id="local_llm-fields" class="backend-fields" data-backend="local_llm">
+    <legend>Local LLM <span class="badge">구현 예정</span></legend>
+    <p>이 backend는 아직 구현되지 않았습니다.</p>
+  </fieldset>
+
+  <button type="submit" id="run-button">Run</button>
+</form>

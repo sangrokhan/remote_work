@@ -1,0 +1,81 @@
+/* aipt/web/static/style.css -- minimal styling, no framework (DESIGN.md 5:
+   "지나치게 화려하게 만들 필요 없음 -- 기능하는 최소 UI"). */
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  color: #1a1a1a;
+}
+
+header .tagline {
+  color: #555;
+}
+
+.cards {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.card {
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 1rem;
+  width: 260px;
+}
+
+.card.disabled {
+  opacity: 0.6;
+}
+
+.badge {
+  display: inline-block;
+  background: #eee;
+  color: #444;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  margin-left: 0.4rem;
+}
+
+.status.ok { color: #1a7f37; }
+.status.warn { color: #b3261e; }
+
+form .field {
+  margin-bottom: 0.75rem;
+}
+
+form label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+form .checkbox label {
+  font-weight: normal;
+}
+
+fieldset.backend-fields {
+  border: 1px dashed #ccc;
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+table th, table td {
+  border: 1px solid #ddd;
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+#run-button {
+  padding: 0.5rem 1.5rem;
+  font-weight: 600;
+}
