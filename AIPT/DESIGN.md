@@ -291,9 +291,46 @@ Client (측정 코드: cwnd/capture/export — 공통)
 
 ### 미해결 세부사항 (Phase 진행 중 확정)
 
-1. Gateway가 L4(TCP 프록시)로 동작할지, L3(라우팅 경유, netem만 인터페이스에 적용)로 동작할지 — L3가 훨씬 단순하고 TCP 스택 자체를 왜곡하지 않아 선호되나, Docker 브리지 네트워크에서 "가운데 라우팅 홉"을 강제하려면 컨테이너 네트워크 네임스페이스 구성이 필요 (veth pair + 정책 라우팅, 또는 gateway 컨테이너를 유일한 next-hop으로 강제).
-2. 런타임 프로파일 전환 시 기존 연결(keep-alive)에도 즉시 반영되는지, 아니면 새 연결부터 적용되는지 — tc netem은 인터페이스 단위라 기존 연결에도 즉시 적용됨(이 편이 실험 재현성엔 유리).
-3. LocalLLMBackend(B4, 표준 서빙엔진+자체 프록시)의 "자체 프록시"와 이 Gateway가 개념적으로 겹치는지 구분 필요 — **결론(잠정)**: LocalLLMBackend의 프록시는 HTTP 신기능/프로토콜 실험 지점(애플리케이션 레벨), Gateway는 순수 네트워크 특성 주입(L3/L4). 서로 다른 관심사이므로 별도 컨테이너로 유지하고 체인으로 연결(`client → Gateway → LocalLLM 프록시 → 서빙엔진`).
+1. ~~Gateway가 L4(TCP 프록시)로 동작할지, L3(라우팅 경유, netem만 인터페이스에 적용)로 동작할지~~
+   **확정 (2026-08-26): L3 라우팅.** Gateway는 TCP 상태를 보지 않는 순수 IP
+   포워딩 컨테이너로 동작한다 — 애플리케이션 레벨 프록시/relay 코드를 만들지
+   않고, 커널의 IP forwarding(`net.ipv4.ip_forward=1`)과 두 개의 분리된
+   Docker 브리지 네트워크(`net-client`, `net-backend`)로 구현한다.
+   - `web`은 `net-client`에만 속하고, `net-backend` 서브넷으로 가는 경로를
+     Gateway의 `net-client` IP를 통해 명시적으로 라우팅한다 (`ip route add`).
+   - `mock-server`(및 향후 `local-llm`)는 `net-backend`에만 속하고, 마찬가지로
+     `net-client` 서브넷 경로를 Gateway 경유로 라우팅한다 (왕복 트래픽이 반드시
+     Gateway를 통과하게 하기 위함 — 이게 없으면 응답 패킷이 Gateway를
+     우회해서 되돌아갈 수 있다).
+   - Gateway 자체는 두 네트워크 모두에 속하며, `net.ipv4.ip_forward=1` +
+     `NET_ADMIN`으로 커널 레벨 포워딩만 수행한다. TCP 페이로드나 헤더를
+     들여다보지 않는다 — 순수 L3/L4-무관 패킷 라우팅.
+   - `tc netem`은 Gateway의 **양쪽 인터페이스 egress**(client-facing,
+     backend-facing)에 동일 프로파일을 적용한다 — 왕복(request/response) 모두
+     같은 지연/손실 특성을 겪게 하기 위함. 한쪽에만 적용하면 편도만 영향받는다.
+2. 런타임 프로파일 전환 시 기존 연결(keep-alive)에도 즉시 반영되는지 — tc netem은
+   인터페이스 단위라 기존 연결에도 즉시 적용됨 (재현성에 유리, 확정 유지).
+3. LocalLLMBackend(B4)의 "자체 프록시"(engine gateway, 애플리케이션 레벨)와
+   이 Network Gateway(L3, 커널 레벨)는 여전히 서로 다른 컴포넌트 —
+   `client → Network Gateway(L3 forward) → engine gateway(애플리케이션 프록시) →
+   서빙 엔진` 순서로 체인된다.
+
+## 4.7.1 실행 결과 저장 정책 (확정, 2026-08-26)
+
+기존 §6 미해결 결정 5번("data/ 저장 위치")을 아래로 확정한다:
+
+- **영속 저장 대상은 Public AI(상용 API) 요청/응답 JSON만.** `PublicAIBackend`로
+  실행한 모든 run은 `aipt/backends/public_ai/recorder.py`를 통해 자동으로
+  `data/public_ai_records/<exec_id>.json`에 저장된다 — 과금이 발생한 실제 API
+  호출 기록이므로 재현 불가능하고, 재시작으로 잃으면 안 되는 유일한 데이터.
+- **그 외 모든 산출물(cwnd 샘플, pcap, mock/local_llm 턴 기록, CSV)은 영속
+  저장하지 않는다.** `aipt/web/store.py`의 인메모리 캐시(최근 50개)만 유지하고,
+  사용자가 실행 직후 `GET /api/runs/{id}/bundle.zip`으로 다운로드해서 직접
+  보관/정리한다. 별도 DB나 파일 시스템 저장소를 구축하지 않는다 — 이 프로젝트는
+  "한 대의 머신에서 도는 실험실"이라는 token_traffic 원본의 설계 철학을 그대로
+  계승한다.
+- Docker 볼륨은 `./data/pcaps`(기존) + `./data/public_ai_records`(신규)만
+  마운트한다.
 
 ## 5.1 리스트업 갱신 — Gateway 관련 신규 작업
 

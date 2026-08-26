@@ -416,10 +416,108 @@ Gateway 컨테이너**(별도 컴포넌트, `tc netem` 기반 L3/L4 지연·손�
   이미지(`aipt-web`, `aipt-gateway`, `aipt-mock-server`) 전부 빌드 성공.
   `docker compose up -d`(호스트에 이미 다른 프로젝트가 10000 포트를 점유 중이라
   `WEB_HOST_PORT=10001`로 재시도) → 3개 컨테이너 전부 기동, `curl
-  localhost:10001/` → 200, 컨테이너 내부에서 `web→gateway:8080/health`
+  `localhost:10001/` → 200, 컨테이너 내부에서 `web→gateway:8080/health`
   (`netem_available: true`, `NET_ADMIN` 정상 동작 확인) 및
   `gateway→mock-server:8888/health` (`{"status": "ok"}`) 양쪽 모두 확인 후
   `docker compose down`으로 정리. `pytest tests/ -q -m "not live"` →
   **410 passed, 1 skipped, 12 deselected**(기존 베이스라인과 동일, Python
   코드는 전혀 건드리지 않았으므로 회귀 없음 확인)
+
+## Network Gateway — L3 IP 포워딩 확정 구현 (DESIGN.md 4.7 "미해결 세부사항" 1, 2026-08-26 확정) — [x] 완료
+
+DESIGN.md 4.7 미해결 세부사항 1이 "L3 라우팅"으로 확정됨에 따라, 기존
+Gateway(netem 프로파일 API만 있던 상태)를 실제 커널 IP 포워딩 컨테이너로
+구현했다. 애플리케이션 레벨 프록시/relay 코드는 만들지 않음 — 순수
+`net.ipv4.ip_forward=1` + 분리 브리지 네트워크 + 명시적 `ip route add`.
+
+- [x] `docker-compose.yml` — 최상단에 `networks:` 섹션 신규 추가:
+  `net-client`(172.28.1.0/24, `web`+`gateway`), `net-backend`
+  (172.28.2.0/24, `mock-server`+`gateway`). `web`은 `networks: [net-client]`
+  만, `mock-server`는 `networks: [net-backend]`만, `gateway`는 두 네트워크
+  모두에 고정 IP(`ipv4_address`, 기본 `172.28.1.2`/`172.28.2.2`, env로
+  override 가능)로 연결. `gateway` 서비스에 `sysctls: [net.ipv4.ip_forward=1]`
+  추가. `web`/`mock-server`에 `cap_add: [NET_ADMIN]` 추가(entrypoint의
+  `ip route add`용). `web`/`mock-server` 각각에 `GATEWAY_PEER_SUBNET`/
+  `GATEWAY_ROUTE_VIA` env 추가(entrypoint wrapper가 읽어 상대 네트워크로
+  가는 경로를 gateway 경유로 명시 라우팅). 기존 "L3 vs L4 미정" TODO 주석은
+  확정 설계 설명으로 교체
+- [x] `aipt/gateway/netem_control.py` — 기존 `apply_profile(iface, profile)`은
+  하위호환으로 그대로 유지. 신규 `apply_profile_both(client_iface,
+  backend_iface, profile, dry_run=False)` 추가 — 두 인터페이스에 각각
+  `apply_profile`을 호출(한쪽 실패해도 다른 쪽 계속 시도), 결과를
+  `{"ok": bool(둘 다 성공해야 True), "client": {...}, "backend": {...},
+  "reason": "client_iface=...: ...; backend_iface=...: ..."}`로 반환 — 어느
+  쪽이 실패했는지 항상 구분 가능. `current_profile_both()`/`clear_both()`도
+  같은 패턴으로 추가. 신규 `DEFAULT_CLIENT_IFACE`/`DEFAULT_BACKEND_IFACE`
+  (env `GATEWAY_CLIENT_IFACE`/`GATEWAY_BACKEND_IFACE`, 기본 eth0/eth1) —
+  Docker가 컨테이너에 여러 네트워크를 붙일 때 인터페이스 순서를 보장하지
+  않으므로 하드코딩 대신 명시적 env로 받음. 기존 `DEFAULT_IFACE`/`GATEWAY_IFACE`는
+  deprecated로 유지(하위호환)
+- [x] `aipt/gateway/app.py` — `GET`/`POST /gateway/profile`이
+  `apply_profile_both`/`current_profile_both`를 사용하도록 변경(양쪽
+  인터페이스에 동일 프로파일 적용). 응답 shape이 `{"client": {...},
+  "backend": {...}, ...}`로 바뀜(기존 단일 `{"profile": ..., "delay_ms":
+  ...}` 평면 구조에서 변경 — 이 변경으로 `tests/gateway/test_app.py`의
+  관련 테스트 최소 수정 필요, 아래 참고). `GET /health`에
+  `client_iface`/`backend_iface`/`ip_forward_available`/`ip_forward_reason`
+  필드 추가(기존 `iface` 필드는 하위호환으로 유지)
+- [x] `aipt/gateway/forwarding.py` — 신규. `net.ipv4.ip_forward`가 실제로
+  1인지 `/proc/sys/net/ipv4/ip_forward`를 직접 읽어 확인하는
+  `read_ip_forward(path)`/`available(path)`/`status(path)`. sysctl이
+  docker-compose 설정 누락/권한 부족 등으로 안 먹었을 때 예외로 죽지 않고
+  `netem_control.available()`과 동일한 `(ok, reason)`/`{"ok": bool,
+  "reason": ...}` 패턴으로 보고. `aipt.gateway.app`의 `GET /health`에서 사용
+- [x] `docker/entrypoint_web.py` — 신규. `GATEWAY_PEER_SUBNET`/
+  `GATEWAY_ROUTE_VIA` env를 읽어 컨테이너 시작 시 `ip route add
+  <net-backend subnet> via <gateway의 net-client IP>` 실행 후
+  `uvicorn aipt.web.app:create_app --factory ...`로 exec. env 미설정 시
+  라우팅 설정을 건너뛰고 그대로 앱 기동(standalone/dev 실행 호환).
+  `ip route add`가 이미 존재하는 경로("File exists")나 NET_ADMIN 부재로
+  실패해도 컨테이너를 죽이지 않고 로그만 남김(netem_control과 동일한
+  honesty-over-crash 원칙)
+- [x] `docker/entrypoint_mockserver.py` — 기존 파일에 동일한 라우팅 로직
+  추가(`GATEWAY_PEER_SUBNET`=net-client subnet, `GATEWAY_ROUTE_VIA`=gateway의
+  net-backend IP), 그 다음 기존 `Server(...).serve_forever()` 그대로 실행.
+  기존 동작(env 미설정 시 mock server만 기동)은 완전히 보존
+- [x] `docker/Dockerfile.gateway` — `ENV GATEWAY_CLIENT_IFACE=eth0
+  GATEWAY_BACKEND_IFACE=eth1` 추가(기존 `GATEWAY_IFACE=eth0`는 유지), 상단
+  주석에 `net.ipv4.ip_forward=1` sysctl 요구사항 설명 추가
+- [x] `docker/Dockerfile.web` — `COPY docker/entrypoint_web.py`,
+  `CMD`를 `uvicorn ...` 직접 호출에서 `python entrypoint_web.py`로 변경(내부적으로
+  동일한 uvicorn 커맨드를 `os.execvp`로 실행하므로 최종 프로세스는 동일)
+- [x] `docker/Dockerfile.mockserver` — 주석만 갱신(entrypoint 파일 자체는
+  기존과 동일 경로, 내용만 라우팅 로직 추가)
+- [x] `tests/gateway/test_forwarding.py` — 신규, 8개 테스트. 실제
+  `/proc/sys/net/ipv4/ip_forward`를 건드리지 않고 `tmp_path` scratch 파일로
+  대체(1/0/파일없음/PermissionError 각 경로), `status()`의 dict shape 확인
+- [x] `tests/gateway/test_netem_control.py` — 기존 테스트는 전량 무수정.
+  `TestApplyProfileBoth` 클래스 신규 추가(8개 테스트): 양쪽 성공(커맨드
+  6개=인터페이스당 3개 확인)/dry_run/tc 미설치 시 양쪽 reason 모두 포함/
+  한쪽만 실패 시 실패한 쪽만 `reason`에 명시(다른 쪽 iface명은 안 들어감을
+  확인)/`current_profile_both`/`clear_both`/`DEFAULT_CLIENT_IFACE`·
+  `DEFAULT_BACKEND_IFACE` 상수 존재 확인
+- [x] `tests/gateway/test_app.py` — `apply_profile_both` 응답 shape 변경에
+  맞춰 3개 테스트 최소 수정(`test_get_profile_defaults_to_clean`,
+  `test_post_then_get_reflects_applied_profile_when_tc_available`이
+  `body["profile"]`→`body["client"]["profile"]`/`body["backend"]["profile"]`
+  참조로 변경) + `test_health_ok`에 신규 필드
+  (`client_iface`/`backend_iface`/`ip_forward_available`/`ip_forward_reason`)
+  존재 확인 추가. `test_post_profile_preset`/`test_post_profile_custom`/
+  `test_post_profile_unknown_name_rejected_without_500`/
+  `test_post_profile_missing_field_is_422`는 응답 최상위 shape이
+  `apply_profile_both`와 호환(여전히 최상위 `ok`/`profile` 키 존재)이라
+  무수정
+- [x] 검증: `pytest tests/gateway -q` 포함 `pytest tests/ -q -m "not live"`
+  → **430 passed, 1 skipped, 12 deselected**(다른 병렬 작업자 영역 포함
+  전체 그린, 회귀 없음). `from aipt.gateway import app, netem_control,
+  profiles, forwarding` 임포트 스모크 통과.
+  `netem_control.apply_profile_both("eth0","eth1", PRESETS["clean"],
+  dry_run=True)` 실제 호출 → `ok=True`, 양쪽 `dry_run=True` 확인.
+  `docker compose -f docker-compose.yml config` → 정상 파싱(네트워크 2개
+  `net-client`/`net-backend`, `web`이 `net-client`에만, `mock-server`가
+  `net-backend`에만, `gateway`가 양쪽에 고정 IP로 연결된 것 확인). 실제
+  `docker compose up`으로 컨테이너 2개 띄워 `ip route`/포워딩 왕복 검증은
+  이번 작업 범위 밖(다음 단계에서 사용자가 직접 확인 예정) — 코드/설정
+  파일 정확성에 집중
+
 

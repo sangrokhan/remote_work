@@ -67,4 +67,11 @@ ENV WEB_HOST=0.0.0.0 \
 
 EXPOSE 10000
 
-CMD ["uvicorn", "aipt.web.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "10000"]
+# entrypoint_web.py: adds an explicit `ip route add` to net-backend via the
+# gateway container before starting uvicorn (DESIGN.md 4.7 확정 설계 1 --
+# forces round-trip traffic through `gateway` for netem to actually apply
+# to both directions). No-op (route setup skipped) when
+# GATEWAY_PEER_SUBNET/GATEWAY_ROUTE_VIA are unset, e.g. standalone/dev runs.
+COPY docker/entrypoint_web.py ./entrypoint_web.py
+
+CMD ["python", "entrypoint_web.py"]

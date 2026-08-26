@@ -16,6 +16,15 @@
 # docstring) -- so the image itself always builds and runs; only actual
 # netem application needs the grant. Wiring that into docker-compose.yml
 # is DESIGN.md B10, a separate task, out of scope here.
+#
+# *** ALSO REQUIRES net.ipv4.ip_forward=1 ***
+# DESIGN.md 4.7 확정 설계 1: this container is a pure kernel L3 IP-forwarding
+# hop between the `net-client` and `net-backend` Docker bridge networks --
+# no application-level proxy code. The forwarding sysctl itself is set via
+# docker-compose.yml's `sysctls: [net.ipv4.ip_forward=1]` on this service
+# (Dockerfile ENV cannot set kernel sysctls). aipt.gateway.forwarding checks
+# at runtime whether it actually took effect and reports the truth via
+# GET /health rather than assuming the compose file's intent held.
 
 FROM python:3.12-slim
 
@@ -38,11 +47,18 @@ COPY aipt ./aipt
 # declare.
 RUN pip install --no-cache-dir ".[web]"
 
-# GATEWAY_IFACE: interface tc commands target (default eth0, see
-# aipt.gateway.netem_control.DEFAULT_IFACE).
+# ENV GATEWAY_IFACE: deprecated, kept as the default for
+# GATEWAY_CLIENT_IFACE when that var is unset (backward compatibility).
+# GATEWAY_CLIENT_IFACE / GATEWAY_BACKEND_IFACE: which of this container's
+# two network interfaces (net-client, net-backend -- DESIGN.md 4.7 확정
+# 설계 1) tc commands target for the client-facing vs backend-facing leg.
+# Docker's interface attach order is not guaranteed, so docker-compose.yml
+# should set these explicitly rather than relying on the eth0/eth1 default.
 # GATEWAY_PROFILE / GATEWAY_DELAY_MS / GATEWAY_JITTER_MS / GATEWAY_LOSS_PCT
 # / GATEWAY_REORDER_PCT: startup preset (aipt.gateway.profiles.from_env).
-ENV GATEWAY_IFACE=eth0
+ENV GATEWAY_IFACE=eth0 \
+    GATEWAY_CLIENT_IFACE=eth0 \
+    GATEWAY_BACKEND_IFACE=eth1
 
 EXPOSE 8080
 

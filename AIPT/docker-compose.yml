@@ -1,4 +1,5 @@
-# docker-compose.yml -- AIPT container topology (DESIGN.md 4, 4.7 B10).
+# docker-compose.yml -- AIPT container topology (DESIGN.md 4, 4.7 B10, and
+# 4.7 "미해결 세부사항" 1 확정 설계).
 #
 # 3-service topology this phase actually stands up: web -> gateway ->
 # mock-server. `local-llm` is intentionally NOT included as a built service
@@ -11,18 +12,37 @@
 # path); PublicAIBackend (Gemini/OpenAI) goes straight to the real internet
 # and never touches `gateway`.
 #
-# IMPORTANT / TODO (DESIGN.md 4.7 "미해결 세부사항 1"): whether `gateway`
-# acts as an L4 TCP proxy (application-level forward) or an L3 routing hop
-# (pure netem on an interface, no proxying) is still UNDECIDED in the design
-# doc itself. This compose file only establishes the *container topology*
-# (service names, depends_on ordering, network membership, mock-server not
-# published to the host) -- it does NOT implement actual L3/L4 forwarding
-# from `gateway` to `mock-server`/`local-llm`. Until that is implemented,
-# `aipt.gateway.app` only exposes the netem profile-control API
-# (`/gateway/profile`); it does not yet relay `web`'s HTTP requests through
-# to `mock-server`. Wiring real forwarding is left as a follow-up (B10
-# continuation / a later phase), same scope boundary the task description
-# for this compose file draws.
+# DESIGN.md 4.7 "미해결 세부사항 1" 확정 (2026-08-26): L3 라우팅. `gateway`는
+# TCP 상태를 보지 않는 순수 커널 IP 포워딩 컨테이너다 -- 애플리케이션 레벨
+# 프록시/relay 코드가 아니라 `net.ipv4.ip_forward=1` + 두 개의 분리된 브리지
+# 네트워크(`net-client`, `net-backend`)로 구현한다:
+#   - `web`은 `net-client`에만 속한다.
+#   - `mock-server`(및 향후 `local-llm`)는 `net-backend`에만 속한다.
+#   - `gateway`는 두 네트워크 모두에 속하고, `net.ipv4.ip_forward=1`로 그
+#     사이를 라우팅한다.
+#   - 왕복 트래픽이 반드시 `gateway`를 통과하도록, `web`/`mock-server`는
+#     컨테이너 시작 시 상대 네트워크로 가는 경로를 `gateway`의 자기 네트워크
+#     내 IP를 통해 명시적으로 라우팅한다 (`docker/entrypoint_web.py`,
+#     `docker/entrypoint_mockserver.py`의 `ip route add`).
+#   - `tc netem`은 `gateway`의 양쪽 인터페이스(client-facing, backend-facing)
+#     egress 모두에 동일 프로파일이 적용된다 (`aipt/gateway/netem_control.py`
+#     `apply_profile_both`).
+
+networks:
+  # 172.28.1.0/24 -- web + gateway (gateway's net-client-side IP is the
+  # `via` target for mock-server's route back to web).
+  net-client:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.1.0/24
+  # 172.28.2.0/24 -- mock-server (+ future local-llm) + gateway (gateway's
+  # net-backend-side IP is the `via` target for web's route to mock-server).
+  net-backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.2.0/24
 
 services:
 
@@ -30,13 +50,25 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.mockserver
+    # NET_ADMIN: entrypoint_mockserver.py's `ip route add` back to
+    # net-client via `gateway` (DESIGN.md 4.7 확정 설계 1 -- forces response
+    # traffic through gateway instead of a shortcut return path).
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - net-backend
     environment:
       - MOCK_HOST=0.0.0.0
       - MOCK_PORT=8888
+      # Route setup (docker/entrypoint_mockserver.py): net-client subnet,
+      # reached via gateway's IP on net-backend.
+      - GATEWAY_PEER_SUBNET=${NET_CLIENT_SUBNET:-172.28.1.0/24}
+      - GATEWAY_ROUTE_VIA=${GATEWAY_BACKEND_IP:-172.28.2.2}
     # No `ports:` mapping on purpose -- DESIGN.md 4.7's topology requires
     # mock-server to be reachable only through `gateway` (and, from the
     # host's point of view, not at all). Other services reach it at
-    # mock-server:8888 over the default compose network.
+    # mock-server:8888, but only `gateway` (on net-backend) actually can --
+    # `web` is not on net-backend at all, by design.
     expose:
       - "8888"
 
@@ -45,19 +77,32 @@ services:
       context: .
       dockerfile: docker/Dockerfile.gateway
     # NET_ADMIN: tc qdisc netem (aipt/gateway/netem_control.py) targeting
-    # GATEWAY_IFACE inside this container's network namespace.
+    # both GATEWAY_CLIENT_IFACE/GATEWAY_BACKEND_IFACE inside this
+    # container's network namespace.
     cap_add:
       - NET_ADMIN
+    # DESIGN.md 4.7 확정 설계 1: kernel-level IP forwarding between
+    # net-client and net-backend. aipt.gateway.forwarding verifies this
+    # actually took effect at runtime and surfaces it via GET /health.
+    sysctls:
+      - net.ipv4.ip_forward=1
+    networks:
+      net-client:
+        ipv4_address: ${GATEWAY_CLIENT_IP:-172.28.1.2}
+      net-backend:
+        ipv4_address: ${GATEWAY_BACKEND_IP:-172.28.2.2}
     environment:
       - GATEWAY_IFACE=${GATEWAY_IFACE:-eth0}
+      - GATEWAY_CLIENT_IFACE=${GATEWAY_CLIENT_IFACE:-eth0}
+      - GATEWAY_BACKEND_IFACE=${GATEWAY_BACKEND_IFACE:-eth1}
       - GATEWAY_PROFILE=${GATEWAY_PROFILE:-clean}
       - GATEWAY_DELAY_MS=${GATEWAY_DELAY_MS:-0}
       - GATEWAY_JITTER_MS=${GATEWAY_JITTER_MS:-0}
       - GATEWAY_LOSS_PCT=${GATEWAY_LOSS_PCT:-0}
       - GATEWAY_REORDER_PCT=${GATEWAY_REORDER_PCT:-0}
-      # Forwarding targets for a future L3/L4 relay implementation (see the
-      # TODO above) -- read by aipt/gateway code once that lands, harmless
-      # env-only documentation until then.
+      # Documentation only -- with L3 routing, `web` addresses mock-server
+      # directly (mock-server:8888) and the kernel forwards the packets via
+      # `gateway`; this app itself never proxies the connection.
       - MOCK_SERVER_HOST=mock-server
       - MOCK_SERVER_PORT=8888
     expose:
@@ -71,28 +116,36 @@ services:
       dockerfile: docker/Dockerfile.web
     # NET_RAW: tcpdump packet capture (aipt.core.capture).
     # NET_ADMIN: netlink cwnd monitor (aipt.core.cwnd) + NIC offload toggle
-    # (aipt.core.offload).
+    # (aipt.core.offload) + entrypoint_web.py's `ip route add` to
+    # net-backend via `gateway` (DESIGN.md 4.7 확정 설계 1).
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    networks:
+      - net-client
     environment:
       - WEB_HOST=0.0.0.0
       - WEB_PORT=10000
       - TRAFFIC_PCAP_DIR=/app/data/pcaps
+      # DESIGN.md 4.7.1: PublicAIBackend request/response JSON, one file per
+      # exec_id -- the only persistent-on-disk run artifact this app writes.
+      - PUBLIC_AI_RECORDS_DIR=/app/data/public_ai_records
       # PublicAIBackend credentials -- passed through from the host/.env,
       # never baked into the image. Empty is fine; that backend's own
       # ready() check reports "not ready" rather than crashing (see
       # aipt/backends/public_ai/*).
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # DESIGN.md 4.7: Mock/LocalLLM traffic must be addressed via the
-      # gateway service, not mock-server directly, once gateway forwarding
-      # is implemented (see TODO above) -- these env vars document/reserve
-      # that target for when aipt.backends.mock / aipt.backends.local_llm
-      # read a gateway-aware base URL instead of talking to mock-server or
-      # LOCAL_LLM_ENGINE_URL directly.
+      # DESIGN.md 4.7: Gateway's profile-control API (netem presets), not
+      # a proxy address -- with L3 routing, Mock/LocalLLM traffic itself is
+      # addressed directly (mock-server:8888 / LOCAL_LLM_ENGINE_URL) and
+      # traverses `gateway` transparently at the kernel level.
       - GATEWAY_HOST=gateway
       - GATEWAY_PORT=8080
+      # Route setup (docker/entrypoint_web.py): net-backend subnet, reached
+      # via gateway's IP on net-client.
+      - GATEWAY_PEER_SUBNET=${NET_BACKEND_SUBNET:-172.28.2.0/24}
+      - GATEWAY_ROUTE_VIA=${GATEWAY_CLIENT_IP:-172.28.1.2}
       # LocalLLMBackend (aipt/backends/local_llm/engine_adapter.py) targets
       # this URL directly (DEFAULT_ENGINE_URL is http://127.0.0.1:8080,
       # only correct for a bare-metal run) -- no `local-llm` service is
@@ -110,5 +163,10 @@ services:
       # Captured pcaps persist across container restarts and stay
       # inspectable on the host with Wireshark (tcp_congestion convention).
       - ./data/pcaps:/app/data/pcaps
+      # DESIGN.md 4.7.1: the ONLY persistent-on-disk run artifact -- Public
+      # AI (real Gemini/OpenAI) request/response JSON, one file per exec_id.
+      # Everything else (cwnd/pcap/mock/local_llm turns, CSV) stays in the
+      # in-memory store only; see aipt/web/store.py.
+      - ./data/public_ai_records:/app/data/public_ai_records
     depends_on:
       - gateway

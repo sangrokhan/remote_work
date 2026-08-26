@@ -40,6 +40,15 @@ def _engine_for_arm(arm: str) -> str:
     )
 
 
+def engine_for_arm(arm: str) -> str:
+    """Public wrapper over :func:`_engine_for_arm` -- lets a caller (e.g. the
+    web run route, which needs to know which engine an arm belongs to
+    *before* connecting, in order to wire ``recorder.recording_backend``)
+    resolve the engine without importing the private helper directly.
+    """
+    return _engine_for_arm(arm)
+
+
 class PublicAIBackend:
     """``aipt.backends.base.Backend`` over Gemini and/or OpenAI.
 
@@ -117,4 +126,4 @@ class PublicAIBackend:
             self._backend.close()
 
 
-__all__ = ["NAME", "PublicAIBackend"]
+__all__ = ["NAME", "PublicAIBackend", "engine_for_arm"]

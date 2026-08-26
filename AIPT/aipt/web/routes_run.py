@@ -20,8 +20,11 @@ unhandled 500.
 
 from __future__ import annotations
 
+import logging
+import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
@@ -30,9 +33,22 @@ from pydantic import BaseModel, Field
 
 import aipt.backends as backends_registry
 from aipt.backends.record import turn_record
+from aipt.backends.public_ai import recorder as public_ai_recorder
 from aipt.web import store as run_store
 
 router = APIRouter()
+
+log = logging.getLogger(__name__)
+
+#: DESIGN.md 4.7.1 -- the *only* persistent-on-disk output this app writes.
+#: Everything else (cwnd/pcap/mock/local_llm turns, CSV) stays in
+#: aipt/web/store.py's in-memory cache; the user downloads bundle.zip.
+PUBLIC_AI_RECORDS_DIR_ENV = "PUBLIC_AI_RECORDS_DIR"
+DEFAULT_PUBLIC_AI_RECORDS_DIR = "data/public_ai_records"
+
+
+def public_ai_records_dir() -> Path:
+    return Path(os.environ.get(PUBLIC_AI_RECORDS_DIR_ENV, DEFAULT_PUBLIC_AI_RECORDS_DIR))
 
 
 class RunRequest(BaseModel):
@@ -91,6 +107,13 @@ def _run_conversation(req: RunRequest) -> dict:
     a run document the export layer and the runs endpoints can consume.
     Runs on a threadpool worker (see ``run_experiment`` below), never on
     the event loop thread.
+
+    DESIGN.md 4.7.1: when ``req.backend == "public_ai"``, every request/
+    response this run makes is additionally captured via
+    ``aipt.backends.public_ai.recorder.recording_backend`` and written to
+    ``data/public_ai_records/<exec_id>.json`` -- the *only* persistent
+    on-disk artifact this app produces. mock/local_llm runs never touch
+    this path; their turns live only in the in-memory store (Phase 1).
     """
     backend = _build_backend(req.backend)
     ok, reason = backend.ready()
@@ -111,6 +134,20 @@ def _run_conversation(req: RunRequest) -> dict:
         backend.inference_delay_ms = req.inference_delay_ms
         backend.algorithm = req.algorithm
         backend.label = label
+
+    # exec_id is generated here (rather than left to run_store.save_run) so
+    # the public_ai record file on disk and the in-memory run doc share the
+    # same id -- a caller can go from one to the other.
+    exec_id = run_store.new_exec_id()
+
+    writer = None
+    if req.backend == "public_ai":
+        try:
+            engine = backends_registry.get("public_ai").engine_for_arm(req.arm)
+        except ValueError:
+            engine = ""
+        writer = public_ai_recorder.FixtureWriter(system=req.system, steps=list(req.turns))
+        backend = public_ai_recorder.recording_backend(backend, writer, engine=engine)
 
     records: list[dict] = []
     error = ""
@@ -149,7 +186,7 @@ def _run_conversation(req: RunRequest) -> dict:
         except Exception:
             cwnd_result = None
 
-    return {
+    result = {
         "ok": not error,
         "error": error,
         "backend": req.backend,
@@ -163,7 +200,28 @@ def _run_conversation(req: RunRequest) -> dict:
         "turns": records,
         "monitors": [cwnd_result] if cwnd_result else [],
         "pcap": None,  # TODO: wire aipt.core.capture once a route asks for it
+        "exec_id": exec_id,
     }
+
+    # DESIGN.md 4.7.1: persist public_ai records regardless of run success --
+    # a failed-partway-through run still spent real API-call money on the
+    # turns it did make, and those must not be silently dropped. A disk
+    # write failure here (permissions, disk full, ...) must never crash the
+    # experiment itself -- same "honest failure reporting, never a hard
+    # crash" posture as recorder.py's masking: log it, surface it in the
+    # response, keep going.
+    if writer is not None:
+        try:
+            path = public_ai_records_dir() / f"{exec_id}.json"
+            writer.write(path)
+            result["record_saved"] = True
+            result["record_path"] = str(path)
+        except Exception as exc:
+            log.exception("failed to persist public_ai record for exec_id=%s", exec_id)
+            result["record_saved"] = False
+            result["record_error"] = f"{type(exc).__name__}: {exc}"
+
+    return result
 
 
 @router.post("/api/run")

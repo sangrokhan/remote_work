@@ -69,14 +69,23 @@ docker compose up --build
 - `web`: FastAPI 앱(`aipt.web.app:create_app`). `NET_ADMIN`/`NET_RAW`
   capability로 cwnd 모니터/tcpdump 캡처/NIC offload 제어. `./data/pcaps`가
   호스트에 볼륨 마운트된다.
-- `gateway`: `aipt/gateway/` 기반 Network Gateway 컨테이너, `NET_ADMIN`
-  capability로 `tc netem` 프로파일 제어(`GET`/`POST /gateway/profile`,
-  프리셋: `clean`/`broadband`/`3g`/`satellite`/`lossy`/`custom`). 현재는
-  컨테이너 토폴로지 수준까지만 배선되어 있고, `gateway`→`mock-server` 실제
-  L3/L4 포워딩은 아직 미구현이다 (ARCHITECTURE.md §1.1, §7 참고).
+- `gateway`: `aipt/gateway/` 기반 Network Gateway 컨테이너. **순수 L3 IP
+  포워딩**으로 동작한다 — `web`(net-client, 172.28.1.0/24)과
+  `mock-server`(net-backend, 172.28.2.0/24)를 분리된 Docker 네트워크에
+  두고, `gateway`만 양쪽에 속해 커널(`net.ipv4.ip_forward=1`)로 그
+  사이를 라우팅한다. TCP 페이로드를 들여다보는 애플리케이션 프록시가
+  아니다. `NET_ADMIN` capability로 양쪽 인터페이스에 `tc netem`
+  프로파일을 동시 적용(`GET`/`POST /gateway/profile`, 프리셋:
+  `clean`/`broadband`/`3g`/`satellite`/`lossy`/`custom`) — 왕복 요청과
+  응답 모두 같은 지연/손실을 겪는다.
 - `mock-server`: `aipt.backends.mock.server`를 구동하는 경량 컨테이너.
-  호스트에 포트를 노출하지 않고 compose 네트워크 내부(`mock-server:8888`)에서만
-  접근 가능하다.
+  호스트에 포트를 노출하지 않고 `net-backend` 네트워크에서만 도달 가능하다.
+
+실행 결과 저장 정책: **Public AI(상용 Gemini/OpenAI API) 요청/응답만**
+`./data/public_ai_records/`에 JSON으로 자동 영속 저장된다. 그 외 모든
+산출물(cwnd 샘플, pcap, mock/local_llm 턴 기록, CSV)은 인메모리에만
+있다가 실행 직후 `bundle.zip`으로 사용자가 직접 다운로드해서 관리한다 —
+별도 DB나 파일 저장소는 없다.
 
 개별 서비스만 빌드/재기동하려면 `docker compose build web`,
 `docker compose up -d gateway mock-server` 처럼 서비스명을 지정한다.

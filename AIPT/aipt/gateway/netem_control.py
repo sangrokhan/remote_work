@@ -35,6 +35,18 @@ _CHILD_HANDLE = "10:"
 
 DEFAULT_IFACE = os.environ.get("GATEWAY_IFACE", "eth0")
 
+# DESIGN.md 4.7 확정 설계 (2026-08-26): Gateway는 net-client/net-backend 두
+# 브리지 네트워크 모두에 속하고, tc netem은 "양쪽 인터페이스의 egress" 모두에
+# 동일 프로파일을 적용해야 왕복(request/response) 둘 다 영향을 받는다 -- 한쪽
+# 인터페이스에만 걸면 편도만 영향받는다 (DESIGN.md 4.7 미해결 세부사항 1).
+#
+# Docker는 컨테이너에 여러 네트워크를 붙일 때 어떤 인터페이스가 eth0/eth1이
+# 될지 순서를 보장하지 않으므로, 하드코딩 대신 명시적인 env var로 받는다.
+# docker-compose.yml에서 gateway 서비스가 net-client에 먼저 연결되면 보통
+# eth0=client, eth1=backend가 되지만 그 가정에 의존하지 않기 위한 override.
+DEFAULT_CLIENT_IFACE = os.environ.get("GATEWAY_CLIENT_IFACE", os.environ.get("GATEWAY_IFACE", "eth0"))
+DEFAULT_BACKEND_IFACE = os.environ.get("GATEWAY_BACKEND_IFACE", "eth1")
+
 _NO_TC = (
     "tc (iproute2) not installed -- install the iproute2 package "
     "(the Gateway container image does this in docker/Dockerfile.gateway)."
@@ -176,12 +188,87 @@ def clear(iface: str, *, dry_run: bool = False) -> dict:
     return apply_profile(iface, PRESETS["clean"], dry_run=dry_run)
 
 
+def apply_profile_both(
+    client_iface: str,
+    backend_iface: str,
+    profile: Profile,
+    *,
+    dry_run: bool = False,
+) -> dict:
+    """Install *profile* on **both** of the Gateway's interfaces
+    (DESIGN.md 4.7 확정 설계: client-facing egress + backend-facing egress
+    both get the same profile, so round-trip traffic -- not just one
+    direction -- is impaired).
+
+    Applies to *client_iface* first, then *backend_iface*, independently
+    (a failure on one side does not skip the other -- both are attempted so
+    the caller learns about both failures, not just the first). Never
+    raises.
+
+    Returns::
+
+        {
+          "ok": bool,                # True only if BOTH sides succeeded
+          "profile": profile.as_dict(),
+          "client_iface": client_iface,
+          "backend_iface": backend_iface,
+          "client": {...apply_profile(client_iface, ...) result...},
+          "backend": {...apply_profile(backend_iface, ...) result...},
+          "reason": "..." (present only when ok is False; names which
+                            side(s) failed and why),
+        }
+    """
+    client_result = apply_profile(client_iface, profile, dry_run=dry_run)
+    backend_result = apply_profile(backend_iface, profile, dry_run=dry_run)
+
+    ok = client_result["ok"] and backend_result["ok"]
+    result = {
+        "ok": ok,
+        "profile": profile.as_dict(),
+        "client_iface": client_iface,
+        "backend_iface": backend_iface,
+        "client": client_result,
+        "backend": backend_result,
+    }
+    if not ok:
+        failures = []
+        if not client_result["ok"]:
+            failures.append(f"client_iface={client_iface}: {client_result['reason']}")
+        if not backend_result["ok"]:
+            failures.append(f"backend_iface={backend_iface}: {backend_result['reason']}")
+        result["reason"] = "; ".join(failures)
+    return result
+
+
+def current_profile_both(client_iface: str, backend_iface: str) -> dict:
+    """The profile last successfully applied to each of the Gateway's two
+    interfaces (each independently defaults to ``clean`` per
+    :func:`current_profile`'s own contract)."""
+    return {
+        "client_iface": client_iface,
+        "client": current_profile(client_iface).as_dict(),
+        "backend_iface": backend_iface,
+        "backend": current_profile(backend_iface).as_dict(),
+    }
+
+
+def clear_both(client_iface: str, backend_iface: str, *, dry_run: bool = False) -> dict:
+    """Remove any netem rule from both interfaces (apply ``clean`` to
+    both, via :func:`apply_profile_both`)."""
+    return apply_profile_both(client_iface, backend_iface, PRESETS["clean"], dry_run=dry_run)
+
+
 __all__ = [
     "DEFAULT_IFACE",
+    "DEFAULT_CLIENT_IFACE",
+    "DEFAULT_BACKEND_IFACE",
     "tc_path",
     "available",
     "build_commands",
     "apply_profile",
+    "apply_profile_both",
     "current_profile",
+    "current_profile_both",
     "clear",
+    "clear_both",
 ]

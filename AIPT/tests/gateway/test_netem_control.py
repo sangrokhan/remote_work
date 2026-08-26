@@ -179,3 +179,88 @@ class TestApplyProfile:
         assert result["ok"] is True
         assert result["profile"]["profile"] == "clean"
         assert netem_control.current_profile("eth0").name == "clean"
+
+
+class TestApplyProfileBoth:
+    """DESIGN.md 4.7 확정 설계 1: netem must be applied to BOTH the
+    client-facing and backend-facing interfaces so round-trip traffic is
+    impaired identically in each direction, not just one leg."""
+
+    def setup_method(self):
+        netem_control._STATE.clear()
+
+    def test_apply_profile_both_runs_commands_on_both_ifaces(self, monkeypatch):
+        monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            return _Proc(returncode=0)
+
+        monkeypatch.setattr(netem_control.subprocess, "run", fake_run)
+        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["3g"])
+
+        assert result["ok"] is True
+        assert result["client_iface"] == "eth0"
+        assert result["backend_iface"] == "eth1"
+        assert result["client"]["ok"] is True
+        assert result["backend"]["ok"] is True
+        # 3 commands (del, netem, fq) per interface = 6 total
+        assert len(calls) == 6
+        assert netem_control.current_profile("eth0").name == "3g"
+        assert netem_control.current_profile("eth1").name == "3g"
+
+    def test_apply_profile_both_dry_run_does_not_execute(self, monkeypatch):
+        monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
+        calls = []
+        monkeypatch.setattr(netem_control.subprocess, "run", lambda *a, **k: calls.append(a))
+        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["broadband"], dry_run=True)
+        assert result["ok"] is True
+        assert result["client"]["dry_run"] is True
+        assert result["backend"]["dry_run"] is True
+        assert calls == []
+
+    def test_apply_profile_both_without_tc_reports_ok_false_with_both_reasons(self, monkeypatch):
+        monkeypatch.setattr(netem_control.shutil, "which", lambda name: None)
+        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["3g"])
+        assert result["ok"] is False
+        assert "eth0" in result["reason"]
+        assert "eth1" in result["reason"]
+
+    def test_apply_profile_both_partial_failure_names_failing_side(self, monkeypatch):
+        # client (eth0) succeeds, backend (eth1) fails -- e.g. one bridge
+        # interface lost NET_ADMIN visibility but not the other.
+        monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
+
+        def fake_run(argv, **kwargs):
+            if argv[:3] == ["tc", "qdisc", "del"]:
+                return _Proc(returncode=0)
+            if "eth1" in argv:
+                return _Proc(returncode=2, stderr="RTNETLINK answers: Operation not permitted")
+            return _Proc(returncode=0)
+
+        monkeypatch.setattr(netem_control.subprocess, "run", fake_run)
+        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["3g"])
+
+        assert result["ok"] is False
+        assert result["client"]["ok"] is True
+        assert result["backend"]["ok"] is False
+        assert "backend_iface=eth1" in result["reason"]
+        assert "client_iface=eth0" not in result["reason"]
+
+    def test_current_profile_both_defaults_to_clean_both_sides(self):
+        result = netem_control.current_profile_both("eth0", "eth1")
+        assert result["client"]["profile"] == "clean"
+        assert result["backend"]["profile"] == "clean"
+
+    def test_clear_both_applies_clean_to_both(self, monkeypatch):
+        monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
+        monkeypatch.setattr(netem_control.subprocess, "run", lambda *a, **k: _Proc(returncode=0))
+        result = netem_control.clear_both("eth0", "eth1")
+        assert result["ok"] is True
+        assert netem_control.current_profile("eth0").name == "clean"
+        assert netem_control.current_profile("eth1").name == "clean"
+
+    def test_default_client_backend_iface_constants_exist(self):
+        assert netem_control.DEFAULT_CLIENT_IFACE
+        assert netem_control.DEFAULT_BACKEND_IFACE

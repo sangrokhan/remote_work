@@ -7,6 +7,8 @@ module's docstring on persistence).
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, Response
 
@@ -16,6 +18,7 @@ from aipt.export import connection as connection_mod
 from aipt.export import packets as packets_mod
 from aipt.export import turns as turns_mod
 from aipt.web import store as run_store
+from aipt.web.routes_run import public_ai_records_dir
 
 router = APIRouter()
 
@@ -177,3 +180,66 @@ def pcap_file(name: str):
         return _not_found()
     return FileResponse(str(path), media_type="application/vnd.tcpdump.pcap",
                         filename=name)
+
+
+# ---------------------------------------------------------------------------
+# DESIGN.md 4.7.1 -- Public AI record files (disk-backed, NOT the in-memory
+# run store above). These two routes read directly off
+# data/public_ai_records/<exec_id>.json, the one persistent artifact this
+# app writes (see aipt.web.routes_run._run_conversation). They are entirely
+# separate from run_store: a public_ai record can outlive its in-memory run
+# doc (which evicts after MAX_RUNS/restart) and there is no requirement that
+# an exec_id present on disk still be in the in-memory store, or vice versa.
+# ---------------------------------------------------------------------------
+
+
+def _safe_record_path(exec_id: str):
+    """Resolve *exec_id* to a path strictly inside the records dir, refusing
+    path traversal (``../..``) the same way ``capture_mod.safe_pcap_path``
+    guards pcap names."""
+    base = public_ai_records_dir().resolve()
+    candidate = (base / f"{exec_id}.json").resolve()
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        return None
+    return candidate
+
+
+@router.get("/api/public-ai-records")
+def list_public_ai_records():
+    """List files under ``data/public_ai_records/`` -- exec_id, mtime, and
+    size only (not the file content; use the detail route for that)."""
+    base = public_ai_records_dir()
+    if not base.is_dir():
+        return JSONResponse([])
+    entries = []
+    for p in sorted(base.glob("*.json")):
+        try:
+            stat = p.stat()
+        except OSError:
+            continue
+        entries.append(
+            {
+                "exec_id": p.stem,
+                "timestamp": stat.st_mtime,
+                "size_bytes": stat.st_size,
+            }
+        )
+    entries.sort(key=lambda e: e["timestamp"], reverse=True)
+    return JSONResponse(entries)
+
+
+@router.get("/api/public-ai-records/{exec_id}")
+def get_public_ai_record(exec_id: str):
+    """Return the raw persisted fixture JSON for one public_ai run."""
+    path = _safe_record_path(exec_id)
+    if path is None or not path.is_file():
+        return _not_found()
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
+        )
+    return JSONResponse(doc)

@@ -18,7 +18,8 @@ flowchart TB
 
     subgraph WEBAPP["aipt/web — FastAPI 단일 앱 (컴포넌트 ⑤ 프론트)"]
         Routes["routes_config / routes_run / routes_runs"]
-        Store["store.py (인메모리 실행 이력)"]
+        Store["store.py (인메모리, 최근 50개)"]
+        Records["data/public_ai_records/*.json<br/>(Public AI 요청/응답, 유일한 영속 저장)"]
         Templates["templates + static"]
     end
 
@@ -29,18 +30,22 @@ flowchart TB
         LocalLLM["③ LocalLLMBackend<br/>engine_adapter.py / gateway.py(engine gateway)"]
     end
 
-    subgraph GATEWAY["aipt/gateway — Network Gateway 컨테이너 (컴포넌트 ④)"]
-        Netem["netem_control.py (tc netem)"]
+    subgraph GATEWAY["aipt/gateway — Network Gateway 컨테이너 (컴포넌트 ④, L3 IP 포워딩)"]
+        Forward["forwarding.py<br/>net.ipv4.ip_forward=1 확인"]
+        Netem["netem_control.py<br/>apply_profile_both() — 양쪽 인터페이스"]
         ProfileAPI["profiles.py + app.py<br/>/gateway/profile API"]
+    end
+
+    subgraph NETCLIENT["net-client (172.28.1.0/24)"]
+        WebNet["web"]
+    end
+    subgraph NETBACKEND["net-backend (172.28.2.0/24)"]
+        MockNet["mock-server"]
     end
 
     subgraph EXT["실제 인터넷"]
         Gemini["generativelanguage.googleapis.com"]
         OpenAI["api.openai.com"]
-    end
-
-    subgraph MOCKSRV["mock-server 컨테이너"]
-        MockServer["HTTP/1.1 keep-alive 서버"]
     end
 
     subgraph LLMSRV["로컬 서빙 엔진 (외부 실행)"]
@@ -55,7 +60,7 @@ flowchart TB
         Wire["wire.py / streaming.py"]
     end
 
-    subgraph EXPORT["aipt/export — 3-레이어 산출물"]
+    subgraph EXPORT["aipt/export — 3-레이어 산출물 (다운로드 전용, 비영속)"]
         direction LR
         Connection["connection.py → cwnd.csv"]
         Turns["turns.py → turns.csv (+goodput_bps)"]
@@ -66,18 +71,21 @@ flowchart TB
     Browser <--> Routes
     Routes --> Templates
     Routes --> Store
+    Routes -->|"public_ai 실행만"| Records
     Routes --> PublicAI
     Routes --> Mock
     Routes --> LocalLLM
-    Routes -.->|"POST /gateway/profile (프록시)"| ProfileAPI
+    Routes -.->|"POST /gateway/profile"| ProfileAPI
 
     PublicAI <-->|"실제 네트워크 (Gateway 미경유)"| Gemini
     PublicAI <-->|"실제 네트워크"| OpenAI
 
-    Mock <--> Netem
-    LocalLLM <--> Netem
-    Netem <-.->|"L3/L4 forwarding — 미구현, TODO"| MockServer
-    LocalLLM <--> Engine
+    Mock -.->|"연결: web은 net-client에만 속함"| WebNet
+    WebNet ==>|"L3 forward<br/>(커널 IP 포워딩,<br/>TCP 페이로드 안 봄)"| GATEWAY
+    GATEWAY ==>|"L3 forward"| MockNet
+    MockNet -.-> Mock
+    LocalLLM -.->|"engine gateway 경유"| GATEWAY
+    GATEWAY <--> Engine
 
     PublicAI -. 계측 훅 .- CORE
     Mock -. 계측 훅 .- CORE
@@ -90,14 +98,25 @@ flowchart TB
     style CORE fill:#243447,stroke:#4a90d9,stroke-width:2px,color:#fff
     style EXPORT fill:#2f3b2f,stroke:#5cb85c,stroke-width:2px,color:#fff
     style EXT fill:#3a2626,stroke:#c0392b,stroke-width:1px,color:#fff
+    style Records fill:#3a3020,stroke:#e0a030,stroke-width:2px,color:#fff
 ```
 
-> **구현 상태 주석**: Gateway의 `mock-server`/`local-llm`으로의 실제 L3/L4
-> forwarding은 아직 미구현이다 (`docker-compose.yml`에 TODO로 명시됨).
-> 현재 Gateway 컨테이너는 프로파일 제어 API(`/gateway/profile`)와
-> 자기 자신의 네트워크 인터페이스에 대한 `tc netem` 적용까지만 동작한다.
-> 컨테이너 토폴로지(`web → gateway → mock-server`, `depends_on` 순서,
-> `mock-server`는 호스트에 미노출)는 갖춰져 있다.
+> **구현 상태 (2026-08-26 갱신)**: Gateway는 이제 **실제 동작하는 L3 IP
+> 포워딩 컨테이너**다 — `web`은 `net-client`(172.28.1.0/24), `mock-server`는
+> `net-backend`(172.28.2.0/24)에 각각 격리되어 있고, Gateway만 두 네트워크
+> 모두에 속해 커널(`net.ipv4.ip_forward=1`)로 그 사이를 라우팅한다. 컨테이너
+> 시작 시 `entrypoint_web.py`/`entrypoint_mockserver.py`가 상대 서브넷으로
+> 가는 경로를 Gateway 경유로 명시적으로 추가(`ip route add`)해서, 왕복
+> 트래픽(요청+응답)이 반드시 Gateway를 통과하게 한다. `tc netem`은 Gateway의
+> 양쪽 인터페이스(client-facing + backend-facing) egress에 동시에
+> 적용된다(`apply_profile_both()`) — 편도만 영향받는 일이 없다. Gateway는
+> TCP 상태를 전혀 보지 않는 순수 L3 라우팅이며, 애플리케이션 레벨 프록시
+> 코드는 없다.
+
+> 실행 결과 저장은 §3.1에서 자세히 다루지만 다이어그램에도 반영했다:
+> **Public AI(상용 API) 요청/응답 JSON만** `data/public_ai_records/`에
+> 자동으로 영속 저장되고, 그 외 산출물(cwnd/pcap/mock/local_llm 턴 기록)은
+> 인메모리에만 있다가 `bundle.zip`으로 사용자가 직접 받아서 관리한다.
 
 ### 1.2 패키지/폴더 구조
 
@@ -138,10 +157,11 @@ AIPT/
 │   │       ├── engine_adapter.py       (표준 엔진 OpenAI 호환 클라이언트)
 │   │       └── gateway.py              ("engine gateway" — 애플리케이션 레벨 프록시)
 │   │
-│   ├── gateway/                   # ★ ④ Network Gateway (별도 컨테이너/프로세스)
+│   ├── gateway/                   # ★ ④ Network Gateway (L3 IP 포워딩, 별도 컨테이너)
 │   │   ├── profiles.py             #   clean/broadband/3g/satellite/lossy/custom
-│   │   ├── netem_control.py        #   tc qdisc 명령 구성/실행
-│   │   └── app.py                  #   독립 FastAPI 미니앱 (/gateway/profile)
+│   │   ├── netem_control.py        #   apply_profile_both() — 양쪽 인터페이스에 tc qdisc
+│   │   ├── forwarding.py           #   net.ipv4.ip_forward 상태 확인
+│   │   └── app.py                  #   독립 FastAPI 미니앱 (/health, /gateway/profile)
 │   │
 │   ├── export/                    # 3-레이어 통합 산출물
 │   │   ├── connection.py / turns.py / packets.py / bundle.py
@@ -220,26 +240,48 @@ gateway"(애플리케이션 레벨 프록시)를 둔다. **주의**: 이 "engine
   (`on_request`/`on_response` 콜백). `transport` 슬롯 필드를
   `X-AIPT-Transport` 헤더로 반영 — 향후 HTTP 신기능/QUIC 실험을 위한
   확장 지점이며, 이번 범위에서는 실제 신기능을 구현하지 않는다.
-- **네트워크 경로**: Mock과 마찬가지로 Network Gateway를 경유한다
-  (토폴로지상 전제, 실제 L3/L4 forwarding은 §1.1 주석대로 미구현).
+- **네트워크 경로**: Mock과 마찬가지로 Network Gateway를 L3로 경유한다 —
+  `LOCAL_LLM_ENGINE_URL`이 `net-backend` 서브넷을 가리키면 `web`의
+  entrypoint가 설정한 라우트를 타고 Gateway를 거쳐 도달한다.
 
 ### ④ Network Gateway — `aipt/gateway/`
 
 Mock/LocalLLM 경로에 실제 네트워크 특성(지연/손실/재정렬)을 주입하는
-**별도 컨테이너/프로세스**. PublicAI는 실제 인터넷이 이미 이 역할을 하므로
-경유하지 않는다.
+**순수 L3 IP 포워딩 컨테이너** (DESIGN.md §4.7 "미해결 세부사항 1" 확정:
+L4 프록시가 아니라 L3 라우팅). PublicAI는 실제 인터넷이 이미 이 역할을
+하므로 경유하지 않는다.
 
-- **profiles.py**: 프리셋 5종(`clean`/`broadband`/`3g`/`satellite`/
-  `lossy`) + `custom`(임의 delay/jitter/loss/reorder 조합). `from_env()`가
-  `GATEWAY_*` 환경변수와 구 `CLIENT_NETEM_DELAY_MS`/`SERVER_NETEM_DELAY_MS`
-  alias를 모두 지원.
-- **netem_control.py**: `aipt.core.netem`을 확장해 `tc qdisc` 명령을
-  구성/실행. **정직한 실패 보고** — CAP_NET_ADMIN이 없으면 예외 대신
-  `{"ok": false, "reason": "..."}`를 반환 (offload.py/capture.py와 동일한
-  가용성 감지 패턴).
-- **app.py**: 독립 FastAPI 미니앱. `GET /health`, `GET/POST
-  /gateway/profile`. `aipt/web`과는 별도 프로세스로, HTTP로만 통신한다
-  (import하지 않음).
+- **네트워크 격리**: `web`은 `net-client`(172.28.1.0/24)에만, `mock-server`는
+  `net-backend`(172.28.2.0/24)에만 속한다. Gateway만 두 네트워크 모두에
+  고정 IP(172.28.1.2 / 172.28.2.2)로 속해 있다.
+- **forwarding.py**: `net.ipv4.ip_forward`(커널 sysctl)가 실제로 1인지
+  `/proc/sys/net/ipv4/ip_forward`를 읽어 확인. `docker-compose.yml`의
+  `sysctls: [net.ipv4.ip_forward=1]`가 실제로 적용됐는지를 런타임에
+  검증하고 `GET /health`에 노출 — 설정이 코드로 반영됐다고 그냥 믿지 않는다.
+- **라우팅 강제**: Gateway 자체는 라우트를 추가하지 않는다 — 대신 `web`/
+  `mock-server` 컨테이너의 entrypoint(`docker/entrypoint_web.py`,
+  `docker/entrypoint_mockserver.py`)가 시작 시 상대 서브넷으로 가는 경로를
+  Gateway의 자기 네트워크 내 IP를 next-hop으로 명시적으로 추가한다
+  (`ip route add <상대 서브넷> via <gateway IP>`). 이게 없으면 응답 패킷이
+  Gateway를 우회해서 돌아갈 수 있어 왕복 중 편도만 지연/손실이 적용되는
+  비대칭이 생긴다. 라우트 추가가 실패해도(NET_ADMIN 누락 등) 컨테이너는
+  크래시하지 않고 로그만 남긴다 — 이후 backend의 `connect()` 실패로
+  자연스럽게 드러난다.
+- **netem_control.py**: `apply_profile_both(client_iface, backend_iface,
+  profile)`가 Gateway의 **양쪽** 인터페이스 egress에 동일 프로파일을
+  적용한다 — 한쪽에만 걸면 편도만 영향받기 때문. 각 인터페이스는 독립적으로
+  시도되고, 한쪽만 실패해도 어느 쪽이 왜 실패했는지 결과에 개별로 남는다
+  (`{"ok": false, "client": {...}, "backend": {...}, "reason": "..."}`).
+  **정직한 실패 보고** — CAP_NET_ADMIN이 없으면 예외 대신 실패를 보고한다
+  (offload.py/capture.py와 동일한 가용성 감지 패턴).
+- **app.py**: 독립 FastAPI 미니앱. `GET /health`(netem + ip_forward 가용성
+  모두 노출), `GET/POST /gateway/profile`(양쪽 인터페이스 기준).
+  `aipt/web`과는 별도 프로세스로, HTTP로만 통신한다 (import하지 않음).
+- **TCP를 보지 않는다는 것의 의미**: Gateway 프로세스(FastAPI 앱)는 트래픽
+  자체를 중계하지 않는다 — 그건 커널의 IP 포워딩이 한다. Gateway 프로세스가
+  하는 일은 오직 (1) 그 커널 기능이 켜져 있는지 확인하고 (2) `tc netem`으로
+  인터페이스에 지연/손실 특성을 거는 것뿐이다. 이래서 "L3 라우팅"이다 —
+  애플리케이션 레벨에서 TCP 연결을 종료하고 다시 맺는 프록시(L4/L7)가 아니다.
 
 ### ⑤ 프론트 — `aipt/web/`
 
@@ -252,11 +294,22 @@ FastAPI 단일 앱. 기존 token_traffic(Flask) + tcp_congestion(FastAPI) 두
 - **routes_run.py**: `POST /api/run` — backend 이름으로 인스턴스를 얻어
   `connect → send_turn* → close` 라이프사이클을 스레드풀에서 실행
   (`run_in_threadpool`, 이벤트 루프 블로킹 방지). 미구현 backend는 501로
-  응답(예외를 그대로 전파하지 않음).
+  응답(예외를 그대로 전파하지 않음). **`backend == "public_ai"`일 때만**
+  `aipt.backends.public_ai.recorder.recording_backend()`로 실제 backend
+  인스턴스를 감싸서 매 턴을 자동 기록하고, 실행 종료 시
+  `data/public_ai_records/<exec_id>.json`으로 저장한다 (§4.7.1, §3.1 참고).
+  저장 실패는 실행 자체를 죽이지 않고 응답에 `record_saved`/`record_error`
+  필드로 남는다.
 - **routes_runs.py**: 실행 이력 조회/삭제, `aipt.export`의 4개 CSV +
-  bundle.zip 다운로드 라우트.
+  bundle.zip 다운로드 라우트. 그리고 인메모리 store와는 완전히 별개인
+  디스크 기반 라우트 `GET /api/public-ai-records`(목록)/
+  `GET /api/public-ai-records/{exec_id}`(원문 JSON).
 - **store.py**: 인메모리 `OrderedDict` 기반 최근 실행 이력 저장
-  (`MAX_RUNS=50`). 파일 영속화는 TODO로 남겨져 있다 (§8 참고).
+  (`MAX_RUNS=50`). **의도적으로 파일 영속화를 하지 않는다** — DESIGN.md
+  §4.7.1에서 확정: 영속 저장 대상은 Public AI 요청/응답 JSON뿐이고, 그 외
+  산출물(cwnd/pcap/mock/local_llm 턴 기록)은 사용자가 실행 직후
+  `bundle.zip`으로 받아서 직접 관리한다. 이건 미완성이 아니라 확정된
+  설계다.
 
 ---
 
@@ -266,16 +319,23 @@ FastAPI 단일 앱. 기존 token_traffic(Flask) + tcp_congestion(FastAPI) 두
 
 | 데이터 | 저장 위치 | 관리 방식 |
 |---|---|---|
-| 실행 결과(run document) | `aipt/web/store.py`의 인메모리 dict | 최근 50개(MAX_RUNS) 유지, 프로세스 재시작 시 소실(파일 영속화 TODO) |
-| cwnd 연속 샘플 | `Monitor.result()` → 메모리 → `export.connection.connection_csv()` | 요청 시 CSV로 직렬화, 별도 DB 없음 |
+| **Public AI 요청/응답** | `data/public_ai_records/<exec_id>.json` (디스크, 영속) | `recording_backend()`가 매 턴 자동 기록, `mask_secrets()`로 API 키 등 마스킹. **이 프로젝트에서 유일하게 영속 저장되는 실행 산출물** — 과금이 발생한 재현 불가능한 데이터이기 때문 |
+| 그 외 실행 결과(run document, mock/local_llm 턴 기록) | `aipt/web/store.py`의 인메모리 dict | 최근 50개(MAX_RUNS) 유지, 프로세스 재시작 시 소실 — **의도된 설계** (§4.7.1). 사용자가 `bundle.zip`으로 실행 직후 다운로드해서 직접 보관 |
+| cwnd 연속 샘플 | `Monitor.result()` → 메모리 → `export.connection.connection_csv()` | 요청 시 CSV로 직렬화, 별도 DB 없음, 다운로드 후 미보관 |
 | turn 단위 레코드 | `Backend.send_turn()` → `TurnExchange` → `turn_record()` | 요청 시 `export.turns.turns_csv()`로 직렬화 |
-| pcap 캡처 | `aipt.core.capture` → `data/pcaps/` 디스크 | run당 1개 파일, `export.packets`가 파싱해 CSV 생성 |
+| pcap 캡처 | `aipt.core.capture` → `data/pcaps/` 디스크 | run당 1개 파일, `export.packets`가 파싱해 CSV 생성. 볼륨 마운트되어 호스트에 남지만 별도 보존 정책 없음(사용자 관리) |
 | packets.csv | pcap을 매 요청마다 파싱 (사전 계산 없음) | dpkt 있으면 사용, 없으면 순수 stdlib 파서 폴백 |
 | Gateway 프로파일 상태 | `aipt/gateway`가 커널 qdisc 상태에 위임 | Gateway 프로세스가 진실의 소스, 별도 저장 안 함(`GET /gateway/profile`이 매번 커널에 조회) |
 | 실측 fixture(재생용) | `recorder.py` → JSON 파일 | `MockBackend.replay`가 로드해서 재생 |
 
 핵심 설계 원칙(§4.6 계승): **connection/turn/packet 3-레이어를 분리** —
 서로 다른 단위(tick vs turn vs packet)를 하나의 테이블에 섞지 않는다.
+
+두 번째 원칙(§4.7.1 신규): **영속 저장은 "재현 불가능하고 돈이 든 데이터"로
+한정**한다. Public AI 호출은 과금이 발생하고 실제 서비스 상태(캐시 warm-up
+등)에 의존해 재현이 어렵다 — 그래서 자동으로 남긴다. 나머지는 로컬에서
+재현 가능한 실험(mock 재생, cwnd 측정)이므로 "필요하면 다시 돌리면 된다"는
+전제로 영속화하지 않고, 사용자가 필요한 결과만 골라 zip으로 가져간다.
 
 ### 3.2 Backend별 통신 Sequence Diagram
 
@@ -301,40 +361,40 @@ sequenceDiagram
     end
     W->>B: close()
     B->>Core: cwnd 결과 확정, wire_counter 종료
-    W->>W: turn_record() 누적 → store.py 저장
+    W->>W: turn_record() 누적, public_ai면 recorder로 JSON 영속 저장
     W-->>U: 실행 결과 JSON
 ```
 
-#### (b) MockBackend — Network Gateway 경유
+#### (b) MockBackend — Network Gateway 경유 (L3 IP 포워딩)
 
 ```mermaid
 sequenceDiagram
     participant U as 브라우저
-    participant W as aipt/web (routes_run)
+    participant W as aipt/web (routes_run, net-client)
     participant B as MockBackend
     participant Core as aipt.core (cwnd/capture)
-    participant GW as Network Gateway (tc netem)
-    participant M as mock-server
+    participant K as Gateway 커널 (ip_forward + tc netem, L3)
+    participant M as mock-server (net-backend)
 
     U->>W: POST /api/run {backend: mock, arm: fixture, turns}
+    Note over K: 사전에 POST /gateway/profile 로<br/>양쪽 인터페이스에 지연/손실 프로파일 적용됨<br/>(apply_profile_both)
     W->>B: connect(arm)
     B->>Core: cwnd.Monitor 시작 (2ms 또는 B12 적응형 주기), capture 시작(옵션)
-    Note over GW: 사전에 POST /gateway/profile 로<br/>지연/손실 프로파일 적용됨
     loop 각 turn (누적 컨텍스트)
-        B->>GW: HTTP 요청 (tc netem 경유)
-        GW->>M: forward (L3/L4, 현재 토폴로지만 구현)
-        M-->>GW: mock 응답 (fixture 또는 byte-size)
-        GW-->>B: 응답 (지연/손실 적용됨)
+        B->>K: TCP 연결 (entrypoint가 추가한 라우트로 Gateway를 next-hop 경유)
+        K->>M: 커널 IP 포워딩 (TCP 페이로드 미검사, netem 지연/손실 적용됨)
+        M-->>K: mock 응답 (fixture 또는 byte-size)
+        K-->>B: 커널 IP 포워딩 (응답도 동일 경로로 왕복)
         B-->>W: TurnExchange
     end
     B->>Core: idle probe(옵션), cwnd 리셋 이벤트 관찰
     W->>B: close()
     Core-->>W: cwnd 결과 + pcap
-    W->>W: turn_record() + connection 결과 저장
+    W->>W: turn_record() + connection 결과 (인메모리, 비영속)
     W-->>U: 실행 결과 JSON (idle_resets 등 포함)
 ```
 
-#### (c) LocalLLMBackend — engine gateway + Network Gateway 이중 경유
+#### (c) LocalLLMBackend — engine gateway(애플리케이션) + Network Gateway(L3) 이중 경유
 
 ```mermaid
 sequenceDiagram
@@ -342,16 +402,16 @@ sequenceDiagram
     participant W as aipt/web (routes_run)
     participant B as LocalLLMBackend
     participant EG as engine gateway (gateway.py, 애플리케이션 레벨)
-    participant NG as Network Gateway (tc netem)
+    participant K as Network Gateway 커널 (ip_forward + tc netem, L3)
     participant E as 서빙 엔진 (llama.cpp/vLLM)
 
     U->>W: POST /api/run {backend: local_llm, turns}
     W->>B: connect()
     B->>EG: 요청 준비 (on_request 훅, transport 헤더 주입)
-    EG->>NG: HTTP 요청 (지연/손실 프로파일 적용 경로)
-    NG->>E: forward → OpenAI 호환 /v1/chat/completions
-    E-->>NG: 응답 (추론은 표준 엔진이 수행)
-    NG-->>EG: 응답 (네트워크 특성 반영됨)
+    EG->>K: TCP 연결 (라우트를 통해 Gateway 경유)
+    K->>E: 커널 IP 포워딩 → OpenAI 호환 /v1/chat/completions
+    E-->>K: 응답 (추론은 표준 엔진이 수행)
+    K-->>EG: 커널 IP 포워딩 (지연/손실 반영됨)
     EG->>EG: on_response 훅
     EG-->>B: 응답 + wire 계측
     B-->>W: TurnExchange
@@ -377,13 +437,16 @@ sequenceDiagram
 ### 4.2 내부 API — Network Gateway 제어
 
 Gateway 컨테이너가 노출하는 API. `aipt/web`이 이 API를 호출해 실험 조건을
-바꾼다 (import가 아니라 HTTP 호출 — 프로세스/컨테이너 경계 유지).
+바꾼다 (import가 아니라 HTTP 호출 — 프로세스/컨테이너 경계 유지). Gateway는
+L3 IP 포워딩 컨테이너이므로, 이 API는 트래픽 자체를 다루지 않고 순수하게
+"인터페이스에 어떤 netem 특성을 걸지"와 "커널 포워딩이 켜져 있는지"만
+제어/보고한다.
 
 | 엔드포인트 | 메서드 | 역할 |
 |---|---|---|
-| `/health` | GET | liveness + `tc netem` 사용 가능 여부(`netem_control.available()`) |
-| `/gateway/profile` | GET | 현재 인터페이스에 적용된 프로파일 조회 (커널 qdisc 상태 직접 조회) |
-| `/gateway/profile` | POST | 프로파일 교체. Body: `{"profile": "3g"}` 또는 `{"profile": "custom", "delay_ms", "jitter_ms", "loss_pct", "reorder_pct"}` |
+| `/health` | GET | liveness + `tc netem` 사용 가능 여부(`netem_control.available()`) + **양쪽** 인터페이스(`client_iface`/`backend_iface`) 이름 + `net.ipv4.ip_forward`가 실제로 켜져 있는지(`ip_forward_available`/`ip_forward_reason`) |
+| `/gateway/profile` | GET | **양쪽** 인터페이스에 적용된 프로파일을 각각 조회 (커널 qdisc 상태 직접 조회, `current_profile_both()`) |
+| `/gateway/profile` | POST | 프로파일 교체. Body: `{"profile": "3g"}` 또는 `{"profile": "custom", "delay_ms", "jitter_ms", "loss_pct", "reorder_pct"}`. **양쪽** 인터페이스에 동시 적용(`apply_profile_both()`) — 응답에 `client`/`backend` 각각의 성공 여부가 개별로 담긴다 |
 
 **TCP 혼잡제어 알고리즘 변경**: Gateway API 자체가 아니라 `MockBackend`가
 소켓 `connect()` 이전에 `TCP_CONGESTION` 소켓옵션으로 적용한다
@@ -397,11 +460,13 @@ cubic/reno/bbr/vegas 4종). 요청한 알고리즘(`algorithm_requested`)과 실
 | 엔드포인트 | 역할 |
 |---|---|
 | `GET /api/config` | backend 목록/준비 상태, congestion algorithm 목록, cwnd/capture 가용성 |
-| `POST /api/run` | 실험 실행 (backend 이름 + arm + turns) |
-| `GET /api/runs`, `GET/DELETE /api/runs/{id}` | 실행 이력 |
+| `POST /api/run` | 실험 실행 (backend 이름 + arm + turns). `public_ai`는 응답에 `record_saved`/`record_path` 포함 |
+| `GET /api/runs`, `GET/DELETE /api/runs/{id}` | 실행 이력 (인메모리, 비영속) |
 | `GET /api/runs/{id}/{turns,summary,cwnd,cwnd_summary,packets}.csv` | 3-레이어 CSV |
-| `GET /api/runs/{id}/bundle.zip` | 전체 산출물 zip |
+| `GET /api/runs/{id}/bundle.zip` | 전체 산출물 zip — **비영속 데이터를 보관하는 유일한 방법**, 실행 직후 받아야 함 |
 | `GET /api/pcaps/{name}` | pcap 원본 다운로드 |
+| `GET /api/public-ai-records` | `data/public_ai_records/`(디스크, 영속) 파일 목록 — 인메모리 store와 무관 |
+| `GET /api/public-ai-records/{exec_id}` | 저장된 Public AI 요청/응답 JSON 원문 |
 
 ---
 
@@ -505,11 +570,31 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 
 ## 7. 아직 열려 있는 것
 
-- Gateway의 `mock-server`/`local-llm`으로의 실제 L3/L4 forwarding (§1.1)
-- QUIC/HTTP 신기능 실험 (engine gateway의 transport 슬롯만 마련된 상태)
-- 실행 결과의 디스크 영속화 (`aipt/web/store.py`는 현재 인메모리만)
-- local-llm 서빙 엔진의 docker-compose 서비스화 (현재는 외부 실행 엔진에
-  `LOCAL_LLM_ENGINE_URL`로 연결하는 방식만 지원)
+**완료됨 (2026-08-26 갱신, 참고로 남김)**: ~~Gateway의 mock-server/local-llm으로의
+실제 L3/L4 forwarding~~ → **L3 IP 포워딩으로 구현 완료** (커널
+`net.ipv4.ip_forward` + 분리 네트워크 + 양방향 `apply_profile_both`).
+~~실행 결과의 디스크 영속화~~ → **정책 확정 및 구현 완료**: Public AI
+요청/응답 JSON만 자동 영속 저장, 나머지는 의도적으로 비영속(§4.7.1).
 
-원본 `token_traffic/`, `tcp_congestion/` 디렉터리는 아직 보존되어 있다 —
-정리 방침은 별도 확인 후 진행한다.
+**남은 것**:
+
+- **QUIC/HTTP 신기능 실험** — `LocalLLMBackend`의 engine gateway에
+  `transport` 슬롯(현재 `X-AIPT-Transport` 헤더로 반영되는 것까지만)만
+  마련되어 있고, 실제 QUIC 구현이나 신규 HTTP 기능 실험 로직은 아직 없다.
+  다음 작업으로 예정.
+- **local-llm 서빙 엔진의 docker-compose 서비스화** — 현재는 외부에서 실행
+  중인 엔진에 `LOCAL_LLM_ENGINE_URL`로 연결하는 방식만 지원한다. 실제
+  llama.cpp/vLLM 컨테이너를 compose에 포함시키는 건 무겁다는 이유로 범위
+  밖에 두었다.
+- **실제 트래픽으로 L3 라우팅/netem 효과 실측** — `docker compose config`
+  문법 검증과 개별 이미지 빌드까지는 확인됐지만, `docker compose up`으로
+  풀스택을 띄워서 실제로 지연/손실이 mock-server 왕복 트래픽에 반영되는지,
+  브라우저로 실험을 끝까지 돌려보는 건 사용자가 직접 확인 예정.
+- **웹 UI 결과 시각화** — 현재 텍스트/테이블 렌더링만 있고 cwnd 곡선 차트
+  등은 없다 (tcp_congestion 원본에 있던 기능, 범위 밖으로 명시).
+- **Gateway↔backend 구간의 별도 계측** — 지금은 client↔Gateway 구간만
+  cwnd/capture로 관찰한다. Gateway↔mock-server 구간은 별도 관찰 대상이
+  아니다.
+
+원본 `token_traffic/`, `tcp_congestion/` 디렉터리는 병합 완료 후 저장소에서
+제거되었다(git 히스토리에는 보존).

@@ -23,14 +23,24 @@ def test_health_ok(client):
     assert body["status"] == "ok"
     assert "netem_available" in body
     assert "iface" in body
+    # DESIGN.md 4.7 확정 설계: two-interface + kernel ip_forward reporting.
+    assert "client_iface" in body
+    assert "backend_iface" in body
+    assert "ip_forward_available" in body
+    assert "ip_forward_reason" in body
 
 
 def test_get_profile_defaults_to_clean(client):
     resp = client.get("/gateway/profile")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["profile"] == "clean"
-    assert body["delay_ms"] == 0
+    # DESIGN.md 4.7 확정 설계: profile is now reported per-interface
+    # (client-facing + backend-facing), both defaulting to clean.
+    assert body["client"]["profile"] == "clean"
+    assert body["client"]["delay_ms"] == 0
+    assert body["backend"]["profile"] == "clean"
+    assert body["backend"]["delay_ms"] == 0
+    assert "client_iface" in body and "backend_iface" in body
 
 
 def test_post_profile_preset(client):
@@ -85,4 +95,6 @@ def test_post_then_get_reflects_applied_profile_when_tc_available(client, monkey
     assert post_resp.json()["ok"] is True
 
     get_resp = client.get("/gateway/profile")
-    assert get_resp.json()["profile"] == "satellite"
+    body = get_resp.json()
+    assert body["client"]["profile"] == "satellite"
+    assert body["backend"]["profile"] == "satellite"

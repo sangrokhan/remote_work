@@ -31,6 +31,10 @@ COPY aipt ./aipt
 # FastAPI, uvicorn, or pcap parsing.
 RUN pip install --no-cache-dir .
 
+# entrypoint_mockserver.py: adds an explicit `ip route add` to net-client
+# via the gateway container before starting the mock server (DESIGN.md
+# 4.7 확정 설계 1 -- forces response traffic back through `gateway`). No-op
+# when GATEWAY_PEER_SUBNET/GATEWAY_ROUTE_VIA are unset.
 COPY docker/entrypoint_mockserver.py ./entrypoint_mockserver.py
 
 # MOCK_HOST/MOCK_PORT: entrypoint_mockserver.py's bind address (8888, the
