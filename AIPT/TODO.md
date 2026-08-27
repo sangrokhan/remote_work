@@ -18,10 +18,28 @@
   확인. 이후 clean으로 리셋 후 `docker compose down`으로 정리, 잔여
   컨테이너/네트워크 없음 확인.
 
-- [ ] 2. **local_llm 서비스 compose 미통합** — `scripts/run_local_llm_engine.sh`
-  (llama.cpp 부트스트랩)는 준비됐지만 `docker-compose.yml`엔 `local-llm`
-  서비스 자체가 없음. 현재는 `LOCAL_LLM_ENGINE_URL`로 외부 엔진을 가리키는
-  방식만 지원. 필요 시 4번째 서비스로 편입할지 결정 필요.
+- [x] 2. **local_llm 서비스 compose 미통합** — 완료 (2026-08-27). `docker-compose.yml`에
+  `local-llm` 서비스 신규 추가 (`docker/Dockerfile.local_llm`이 상용
+  `ghcr.io/ggml-org/llama.cpp:server` 이미지를 감싸는 방식, 추론 재구현 없음).
+  mock-server와 동일한 net-backend 격리 + gateway 경유 라우팅 패턴 적용,
+  4-서비스(web/gateway/mock-server/local-llm) 토폴로지로 확장. **포트를
+  40000번대(40080)로 통일**: `engine_adapter.DEFAULT_ENGINE_URL`,
+  `scripts/run_local_llm_engine.sh`(호스트에서 스크립트로 직접 구동하는
+  대안 경로), docker-compose의 `local-llm` 서비스가 전부 8080(AIPT
+  자체 `gateway` 포트와 충돌하던 llama-server 기본값)에서 40080으로
+  이동해 서로 충돌하지 않음. 포트 이동 중 실제 버그 1건 발견/수정:
+  `LocalLLMBackend.ready()`가 인스턴스의 `self._engine_url`이 아니라
+  매번 새로 env를 읽는 모듈 레벨 `ready()`를 호출하고 있었음(기존엔
+  기본값과 흔한 override가 우연히 같은 8080이라 안 들켰음).
+  **실컨테이너 end-to-end 검증**: 4개 이미지 빌드 → 4개 컨테이너 기동 →
+  local-llm이 HF Hub에서 `bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M`
+  실제 다운로드 후 서빙 확인 → `POST /api/run`(웹 UI가 실제 쓰는 API)으로
+  `backend=local_llm` 실행 → gateway 경유 실제 chat completion 응답("OK")
+  + wire/cwnd/TCP_INFO 계측값까지 정상 수집 확인. 단, `web`은 net-client
+  전용이라 Docker 내장 DNS로 `local-llm` net-backend 호스트명을 해석하지
+  못함(mock-server와 동일한 제약) — `LOCAL_LLM_ENGINE_URL` 기본값을
+  호스트명 대신 고정 IP(172.28.2.4)로 설정해 우회. `pytest tests/ -q -m
+  "not live"` → 433 passed, 1 skipped, 12 deselected (기존과 동일, 회귀 없음).
 
 - [ ] 3. **`aipt/web/store.py` run 이력 영속화 미구현** — 현재 프로세스 메모리
   (`MAX_RUNS=50`)에만 저장, 재시작하면 소실. 모듈 docstring에
