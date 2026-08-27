@@ -1,7 +1,8 @@
 # AIPT — 남은 작업 (TODO)
 
 이관/병합 핵심 작업은 완료됐다(`MIGRATION.md` Phase 1~4.9 전부 [x],
-`pytest tests/ -q -m "not live"` → 433 passed / 1 skipped / 12 deselected).
+`pytest tests/ -q -m "not live"` → 448 passed / 1 skipped / 12 deselected,
+2026-08-27 재검증).
 아래는 그 이후 남은 실제 미해결 항목이다. **이 파일이 남은 작업의 단일
 소스(SSoT)다** — 새 대화/세션에서 "남은 작업"을 물으면 이 파일을 먼저 확인할 것.
 완료 시 `[x]`로 갱신하고 근거(검증 커맨드/결과)를 한 줄 남긴다.
@@ -56,11 +57,13 @@
   함께 그린 확인). 실제 재시작 시나리오 plain-python으로 직접 검증
   (save → 메모리 초기화 → list_runs()에서 여전히 조회됨).
 
-- [ ] 4. **`/api/run/stream` SSE 엔드포인트 미구현** — 현재 진행상황은 폴링만
-  지원. `aipt/web/app.py` docstring에 명시된 TODO. **주의(2026-08-27)**:
-  이 저장소에서 동시에 다른 세션이 관련 작업(`routes_run.py`에
-  `/api/run/stream` 추가하는 것으로 보이는 변경)을 진행 중인 흔적 발견 —
-  착수 전 `git status`/`git log`로 최신 상태 확인 필요, 중복 작업 주의.
+- [x] 4. **`/api/run/stream` SSE 엔드포인트 미구현** — 완료 (2026-08-27, 커밋
+  `98e4314f`). `routes_run.py`에 `POST /api/run/stream` 라우트 실존 확인
+  (`_run_conversation_stream()` 제너레이터 + `_drive_stream_to_queue`로
+  threadpool↔이벤트루프 브리지, 턴마다 SSE 이벤트 + `<exec_id>.stream.jsonl`
+  서버측 로깅). `MIGRATION.md`에도 완료 기록 있음(라인 586, 631). 재검증:
+  `pytest tests/ -q -m "not live"` → 448 passed, 1 skipped, 12 deselected
+  (문서와 실측 재확인 결과 일치, 그대로 유지).
 
 - [ ] 5. **`routes_run.py`의 pcap 응답 필드 미배선** — `"pcap": None,  # TODO:
   wire aipt.core.capture once a route asks for it`. 실행 결과 응답에 pcap
