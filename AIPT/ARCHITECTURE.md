@@ -582,10 +582,15 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 - **QUIC/HTTP 신기능 실험** — `LocalLLMBackend`의 engine gateway에
   `transport` 슬롯(현재 `X-AIPT-Transport` 헤더로 반영되는 것까지만)만
   마련되어 있고, 실제 QUIC 구현이나 신규 HTTP 기능 실험 로직은 아직 없다.
-- **local-llm 서빙 엔진의 docker-compose 서비스화** — 현재는 외부에서 실행
+- **local-llm 서빙 엔진의 docker-compose 서비스화** — ~~현재는 외부에서 실행
   중인 엔진에 `LOCAL_LLM_ENGINE_URL`로 연결하는 방식만 지원한다. 실제
   llama.cpp/vLLM 컨테이너를 compose에 포함시키는 건 무겁다는 이유로 범위
-  밖에 두었다.
+  밖에 두었다.~~ **완료 (2026-08-27)**: `docker-compose.yml`에 `local-llm`
+  서비스가 실제로 추가됨(`docker/Dockerfile.local_llm`이 상용
+  `ghcr.io/ggml-org/llama.cpp:server` 이미지를 감싸는 방식). 4-서비스
+  토폴로지(web/gateway/mock-server/local-llm)로 실컨테이너 검증까지
+  완료 — 이 문단은 이관 직후 시점의 기술이라 실제로는 이미 해소됨(과거 이력
+  섹션이라 아래 취소선으로 표기, 별도 후속 문서 개정 시 정리 예정).
 - **웹 UI 결과 시각화** — 현재 텍스트/테이블 렌더링만 있고 cwnd 곡선 차트
   등은 없다 (tcp_congestion 원본에 있던 기능, 범위 밖으로 명시).
 - **Gateway↔backend 구간의 별도 계측** — 지금은 client↔Gateway 구간만
