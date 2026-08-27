@@ -111,10 +111,18 @@ def pcap_dir() -> Path:
 
 # Snaplen: bytes kept per packet. The TLS payload is encrypted and therefore useless
 # to read, so only the L2-L4 headers and the TLS record header are worth storing.
-# Truncating to ~100 bytes slashes the disk I/O per packet, which is the main cause
-# of kernel drops (the "previous segment not captured" warnings) under load. Each
-# frame still records its original on-wire length, so packet sizes stay exact.
-PCAP_SNAPLEN = int(os.environ.get("TRAFFIC_PCAP_SNAPLEN", "100"))
+# Truncating to ~200 bytes (Ethernet+IP+TCP headers with options, ~54-66 bytes,
+# plus room for an HTTP/TLS record header on top) slashes the disk I/O per packet,
+# which is the main cause of kernel drops (the "previous segment not captured"
+# warnings) under load, while still leaving the MTU/MSS-relevant evidence intact:
+# with segmentation offload disabled (see aipt.core.offload.Window, applied around
+# every Capture window) each wire-real frame tops out at the path MTU (typically
+# 1500 bytes / ~1448-1460 byte MSS payload), and 200 bytes is enough to see the
+# frame boundary and header stack without paying to store the (often encrypted,
+# always disk-costly) bulk of the payload. Each frame still records its original
+# on-wire length, so packet *sizes* (and therefore MTU/MSS-boundary evidence) stay
+# exact regardless of snaplen -- only the *stored bytes* are truncated.
+PCAP_SNAPLEN = int(os.environ.get("TRAFFIC_PCAP_SNAPLEN", "200"))
 
 # Filename = label + timestamp + a high-entropy token, so concurrent runs never
 # collide and a download URL is not guessable from another one.

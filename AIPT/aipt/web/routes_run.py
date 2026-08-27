@@ -53,6 +53,7 @@ import json
 import logging
 import os
 import queue
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,6 +71,7 @@ from aipt.backends.mock import conversation as mock_conversation
 from aipt.backends.mock import replay as mock_replay
 from aipt.backends.record import turn_record
 from aipt.backends.public_ai import recorder as public_ai_recorder
+from aipt.core import capture as capture_mod
 from aipt.core import wire
 from aipt.web import store as run_store
 
@@ -125,6 +127,15 @@ class RunRequest(BaseModel):
     mock_response_bytes: int = 1000
     inference_delay_ms: int = 1000
     algorithm: str | None = None
+    # Packet capture (tcpdump), TODO #5 (MIGRATION.md): default ON per
+    # operator decision (2026-08-27) -- a run without a pcap is not
+    # evidence of anything (aipt.core.capture's module docstring), so the
+    # UI checkbox now ships pre-checked and this field defaults True to
+    # match a bare /api/run call (no form) with the same posture. Actual
+    # capture only happens if aipt.core.capture.available() is True
+    # (tcpdump + NET_RAW present) -- unavailable environments fall back to
+    # pcap=None exactly as before, never a hard failure.
+    capture: bool = True
 
     # --- input mode ---------------------------------------------------
     # Two modes, per user decision: "dummy" and "record". The original
@@ -271,6 +282,35 @@ def _build_backend(name: str, engine: str | None = None, *, req: "RunRequest | N
     raise KeyError(f"unhandled backend: {name!r}")
 
 
+def _split_api_host(api_host: str, default_port: int = 443) -> tuple[str, int]:
+    """``backend.api_host()`` returns different shapes per backend --
+    ``host:port`` (mock's own bind address), a bare hostname (public_ai,
+    always TLS/443), or a full ``scheme://host:port`` URL (local_llm's
+    engine URL). ``aipt.core.capture.Capture`` needs a plain
+    ``(host, port)`` pair to build its tcpdump filter, so this normalizes
+    all three into that shape. Never raises -- a value this can't parse
+    falls back to ``(api_host, default_port)`` so capture still gets
+    *something* to filter on rather than crashing the run.
+    """
+    from urllib.parse import urlparse
+
+    value = api_host or ""
+    if "://" in value:
+        parsed = urlparse(value)
+        if parsed.hostname:
+            return parsed.hostname, parsed.port or (
+                443 if parsed.scheme == "https" else default_port
+            )
+        return value, default_port
+    if ":" in value:
+        host, _, port_s = value.rpartition(":")
+        try:
+            return host, int(port_s)
+        except ValueError:
+            return value, default_port
+    return value, default_port
+
+
 def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
     """Generator core shared by ``/api/run`` and ``/api/run/stream``: does
     the exact connect/send-every-turn/close work ``_run_conversation()``
@@ -374,10 +414,33 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
     }
 
     records: list[dict] = []
-    error = ""
+    error = "" 
+    cap = None
+    if req.capture:
+        cap_ok, _cap_reason = capture_mod.available()
+        if cap_ok:
+            # api_host() is only meaningful once connect() has picked a
+            # concrete target (mock starts its own server on a random
+            # port at connect() time), so the capture window opens right
+            # after connect() below, not before -- unlike the label/
+            # timestamp naming above, which does not depend on the
+            # connection existing yet. Label sanitized to Capture's
+            # filename alphabet ([a-z0-9_-]); the display `label` above
+            # may contain ':' (backend:arm) which Capture's _SAFE_LABEL
+            # rejects.
+            cap_label = re.sub(r"[^a-z0-9_-]", "_", label.lower()) or "run"
+        else:
+            cap_label = ""
+    else:
+        cap_label = ""
     t0 = time.monotonic()
     try:
         backend.connect(req.arm, req.model, system)
+        if cap_label:
+            host, port = _split_api_host(backend.api_host())
+            cap = capture_mod.Capture(
+                timestamp=timestamp, label=cap_label, host=host, port=port)
+            cap.__enter__()
         for i, question in enumerate(questions):
             exchange = backend.send_turn(i, question, req.measure)
             record = turn_record(
@@ -397,6 +460,11 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
         # reports what it got, rather than losing the turns already sent.
         error = f"{type(exc).__name__}: {exc}"
     finally:
+        if cap is not None:
+            try:
+                cap.__exit__(None, None, None)
+            except Exception:
+                pass
         try:
             backend.close()
         except Exception:
@@ -438,7 +506,7 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
         "elapsed_s": round(elapsed_s, 3),
         "turns": records,
         "monitors": [cwnd_result] if cwnd_result else [],
-        "pcap": None,  # TODO: wire aipt.core.capture once a route asks for it
+        "pcap": cap.result() if cap is not None else None,
         "algorithm": algorithm_result,
         "exec_id": exec_id,
     }

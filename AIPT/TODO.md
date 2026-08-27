@@ -65,9 +65,48 @@
   `pytest tests/ -q -m "not live"` → 448 passed, 1 skipped, 12 deselected
   (문서와 실측 재확인 결과 일치, 그대로 유지).
 
-- [ ] 5. **`routes_run.py`의 pcap 응답 필드 미배선** — `"pcap": None,  # TODO:
-  wire aipt.core.capture once a route asks for it`. 실행 결과 응답에 pcap
-  경로가 채워지지 않음.
+- [x] 5. **`routes_run.py`의 pcap 응답 필드 미배선** — 완료 (2026-08-27, 사용자 지시).
+  `RunRequest.capture: bool = True`(체크박스도 기본 체크로 변경) 신규 추가.
+  `_run_conversation_stream()`이 `connect()` 직후 `backend.api_host()`를
+  `_split_api_host()`(신규, 3-backend의 서로 다른 host 표현 — mock의
+  `host:port`, public_ai의 순수 hostname, local_llm의 `scheme://host:port`
+  URL — 을 `(host, port)`로 통일)로 정규화해 `aipt.core.capture.Capture`를
+  실제로 열고, 결과의 `"pcap": None`을 `cap.result()`로 교체. `capture=True`라도
+  `aipt.core.capture.available()`(tcpdump 미설치/NET_RAW 부재)이면 조용히
+  `pcap=None`로 폴백(기존 계약 유지, 하드 실패 없음).
+
+  **오프로딩/스냅렌 요구사항**(사용자 지시): 캡처 창 동안 TSO/GSO/GRO를
+  끄고, snaplen을 MTU/MSS 경계 확인에 충분한 200바이트로 줄임.
+  `aipt.core.capture.PCAP_SNAPLEN` 기본값을 100→200으로 변경(이미 있던
+  `aipt.core.offload.Window`가 `Capture.__enter__`에서 자동으로 호출되므로
+  코드 변경 불필요, 다만 **`docker/Dockerfile.web`에 `ethtool` 패키지가
+  누락돼 있어 오프로딩이 실제로는 꺼지지 않고 있었음**(offload.Window가
+  "ethtool not installed"로 조용히 폴백) — 추가 설치로 해결.
+  `docker-compose.yml`의 `web` 서비스에 `NIC_OFFLOAD_DISABLE=1` 추가(기존
+  `NET_ADMIN` capability 그대로 사용, 신규 권한 불필요).
+
+  **실컨테이너 검증**: `docker compose build web gateway mock-server` →
+  `docker compose up -d`(3개 컨테이너, local-llm 제외) → `POST /api/run`
+  (mock backend, capture=true) 실행 → 응답의 `pcap.offload.during_capture`
+  = `{tso:false, gso:false, gro:false}`(이전엔 ethtool 없어서
+  `{}`+`"ethtool not installed"`였던 것 확인 후 수정) `.disabled` =
+  `["gro","gso","tso"]`, `.snaplen`=200 확인. 실제 pcap을 `docker cp`로
+  꺼내 `tcpdump -r`로 열어 진짜 TCP 세그먼트(SYN/데이터/ACK)가 찍혀 있음을
+  눈으로 확인. **MTU/MSS 경계 검증**: `web` 컨테이너 안에서 8000바이트
+  페이로드를 실제 소켓으로 `mock-server`(gateway 경유, 172.28.1.3→
+  172.28.2.3, MTU 1500)에 전송하며 `eth0`(오프로딩 끈 상태)를 캡처 →
+  세그먼트 길이가 1448바이트(=1500 MTU - 40 IP/TCP 헤더, MSS 1460과 일치)
+  단위로 정확히 쪼개져 있음을 확인(8000바이트 super-packet 없음, 오프로딩이
+  실제로 커널 세그먼테이션을 억제했다는 직접 증거). 검증 후 컨테이너 정리
+  (`docker compose down`), 테스트용 pcap 삭제.
+
+  **신규 테스트**: `tests/web/test_app.py`에 3개 추가 —
+  `test_api_run_capture_defaults_true_and_produces_a_pcap`(capture 기본값
+  검증 + 실제 pcap 파일 생성 확인, tcpdump 없는 환경에서는 skip),
+  `test_api_run_capture_false_leaves_pcap_none`,
+  `test_split_api_host_handles_all_three_backend_shapes`(mock/public_ai/
+  local_llm 3가지 host 표현 모두 파싱). `pytest tests/ -q -m "not live"` →
+  **451 passed**(기존 448 + 신규 3), 1 skipped, 12 deselected.
 
 - [ ] 6. **원본 디렉터리 정리 확인** — README에는 `token_traffic/`,
   `tcp_congestion/`이 "병합 완료 후 저장소에서 제거됨"이라 적혀 있으나,

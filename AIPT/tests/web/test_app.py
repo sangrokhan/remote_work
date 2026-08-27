@@ -184,6 +184,61 @@ def test_runs_not_found_is_404(client):
     assert client.delete("/api/runs/does-not-exist").status_code == 404
 
 
+def test_api_run_capture_defaults_true_and_produces_a_pcap(client, tmp_path, monkeypatch):
+    """TODO #5 (MIGRATION.md): RunRequest.capture defaults True, and when
+    aipt.core.capture.available() is True (this sandbox has tcpdump +
+    NET_RAW -- see aipt/core/capture.py's ``available()``), an actual pcap
+    is captured and its result dict lands in run["pcap"] instead of the
+    old hardcoded None. Snaplen defaults to 200 bytes (operator spec:
+    enough for L2-L4 headers to see MTU/MSS-sized frame boundaries,
+    without paying the per-packet disk cost of the payload)."""
+    monkeypatch.setenv("TRAFFIC_PCAP_DIR", str(tmp_path / "pcaps"))
+    resp = client.post(
+        "/api/run",
+        json={
+            "backend": "mock", "arm": "dummy", "input_mode": "dummy",
+            "num_turns": 2, "turn_user_msg_bytes": 20, "system_prompt_bytes": 10,
+            "measure": "bytes", "mock_response_bytes": 32,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    run = resp.json()["run"]
+    from aipt.core import capture as capture_mod
+    cap_ok, _ = capture_mod.available()
+    if not cap_ok:
+        pytest.skip("tcpdump/NET_RAW unavailable in this environment")
+    assert run["pcap"] is not None
+    assert run["pcap"]["snaplen"] == 200
+    assert run["pcap"]["ok"] is True
+    assert (tmp_path / "pcaps" / run["pcap"]["file"]).exists()
+
+
+def test_api_run_capture_false_leaves_pcap_none(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("TRAFFIC_PCAP_DIR", str(tmp_path / "pcaps"))
+    resp = client.post(
+        "/api/run",
+        json={
+            "backend": "mock", "arm": "dummy", "input_mode": "dummy",
+            "num_turns": 1, "turn_user_msg_bytes": 20, "system_prompt_bytes": 10,
+            "measure": "bytes", "mock_response_bytes": 32,
+            "capture": False,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["run"]["pcap"] is None
+
+
+def test_split_api_host_handles_all_three_backend_shapes():
+    from aipt.web.routes_run import _split_api_host
+
+    assert _split_api_host("127.0.0.1:40785") == ("127.0.0.1", 40785)
+    assert _split_api_host("generativelanguage.googleapis.com") == (
+        "generativelanguage.googleapis.com", 443)
+    assert _split_api_host("http://172.28.2.4:40080") == ("172.28.2.4", 40080)
+    assert _split_api_host("https://api.openai.com") == ("api.openai.com", 443)
+    assert _split_api_host("") == ("", 443)
+
+
 def _parse_sse(text: str) -> list[dict]:
     events = []
     for line in text.splitlines():

@@ -183,6 +183,13 @@ services:
       - WEB_HOST=0.0.0.0
       - WEB_PORT=10000
       - TRAFFIC_PCAP_DIR=/app/data/pcaps
+      # DESIGN.md TODO #5 (offload-off-by-default): tso/gso/gro on `web`'s
+      # own egress interface are turned off around every capture window
+      # (aipt.core.offload.Window, driven per-run by aipt/web/routes_run.py
+      # now that captures are wired up) so a pcap shows real on-wire MTU/MSS
+      # -sized frames instead of kernel super-packets. Requires the
+      # NET_ADMIN this service already has (below) for `ethtool -K`.
+      - NIC_OFFLOAD_DISABLE=1
       # DESIGN.md 4.7.1: PublicAIBackend request/response JSON, one file per
       # exec_id -- the only persistent-on-disk run artifact this app writes.
       - PUBLIC_AI_RECORDS_DIR=/app/data/public_ai_records

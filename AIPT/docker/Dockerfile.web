@@ -36,11 +36,17 @@ FROM python:3.12-slim
 
 # iproute2: `tc`/`ip` (netem passthrough config, offload's ip link queries)
 # tcpdump:  aipt.core.capture's packet capture (needs NET_RAW at runtime)
+# ethtool:  aipt.core.offload's TSO/GSO/GRO toggling around every capture
+#   window (aipt.core.offload.Window) + aipt.core.capture's timestamp_source()
+#   hardware-timestamp probe -- without it, offload.Window can only report
+#   "ethtool not installed" and never actually disables segmentation, so a
+#   pcap on this image would keep showing kernel super-packets instead of
+#   real on-wire MTU/MSS-sized frames (TODO #5, MIGRATION.md).
 # No gcc/build-essential here -- native/cwnd_monitor is already built above,
 # this stage never compiles anything (the exact lesson the module docstring
 # references).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends iproute2 tcpdump \
+    && apt-get install -y --no-install-recommends iproute2 tcpdump ethtool \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -219,6 +219,11 @@
       mock_response_bytes: Number(fd.get("mock_response_bytes") || 1000),
       inference_delay_ms: Number(fd.get("inference_delay_ms") || 1000),
       algorithm: fd.get("algorithm") || null,
+      // Checkbox default is checked in the HTML (operator decision,
+      // 2026-08-27: capture on by default) -- FormData omits an unchecked
+      // checkbox entirely, so its *presence* is the true/false signal,
+      // not a value comparison.
+      capture: fd.has("capture"),
     };
 
     output.textContent = "Running...";
