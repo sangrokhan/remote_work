@@ -108,7 +108,14 @@
   local_llm 3가지 host 표현 모두 파싱). `pytest tests/ -q -m "not live"` →
   **451 passed**(기존 448 + 신규 3), 1 skipped, 12 deselected.
 
-- [ ] 6. **원본 디렉터리 정리 확인** — README에는 `token_traffic/`,
-  `tcp_congestion/`이 "병합 완료 후 저장소에서 제거됨"이라 적혀 있으나,
-  실제로는 `remote_work/tcp_congestion/`가 아직 디스크에 남아있는 것으로
-  확인됨(2026-08-27 기준). 삭제 또는 `_archive/`로 이동 방침 재확인 필요.
+- [~] 6. **원본 디렉터리 정리 확인** — 사용자 결정(2026-08-27): 완전 삭제.
+  `tcp_congestion/`는 git에는 이미 없었음(`3d393be2` 병합 커밋에서 이미
+  히스토리 반영, 로컬 디스크에만 미삭제 워킹 디렉토리로 남아있던 것 —
+  git 작업 아니라 순수 파일시스템 정리). `rm -rf`로 64M→588K까지 정리
+  (`.venv/`, `.pytest_cache/`, `tests/`, `tcp_congestion/` 코드 디렉토리
+  전부 제거). **남은 588K(`data/pcaps/` 아래 pcap 14개)는 root 소유라 에이전트
+  권한으로 삭제 불가** — 옛 tcp_congestion 코드가 tcpdump를 root로 띄워
+  생성한 파일들(AIPT의 `aipt/core/capture.py`는 `_keep_uid()`로 이 문제를
+  이미 해결했으나 구버전엔 없었음). 사용자가 직접
+  `sudo rm -rf ~/repo/remote_work/tcp_congestion` 실행 필요 — 실행 후 이
+  항목 `[x]`로 전환.
