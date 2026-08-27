@@ -12,29 +12,73 @@
   );
 
   const backendSelect = document.getElementById("backend-select"); // hidden input
-  const armSelect = document.getElementById("arm-select");
+  const apiTypeField = document.getElementById("api-type-field");
+  const apiTypeSelect = document.getElementById("api-type-select");
+  const contextHandleField = document.getElementById("context-handle-field");
+  const contextHandleSelect = document.getElementById("context-handle-select");
+  const armSelect = document.getElementById("arm-select"); // hidden input, resolved arm name
   const inputModeField = document.getElementById("input-mode-field");
   const inputModeSelect = document.getElementById("input-mode-select");
   const form = document.getElementById("experiment-form");
   const output = document.getElementById("run-output");
   const runsTableBody = document.querySelector("#runs-table tbody");
 
+  // Every backend card now resolves its arm through two visible pickers
+  // instead of one flat arm dropdown: API Type first (the actual billable
+  // HTTP endpoint -- Gemini's generateContent vs Interaction API, ChatGPT's
+  // Chat Completion vs Responses API, ...), then Context Handle (how that
+  // API's conversation history is carried -- Default/No Context/Force
+  // Caching under generateContent; Default/Inline/Stateless under
+  // Interaction or Responses; a single Default under APIs with only one
+  // calling convention). Each (api_type, context_handle) pair maps to
+  // exactly one backend-validated arm name, which lands in the hidden
+  // #arm-select input the submit handler already reads.
   function populateArms(key) {
-    const arms = (BACKENDS_BY_KEY[key] || {}).arms || [];
-    armSelect.innerHTML = "";
-    for (const arm of arms) {
-      const opt = document.createElement("option");
-      opt.value = arm;
-      opt.textContent = arm;
-      armSelect.appendChild(opt);
+    const card = BACKENDS_BY_KEY[key] || {};
+    const apiTypes = card.api_types || [];
+    const hasApiTypes = apiTypes.length > 0;
+    apiTypeField.style.display = hasApiTypes ? "block" : "none";
+    contextHandleField.style.display = hasApiTypes ? "block" : "none";
+
+    if (!hasApiTypes) {
+      armSelect.value = "";
+      return;
     }
-    if (arms.length === 0) {
+
+    apiTypeSelect.innerHTML = "";
+    for (const group of apiTypes) {
       const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "(no arms -- backend not implemented yet)";
-      armSelect.appendChild(opt);
+      opt.value = group.key;
+      opt.textContent = group.label;
+      apiTypeSelect.appendChild(opt);
     }
+    populateContextHandles(key, apiTypeSelect.value);
   }
+
+  function populateContextHandles(key, apiTypeKey) {
+    const card = BACKENDS_BY_KEY[key] || {};
+    const group = (card.api_types || []).find((g) => g.key === apiTypeKey);
+    const handles = group ? group.context_handles : [];
+    contextHandleSelect.innerHTML = "";
+    for (const handle of handles) {
+      const opt = document.createElement("option");
+      opt.value = handle.key;
+      opt.textContent = handle.label;
+      opt.dataset.arm = handle.arm;
+      contextHandleSelect.appendChild(opt);
+    }
+    resolveArm();
+  }
+
+  function resolveArm() {
+    const opt = contextHandleSelect.options[contextHandleSelect.selectedIndex];
+    armSelect.value = opt ? opt.dataset.arm : "";
+  }
+
+  apiTypeSelect.addEventListener("change", () => {
+    populateContextHandles(backendSelect.value, apiTypeSelect.value);
+  });
+  contextHandleSelect.addEventListener("change", resolveArm);
 
   function toggleBackendFields(key) {
     document.querySelectorAll(".backend-fields").forEach((el) => {
@@ -165,11 +209,15 @@
       measure: fd.get("measure") || "bytes",
       input_mode: inputMode,
       record_id: fd.get("record_id") || "",
-      system_prompt_bytes: Number(fd.get("system_prompt_bytes") || 0),
-      turn_user_msg_bytes: Number(fd.get("turn_user_msg_bytes") || 0),
-      num_turns: Number(fd.get("num_turns") || 3),
-      mock_response_bytes: Number(fd.get("mock_response_bytes") || 400),
-      inference_delay_ms: Number(fd.get("inference_delay_ms") || 0),
+      // Fallbacks mirror the form's own dummy-fields defaults (operator
+      // spec) and RunRequest's in routes_run.py, so a submit with an
+      // emptied/missing field still lands on the same stress-shaped
+      // defaults rather than an inconsistent zero.
+      system_prompt_bytes: Number(fd.get("system_prompt_bytes") || 20000),
+      turn_user_msg_bytes: Number(fd.get("turn_user_msg_bytes") || 1000),
+      num_turns: Number(fd.get("num_turns") || 10),
+      mock_response_bytes: Number(fd.get("mock_response_bytes") || 1000),
+      inference_delay_ms: Number(fd.get("inference_delay_ms") || 1000),
       algorithm: fd.get("algorithm") || null,
     };
 

@@ -42,7 +42,7 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[web,export,dev]"
 # native cwnd 모니터 빌드 (netlink 연속 샘플링, 리눅스 전용)
 cc -O2 -Wall -o native/cwnd_monitor native/cwnd_monitor.c
 
-.venv/bin/pytest tests/ -q -m "not live"   # 410 passed, 1 skipped, 12 deselected
+.venv/bin/pytest tests/ -q -m "not live"   # 433 passed, 1 skipped, 12 deselected
 
 .venv/bin/uvicorn aipt.web.app:create_app --factory --host 0.0.0.0 --port 10000
 # → http://localhost:10000
@@ -103,7 +103,7 @@ AIPT/
 ├── native/         # cwnd_monitor.c — netlink 연속 샘플링, 별도 프로세스
 ├── docker/          # Dockerfile.{web,gateway,mockserver}
 ├── docker-compose.yml
-├── tests/           # core / backends / export / web / gateway — 410 tests
+├── tests/           # core / backends / export / web / gateway — 440+ tests
 ├── ARCHITECTURE.md  # 최종 아키텍처 레퍼런스 (다이어그램 포함)
 ├── DESIGN.md        # 설계 결정 이력
 └── MIGRATION.md     # 이관 기록

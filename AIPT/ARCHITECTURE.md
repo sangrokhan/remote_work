@@ -272,7 +272,20 @@ FastAPI 단일 앱. 기존 token_traffic(Flask) + tcp_congestion(FastAPI) 두
 
 - **routes_config.py**: 랜딩 페이지 + `/api/config` — `aipt.backends`
   registry에서 사용 가능한 backend 목록/준비 상태(`ready`)를 동적으로
-  수집해서 반환 (하드코딩 없음, backend가 추가되면 자동 반영).
+  수집해서 반환 (하드코딩 없음, backend가 추가되면 자동 반영). Gemini/
+  ChatGPT 카드는 `ui_backends()`가 `_API_TYPES`로 arm을 **API Type →
+  Context Handle** 2단계로 그룹핑해 노출한다 (예: Gemini는
+  `generateContent API`{Default/No Context/Force Caching} vs
+  `Interaction API`{Default/Inline/Stateless}; ChatGPT는
+  `Chat Completion API`{Default} vs `Responses API`{Default/Inline/
+  Stateless}) — 이전에는 6개/4개 arm이 평면 드롭다운 하나였던 것을, 실제로
+  호출하는 HTTP 엔드포인트(API Type)를 먼저 고르고 그 안에서 히스토리
+  전달 방식(Context Handle)을 고르는 2단계로 바꿨다. Local LLM/Mock도
+  같은 `api_types` 필드를 반환하지만 각각 API Type 1개·Context Handle
+  1개("Default")뿐이라 사실상 셀렉터가 늘어나지 않는다. 프론트
+  (`app.js`)는 이 두 값에서 실제 arm 이름을 계산해 숨겨진 `<input
+  name="arm">`에 채워 넣는다 — `POST /api/run`이 받는 값은 이전과 동일한
+  arm 문자열이다.
 - **routes_run.py**: `POST /api/run` — backend 이름으로 인스턴스를 얻어
   `connect → send_turn* → close` 라이프사이클을 스레드풀에서 실행
   (`run_in_threadpool`, 이벤트 루프 블로킹 방지). 미구현 backend는 501로
@@ -281,7 +294,13 @@ FastAPI 단일 앱. 기존 token_traffic(Flask) + tcp_congestion(FastAPI) 두
   인스턴스를 감싸서 매 턴을 자동 기록하고, 실행 종료 시
   `data/public_ai_records/<exec_id>.json`으로 저장한다 (§4.7.1, §3.1 참고).
   저장 실패는 실행 자체를 죽이지 않고 응답에 `record_saved`/`record_error`
-  필드로 남는다.
+  필드로 남는다. `algorithm` 필드는 모든 backend에 적용된다 — Mock은
+  `MockBackend`의 raw socket 경로, 나머지는 `aipt.core.wire`의 pooled
+  세션 경로를 통해 `TCP_CONGESTION`을 pin한다(§4.2 "TCP 혼잡제어 알고리즘
+  변경" 참고). `input_mode="dummy"`(Mock 전용)의 byte-size 기본값은
+  system prompt 20000B / 사용자 입력 1000B / 응답 1000B / 10턴 / 추론지연
+  1000ms로 설정되어 있다(스트레스 시나리오 기본값, `RunRequest`와
+  `_experiment_form.html`/`app.js` 3곳에서 동일하게 유지).
 - **routes_runs.py**: 실행 이력 조회/삭제, `aipt.export`의 4개 CSV +
   bundle.zip 다운로드 라우트. 그리고 인메모리 store와는 완전히 별개인
   디스크 기반 라우트 `GET /api/public-ai-records`(목록)/
@@ -430,12 +449,20 @@ L3 IP 포워딩 컨테이너이므로, 이 API는 트래픽 자체를 다루지 
 | `/gateway/profile` | GET | **양쪽** 인터페이스에 적용된 프로파일을 각각 조회 (커널 qdisc 상태 직접 조회, `current_profile_both()`) |
 | `/gateway/profile` | POST | 프로파일 교체. Body: `{"profile": "3g"}` 또는 `{"profile": "custom", "delay_ms", "jitter_ms", "loss_pct", "reorder_pct"}`. **양쪽** 인터페이스에 동시 적용(`apply_profile_both()`) — 응답에 `client`/`backend` 각각의 성공 여부가 개별로 담긴다 |
 
-**TCP 혼잡제어 알고리즘 변경**: Gateway API 자체가 아니라 `MockBackend`가
-소켓 `connect()` 이전에 `TCP_CONGESTION` 소켓옵션으로 적용한다
-(`aipt/backends/mock/conversation.py`, tcp_congestion 원본 기능 승계 —
-cubic/reno/bbr/vegas 4종). 요청한 알고리즘(`algorithm_requested`)과 실제
-적용값(`algorithm`, `getsockopt`로 재확인)이 다르면 응답에 경고가 포함된다
-— 로드되지 않은 알고리즘 요청 시 조용히 폴백되는 것을 방지하기 위함.
+**TCP 혼잡제어 알고리즘 변경**: Gateway API 자체가 아니라 접속을 여는 코드 경로가
+직접 `connect()` 이전에 `TCP_CONGESTION` 소켓옵션으로 적용한다. Mock은 raw
+socket을 직접 여는 `aipt/backends/mock/conversation.py`(tcp_congestion 원본
+기능 승계)에서, Public AI(Gemini/ChatGPT)/Local LLM은 `aipt.core.wire`가
+관리하는 pooled HTTP 세션의 커넥션 클래스(`_CountingConnection._new_conn`)에서
+동일하게 적용한다 — 이전에는 Mock에서만 가능했던 알고리즘 선택이 이제 모든
+backend에서 동작한다(`aipt/web/routes_run.py`가 `req.algorithm`을
+`wire.set_congestion_algorithm()` + `wire.reset_session()`으로 연결). 선택
+가능한 목록도 고정 리스트가 아니라 `aipt/core/congestion.py`가
+`/proc/sys/net/ipv4/tcp_available_congestion_control`을 매 요청마다 실시간
+으로 읽어 이 커널에 실제로 로드된 알고리즘만 노출한다. 요청한 알고리즘
+(`algorithm.requested`)과 실제 적용값(`algorithm.actual`, `getsockopt`로
+재확인)이 다르면 `algorithm.error`에 사유가 남는다 — 로드되지 않은 알고리즘
+요청 시 조용히 폴백되는 것을 방지하기 위함.
 
 ### 4.3 내부 API — 실행/결과 조회 (`aipt/web`)
 

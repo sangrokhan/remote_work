@@ -37,6 +37,7 @@ from aipt.backends.mock import conversation as mock_conversation
 from aipt.backends.mock import replay as mock_replay
 from aipt.backends.record import turn_record
 from aipt.backends.public_ai import recorder as public_ai_recorder
+from aipt.core import wire
 from aipt.web import store as run_store
 
 router = APIRouter()
@@ -82,8 +83,14 @@ class RunRequest(BaseModel):
     # mock-only knobs (ignored by other backends, kept flat rather than a
     # nested per-backend object -- the request body is small enough that a
     # single shared shape beats a discriminated union for this phase).
-    mock_response_bytes: int = 400
-    inference_delay_ms: int = 0
+    # Defaults match the dummy byte-size sweep form's defaults (per operator
+    # spec): a stress-shaped conversation (20 KB system prompt, 1 KB user
+    # turns, 1 KB responses, 10 turns, 1 s inference delay) rather than the
+    # earlier near-trivial smoke-test sizes, so a bare "just run it" request
+    # (no form, direct /api/run call) exercises the same cumulative-context
+    # growth the UI's own default now does.
+    mock_response_bytes: int = 1000
+    inference_delay_ms: int = 1000
     algorithm: str | None = None
 
     # --- input mode ---------------------------------------------------
@@ -122,9 +129,10 @@ class RunRequest(BaseModel):
     )
     # input_mode='dummy' (mock-only) knobs. Every byte-size input the user
     # sees maps 1:1 onto conversation.build_turns()'s own parameter names.
-    system_prompt_bytes: int = 0
-    turn_user_msg_bytes: int = 0
-    num_turns: int = 3
+    # Defaults match the form's dummy-fields defaults (operator spec).
+    system_prompt_bytes: int = 20000
+    turn_user_msg_bytes: int = 1000
+    num_turns: int = 10
 
 
 def _load_record_fixture(record_id: str):
@@ -273,6 +281,24 @@ def _run_conversation(req: RunRequest) -> dict:
         backend.inference_delay_ms = req.inference_delay_ms
         backend.algorithm = req.algorithm
         backend.label = label
+    else:
+        # public_ai/local_llm never open their own raw socket (mock's
+        # _connect_with_algorithm does) -- their connections come from
+        # aipt.core.wire's shared, pooled session, so pinning the algorithm
+        # goes through wire.set_congestion_algorithm() instead of a
+        # per-backend attribute. Cleared (None) rather than left over from
+        # a previous run's setting whenever this run does not ask for one --
+        # see that function's docstring on why a stale value would otherwise
+        # silently leak into the next run. reset_session() is required here
+        # (unlike LocalLLMBackend.connect(), which already calls it, and
+        # unlike GeminiBackend/OpenAIBackend.connect(), which do not): the
+        # algorithm sockopt is only applied on a fresh socket in
+        # _CountingConnection._new_conn(), so a request reusing an
+        # already-pooled connection from an earlier run would silently keep
+        # that run's algorithm (or the kernel default) regardless of what
+        # this run just asked for.
+        wire.set_congestion_algorithm(req.algorithm or None)
+        wire.reset_session()
 
     # exec_id is generated here (rather than left to run_store.save_run) so
     # the public_ai record file on disk and the in-memory run doc share the
@@ -327,6 +353,21 @@ def _run_conversation(req: RunRequest) -> dict:
         except Exception:
             cwnd_result = None
 
+    # Congestion-algorithm outcome, from whichever path this backend pinned
+    # it through -- MockBackend's own attributes (set on the raw socket by
+    # _connect_with_algorithm) for mock, aipt.core.wire's module-global
+    # state (set on the pooled session's connections) for public_ai/
+    # local_llm. Surfaced uniformly here so the run document/UI does not
+    # need to know which path a given backend used.
+    if req.backend == "mock":
+        algorithm_result = {
+            "requested": getattr(backend, "algorithm_requested", req.algorithm or ""),
+            "actual": getattr(backend, "algorithm_actual", ""),
+            "error": getattr(backend, "algorithm_error", ""),
+        }
+    else:
+        algorithm_result = wire.congestion_algorithm_result()
+
     result = {
         "ok": not error,
         "error": error,
@@ -341,6 +382,7 @@ def _run_conversation(req: RunRequest) -> dict:
         "turns": records,
         "monitors": [cwnd_result] if cwnd_result else [],
         "pcap": None,  # TODO: wire aipt.core.capture once a route asks for it
+        "algorithm": algorithm_result,
         "exec_id": exec_id,
     }
 

@@ -36,11 +36,14 @@ by the same code or the tests prove nothing about production.
 
 from __future__ import annotations
 
+import socket as socket_mod
 import time
 from contextlib import contextmanager
 
 import requests
 from urllib3.connection import HTTPSConnection, HTTPConnection
+
+from aipt.core.congestion import TCP_CONGESTION
 
 # Every counting socket and reader adds to this tally, so the count survives
 # connection pooling. wire_counter() reads it by difference. The experiment loop is
@@ -223,13 +226,104 @@ def _announce(sock) -> None:
             pass
 
 
+# Congestion-control algorithm requested for this session's connections, and what the
+# kernel actually gave back (or refused). A module-global rather than a per-session
+# field for the same reason `_wire_tally` is: the pooled connection classes below are
+# instantiated deep inside urllib3's PoolManager, which never hands the caller a
+# reference to pass a setting through -- so `set_congestion_algorithm()`/
+# `congestion_algorithm_result()` are the only surface a backend has for "pin every
+# socket this session opens next" / "what actually happened last time". Reset per run
+# (``set_congestion_algorithm(None)`` or a fresh algorithm) the same way `reset_session`
+# already forces a fresh connection per run -- a stale value here would otherwise pin a
+# later record-mode run to an earlier dummy run's algorithm choice.
+_ALGORITHM_STATE = {"requested": "", "actual": "", "error": ""}
+
+
+def set_congestion_algorithm(algo: str | None) -> None:
+    """Pin every connection this session opens next to *algo* (e.g. "bbr"), or clear
+    the pin with `None`/"". Must be called before the request that should use it --
+    urllib3 only calls `_new_conn` when it actually needs a fresh socket, so setting
+    this after a connection is already pooled has no effect on that connection
+    (matching `set_congestion_algorithm(sock, algo)`'s own "must be set before
+    connect()" contract in `aipt.backends.mock.conversation`)."""
+    _ALGORITHM_STATE["requested"] = algo or ""
+    _ALGORITHM_STATE["actual"] = ""
+    _ALGORITHM_STATE["error"] = ""
+
+
+def congestion_algorithm_result() -> dict:
+    """(requested, actual, error) for the most recent connection this session opened.
+    `actual` is read back from the socket itself (TCP_CONGESTION getsockopt), the same
+    verify-don't-trust posture `aipt.backends.mock.conversation.get_congestion_algorithm`
+    uses -- a silently-ignored setsockopt must show up here as `actual` disagreeing with
+    `requested`, not as a run that quietly believed it got what it asked for."""
+    return dict(_ALGORITHM_STATE)
+
+
 class _CountingConnection:
     """Swaps in a counting socket once the connection is up.
 
     Mixed into both connection classes: HTTPS is what the providers are called over,
     and plain HTTP exists so a local TLS-less test server is counted by exactly the
     same code path.
+
+    Also pins TCP_CONGESTION when a congestion algorithm has been requested via
+    ``set_congestion_algorithm()`` -- public_ai/local_llm's real HTTP sockets are
+    opened here (through urllib3's connection pool, not a bare socket a caller
+    controls directly), so this is the one place a shared-session backend can set
+    the sockopt before ``connect()`` the way ``aipt.backends.mock.conversation``'s
+    ``_connect_with_algorithm`` already does for its raw socket. ``_new_conn`` is
+    overridden (rather than relying on urllib3's own ``socket_options`` list)
+    because that list has no failure-recovery path: an unloaded/unknown algorithm
+    name would raise straight out of ``create_connection`` and fail the whole
+    request. Mirroring Mock's contract instead -- try the algorithm, record
+    ``_ALGORITHM_STATE['error']`` on failure, keep connecting on the kernel's
+    default -- means a bad algorithm name degrades one run's cwnd behaviour, not
+    the run itself.
     """
+
+    def _new_conn(self):
+        host = self._dns_host if hasattr(self, "_dns_host") else self.host
+        if host.startswith("["):
+            host = host.strip("[]")
+        algo = _ALGORITHM_STATE["requested"]
+        timeout = self.timeout if isinstance(self.timeout, (int, float)) else None
+        last_exc: OSError | None = None
+        for family, socktype, proto, _canon, sockaddr in socket_mod.getaddrinfo(
+            host, self.port, socket_mod.AF_UNSPEC, socket_mod.SOCK_STREAM
+        ):
+            sock = socket_mod.socket(family, socktype, proto)
+            try:
+                if self.socket_options:
+                    for opt in self.socket_options:
+                        sock.setsockopt(*opt)
+                if algo:
+                    try:
+                        sock.setsockopt(socket_mod.IPPROTO_TCP, TCP_CONGESTION,
+                                         algo.encode() + b"\x00")
+                    except OSError as exc:
+                        _ALGORITHM_STATE["error"] = (
+                            f"could not set congestion algorithm {algo!r}: {exc}"
+                        )
+                if timeout is not None:
+                    sock.settimeout(timeout)
+                if self.source_address:
+                    sock.bind(self.source_address)
+                sock.connect(sockaddr)
+                try:
+                    raw = sock.getsockopt(socket_mod.IPPROTO_TCP, TCP_CONGESTION, 16)
+                    _ALGORITHM_STATE["actual"] = raw.split(b"\x00", 1)[0].decode(
+                        errors="replace"
+                    )
+                except OSError:
+                    pass
+                return sock
+            except OSError as exc:
+                last_exc = exc
+                sock.close()
+        if last_exc is not None:
+            raise last_exc
+        raise OSError(f"could not connect to {host}:{self.port}")
 
     def connect(self):
         super().connect()

@@ -19,18 +19,23 @@ import aipt.backends as backends_registry
 from aipt.backends.public_ai import gemini as _gemini
 from aipt.backends.public_ai import openai as _openai
 from aipt.core import capture as capture_mod
+from aipt.core import congestion as congestion_mod
 from aipt.core import cwnd as cwndmon
 from aipt.web.routes_run import public_ai_records_dir
 
 router = APIRouter()
 
-# Congestion-control algorithms surfaced in the experiment form. Not probed
-# from /proc/sys/net/ipv4/tcp_available_congestion_control here -- that file
-# is host-specific and a CI box may only have cubic/reno loaded, which would
-# make the dropdown lie about what a production host supports. The fixed
-# list mirrors tcp_congestion's original UI; MockBackend.connect() still
-# reports algorithm_error if the kernel does not actually have one loaded.
-CONGESTION_ALGORITHMS = ("cubic", "reno", "bbr", "vegas", "bic", "htcp")
+# Congestion-control algorithms surfaced in the experiment form. Read live
+# from the running kernel (aipt.core.congestion.available_algorithms(), which
+# parses /proc/sys/net/ipv4/tcp_available_congestion_control) rather than a
+# fixed guess -- a hardcoded list would offer names this box may not have
+# loaded (a CI box or a slim container image commonly ships only cubic/
+# reno), and the operator would only discover that after a run failed with
+# an opaque algorithm_error. Now the dropdown only ever lists what the
+# kernel says it can actually run.
+def _congestion_algorithms() -> tuple[list[str], str]:
+    return congestion_mod.available_algorithms()
+
 
 #: Backend display metadata for the landing page. Keyed by the same names
 #: aipt.backends.names() returns, so a card is never shown for a backend
@@ -133,6 +138,118 @@ def _public_ai_engine_arms(engine: str) -> list[str]:
     return list(getattr(module, "ARMS", ()))
 
 
+#: Every arm belongs to exactly one underlying HTTP API, and that API --
+#: not the arm's name -- is what changes the shape of the request on the
+#: wire (Gemini's `generateContent` vs `interactions`; OpenAI's
+#: `chat/completions` vs `responses`). The operator picks an API Type
+#: first (a real, billable endpoint choice), then a Context Handle (how
+#: the conversation's history is carried: resent by the client every
+#: turn, kept server-side inline with the prompt, or dropped from the
+#: prompt and referenced statelessly) -- both are UI-only groupings over
+#: the same arm names every backend already validates, so nothing here
+#: changes what actually goes over the wire, only how the form presents
+#: the choice. Keyed by the same key ``ui_backends()`` cards use: the
+#: engine name (\"gemini\"/\"openai\") for the two Public AI cards, and the
+#: registry name (\"mock\"/\"local_llm\") for the other two.
+_API_TYPES = {
+    "gemini": (
+        {
+            "key": "generate_content",
+            "label": "generateContent API",
+            "context_handles": (
+                ("default", "Default", "stateless"),
+                ("no_context", "No Context", "nocontext"),
+                ("force_caching", "Force Caching", "cached"),
+            ),
+        },
+        {
+            "key": "interactions",
+            "label": "Interaction API",
+            "context_handles": (
+                ("default", "Default", "interaction"),
+                ("inline", "Inline", "interaction_inline"),
+                ("stateless", "Stateless", "interaction_stateless"),
+            ),
+        },
+    ),
+    "openai": (
+        {
+            "key": "chat_completions",
+            "label": "Chat Completion API",
+            "context_handles": (
+                ("default", "Default", "chat_stateless"),
+            ),
+        },
+        {
+            "key": "responses",
+            "label": "Responses API",
+            "context_handles": (
+                ("default", "Default", "responses"),
+                ("inline", "Inline", "responses_inline"),
+                ("stateless", "Stateless", "responses_stateless"),
+            ),
+        },
+    ),
+    "local_llm": (
+        {
+            "key": "chat_completions",
+            "label": "Chat Completion API",
+            "context_handles": (
+                ("default", "Default", "chat"),
+            ),
+        },
+    ),
+    "mock": (
+        {
+            "key": "dummy_api",
+            "label": "Dummy API",
+            "context_handles": (
+                ("default", "Default", "dummy"),
+            ),
+        },
+    ),
+}
+
+
+def _api_types_for(card_key: str, known_arms: list[str]) -> list[dict]:
+    """API Type groups for *card_key*, each carrying only the context
+    handles whose underlying arm is in *known_arms*.
+
+    Every card key currently in ``_API_TYPES`` was curated deliberately per
+    the operator's exact spec (e.g. Mock is "Dummy API / Default" only,
+    even though ``MockBackend.ARMS`` also lists ``\"record\"`` -- that arm is
+    already selected via the form's separate Input-mode control, not a
+    second API Type), so a curated card never gets a silent \"Other\" catch-
+    all appended for arms it deliberately excludes. A card key with **no**
+    entry in ``_API_TYPES`` at all (a future backend nobody has curated
+    yet) instead falls back to exposing every one of its arms as its own
+    Context Handle under one \"Other\" API Type, so a brand-new backend
+    still gets a usable (if unlabelled) picker instead of an empty one."""
+    known = set(known_arms)
+    curated = _API_TYPES.get(card_key)
+    if curated is None:
+        return [{
+            "key": "other",
+            "label": "Other",
+            "context_handles": [{"key": a, "label": a, "arm": a} for a in known_arms],
+        }] if known_arms else []
+
+    groups = []
+    for group in curated:
+        handles = [
+            {"key": hkey, "label": hlabel, "arm": arm}
+            for hkey, hlabel, arm in group["context_handles"]
+            if arm in known
+        ]
+        if handles:
+            groups.append({"key": group["key"], "label": group["label"], "context_handles": handles})
+    return groups
+
+
+def _public_ai_api_types(engine: str) -> list[dict]:
+    return _api_types_for(engine, _public_ai_engine_arms(engine))
+
+
 def _public_ai_engine_ready(engine: str) -> tuple[bool, str]:
     module = {"gemini": _gemini, "openai": _openai}[engine]
     try:
@@ -158,6 +275,7 @@ def public_ai_engine_cards() -> list[dict]:
             "ready": ok,
             "reason": "준비됨" if ok else reason,
             "arms": _public_ai_engine_arms(engine),
+            "api_types": _public_ai_api_types(engine),
         })
     return out
 
@@ -183,6 +301,7 @@ def ui_backends() -> list[dict]:
             "ready": b["ready"],
             "reason": "준비됨" if b["ready"] else b["reason"],
             "arms": b["arms"],
+            "api_types": _api_types_for(b["name"], b["arms"]),
         })
     return cards
 
@@ -233,11 +352,13 @@ def config_payload() -> dict:
     the form actually render (public_ai split into Gemini/ChatGPT)."""
     cwnd_ok, cwnd_reason = cwndmon.available()
     cap_ok, cap_reason = capture_mod.available()
+    algo_names, algo_reason = _congestion_algorithms()
     return {
         "backends": backends_view(),
         "ui_backends": ui_backends(),
         "public_ai_records": public_ai_record_names(),
-        "congestion_algorithms": list(CONGESTION_ALGORITHMS),
+        "congestion_algorithms": algo_names,
+        "congestion_algorithms_reason": algo_reason,
         "cwnd": {
             "available": cwnd_ok,
             "reason": cwnd_reason,
