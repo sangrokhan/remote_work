@@ -628,6 +628,31 @@ Phase 4에서 범위 밖으로 명시했던 스트리밍 진행상황 표시(현
   기존부터 실패하던 것 — 이번 SSE 작업과 무관, `docker compose up`으로 실제
   엔진을 띄운 뒤에만 그린이 되는 사전 조건부 테스트임을 확인)
 
+## `/api/run/stream` 서버측 로깅 (2026-08-27, 사용자 지시: 프론트 연동 불필요) — [x] 완료
+
+사용자 지시: 프론트엔드에서 실제로 스트리밍을 소비할 필요는 없고, 스트리밍
+이벤트를 서버 쪽에서 로깅할 수 있는 구조만 있으면 됨. `_drive_stream_to_queue`
+(위 SSE 작업에서 threadpool 워커가 이벤트를 큐로 미는 지점)에 로깅을 추가.
+
+- [x] `AIPT/aipt/web/routes_run.py` — 신규 `_log_stream_event(req, event,
+  exec_id)`: 이벤트 타입별 구조화 로그(`log.info`/`log.warning`) +
+  `exec_id`가 확정된 이후부터는 `<RUN_STORE_DIR>/<exec_id>.stream.jsonl`에
+  한 줄씩 append(`{"logged_at": ..., **event}`). run doc 본체(`<exec_id>.json`)와
+  달리 이 파일은 매 이벤트마다 incremental append — 클라이언트가 SSE를 실제로
+  읽고 있었는지와 완전히 무관하게 서버 쪽에서 독립적으로 남음. `_drive_stream_to_queue`가
+  각 이벤트를 큐에 넣기 직전에 호출, unknown-backend 사전 체크 경로(`exec_id`
+  미확정)도 로깅은 타되 파일은 안 씀(이름 붙일 run이 아직 없으므로).
+  디스크 쓰기 실패는 `run_store`와 동일하게 로그만 남기고 절대 run을 죽이지 않음
+- [x] `AIPT/tests/web/test_app.py` — 신규 테스트 2개:
+  `test_api_run_stream_logs_events_to_jsonl`(mock 2턴 스트리밍 후
+  `<exec_id>.stream.jsonl`이 실제로 생성되고 `["start","turn","turn","done"]`
+  순서로 4줄, 각 줄에 `logged_at` 존재 확인), `test_api_run_stream_unknown_backend_error_not_written_to_disk`
+  (exec_id 없는 사전 에러는 파일을 안 남김 확인)
+- [x] 검증: `pytest tests/web/test_app.py -q` → **13 passed**(기존 11 +
+  신규 2). `pytest tests/ -q -m "not live"` → **448 passed, 1 skipped, 12
+  deselected**(회귀 없음, `test_local_llm_backend_against_real_engine` 1건
+  제외는 위 항목과 동일한 기존 환경 이슈)
+
 
 ## "fixture" 용어 전면 리네임 → "record" (2026-08-27) — [x] 완료
 

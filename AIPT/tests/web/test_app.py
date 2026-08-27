@@ -249,3 +249,45 @@ def test_api_run_stream_local_llm_emits_error_or_done_event(client, tmp_path):
     events = _parse_sse(resp.text)
     assert events, "expected at least one SSE event"
     assert events[-1]["type"] in ("error", "done")
+
+
+def test_api_run_stream_logs_events_to_jsonl(client, tmp_path):
+    """Server-side logging structure: every streamed event for a run also
+    lands, one JSON line per event, in
+    ``<RUN_STORE_DIR>/<exec_id>.stream.jsonl`` -- so the stream can be
+    inspected after the fact without any frontend having listened."""
+    resp = client.post(
+        "/api/run/stream",
+        json={
+            "backend": "mock",
+            "arm": "dummy",
+            "input_mode": "dummy",
+            "num_turns": 2,
+            "turn_user_msg_bytes": 20,
+            "system_prompt_bytes": 10,
+            "measure": "bytes",
+            "mock_response_bytes": 32,
+        },
+    )
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    exec_id = events[-1]["result"]["exec_id"]
+
+    log_path = tmp_path / "runs" / f"{exec_id}.stream.jsonl"
+    assert log_path.is_file(), f"expected stream log at {log_path}"
+    lines = [json.loads(l) for l in log_path.read_text().splitlines() if l]
+    types = [l["type"] for l in lines]
+    assert types == ["start", "turn", "turn", "done"]
+    for line in lines:
+        assert "logged_at" in line
+
+
+def test_api_run_stream_unknown_backend_error_not_written_to_disk(client, tmp_path):
+    """A pre-backend error (no exec_id yet) has nothing to name a per-run
+    log file after -- it must still hit the structured logger but must not
+    attempt to write any file."""
+    resp = client.post("/api/run/stream", json={"backend": "nope", "arm": "x"})
+    assert resp.status_code == 200
+    runs_dir = tmp_path / "runs"
+    if runs_dir.is_dir():
+        assert not any(runs_dir.glob("*.stream.jsonl"))

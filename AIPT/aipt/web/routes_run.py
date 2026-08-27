@@ -507,25 +507,117 @@ async def api_run(req: RunRequest):
 _STREAM_DONE = object()
 
 
+def _stream_log_path(exec_id: str) -> Path:
+    """``<run_store_dir()>/<exec_id>.stream.jsonl`` -- one line per SSE
+    event for that run, in the same directory ``run_store.save_run()``
+    already writes ``<exec_id>.json`` to (reuses ``RUN_STORE_DIR``, no new
+    env var). Kept as a sibling ``.stream.jsonl`` file rather than folded
+    into the run doc itself so it can be appended to incrementally (one
+    ``open(..., "a")`` per event) while the run doc is only ever written
+    once, whole, at the end.
+
+    A ``start`` event's ``exec_id`` is only known once the generator gets
+    past backend/input validation -- events before that point (an early
+    ``done`` with ``ok: False``, or a pre-backend ``error``) have no
+    ``exec_id`` yet and are logged (see ``_log_stream_event``) but not
+    written to a per-run file, since there is no run to name the file
+    after.
+    """
+    return run_store.run_store_dir() / f"{exec_id}.stream.jsonl"
+
+
+def _log_stream_event(req: RunRequest, event: dict, exec_id: str | None) -> None:
+    """Structured log line for every SSE event this route ever produces,
+    plus (once ``exec_id`` is known) an appended line in that run's
+    ``<exec_id>.stream.jsonl`` on disk -- so a run's turn-by-turn stream
+    can be inspected after the fact even though nothing in the client-
+    facing contract requires the client itself to have been listening
+    (the whole point of "log it server-side instead of requiring a
+    frontend consumer").
+
+    All log lines go through ``log.debug`` -- per-turn events are high
+    volume (one per turn per run) and are not actionable at INFO/WARNING
+    severity by themselves (a genuine failure still fully surfaces to the
+    caller as an ``error``/``ok: False`` SSE event and in the persisted
+    run doc); DEBUG keeps this quiet by default and opt-in via the
+    logger's level, same as any other high-frequency diagnostic trace.
+    The on-disk ``.stream.jsonl`` append is unaffected by logger level --
+    it is the durable, always-on record; the ``log.debug`` calls are only
+    the live/ad-hoc visibility path.
+
+    Never raises: a logging/disk-write failure must not take down the run
+    itself, same "honest failure reporting, never a hard crash" posture as
+    ``run_store``'s own disk I/O (log the write failure and move on).
+    """
+    kind = event.get("type", "unknown")
+    if kind == "turn":
+        log.debug(
+            "run/stream backend=%s arm=%s exec_id=%s turn=%s/%s",
+            req.backend, req.arm, exec_id, event.get("turn"), event.get("total_turns"),
+        )
+    elif kind == "start":
+        log.debug(
+            "run/stream backend=%s arm=%s exec_id=%s start total_turns=%s",
+            req.backend, req.arm, exec_id, event.get("total_turns"),
+        )
+    elif kind == "done":
+        result = event.get("result") or {}
+        log.debug(
+            "run/stream backend=%s arm=%s exec_id=%s done ok=%s turns=%s elapsed_s=%s",
+            req.backend, req.arm, exec_id, result.get("ok"),
+            len(result.get("turns") or []), result.get("elapsed_s"),
+        )
+    else:
+        log.debug(
+            "run/stream backend=%s arm=%s exec_id=%s error=%s",
+            req.backend, req.arm, exec_id, event.get("error"),
+        )
+
+    if not exec_id:
+        return  # nothing to name the per-run log file after yet
+    try:
+        path = _stream_log_path(exec_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps({"logged_at": time.time(), **event})
+        with path.open("a") as f:
+            f.write(line + "\n")
+    except OSError as exc:  # pragma: no cover - defensive, disk/perm issues
+        log.warning("failed to append stream log for exec_id=%s: %s", exec_id, exc)
+
+
 def _drive_stream_to_queue(req: RunRequest, q: "queue.Queue[object]") -> None:
     """Runs on a threadpool worker: drains ``_run_conversation_stream()``
     (which itself calls blocking ``backend.send_turn()`` etc.), pushing
-    each event onto *q* as it's produced. Any exception escaping the
-    generator (e.g. ``NotImplementedError`` for local_llm) is turned into
-    one final ``{"type": "error", ...}`` event rather than being raised on
-    a thread nothing awaits -- the streaming response already sent a 200
-    status line by the time this thread starts, so there is no HTTP status
-    code left to change; an SSE error event is the only way left to tell
-    the client something went wrong. ``_STREAM_DONE`` is always pushed
+    each event onto *q* as it's produced and logging every event via
+    :func:`_log_stream_event` (structured log line + per-run
+    ``<exec_id>.stream.jsonl`` append) regardless of whether the HTTP
+    client is even still connected to read the SSE response -- the
+    logging path does not depend on the queue/consumer side at all.
+
+    Any exception escaping the generator (e.g. ``NotImplementedError`` for
+    local_llm) is turned into one final ``{"type": "error", ...}`` event
+    rather than being raised on a thread nothing awaits -- the streaming
+    response already sent a 200 status line by the time this thread
+    starts, so there is no HTTP status code left to change; an SSE error
+    event (logged like any other) is the only way left to tell anything
+    downstream something went wrong. ``_STREAM_DONE`` is always pushed
     last, success or failure, so the consumer loop always terminates.
     """
+    exec_id: str | None = None
     try:
         for event in _run_conversation_stream(req):
+            if event["type"] == "start":
+                exec_id = event.get("exec_id")
+            elif event["type"] == "done":
+                exec_id = event["result"].get("exec_id") or exec_id
+            _log_stream_event(req, event, exec_id)
             q.put(event)
             if event["type"] == "done":
                 run_store.save_run(event["result"])
     except Exception as exc:
-        q.put({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
+        error_event = {"type": "error", "error": f"{type(exc).__name__}: {exc}"}
+        _log_stream_event(req, error_event, exec_id)
+        q.put(error_event)
     finally:
         q.put(_STREAM_DONE)
 
@@ -553,9 +645,11 @@ async def api_run_stream(req: RunRequest):
         backends_registry.get(req.backend)
     except KeyError as exc:
         error_message = str(exc)
+        error_event = {"type": "error", "error": error_message}
+        _log_stream_event(req, error_event, exec_id=None)
 
         async def _bad_backend():
-            yield f"data: {json.dumps({'type': 'error', 'error': error_message})}\n\n"
+            yield f"data: {json.dumps(error_event)}\n\n"
 
         return StreamingResponse(_bad_backend(), media_type="text/event-stream")
 
