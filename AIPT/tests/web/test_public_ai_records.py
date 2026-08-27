@@ -3,7 +3,7 @@
 - mock 백엔드로 /api/run을 돌리면 data/public_ai_records/ 에 아무 파일도
   쓰이지 않아야 한다 (자동 저장은 public_ai 전용).
 - public_ai 실경로는 실제 API 키가 없어 이 스위트에서 돌릴 수 없으므로,
-  recorder.recording_backend()가 만드는 FixtureWriter가 실제로 디스크에
+  recorder.recording_backend()가 만드는 RecordWriter가 실제로 디스크에
   JSON을 쓰고 mask_secrets가 적용되는지를 유닛 레벨로 직접 검증한다.
 - GET /api/public-ai-records, GET /api/public-ai-records/{exec_id} 라우트를
   빈 디렉터리/파일 있는 경우 모두 확인한다.
@@ -181,7 +181,7 @@ class _FakeBackend:
 
 
 def test_recording_backend_writes_masked_json_to_disk(tmp_path):
-    writer = public_ai_recorder.FixtureWriter(system="sys prompt", steps=["hi"])
+    writer = public_ai_recorder.RecordWriter(system="sys prompt", steps=["hi"])
     proxy = public_ai_recorder.recording_backend(_FakeBackend(), writer, engine="gemini")
 
     proxy.connect("fake_arm", "fake-model", "sys prompt")

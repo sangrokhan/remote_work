@@ -8,14 +8,16 @@ includes the three route modules:
 
   * ``routes_config`` -- ``GET /`` (landing page, backend-selection cards)
     and ``GET /api/config``.
-  * ``routes_run``    -- ``POST /api/run``.
+  * ``routes_run``    -- ``POST /api/run`` (blocking, whole-run response)
+    and ``POST /api/run/stream`` (SSE, one event per turn as it finishes).
   * ``routes_runs``   -- ``GET/DELETE /api/runs*``, the CSV/bundle/pcap
     download endpoints.
 
 Run store persists to disk now (``aipt/web/store.py``, ``RUN_STORE_DIR``,
 default ``data/runs/``) -- a restart rehydrates recent runs instead of
-losing them. No ``/api/run/stream`` SSE endpoint yet -- that one's still an
-explicit TODO, not an oversight, called out in ``routes_run.py``.
+losing them. ``/api/run/stream`` (SSE, per-turn progress) now exists
+alongside the original blocking ``/api/run`` -- see ``routes_run.py``'s
+module docstring for how the two share one generator.
 """
 
 from __future__ import annotations

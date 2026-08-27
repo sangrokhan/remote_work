@@ -1,4 +1,4 @@
-"""aipt.backends.public_ai.recorder -- fixture capture and secret masking.
+"""aipt.backends.public_ai.recorder -- scenario-record capture and secret masking.
 
 New tests (no direct token_traffic ancestor; DESIGN.md 5 B2 is new work).
 """
@@ -63,8 +63,8 @@ def test_record_turn_masks_headers_and_parses_json_bodies():
     assert as_dict["wire_sent"] == 10
 
 
-def test_fixture_writer_produces_perf_json_shaped_output(tmp_path):
-    writer = recorder.FixtureWriter(system="sys prompt", steps=["q1", "q2"])
+def test_record_writer_produces_perf_json_shaped_output(tmp_path):
+    writer = recorder.RecordWriter(system="sys prompt", steps=["q1", "q2"])
     ex = gemini.call.Exchange(status=200, request_json="{}", response_json="{}",
                                text="ok")
     rt = recorder.record_turn(backend="public_ai", engine="gemini", arm="stateless",
@@ -81,11 +81,11 @@ def test_fixture_writer_produces_perf_json_shaped_output(tmp_path):
     assert data["turns"][0]["arm"] == "stateless"
 
 
-def test_fixture_writer_never_writes_a_real_key_to_disk(tmp_path, monkeypatch):
+def test_record_writer_never_writes_a_real_key_to_disk(tmp_path, monkeypatch):
     monkeypatch.setenv("TRAFFIC_MOCK", "1")
     monkeypatch.setenv("GEMINI_API_KEY", "AIzaSy-should-never-hit-disk")
 
-    writer = recorder.FixtureWriter(system="sys", steps=["hello?"])
+    writer = recorder.RecordWriter(system="sys", steps=["hello?"])
     backend = gemini.GeminiBackend()
     proxy = recorder.recording_backend(backend, writer, engine="gemini")
 

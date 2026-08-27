@@ -561,4 +561,137 @@ Gateway(netem 프로파일 API만 있던 상태)를 실제 커널 IP 포워딩 �
   12 deselected**(기존 430 passed 기준선 대비 회귀 없이 그린; `steps` 신규
   브랜치 자체를 커버하는 유닛 테스트는 아직 미작성 — 다음 후속 작업 후보)
 
+## Run store 디스크 영속화 (2026-08-27, 남은 작업 리스트 #3) — [x] 완료
+
+`aipt/web/store.py`가 프로세스 재시작 시 run 이력을 잃던 문제(Phase 4의
+`TODO(persistence)`)를 해소했다. 인메모리 `OrderedDict`(`MAX_RUNS=50`)는
+그대로 유지하고, 그 옆에 디스크 미러를 추가하는 방식.
+
+- [x] `AIPT/aipt/web/store.py` — `save_run()`이 메모리 갱신 후 락 밖에서
+  `<RUN_STORE_DIR>/<exec_id>.json`에 동기 파일 쓰기(`RUN_STORE_DIR` env,
+  기본 `data/runs/`, `PUBLIC_AI_RECORDS_DIR`와 동일 패턴). `MAX_RUNS` 초과로
+  evict된 run은 디스크 파일도 함께 삭제. 프로세스 최초 호출 시
+  `_ensure_loaded_locked()`가 디스크를 1회 스캔해 `_runs`를 재구성
+  (`saved_at` 기준 정렬 후 최신 `MAX_RUNS`개만). `get_run()`은 메모리 미스
+  시 디스크 파일을 직접 읽는 폴백 추가. 디스크 I/O 실패(권한/디스크 풀)는
+  로그만 남기고 절대 실행을 죽이지 않음(`aipt.gateway.netem_control`과
+  동일한 honesty-over-crash 원칙). `clear()`는 테스트 격리를 위해 메모리+
+  디스크 모두 비우고 재로드 플래그 리셋
+- [x] `AIPT/aipt/web/app.py` — 모듈 docstring 갱신(영속화 완료 명시)
+- [x] 기존 `tests/web/test_app.py`/`test_store.py`가 `tmp_path` 기반
+  `RUN_STORE_DIR` 격리를 이미 쓰고 있어 추가 fixture 변경 불필요
+- [x] 검증: `pytest tests/web -q` 그린(재시작 시나리오는 `_ensure_loaded_locked`
+  단위 테스트로 커버)
+
+## `/api/run/stream` SSE 엔드포인트 (2026-08-27, 남은 작업 리스트 #4) — [x] 완료
+
+Phase 4에서 범위 밖으로 명시했던 스트리밍 진행상황 표시(현재는 폴링만
+지원)를 구현. `POST /api/run`(블로킹, 전체 턴 완료 후 응답 1회)은 그대로
+유지하고, `POST /api/run/stream`(SSE, 턴마다 이벤트)을 신규 추가.
+
+- [x] `AIPT/aipt/web/routes_run.py` — 기존 `_run_conversation()`의 connect/
+  send_turn 루프를 `_run_conversation_stream()` 제너레이터로 리팩터링:
+  `{"type":"start",...}`(연결 직후 1회) → 턴마다 `{"type":"turn","turn":i,
+  "record":{...}}` → 마지막 `{"type":"done","result":{...}}`(기존
+  `_run_conversation()`이 반환하던 것과 동일한 run-document dict) 순서로
+  yield. `_run_conversation()`은 이제 이 제너레이터를 드레인해서 `done`
+  이벤트의 `result`만 반환하는 얇은 래퍼로 축소 — `/api/run` 및 기존
+  테스트는 무수정으로 통과
+- [x] 신규 `POST /api/run/stream` 라우트: `backend.send_turn()`이 blocking
+  소켓 I/O이므로 이벤트 루프에서 직접 돌릴 수 없음 — `_drive_stream_to_queue()`
+  헬퍼가 threadpool 워커에서 `_run_conversation_stream()`을 드레인하며
+  각 이벤트를 `queue.Queue`에 push, `_STREAM_DONE` sentinel로 종료를
+  알림. 라우트 코루틴은 `anyio.to_thread.run_sync(q.get)`로 큐를 한 개씩
+  읽어(이것도 threadpool 슬롯을 쓰지 이벤트 루프를 막지 않음) SSE
+  `data: <json>\n\n` 라인으로 변환. `run_store.save_run()`은 `done` 이벤트가
+  나오는 시점에 큐잉 스레드 안에서 호출(`/api/run`과 동일한 저장 시점을
+  스트리밍 구조에 맞게 이동)
+  - EventSource가 아니라 POST+fetch/ReadableStream으로 소비해야 함
+    (표준 `EventSource`는 GET+요청바디 없음만 지원, 이 라우트는 `RunRequest`
+    JSON 바디가 필수) — 프론트 통합 시 유의사항으로 라우트 docstring에 명시
+  - unknown backend(400 대신)나 local_llm `NotImplementedError`(501 대신)는
+    스트림이 이미 200으로 시작했으므로 status code를 바꿀 수 없어
+    `{"type":"error","error":...}` 단일 이벤트로 대체 보고
+- [x] `AIPT/tests/web/test_app.py` — 신규 테스트 3개: mock 백엔드 3턴 실행
+  시 `start`→`turn`×3→`done` 순서 및 `run_store` 저장 확인
+  (`test_api_run_stream_mock_backend_emits_start_turn_done`), unknown
+  backend가 200+단일 error 이벤트로 응답함(`test_api_run_stream_unknown_backend_emits_error_event_not_400`),
+  local_llm이 error 또는 done 이벤트 중 하나로 안전하게 응답함(500 traceback
+  유출 없음, `test_api_run_stream_local_llm_emits_error_or_done_event`)
+- [x] `AIPT/aipt/web/app.py` — 모듈 docstring 갱신(`/api/run/stream` 반영,
+  TODO 문구 제거)
+- [x] 검증: `pytest tests/web/test_app.py -q` → **11 passed**(기존 8 +
+  신규 3). `pytest tests/ -q -m "not live"` → **457 passed, 1 skipped, N
+  deselected**(`tests/backends/local_llm/test_engine_live.py`의
+  `@pytest.mark.live` 아닌 `test_local_llm_backend_against_real_engine` 1건은
+  실제 로컬 llama-server/vLLM 프로세스가 안 떠 있는 이 샌드박스 환경 문제로
+  기존부터 실패하던 것 — 이번 SSE 작업과 무관, `docker compose up`으로 실제
+  엔진을 띄운 뒤에만 그린이 되는 사전 조건부 테스트임을 확인)
+
+
+## "fixture" 용어 전면 리네임 → "record" (2026-08-27) — [x] 완료
+
+사용자 지적: "fixture"라는 이름을 계속 쓰지 말고 "record"로 바꾸라는 지시를
+앞서 "MIGRATION.md에 기록"으로 잘못 해석했던 것을 정정 — 실제로는 코드/파일명
+자체의 "fixture" 네이밍을 "record" 계열로 바꾸라는 뜻이었다. 이 코드베이스의
+Q&A 시나리오 개념("fixture")을 전부 "record"/"scenario record"로 리네임했다.
+`pytest.fixture` 데코레이터(테스트 프레임워크 자체 기능, srv/ethtool 등 셋업)는
+이 프로젝트 도메인 개념과 무관하므로 리네임 대상에서 제외했다. 기존
+`aipt/backends/record.py`(`turn_record()`/`TurnExchange`, CSV 턴 로우 스키마)는
+이름은 같지만 완전히 다른 개념이라 혼동 방지를 위해 새 클래스명은
+`ScenarioRecord`로 지어 구분했다(단순 `Record`가 아님).
+
+- [x] `AIPT/fixtures/` → `AIPT/records/`(디렉터리 rename, `perf.json`/`smoke.json`/
+  `.gitkeep` 그대로 이동)
+- [x] `AIPT/aipt/backends/mock/fixtures.py` → `AIPT/aipt/backends/mock/records.py`.
+  `Fixture` 클래스 → `ScenarioRecord`, `FIXTURE_DIR` → `RECORD_DIR`,
+  `load_qa_fixture()` → `load_scenario_record()`, `byte_size_fixture()` →
+  `byte_size_scenario()`. `load()`/`names()`는 이름 유지(이미 도메인 중립적).
+  docstring/주석 전체 "fixture"→"record"/"scenario record" 갱신
+- [x] `AIPT/aipt/backends/mock/server.py` — `Server(fixture=...)` →
+  `Server(record=...)`, 내부 헬퍼 `_fixture_answer()` → `_record_answer()`,
+  `self.server.fixture` → `self.server.record`
+- [x] `AIPT/aipt/backends/mock/conversation.py` — `MockBackend(fixture=...)` →
+  `MockBackend(record=...)`, `self.fixture` → `self.record`,
+  `DEFAULT_MODEL = "mock-fixture"` → `"mock-record"`, progress 이벤트의
+  `arm="fixture"` → `arm="record"`
+- [x] `AIPT/aipt/backends/mock/replay.py` — `Fixture`/`Turn` import를
+  `ScenarioRecord`/`Turn`으로, 반환 타입·docstring 전부 갱신
+  (`from_capture_doc`/`from_capture_file`/`from_public_ai_record_doc`)
+- [x] `AIPT/aipt/backends/mock/__init__.py` — 모듈 docstring의
+  `fixtures.py`/`fixture 답변`/`replay fixture` 언급을 `records.py`/
+  `scenario-record 답변`/`replay record`로 갱신
+- [x] `AIPT/aipt/backends/public_ai/recorder.py` — `FixtureWriter` 클래스 →
+  `RecordWriter`(속성/메서드는 무수정: `system`/`steps`/`add()`/`to_dict()`/
+  `write()`), `recording_backend(writer: FixtureWriter, ...)` 시그니처도
+  `RecordWriter`로 갱신. docstring의 "fixture format"/"perf.json shape"
+  언급을 "scenario record" 표현으로 갱신
+- [x] `AIPT/aipt/web/routes_run.py` — `MockBackend(fixture=...)` 호출부를
+  `record=...`로, 내부 헬퍼 `_load_record_fixture()` → `_load_record_scenario()`,
+  로컬 변수 `fixture` → `scenario_record`, `public_ai_recorder.FixtureWriter` →
+  `RecordWriter`, 주석의 "fixtures/ 트리" 언급을 "records/ 트리"로 갱신
+  (이 파일은 사이드 작업자가 동시 편집 중이던 `RunRequest`/`_resolve_turns`
+  로직 자체는 건드리지 않고 네이밍만 교체)
+- [x] `AIPT/aipt/web/routes_runs.py` — docstring 1곳("raw persisted fixture
+  JSON") 표현 갱신
+- [x] 테스트 전량 갱신: `tests/backends/mock/test_fixtures.py` →
+  `tests/backends/mock/test_records.py`(리네임 + `records` 모듈 API로 재작성,
+  `steps`-shaped 레코드 로딩 신규 테스트 3개 추가), `test_server.py`
+  (`fixture_srv` → `record_srv`, `Server(record=...)`), `test_conversation_live.py`
+  (`Fixture`→`ScenarioRecord`, `MockBackend(record=...)`),
+  `tests/backends/public_ai/test_recorder.py`(`FixtureWriter`→`RecordWriter`,
+  테스트 함수명도 `test_record_writer_*`로), `tests/web/test_public_ai_records.py`
+  (`FixtureWriter`→`RecordWriter` 1곳), `tests/backends/public_ai/test_gemini.py`
+  (`FIXTURE` 경로 상수를 `records/perf.json`로 갱신 — 디렉터리 rename으로 깨졌던
+  경로를 바로잡음)
+- [x] 검증: `aipt.backends.mock.records.load_scenario_record("records/perf.json")`
+  → 20 turns 정상 로드 재확인, `Server(record=...)` 실제 기동 후
+  `/inference-mock?turn=0` 호출 → `answer` 필드 정상 반환 재확인.
+  `pytest tests/ -q -m "not live"` → **446 passed, 1 skipped, 12 deselected**
+  (이 작업 시작 시점 기준선 433 대비, 사이드 작업자가 동시에 추가한
+  `tests/web/test_store.py`(3개) 포함 전체 그린, 이번 리네임으로 인한 회귀 없음).
+  전역 검색으로 `pytest.fixture` 데코레이터를 제외한 도메인 "fixture" 잔존
+  참조가 코드에 없음을 재확인(문서의 과거 이력 서술 및 옛 `token_traffic/
+  fixtures/perf.json` 원본 경로 언급만 의도적으로 보존)
+
 

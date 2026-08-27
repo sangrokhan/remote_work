@@ -1,7 +1,7 @@
 """aipt.backends.mock.server: HTTP/1.1 inference-mock server.
 
 Migrated from tcp_congestion/tests/test_server.py (DESIGN.md 5, A3), plus
-new tests for fixture-answer serving (B1).
+new tests for scenario-record answer serving (B1).
 """
 
 import json
@@ -12,7 +12,7 @@ import time
 import pytest
 
 from aipt.backends.mock import server
-from aipt.backends.mock.fixtures import Fixture, Turn
+from aipt.backends.mock.records import ScenarioRecord, Turn
 
 
 @pytest.fixture()
@@ -27,15 +27,15 @@ def srv():
 
 
 @pytest.fixture()
-def fixture_srv():
-    fixture = Fixture(
+def record_srv():
+    record = ScenarioRecord(
         name="test",
         turns=[
             Turn(question="q0", answer="hello"),
             Turn(question="q1", answer="a much longer canned answer text"),
         ],
     )
-    s = server.Server(host="127.0.0.1", port=0, fixture=fixture)
+    s = server.Server(host="127.0.0.1", port=0, record=record)
     t = threading.Thread(target=s.serve_forever, daemon=True)
     t.start()
     time.sleep(0.05)
@@ -157,19 +157,19 @@ def test_unknown_path_returns_404(srv):
     assert status == 404
 
 
-# --- fixture-answer serving (new, DESIGN.md B1) -----------------------------
+# --- scenario-record answer serving (new, DESIGN.md B1) --------------------
 
 
-def test_inference_mock_with_fixture_serves_answer_text(fixture_srv):
-    status, _, body = _get(fixture_srv.host, fixture_srv.port,
+def test_inference_mock_with_record_serves_answer_text(record_srv):
+    status, _, body = _get(record_srv.host, record_srv.port,
                             "/inference-mock?turn=0")[0]
     assert status == 200
     data = json.loads(body)
     assert data["answer"] == "hello"
 
 
-def test_inference_mock_with_fixture_pads_to_answer_length_by_default(fixture_srv):
-    status, headers, body = _get(fixture_srv.host, fixture_srv.port,
+def test_inference_mock_with_record_pads_to_answer_length_by_default(record_srv):
+    status, headers, body = _get(record_srv.host, record_srv.port,
                                   "/inference-mock?turn=1")[0]
     assert status == 200
     data = json.loads(body)
@@ -181,9 +181,9 @@ def test_inference_mock_with_fixture_pads_to_answer_length_by_default(fixture_sr
     assert content_length >= len("a much longer canned answer text".encode())
 
 
-def test_inference_mock_with_fixture_explicit_response_bytes_overrides(fixture_srv):
+def test_inference_mock_with_record_explicit_response_bytes_overrides(record_srv):
     status, headers, body = _get(
-        fixture_srv.host, fixture_srv.port,
+        record_srv.host, record_srv.port,
         "/inference-mock?turn=0&response_bytes=500")[0]
     assert status == 200
     content_length = int(
@@ -192,8 +192,8 @@ def test_inference_mock_with_fixture_explicit_response_bytes_overrides(fixture_s
     assert content_length == 500
 
 
-def test_inference_mock_with_fixture_out_of_range_turn_falls_back_to_dummy(fixture_srv):
-    status, _, body = _get(fixture_srv.host, fixture_srv.port,
+def test_inference_mock_with_record_out_of_range_turn_falls_back_to_dummy(record_srv):
+    status, _, body = _get(record_srv.host, record_srv.port,
                             "/inference-mock?turn=99")[0]
     assert status == 200
     data = json.loads(body)
@@ -201,16 +201,16 @@ def test_inference_mock_with_fixture_out_of_range_turn_falls_back_to_dummy(fixtu
     assert "tokens" in data
 
 
-def test_inference_mock_without_turn_param_falls_back_to_dummy(fixture_srv):
-    status, _, body = _get(fixture_srv.host, fixture_srv.port, "/inference-mock")[0]
+def test_inference_mock_without_turn_param_falls_back_to_dummy(record_srv):
+    status, _, body = _get(record_srv.host, record_srv.port, "/inference-mock")[0]
     assert status == 200
     data = json.loads(body)
     assert "answer" not in data
 
 
-def test_inference_mock_no_fixture_bound_ignores_turn_param(srv):
-    """A plain Server(fixture=None) must behave exactly as before even if
-    a caller happens to pass turn= -- no fixture means no lookup at all."""
+def test_inference_mock_no_record_bound_ignores_turn_param(srv):
+    """A plain Server(record=None) must behave exactly as before even if
+    a caller happens to pass turn= -- no record means no lookup at all."""
     status, _, body = _get(srv.host, srv.port, "/inference-mock?turn=0")[0]
     assert status == 200
     data = json.loads(body)

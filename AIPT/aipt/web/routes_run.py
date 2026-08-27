@@ -6,16 +6,45 @@ Synchronous, blocking-per-request, same posture as
 동기 blocking 실행 ... FastAPI에서 run_in_threadpool로 감싸 이벤트 루프
 블로킹 방지") -- the whole conversation runs in a worker thread via
 ``run_in_threadpool`` so it never blocks the event loop, but the HTTP
-response only comes back once the run has finished. A streaming
-(``/api/run/stream``) variant is out of scope for this phase (see the
-module docstring in ``aipt/web/app.py``).
+response only comes back once the run has finished.
+
+``POST /api/run/stream`` is the streaming sibling (was the ``/api/run/stream``
+TODO in ``aipt/web/app.py``'s module docstring): same ``RunRequest`` body,
+but the response is ``text/event-stream`` and a ``{"type": "turn", ...}``
+event is pushed the moment *each* turn finishes, rather than making the
+caller wait for every turn before seeing anything. It is POST (not GET)
+because the request body carries the full experiment config -- the browser
+``EventSource`` API cannot send a POST body/JSON, so the frontend must read
+this with ``fetch()`` + a manual ``ReadableStream`` reader instead of
+``new EventSource(...)``.
+
+Internally both routes share one generator, ``_run_conversation_stream()``:
+it does the exact same connect/send/close work ``_run_conversation()``
+always did, but ``yield``s a ``turn`` event after every
+``backend.send_turn()`` instead of only appending to a list and returning
+once at the very end. ``_run_conversation()` is now a thin wrapper that
+drains that generator and returns just the final ``done`` event's result
+dict, so ``/api/run`` and every existing caller/test keep working
+unchanged.
+
+The turn loop itself still runs in a worker thread (``backend.send_turn()``
+is blocking socket I/O) -- for ``/api/run/stream`` that thread pushes each
+yielded event onto a ``queue.Queue``, and the async route reads that queue
+one item at a time via ``anyio.to_thread.run_sync(q.get)`` (blocks a
+threadpool slot waiting for the next item, never the event loop) before
+turning it into an SSE ``data: ...\\n\\n`` line. This is the standard
+sync-generator-to-async-SSE bridge: a real async generator can't safely
+wrap a blocking one without doing exactly this hand-off.
 
 ``local_llm`` is still a stub (``aipt.backends.local_llm.NotImplementedBackend``,
 a parallel work stream owns the real implementation -- DESIGN.md 5 B4): a
 request naming it is accepted at the route level (the registry knows the
 name) and turned into a 501 the moment ``aipt.backends.get("local_llm")``'s
 constructor raises ``NotImplementedError``, rather than surfacing as an
-unhandled 500.
+unhandled 500. ``/api/run/stream`` surfaces the same case as a single
+``{"type": "error", ...}`` SSE event instead of an HTTP 501, since the
+streaming response has already started (status 200) by the time a
+mid-stream failure can happen.
 """
 
 from __future__ import annotations
@@ -23,13 +52,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
+import anyio
+import anyio.to_thread
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import aipt.backends as backends_registry
@@ -95,13 +128,13 @@ class RunRequest(BaseModel):
 
     # --- input mode ---------------------------------------------------
     # Two modes, per user decision: "dummy" and "record". The original
-    # three mock arms (dummy/fixture/replay) collapsed to two -- a
-    # hand-authored Q&A fixture and a captured real run are the same
+    # three mock arms (dummy/record/replay) collapsed to two -- a
+    # hand-authored Q&A scenario record and a captured real run are the same
     # concept (a JSON of question/answer turns to replay), so there is
     # only one "record" source now: data/public_ai_records/<record_id>.json
     # (DESIGN.md 4.7.1). A hand-written scenario just gets dropped into
     # that same directory in the same schema instead of living in a
-    # separate "fixtures/" tree with its own loader.
+    # separate "records/" tree with its own loader.
     #
     # "dummy": mock-only. No record, no real question text -- the caller
     #   picks byte sizes and a turn count, and the size of the request
@@ -135,9 +168,9 @@ class RunRequest(BaseModel):
     num_turns: int = 10
 
 
-def _load_record_fixture(record_id: str):
+def _load_record_scenario(record_id: str):
     """Loads ``data/public_ai_records/<record_id>.json`` and rebuilds it as
-    a byte-pattern-only replay :class:`~aipt.backends.mock.fixtures.Fixture`
+    a byte-pattern-only replay :class:`~aipt.backends.mock.records.ScenarioRecord`
     (question verbatim, answer -> same-length placeholder). Raises
     ``ValueError``/``OSError`` on a bad/missing record -- callers turn that
     into a normal run failure, never a raw 500.
@@ -193,11 +226,11 @@ def _resolve_turns(req: RunRequest) -> tuple[list[str], str, str | None]:
     if not req.record_id:
         return [], "", "input_mode='record' requires record_id"
     try:
-        fixture = _load_record_fixture(req.record_id)
+        scenario_record = _load_record_scenario(req.record_id)
     except (ValueError, OSError) as exc:
         return [], "", f"failed to load record_id {req.record_id!r}: {exc}"
-    questions = [t.question for t in fixture.turns]
-    return questions, fixture.system_prompt, None
+    questions = [t.question for t in scenario_record.turns]
+    return questions, scenario_record.system_prompt, None
 
 
 def _build_backend(name: str, engine: str | None = None, *, req: "RunRequest | None" = None):
@@ -211,7 +244,7 @@ def _build_backend(name: str, engine: str | None = None, *, req: "RunRequest | N
     If/when it lands as a real ``LocalLLMBackend``, this branch picks it up
     automatically (same attribute lookup pattern as public_ai/mock).
 
-    ``mock`` + ``input_mode='record'``: the loaded Fixture (question AND
+    ``mock`` + ``input_mode='record'``: the loaded ScenarioRecord (question AND
     answer) is bound to MockBackend so its own server actually serves the
     record's answer text for each turn -- unlike public_ai/local_llm, mock
     has no real model to ask, so replaying the recorded answer bytes IS
@@ -221,13 +254,13 @@ def _build_backend(name: str, engine: str | None = None, *, req: "RunRequest | N
     if name == "public_ai":
         return module.PublicAIBackend(engine=engine) if engine else module.PublicAIBackend()
     if name == "mock":
-        fixture = None
+        scenario_record = None
         if req is not None and req.input_mode == "record" and req.record_id:
             try:
-                fixture = _load_record_fixture(req.record_id)
+                scenario_record = _load_record_scenario(req.record_id)
             except (ValueError, OSError):
-                fixture = None  # _resolve_turns() already reports this as a run failure
-        return module.MockBackend(fixture=fixture)
+                scenario_record = None  # _resolve_turns() already reports this as a run failure
+        return module.MockBackend(record=scenario_record)
     if name == "local_llm":
         facade = getattr(module, "LocalLLMBackend", None) or getattr(
             module, "NotImplementedBackend", None
@@ -238,44 +271,58 @@ def _build_backend(name: str, engine: str | None = None, *, req: "RunRequest | N
     raise KeyError(f"unhandled backend: {name!r}")
 
 
-def _run_conversation(req: RunRequest) -> dict:
-    """Blocking: connect, send every turn, close, and shape the result into
-    a run document the export layer and the runs endpoints can consume.
-    Runs on a threadpool worker (see ``run_experiment`` below), never on
-    the event loop thread.
+def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
+    """Generator core shared by ``/api/run`` and ``/api/run/stream``: does
+    the exact connect/send-every-turn/close work ``_run_conversation()``
+    used to do inline, but ``yield``s an event after each meaningful step
+    instead of only building up a ``records`` list silently.
 
-    DESIGN.md 4.7.1: when ``req.backend == "public_ai"``, every request/
-    response this run makes is additionally captured via
-    ``aipt.backends.public_ai.recorder.recording_backend`` and written to
-    ``data/public_ai_records/<exec_id>.json`` -- the *only* persistent
-    on-disk artifact this app produces. mock/local_llm runs never touch
-    this path; their turns live only in the in-memory store (Phase 1).
+    Events (each a plain ``dict``, JSON-serializable as-is):
+      - ``{"type": "start", "exec_id", "backend", "arm", "label", "total_turns"}``
+        once, right before the first ``send_turn()`` call.
+      - ``{"type": "turn", "turn": i, "total_turns": N, "record": {...}}``
+        after each turn completes (record has the same shape
+        ``turn_record()`` always produced).
+      - ``{"type": "done", "result": {...}}`` exactly once, always last --
+        ``result`` is the same run-document dict ``_run_conversation()``
+        used to return directly (``ok``/``error``/``turns``/``exec_id``/...).
+
+    A ready()/input-resolution failure short-circuits straight to a single
+    ``done`` event (no ``start``/``turn``), matching the early-return
+    shapes ``_run_conversation()`` always used for those cases.
     """
     backend = _build_backend(req.backend, engine=req.engine, req=req)
     ok, reason = backend.ready()
     if not ok:
-        return {
-            "ok": False,
-            "error": reason,
-            "backend": req.backend,
-            "arm": req.arm,
-            "turns": [],
+        yield {
+            "type": "done",
+            "result": {
+                "ok": False,
+                "error": reason,
+                "backend": req.backend,
+                "arm": req.arm,
+                "turns": [],
+            },
         }
+        return
 
     questions, resolved_system, resolve_error = _resolve_turns(req)
     if resolve_error:
-        return {
-            "ok": False,
-            "error": resolve_error,
-            "backend": req.backend,
-            "arm": req.arm,
-            "turns": [],
+        yield {
+            "type": "done",
+            "result": {
+                "ok": False,
+                "error": resolve_error,
+                "backend": req.backend,
+                "arm": req.arm,
+                "turns": [],
+            },
         }
+        return
     system = req.system or resolved_system
 
     label = req.label or f"{req.backend}:{req.arm}"
     timestamp = datetime.now(timezone.utc).isoformat()
-    connect_kwargs = {}
     if req.backend == "mock":
         backend.mock_response_bytes = req.mock_response_bytes
         backend.inference_delay_ms = req.inference_delay_ms
@@ -313,8 +360,18 @@ def _run_conversation(req: RunRequest) -> dict:
                 engine = backends_registry.get("public_ai").engine_for_arm(req.arm)
             except ValueError:
                 engine = ""
-        writer = public_ai_recorder.FixtureWriter(system=system, steps=list(questions))
+        writer = public_ai_recorder.RecordWriter(system=system, steps=list(questions))
         backend = public_ai_recorder.recording_backend(backend, writer, engine=engine)
+
+    total_turns = len(questions)
+    yield {
+        "type": "start",
+        "exec_id": exec_id,
+        "backend": req.backend,
+        "arm": req.arm,
+        "label": label,
+        "total_turns": total_turns,
+    }
 
     records: list[dict] = []
     error = ""
@@ -323,19 +380,19 @@ def _run_conversation(req: RunRequest) -> dict:
         backend.connect(req.arm, req.model, system)
         for i, question in enumerate(questions):
             exchange = backend.send_turn(i, question, req.measure)
-            records.append(
-                turn_record(
-                    backend=req.backend,
-                    arm=req.arm,
-                    phase="steady",
-                    turn=i,
-                    question=question,
-                    measure=req.measure,
-                    exchange=exchange,
-                    usage={},
-                    transport=getattr(backend, "transport", "http1"),
-                )
+            record = turn_record(
+                backend=req.backend,
+                arm=req.arm,
+                phase="steady",
+                turn=i,
+                question=question,
+                measure=req.measure,
+                exchange=exchange,
+                usage={},
+                transport=getattr(backend, "transport", "http1"),
             )
+            records.append(record)
+            yield {"type": "turn", "turn": i, "total_turns": total_turns, "record": record}
     except Exception as exc:  # a run that fails mid-conversation still
         # reports what it got, rather than losing the turns already sent.
         error = f"{type(exc).__name__}: {exc}"
@@ -404,7 +461,20 @@ def _run_conversation(req: RunRequest) -> dict:
             result["record_saved"] = False
             result["record_error"] = f"{type(exc).__name__}: {exc}"
 
-    return result
+    yield {"type": "done", "result": result}
+
+
+def _run_conversation(req: RunRequest) -> dict:
+    """Blocking: drains :func:`_run_conversation_stream` and returns just
+    its final ``done`` event's ``result`` dict -- the same run-document
+    shape this function always returned directly, before the per-turn
+    ``yield`` events existed. Runs on a threadpool worker (see
+    ``api_run`` below), never on the event loop thread.
+    """
+    for event in _run_conversation_stream(req):
+        if event["type"] == "done":
+            return event["result"]
+    raise RuntimeError("_run_conversation_stream() ended without a 'done' event")
 
 
 @router.post("/api/run")
@@ -428,3 +498,83 @@ async def api_run(req: RunRequest):
 
     saved = run_store.save_run(result)
     return JSONResponse({"ok": result["ok"], "run": saved})
+
+
+#: Sentinel put on the bridge queue once the worker thread's generator is
+#: fully drained (normal completion or an uncaught exception) -- lets the
+#: async consumer loop tell "no more items, stop reading" apart from "no
+#: item yet, keep waiting" without needing a separate flag/event.
+_STREAM_DONE = object()
+
+
+def _drive_stream_to_queue(req: RunRequest, q: "queue.Queue[object]") -> None:
+    """Runs on a threadpool worker: drains ``_run_conversation_stream()``
+    (which itself calls blocking ``backend.send_turn()`` etc.), pushing
+    each event onto *q* as it's produced. Any exception escaping the
+    generator (e.g. ``NotImplementedError`` for local_llm) is turned into
+    one final ``{"type": "error", ...}`` event rather than being raised on
+    a thread nothing awaits -- the streaming response already sent a 200
+    status line by the time this thread starts, so there is no HTTP status
+    code left to change; an SSE error event is the only way left to tell
+    the client something went wrong. ``_STREAM_DONE`` is always pushed
+    last, success or failure, so the consumer loop always terminates.
+    """
+    try:
+        for event in _run_conversation_stream(req):
+            q.put(event)
+            if event["type"] == "done":
+                run_store.save_run(event["result"])
+    except Exception as exc:
+        q.put({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        q.put(_STREAM_DONE)
+
+
+@router.post("/api/run/stream")
+async def api_run_stream(req: RunRequest):
+    """Streaming sibling of ``POST /api/run`` (the former ``/api/run/stream``
+    TODO): same ``RunRequest`` body, ``text/event-stream`` response with one
+    SSE ``data: <json>\\n\\n`` line per event (``start``/``turn``/``done``, or
+    a single ``error`` event if something raised before/instead of a normal
+    ``done``). The completed run is saved to ``run_store`` exactly once, at
+    the moment the ``done`` event is produced -- same persistence ``POST
+    /api/run`` always did, just moved earlier (mid-stream, not after
+    draining) since there is no final synchronous return value here to hang
+    the save off of.
+
+    Unlike ``POST /api/run``, an unknown backend name or a ``local_llm``
+    ``NotImplementedError`` is reported as an in-stream ``error`` event
+    (still HTTP 200) rather than a 400/501 status code, because SSE headers
+    (and therefore the status line) go out before any backend work happens
+    -- there is no later point at which this route could still change the
+    status code.
+    """
+    try:
+        backends_registry.get(req.backend)
+    except KeyError as exc:
+        error_message = str(exc)
+
+        async def _bad_backend():
+            yield f"data: {json.dumps({'type': 'error', 'error': error_message})}\n\n"
+
+        return StreamingResponse(_bad_backend(), media_type="text/event-stream")
+
+    q: "queue.Queue[object]" = queue.Queue()
+
+    async def event_gen():
+        # Kick off the blocking generator on its own thread immediately --
+        # do not await it (that would block this coroutine on the whole
+        # run finishing, exactly what streaming exists to avoid).
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(anyio.to_thread.run_sync, _drive_stream_to_queue, req, q)
+            while True:
+                # anyio.to_thread.run_sync(q.get) parks a threadpool worker
+                # on the blocking Queue.get(), not the event loop -- so
+                # other requests keep being served while this one waits
+                # for the next event.
+                item = await anyio.to_thread.run_sync(q.get)
+                if item is _STREAM_DONE:
+                    break
+                yield f"data: {json.dumps(item)}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")

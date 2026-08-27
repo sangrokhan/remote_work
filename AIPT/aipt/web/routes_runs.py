@@ -232,7 +232,7 @@ def list_public_ai_records():
 
 @router.get("/api/public-ai-records/{exec_id}")
 def get_public_ai_record(exec_id: str):
-    """Return the raw persisted fixture JSON for one public_ai run."""
+    """Return the raw persisted scenario-record JSON for one public_ai run."""
     path = _safe_record_path(exec_id)
     if path is None or not path.is_file():
         return _not_found()

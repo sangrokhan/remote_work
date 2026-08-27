@@ -23,7 +23,7 @@ import pytest
 
 from aipt.backends.public_ai import gemini
 
-FIXTURE = Path(__file__).resolve().parents[3] / "fixtures" / "perf.json"
+RECORD_FILE = Path(__file__).resolve().parents[3] / "records" / "perf.json"
 MODEL = gemini.DEFAULT_MODEL
 
 
@@ -33,7 +33,7 @@ def mock_mode(monkeypatch):
 
 
 def scenario(turns=3) -> tuple[str, list[str]]:
-    data = json.loads(FIXTURE.read_text())
+    data = json.loads(RECORD_FILE.read_text())
     system = data.get("system", "")
     if isinstance(system, list):
         system = "\n\n".join(system)

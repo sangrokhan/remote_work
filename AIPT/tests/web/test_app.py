@@ -182,3 +182,70 @@ def test_runs_not_found_is_404(client):
     assert client.get("/api/runs/does-not-exist").status_code == 404
     assert client.get("/api/runs/does-not-exist/turns.csv").status_code == 404
     assert client.delete("/api/runs/does-not-exist").status_code == 404
+
+
+def _parse_sse(text: str) -> list[dict]:
+    events = []
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: "):]))
+    return events
+
+
+def test_api_run_stream_mock_backend_emits_start_turn_done(client):
+    resp = client.post(
+        "/api/run/stream",
+        json={
+            "backend": "mock",
+            "arm": "dummy",
+            "input_mode": "dummy",
+            "num_turns": 3,
+            "turn_user_msg_bytes": 20,
+            "system_prompt_bytes": 10,
+            "measure": "bytes",
+            "mock_response_bytes": 32,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse(resp.text)
+
+    assert events[0]["type"] == "start"
+    assert events[0]["total_turns"] == 3
+    turn_events = [e for e in events if e["type"] == "turn"]
+    assert [e["turn"] for e in turn_events] == [0, 1, 2]
+    for e in turn_events:
+        assert e["record"]["turn"] in (0, 1, 2)
+
+    assert events[-1]["type"] == "done"
+    result = events[-1]["result"]
+    assert result["ok"] is True
+    assert len(result["turns"]) == 3
+    exec_id = result["exec_id"]
+
+    # the streamed run was persisted to run_store exactly like /api/run does
+    runs_resp = client.get("/api/runs")
+    assert any(r["exec_id"] == exec_id for r in runs_resp.json())
+
+
+def test_api_run_stream_unknown_backend_emits_error_event_not_400(client):
+    resp = client.post("/api/run/stream", json={"backend": "nope", "arm": "x"})
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    assert len(events) == 1
+    assert events[0]["type"] == "error"
+
+
+def test_api_run_stream_local_llm_emits_error_or_done_event(client, tmp_path):
+    _write_record(tmp_path / "public_ai_records", "rec-smoke", ["hi"])
+    resp = client.post(
+        "/api/run/stream",
+        json={
+            "backend": "local_llm", "arm": "chat",
+            "input_mode": "record", "record_id": "rec-smoke",
+        },
+    )
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    assert events, "expected at least one SSE event"
+    assert events[-1]["type"] in ("error", "done")

@@ -12,7 +12,7 @@ import time
 import pytest
 
 from aipt.backends.mock import conversation, server
-from aipt.backends.mock.fixtures import Fixture, Turn
+from aipt.backends.mock.records import ScenarioRecord, Turn
 from aipt.core import cwnd
 
 pytestmark = pytest.mark.live
@@ -127,23 +127,23 @@ def test_run_sends_mock_response_bytes_as_actual_response_size(srv):
 
 
 @skip_no_cwnd
-def test_mock_backend_full_lifecycle_with_fixture():
-    fixture = Fixture(
+def test_mock_backend_full_lifecycle_with_record():
+    record = ScenarioRecord(
         name="live-test",
         turns=[Turn(question="q0", answer="short answer"),
                Turn(question="q1", answer="a somewhat longer second answer")],
     )
     backend = conversation.MockBackend(
-        fixture=fixture, host="127.0.0.1", port=0,
+        record=record, host="127.0.0.1", port=0,
         inference_delay_ms=5, label="mockbackend-live-test",
     )
     ok, _ = backend.ready()
     assert ok
 
-    backend.connect(arm="fixture", model="mock-fixture", system=fixture.system_prompt)
+    backend.connect(arm="record", model="mock-record", system=record.system_prompt)
     try:
         exchanges = []
-        for i, turn in enumerate(fixture.turns):
+        for i, turn in enumerate(record.turns):
             exchange = backend.send_turn(turn=i, question=turn.question, measure="bytes")
             exchanges.append(exchange)
     finally:
@@ -161,7 +161,7 @@ def test_mock_backend_full_lifecycle_with_fixture():
 def test_mock_backend_cwnd_result_available_after_connect():
     backend = conversation.MockBackend(host="127.0.0.1", port=0,
                                         label="mockbackend-cwnd-check")
-    backend.connect(arm="dummy", model="mock-fixture", system="")
+    backend.connect(arm="dummy", model="mock-record", system="")
     try:
         backend.send_turn(turn=0, question="hi", measure="bytes")
     finally:
