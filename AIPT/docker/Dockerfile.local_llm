@@ -1,0 +1,39 @@
+# docker/Dockerfile.local_llm -- AIPT local-llm engine container.
+#
+# Wraps the upstream ghcr.io/ggml-org/llama.cpp:server image (real
+# llama-server binary, OpenAI-compatible /v1/chat/completions) -- this
+# project never reimplements inference (aipt/backends/local_llm/
+# engine_adapter.py's explicit stance). We only add iproute2 (for the
+# L3-routing `ip route add` DESIGN.md 4.7 확정 설계 1 requires, same reason
+# docker/Dockerfile.mockserver needs it) and a thin entrypoint that does
+# that routing fix-up before exec'ing the real llama-server.
+#
+# Port convention: 40080 (AIPT "local_llm lab uses the 40000s" convention),
+# distinct from mock-server:8888, gateway:8080, web:10000 -- avoids any
+# collision with a host-run engine a developer might have on the classic
+# llama-server default of 8080 (see scripts/run_local_llm_engine.sh, which
+# also defaults to 40080 now for the same reason).
+
+FROM ghcr.io/ggml-org/llama.cpp:server
+
+WORKDIR /app
+
+# iproute2: the `ip` binary entrypoint_local_llm.py needs for
+# `ip route add <net-client subnet> via <gateway IP>` (DESIGN.md 4.7 확정
+# 설계 1). Missing it silently no-ops the route (entrypoint treats it as
+# non-fatal), same posture as Dockerfile.mockserver.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/entrypoint_local_llm.py /app/entrypoint_local_llm.py
+
+ENV LLAMA_HOST=0.0.0.0 \
+    LLAMA_PORT=40080 \
+    MODEL_REPO=bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M \
+    CTX_SIZE=4096
+
+EXPOSE 40080
+
+ENTRYPOINT ["python3", "/app/entrypoint_local_llm.py"]

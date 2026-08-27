@@ -114,7 +114,21 @@ class LocalLLMBackend:
         self._unsubscribe_watch = None
 
     def ready(self) -> tuple[bool, str]:
-        return engine_adapter_mod.ready()
+        """Whether this instance is configured to try talking to an engine.
+
+        Reports against ``self._engine_url`` (this instance's actual
+        configured target -- from the ``engine_url=`` constructor arg, or
+        ``engine_adapter_mod.engine_url()``'s env/default fallback when not
+        given), not a fresh env-var lookup -- otherwise a caller who
+        explicitly picked a different ``engine_url=`` would get a
+        ``ready()`` reason describing some other engine entirely. Bug
+        caught when DEFAULT_ENGINE_URL moved off 8080 (previously
+        the default and an explicit ``engine_url="...:8080"`` happened to
+        collide, masking that this ignored the instance's own value).
+        """
+        if not self._engine_url:
+            return False, "LOCAL_LLM_ENGINE_URL is empty"
+        return True, f"targeting {self._engine_url} ({self._engine_kind})"
 
     def api_host(self) -> str:
         return self._engine_url

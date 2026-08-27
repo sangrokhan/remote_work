@@ -18,10 +18,16 @@ change (see the task's own framing and DESIGN.md B4's "엔진 선택은
 huggingface-hub/llama-cpp/serving-llms-vllm 스킬 활용" -- that is a
 follow-up operational concern, not something this adapter does). Instead the
 engine's base URL is supplied externally, by convention
-``LOCAL_LLM_ENGINE_URL`` (default ``http://127.0.0.1:8080``, the default
-`llama-server` port) -- whoever stood the engine up (a human, a Compose
-service, a later Dockerfile.local-llm) is responsible for it being reachable
-there. ``LOCAL_LLM_ENGINE_KIND`` is purely a label (``"llama_cpp"`` /
+``LOCAL_LLM_ENGINE_URL`` (default ``http://127.0.0.1:40080``) -- whoever
+stood the engine up (a human via ``scripts/run_local_llm_engine.sh``, the
+``local-llm`` Compose service/``docker/Dockerfile.local_llm``) is
+responsible for it being reachable there. The port is deliberately NOT
+llama-server's own classic default of 8080 -- that number already belongs
+to this project's ``gateway`` service (``aipt/gateway/app.py``); the whole
+local_llm engine surface (script default, container default, this
+adapter's default) uses the 40000s instead so a bare-metal script-run
+engine and this project's other services never fight over the same port.
+``LOCAL_LLM_ENGINE_KIND`` is purely a label (``"llama_cpp"`` /
 ``"vllm"``) carried through to the run record for readers -- both kinds are
 driven through the identical OpenAI-compatible request/response shape, so
 the adapter's own behaviour never branches on it.
@@ -49,11 +55,14 @@ EngineKind = Literal["llama_cpp", "vllm"]
 
 _KNOWN_KINDS = ("llama_cpp", "vllm")
 
-#: The default `llama-server` (llama.cpp's OpenAI-compatible HTTP server)
-#: listen address. vLLM's OpenAI server defaults to :8000 -- a vLLM-backed
-#: run is expected to set LOCAL_LLM_ENGINE_URL explicitly rather than rely
-#: on this default silently being wrong for it.
-DEFAULT_ENGINE_URL = "http://127.0.0.1:8080"
+#: Default engine address. NOT llama-server's own classic default port
+#: (8080) -- that collides with this project's `gateway` service. The
+#: 40000s are this project's local_llm convention instead (see
+#: scripts/run_local_llm_engine.sh and docker/Dockerfile.local_llm, both
+#: default to the same 40080). vLLM's OpenAI server defaults to :8000 --
+#: either way, a run against a different engine/port is expected to set
+#: LOCAL_LLM_ENGINE_URL explicitly rather than rely on this default.
+DEFAULT_ENGINE_URL = "http://127.0.0.1:40080"
 DEFAULT_MODEL = "local-model"
 
 

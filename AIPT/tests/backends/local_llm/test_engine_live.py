@@ -1,6 +1,6 @@
 """Live coverage requiring an actual llama.cpp `llama-server` / vLLM
 OpenAI-compatible server reachable at LOCAL_LLM_ENGINE_URL (default
-http://127.0.0.1:8080). Not run by default -- see pyproject.toml's `live`
+http://127.0.0.1:40080). Not run by default -- see pyproject.toml's `live`
 marker and `pytest tests/ -q -m "not live"`.
 
 Standing up a real engine (downloading a GGUF, `llama-server --model ...`,

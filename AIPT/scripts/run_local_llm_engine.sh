@@ -14,10 +14,10 @@
 # Usage:
 #   ./scripts/run_local_llm_engine.sh                 # defaults below
 #   MODEL_REPO=bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M \
-#     PORT=8090 ./scripts/run_local_llm_engine.sh
+#     PORT=40090 ./scripts/run_local_llm_engine.sh
 #
 # Then point the local_llm backend at it:
-#   export LOCAL_LLM_ENGINE_URL="http://127.0.0.1:${PORT:-8080}"
+#   export LOCAL_LLM_ENGINE_URL="http://127.0.0.1:${PORT:-40080}"
 #   export LOCAL_LLM_ENGINE_KIND=llama_cpp
 #
 # Env vars (all optional):
@@ -30,10 +30,12 @@
 #                   model, ~400MB on disk / ~500MB RSS at 4k context --
 #                   good for a quick API smoke test.
 #                   Default: bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
-#   PORT            Port to bind. Default: 8080 (llama-server's own
-#                   default, and what LOCAL_LLM_ENGINE_URL defaults to in
-#                   engine_adapter.py). Pick a free port with
-#                   `ss -tlnp | grep <port>` first if 8080 is already used
+#   PORT            Port to bind. Default: 40080 (this project's local_llm
+#                   convention -- deliberately NOT llama-server's own
+#                   classic default of 8080, which collides with AIPT's own
+#                   `gateway` service; see engine_adapter.py's
+#                   DEFAULT_ENGINE_URL). Pick a different free port with
+#                   `ss -tlnp | grep <port>` first if 40080 is already used
 #                   on your box.
 #   HOST            Bind address. Default: 127.0.0.1
 #   CTX_SIZE        -c context size passed to llama-server. Default: 4096
@@ -47,7 +49,7 @@ set -euo pipefail
 LLAMA_CPP_DIR="${LLAMA_CPP_DIR:-$HOME/opt/llama.cpp}"
 LLAMA_CPP_TAG="${LLAMA_CPP_TAG:-latest}"
 MODEL_REPO="${MODEL_REPO:-bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M}"
-PORT="${PORT:-8080}"
+PORT="${PORT:-40080}"
 HOST="${HOST:-127.0.0.1}"
 CTX_SIZE="${CTX_SIZE:-4096}"
 
