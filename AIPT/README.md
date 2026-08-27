@@ -30,6 +30,9 @@ Mock/Local LLM 경로는 **Network Gateway** 컨테이너(`aipt/gateway`, `tc ne
   검토했던 대안, 아직 열려 있는 이슈).
 - [`MIGRATION.md`](./MIGRATION.md) — token_traffic/tcp_congestion → AIPT
   파일 단위 이관 기록.
+- [`TODO.md`](./TODO.md) — **남은 작업 SSoT**. 이관/병합 자체는 끝났고,
+  이후 발견된 미해결 항목(Docker 실검증, 웹 레이어 TODO 등)은 전부 여기서
+  추적한다.
 
 ## 빠른 시작
 
