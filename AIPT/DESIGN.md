@@ -587,14 +587,72 @@ flowchart LR
 **남은 단계 (사용자 지시, 순서대로)**:
 1. (완료) Mock 환경에서 baseline과의 cwnd 동작 차이를 실제 Gateway netem
    경로에서 확인.
-2. 처리량/지연 관점의 실제 "성능 개선" 여부 측정(현재는 cwnd 궤적만
-   확인, 처리량 비교는 미착수).
+2. (완료, 2026-08-27) 처리량/지연 관점의 실제 A/B 측정 — 결과는 아래.
 3. UI에 "Use QUIC" 체크박스 + 알고리즘 선택 추가, `aipt/web/routes_run.py`
    의 `RunRequest`/`Backend` 프로토콜에 정식 편입(현재
-   `spike_runner.py`는 독립 CLI, 웹 UI/`RunRequest`에는 미연결).
+   `spike_runner.py`/`experiment.py`는 독립 CLI, 웹 UI/`RunRequest`에는
+   미연결).
 4. HTTP/3 지원을 통한 실제 `local_llm` 백엔드 테스트(llama.cpp/vLLM의
    HTTP/3 지원 여부 확인 필요 -- 미지원 시 게이트웨이에서 QUIC↔HTTP1
    브리지 필요할 수 있음).
+
+### 7.1 처리량/지연 A/B 측정 결과 (2026-08-27)
+
+`aipt/backends/quic_mock/experiment.py` 신규 — cwnd 궤적만 보던
+`spike_runner.py`와 달리, 실제 요청-완전응답 왕복 지연(post-idle latency,
+turn 0은 idle 직전이 없어 제외)과 총 처리량(goodput, 반복 실행 합산
+바이트/합산 활성 시간)을 측정한다. payload를 초기 cwnd(~12000바이트)보다
+훨씬 큰 30000바이트로 잡아 매 턴이 실제로 여러 RTT에 걸쳐 전송되게
+했다(작은 payload로는 cwnd 차이가 아예 드러나지 않음). 이 과정에서
+`spike_runner.py`의 프로토콜 버그도 하나 발견/수정: 첫 번째 STREAM
+프래그먼트만 받고 응답 완료로 처리하고 있어서(`end_stream` 미확인),
+멀티프래그먼트로 도착하는 큰 응답의 지연을 실제보다 짧게 측정할 뻔했다
+-- `experiment.ThroughputProtocol`은 `end_stream=True`까지 프래그먼트를
+누적해서 받은 뒤에만 완료 처리하도록 수정(테스트로 검증,
+`test_throughput_protocol_receives_full_multi_fragment_payload`).
+
+**실측 (Gateway `3g` 프로파일: delay 150±40ms, loss 1%, reorder 0.5%,
+turns=6, think_time=1.0s, payload=30000B, repeats=3)**:
+
+| 지표 | baseline (reno) | idle_probe | 델타 |
+|---|---|---|---|
+| post-idle latency 평균 | 3024.3ms | 3233.3ms | **+6.9% (악화)** |
+| post-idle latency stdev | 549.1ms | 337.2ms | (분산은 감소) |
+| post-idle latency 최대 | 4099.0ms | 3734.8ms | (최악값은 개선) |
+| goodput | 16535bps | 14892bps | **-9.9% (악화)** |
+
+**결론: 이번 구현/파라미터로는 개선되지 않았다 — 오히려 평균 지연·처리량
+모두 소폭 악화됐다.** §7의 cwnd 궤적 스파이크에서 확인한 "idle_probe가
+RTT 증가를 감지해 cwnd를 사전에 줄인다"는 메커니즘 자체는 정상 동작했지만
+(이 실험 로그에도 매 idle 갭마다 `RTT grew X% ... cwnd A -> B` 조정이
+찍힘), **그 조정이 실제 성능에는 순이익이 아니라 순손실**이었다. 원인
+추정(추가 검증 필요, 미확정):
+
+- `MAX_REACTED_GROWTH=0.5` 캡이 있어도, netem의 지터(±40ms)만으로도
+  probe 1회 샘플에서 10~35%대 "성장"이 흔히 관측됐다(로그의
+  `RTT grew 21.4%`, `36.1%` 등) -- 이는 실제 지속적 혼잡이 아니라 단발성
+  지터 노이즈일 가능성이 높은데, 알고리즘이 이를 구분하지 못하고 매번
+  cwnd를 깎아서 다음 턴의 처리량 상한을 낮춰버린다.
+  §7에서 이미 "단일 probe 샘플은 노이즈에 취약하다"고 우려했던 바로 그
+  실패 모드가 실측으로 확인된 것.
+- 반감이 아니라 부분 축소(비율 기반)라 TCP의 이분법적
+  idle-restart보다는 온건하지만, **위험을 낮추는 보수적 조정이 이 특정
+  워크로드(1% loss, 150ms RTT, 30KB payload)에서는 처리량 손실 쪽으로만
+  작용**했다 -- loss를 막아주지도 못했고(reno도 이미 loss 기반 조정을
+  하고 있어 중복), cwnd만 불필요하게 낮춰 회복 시간만 늘렸을 가능성.
+
+**후속 조치 필요(3단계 UI 편입 전에 먼저 처리 권장)**:
+- 노이즈와 진짜 신호를 구분하는 로직 필요 -- 예: 단일 probe가 아니라
+  idle 중 probe를 N회 반복해 평균/중앙값을 쓰거나, `MAX_REACTED_GROWTH`를
+  훨씬 보수적으로(예 0.1~0.2) 낮추거나, 일정 threshold 이하 성장은
+  완전히 무시.
+- 서로 다른 netem 프로파일(clean/broadband/satellite/lossy)과 payload
+  크기 조합으로 반복 측정해, 이번 3g+30KB 조합에 국한된 결과인지 일반적
+  경향인지 확인 필요 -- 현재는 단일 프로파일·단일 payload 크기 1회
+  시리즈(반복 3회)만 측정한 상태.
+- **이 시점에서 3단계(UI 편입)로 바로 넘어가는 것은 권장하지 않는다** --
+  아직 개선을 증명하지 못한 알고리즘을 사용자 대면 UI 옵션으로 노출하는
+  건 시기상조.
 
 각 Phase는 독립적으로 테스트 가능한 단위로 커밋하고, Phase 종료마다 사용자
 리뷰를 받는다 (`git mv` 없이 새로 복사하기로 했으므로, Phase별로 원본을 지우지

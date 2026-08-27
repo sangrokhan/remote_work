@@ -96,3 +96,33 @@ async def test_baseline_reno_never_calls_idle_adjustment(cert_pair):
         assert len(samples) == 6
     finally:
         server.close()
+
+
+@pytest.mark.anyio
+async def test_throughput_protocol_receives_full_multi_fragment_payload(cert_pair):
+    """aipt.backends.quic_mock.experiment.ThroughputProtocol must
+    accumulate every fragment of a large echoed payload and only resolve
+    once end_stream=True -- spike_runner.ProbeAwareProtocol resolves on
+    the *first* StreamDataReceived event, which silently truncates a
+    reply that arrives as multiple QUIC packets. A payload larger than
+    the initial cwnd (~12000 bytes) forces the echo to actually arrive in
+    more than one fragment, so this test would fail on the
+    first-fragment-only implementation."""
+    from aipt.backends.quic_mock.experiment import run_one_conversation
+
+    cert, key = cert_pair
+    host, port = "127.0.0.1", 14435
+    server = await run_server(host, port, cert, key)
+    try:
+        payload_bytes = 30000  # > initial cwnd, forces multi-packet echo
+        result = await run_one_conversation(
+            host=host, port=port, cc_name="reno", num_turns=1,
+            think_time=0.01, use_idle_probe=False, payload_bytes=payload_bytes,
+        )
+        # total_bytes = len(request) + len(reply) for the one turn; both
+        # request and reply carry the same payload_bytes-sized body plus a
+        # short "turn-N-" prefix, so a truncated reply would show up as
+        # total_bytes noticeably smaller than 2x the sent payload size.
+        assert result["total_bytes"] >= 2 * payload_bytes
+    finally:
+        server.close()
