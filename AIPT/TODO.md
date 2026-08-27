@@ -41,12 +41,26 @@
   호스트명 대신 고정 IP(172.28.2.4)로 설정해 우회. `pytest tests/ -q -m
   "not live"` → 433 passed, 1 skipped, 12 deselected (기존과 동일, 회귀 없음).
 
-- [ ] 3. **`aipt/web/store.py` run 이력 영속화 미구현** — 현재 프로세스 메모리
-  (`MAX_RUNS=50`)에만 저장, 재시작하면 소실. 모듈 docstring에
-  `TODO(persistence)`로 명시.
+- [x] 3. **`aipt/web/store.py` run 이력 영속화 미구현** — 완료 (2026-08-27).
+  `save_run()`이 메모리(`OrderedDict`, `MAX_RUNS=50`) + 디스크(`RUN_STORE_DIR`,
+  기본 `data/runs/<exec_id>.json`) 이중 저장으로 변경. 프로세스 재시작 시
+  첫 호출에서 디스크로부터 자동 rehydrate. `MAX_RUNS` 초과로 evict될 때
+  디스크 파일도 함께 삭제(token_traffic의 기존 pruning 정책과 동일 취지).
+  `get_run()`은 메모리에 없으면 디스크 직접 읽기로 폴백. 디스크 I/O 실패는
+  로그만 남기고 삼켜서 run 자체는 실패시키지 않음(honesty-over-crash).
+  `docker-compose.yml`에 `RUN_STORE_DIR` env + `./data/runs` 볼륨 마운트
+  추가. 신규 유닛테스트 7개(재시작 시뮬레이션, evict 시 파일 삭제, 디스크
+  폴백, 손상 파일 스킵, 쓰기불가 디렉토리 방어 등) + 기존 web 테스트
+  fixture들 `RUN_STORE_DIR` 격리 처리. `pytest -q -m "not live"` → 446
+  passed(작업 중 동시에 진행되던 다른 세션의 mock/public_ai 리팩터링과
+  함께 그린 확인). 실제 재시작 시나리오 plain-python으로 직접 검증
+  (save → 메모리 초기화 → list_runs()에서 여전히 조회됨).
 
 - [ ] 4. **`/api/run/stream` SSE 엔드포인트 미구현** — 현재 진행상황은 폴링만
-  지원. `aipt/web/app.py` docstring에 명시된 TODO.
+  지원. `aipt/web/app.py` docstring에 명시된 TODO. **주의(2026-08-27)**:
+  이 저장소에서 동시에 다른 세션이 관련 작업(`routes_run.py`에
+  `/api/run/stream` 추가하는 것으로 보이는 변경)을 진행 중인 흔적 발견 —
+  착수 전 `git status`/`git log`로 최신 상태 확인 필요, 중복 작업 주의.
 
 - [ ] 5. **`routes_run.py`의 pcap 응답 필드 미배선** — `"pcap": None,  # TODO:
   wire aipt.core.capture once a route asks for it`. 실행 결과 응답에 pcap
