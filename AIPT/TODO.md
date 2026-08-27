@@ -6,12 +6,17 @@
 소스(SSoT)다** — 새 대화/세션에서 "남은 작업"을 물으면 이 파일을 먼저 확인할 것.
 완료 시 `[x]`로 갱신하고 근거(검증 커맨드/결과)를 한 줄 남긴다.
 
-- [ ] 1. **Gateway L3 포워딩 실제 컨테이너 검증** — `docker-compose.yml`의
-  `net-client`/`net-backend` 분리 네트워크 + `ip_forward=1` 설정은 완료됐으나,
-  실제 `docker compose up`으로 컨테이너를 띄워 mock-server ↔ web 트래픽이
-  실제로 `gateway`를 경유하는지(왕복 라우팅, netem 프로파일 적용 확인)는
-  MIGRATION.md 마지막 항목에 "다음 단계에서 사용자가 직접 확인 예정"으로
-  명시된 채 미검증 상태. (DESIGN.md 4.7, MIGRATION.md 2026-08-26 섹션)
+- [x] 1. **Gateway L3 포워딩 실제 컨테이너 검증** — 완료 (2026-08-27).
+  `docker compose build && docker compose up -d`로 web/gateway/mock-server
+  3개 컨테이너 실기동. `web`(net-client)과 `mock-server`(net-backend)는
+  서로 다른 브리지 네트워크에 격리돼 있어 `gateway`의 IP 포워딩 외에는
+  물리적 통신 경로가 없음 — 통신 자체가 경유 증거. 정량 검증: `POST
+  /gateway/profile`로 clean→3g(delay 150±40ms, loss 1%, reorder 0.5%) 전환 시
+  web→mock-server 왕복 지연이 clean 1.0~1.4ms → 3g 874~1000ms로 실측 증가
+  (양쪽 인터페이스(eth0/eth1) 모두 delay 적용되므로 대략 2x150ms 왕복과
+  부합). `GET /health`로 `ip_forward_available:true`, `netem_available:true`
+  확인. 이후 clean으로 리셋 후 `docker compose down`으로 정리, 잔여
+  컨테이너/네트워크 없음 확인.
 
 - [ ] 2. **local_llm 서비스 compose 미통합** — `scripts/run_local_llm_engine.sh`
   (llama.cpp 부트스트랩)는 준비됐지만 `docker-compose.yml`엔 `local-llm`
