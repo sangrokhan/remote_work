@@ -19,6 +19,7 @@ from aipt.web.app import create_app
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv(routes_run.PUBLIC_AI_RECORDS_DIR_ENV, str(tmp_path / "public_ai_records"))
+    monkeypatch.setenv(run_store.RUN_STORE_DIR_ENV, str(tmp_path / "runs"))
     run_store.clear()
     app = create_app()
     with TestClient(app) as c:

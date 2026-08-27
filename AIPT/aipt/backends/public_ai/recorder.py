@@ -1,8 +1,8 @@
-"""aipt.backends.public_ai.recorder -- capture real API traffic as fixtures.
+"""aipt.backends.public_ai.recorder -- capture real API traffic as scenario records.
 
 DESIGN.md 5 B2: "Public AI backend 호출 시 request/response 원문을 B1 포맷으로
 저장" -- when a live (non-mock) call goes out through :mod:`aipt.backends.public_ai`,
-this module can capture its raw request/response bodies into a JSON fixture that
+this module can capture its raw request/response bodies into a JSON record that
 :mod:`aipt.backends.mock` (DESIGN.md 5 B3 -- replay) can later play back byte-for-byte.
 
 Two things this module refuses to do:
@@ -14,7 +14,8 @@ Two things this module refuses to do:
      field a future engine might put in its body. Masking happens before anything
      touches disk, never after.
   2. Guess at a fixture format nobody asked for. The record schema mirrors
-     ``token_traffic/fixtures/perf.json`` in shape (a top-level ``system`` +
+     ``token_traffic/fixtures/perf.json`` (now ``AIPT/records/perf.json``) in
+     shape (a top-level ``system`` +
      ``steps``) and adds `turns`: exactly what a real call produced, keyed the way
      :mod:`aipt.backends.record` already keys everything else -- backend/arm/turn/
      phase -- so a mock replay layer built on this later does not have to invent a
@@ -111,7 +112,7 @@ def mask_secrets_json(raw: str) -> str:
 
 @dataclass
 class RecordedTurn:
-    """One captured (backend, arm, turn) exchange, fixture-ready."""
+    """One captured (backend, arm, turn) exchange, record-ready."""
 
     backend: str
     engine: str          # "gemini" | "openai" -- which public_ai adapter made the call
@@ -203,12 +204,12 @@ def record_turn(
     )
 
 
-class FixtureWriter:
+class RecordWriter:
     """Accumulates :class:`RecordedTurn` rows for one run and writes them as a
-    fixture JSON file shaped like ``token_traffic/fixtures/perf.json`` (a top-level
+    scenario-record JSON file shaped like ``AIPT/records/perf.json`` (a top-level
     ``system``/``steps`` plus the recorded ``turns``), so a replay layer built on
-    top of this (DESIGN.md 5 B3) can read both the original scenario fixture format
-    and a recorded-traffic fixture without a format switch.
+    top of this (DESIGN.md 5 B3) can read both the original scenario record format
+    and a recorded-traffic record without a format switch.
     """
 
     def __init__(self, system: str = "", steps: list[str] | None = None) -> None:
@@ -234,14 +235,14 @@ class FixtureWriter:
         return p
 
 
-def recording_backend(backend, writer: FixtureWriter, *, engine: str):
+def recording_backend(backend, writer: RecordWriter, *, engine: str):
     """Wrap a live ``Backend`` (GeminiBackend/OpenAIBackend instance) so every
     ``send_turn`` it makes is also captured into ``writer``.
 
     Returns a thin proxy exposing the same connect/send_turn/close surface -- the
     caller uses the proxy exactly like the backend it wraps, and gets a populated
-    fixture as a side effect. Recording is opt-in and additive: nothing about
-    ``GeminiBackend``/``OpenAIBackend`` themselves depends on this module, so a
+    scenario record as a side effect. Recording is opt-in and additive: nothing
+    about ``GeminiBackend``/``OpenAIBackend`` themselves depends on this module, so a
     backend used directly (no recorder) behaves exactly as before.
     """
 

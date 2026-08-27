@@ -1,7 +1,7 @@
 """aipt.backends.mock.server: HTTP/1.1 inference-mock server (stdlib only).
 
 Migrated from ``tcp_congestion/tcp_congestion/server.py`` (DESIGN.md 5, A3),
-extended per DESIGN.md 5 B1 to also serve real fixture answer text, not
+extended per DESIGN.md 5 B1 to also serve real scenario-record answer text, not
 just N-byte dummy padding.
 
 Endpoints (unchanged from the original, still stdlib-only, still
@@ -15,20 +15,20 @@ HTTP/1.1 keep-alive so a client can reuse one TCP connection across turns
 
 ``/inference-mock`` behaviour:
 
-  * No ``fixture`` bound to the server (``Server(fixture=None)``, the
+  * No ``record`` bound to the server (``Server(record=None)``, the
     default): exactly the original dummy-byte behaviour --
     ``{"tokens": 100, "ts": ..., ["prompt_bytes": <n> on POST]}``, padded
     with a "pad" filler field to ``response_bytes`` bytes on the wire via
     ``_pad_json_to_size`` (unchanged; this is the "pure byte-size sweep"
     option DESIGN.md 5 keeps around).
-  * A ``fixture`` bound and a valid ``turn=<i>`` query param: the response
-    additionally carries ``"answer": fixture.turns[i].answer`` -- the real
+  * A ``record`` bound and a valid ``turn=<i>`` query param: the response
+    additionally carries ``"answer": record.turns[i].answer`` -- the real
     (or replay-placeholder, see ``aipt.backends.mock.replay``) answer text
     for that turn -- and, unless the caller passed an explicit
     ``response_bytes``, the padding target defaults to that answer's own
     byte length, so the wire response size matches the fixture's answer
     size without the caller having to compute and pass it separately.
-    ``turn`` out of range, non-numeric, or no fixture bound: falls back to
+    ``turn`` out of range, non-numeric, or no record bound: falls back to
     the plain dummy response (never a 5xx -- a malformed replay request
     should degrade to dummy bytes, not break the run).
 
@@ -48,7 +48,7 @@ from http.server import BaseHTTPRequestHandler
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from aipt.backends.mock.fixtures import Fixture
+    from aipt.backends.mock.records import ScenarioRecord
 
 
 def _pad_json_to_size(base: dict, target_bytes: int) -> bytes:
@@ -74,14 +74,14 @@ def _pad_json_to_size(base: dict, target_bytes: int) -> bytes:
     return json.dumps(padded).encode()
 
 
-def _fixture_answer(fixture: "Fixture | None", query: dict) -> tuple[str | None, int]:
+def _record_answer(record: "ScenarioRecord | None", query: dict) -> tuple[str | None, int]:
     """(answer_text_or_None, byte_len_to_pad_to_if_answer_found).
 
-    Returns (None, 0) whenever there is no fixture, no/invalid ``turn``
+    Returns (None, 0) whenever there is no record, no/invalid ``turn``
     param, or the index is out of range -- the caller falls back to plain
     dummy behaviour in every one of those cases.
     """
-    if fixture is None:
+    if record is None:
         return None, 0
     raw_turn = query.get("turn", [None])[0]
     if raw_turn is None:
@@ -90,9 +90,9 @@ def _fixture_answer(fixture: "Fixture | None", query: dict) -> tuple[str | None,
         idx = int(raw_turn)
     except ValueError:
         return None, 0
-    if idx < 0 or idx >= len(fixture.turns):
+    if idx < 0 or idx >= len(record.turns):
         return None, 0
-    answer = fixture.turns[idx].answer
+    answer = record.turns[idx].answer
     return answer, len(answer.encode())
 
 
@@ -132,8 +132,8 @@ class _Handler(BaseHTTPRequestHandler):
         if delay_ms > 0:
             time.sleep(delay_ms / 1000)
 
-        fixture = getattr(self.server, "fixture", None)
-        answer, answer_bytes = _fixture_answer(fixture, query)
+        record = getattr(self.server, "record", None)
+        answer, answer_bytes = _record_answer(record, query)
 
         body: dict = {"tokens": 100, "ts": time.time()}
         if prompt_bytes is not None:
@@ -160,18 +160,18 @@ class _Handler(BaseHTTPRequestHandler):
 class Server(socketserver.ThreadingTCPServer):
     """HTTP/1.1 keep-alive mock inference server.
 
-    ``fixture`` (optional): an ``aipt.backends.mock.fixtures.Fixture``
+    ``record`` (optional): an ``aipt.backends.mock.records.ScenarioRecord``
     (Q&A-loaded, byte-size-swept, or replay-built) whose answers
     ``/inference-mock?turn=<i>`` will serve. ``None`` (default) preserves
     the exact original tcp_congestion behaviour: pure dummy-byte
-    responses, no fixture lookup at all.
+    responses, no record lookup at all.
     """
 
     allow_reuse_address = True
     daemon_threads = True
 
     def __init__(self, host: str = "0.0.0.0", port: int = 8888,
-                 fixture: "Fixture | None" = None):
+                 record: "ScenarioRecord | None" = None):
         super().__init__((host, port), _Handler)
         self.host, self.port = self.server_address
-        self.fixture = fixture
+        self.record = record

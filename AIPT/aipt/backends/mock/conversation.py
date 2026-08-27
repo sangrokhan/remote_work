@@ -5,7 +5,7 @@ Migrated from ``tcp_congestion/tcp_congestion/conversation.py`` (DESIGN.md
 5, A3), then extended (DESIGN.md 4.5) to satisfy
 ``aipt.backends.base.Backend`` so the client's cwnd/capture/export
 instrumentation can drive this backend exactly like ``public_ai``/
-``local_llm``, and (DESIGN.md 5 B1/B3) to serve fixture Q&A / replay
+``local_llm``, and (DESIGN.md 5 B1/B3) to serve scenario-record Q&A / replay
 answers instead of only N-byte dummy padding.
 
 Two layers, kept separate on purpose:
@@ -34,7 +34,7 @@ import time
 
 from aipt.backends.base import Transport
 from aipt.backends.mock import probe
-from aipt.backends.mock.fixtures import Fixture
+from aipt.backends.mock.records import ScenarioRecord
 from aipt.backends.mock.server import Server
 from aipt.backends.record import Exchange
 from aipt.core import capture as capture_mod
@@ -186,7 +186,7 @@ def run(
     Migrated unchanged in behaviour from
     ``tcp_congestion.conversation.run`` -- the raw byte-size-sweep script
     used directly against a bare ``aipt.backends.mock.server.Server``
-    (no fixture, no Backend-protocol lifecycle). See ``MockBackend`` for
+    (no scenario record, no Backend-protocol lifecycle). See ``MockBackend`` for
     the Backend-protocol-driven equivalent.
     """
     turns = build_turns(
@@ -287,7 +287,7 @@ class MockBackend:
     across the ``connect``/``send_turn``*/``close`` lifecycle the client
     drives turn by turn.
 
-    ``fixture`` (optional): an ``aipt.backends.mock.fixtures.Fixture`` (Q&A
+    ``record`` (optional): an ``aipt.backends.mock.records.ScenarioRecord`` (Q&A
     loaded, byte-size-swept, or replay-built via
     ``aipt.backends.mock.replay``) whose ``turns[i].answer`` is served for
     ``send_turn(turn=i, ...)``. Without one, every turn gets the plain
@@ -299,19 +299,19 @@ class MockBackend:
     """
 
     NAME = "mock"
-    DEFAULT_MODEL = "mock-fixture"
+    DEFAULT_MODEL = "mock-record"
     # Display-only labels the web UI's arm dropdown offers -- MockBackend
     # never validates ``arm`` against this list (unlike public_ai/
     # local_llm), since what actually drives its behaviour is
     # aipt.web.routes_run.RunRequest.input_mode ("dummy" vs "record") plus
-    # whichever Fixture (if any) gets bound at construction time.
+    # whichever ScenarioRecord (if any) gets bound at construction time.
     ARMS = ("dummy", "record")
     HEADLINE_ARMS = ("dummy", "record")
 
     def __init__(
         self,
         *,
-        fixture: Fixture | None = None,
+        record: ScenarioRecord | None = None,
         host: str = "127.0.0.1",
         port: int = 0,
         mock_response_bytes: int = 400,
@@ -320,7 +320,7 @@ class MockBackend:
         label: str = "mock-conversation",
         transport: Transport = "http1",
     ) -> None:
-        self.fixture = fixture
+        self.record = record
         self._bind_host = host
         self._bind_port = port
         self.mock_response_bytes = mock_response_bytes
@@ -349,13 +349,13 @@ class MockBackend:
     def connect(self, arm: str, model: str, system: str) -> None:
         """Start the mock server, open the keep-alive connection, and
         start the cwnd monitor. ``system`` is accepted for protocol
-        compatibility but unused -- a fixture's ``system_prompt`` (set at
+        compatibility but unused -- a record's ``system_prompt`` (set at
         construction) is the mock backend's equivalent, since the mock
         server never actually consults a system prompt to generate
         anything.
         """
         self._server = Server(host=self._bind_host, port=self._bind_port,
-                               fixture=self.fixture)
+                               record=self.record)
         self._server_thread = threading.Thread(
             target=self._server.serve_forever, daemon=True,
             name=f"mock-server:{self.label}")
@@ -381,8 +381,8 @@ class MockBackend:
         if self._conn is None or self._server is None:
             raise RuntimeError("send_turn called before connect()")
         from aipt.backends.base import progress
-        progress(on_progress, backend=self.NAME, arm="fixture" if self.fixture else "dummy",
-                  phase="steady", turn=turn, turns=len(self.fixture) if self.fixture else 0)
+        progress(on_progress, backend=self.NAME, arm="record" if self.record else "dummy",
+                  phase="steady", turn=turn, turns=len(self.record) if self.record else 0)
 
         body = question.encode()
         path = (f"/inference-mock?delay={self.inference_delay_ms}"

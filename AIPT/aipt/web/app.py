@@ -12,9 +12,10 @@ includes the three route modules:
   * ``routes_runs``   -- ``GET/DELETE /api/runs*``, the CSV/bundle/pcap
     download endpoints.
 
-Run store is in-memory only for this phase (``aipt/web/store.py``); no
-``/api/run/stream`` SSE endpoint yet -- both are explicit TODOs, not
-oversights, called out in those modules' docstrings.
+Run store persists to disk now (``aipt/web/store.py``, ``RUN_STORE_DIR``,
+default ``data/runs/``) -- a restart rehydrates recent runs instead of
+losing them. No ``/api/run/stream`` SSE endpoint yet -- that one's still an
+explicit TODO, not an oversight, called out in ``routes_run.py``.
 """
 
 from __future__ import annotations

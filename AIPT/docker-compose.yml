@@ -186,6 +186,10 @@ services:
       # DESIGN.md 4.7.1: PublicAIBackend request/response JSON, one file per
       # exec_id -- the only persistent-on-disk run artifact this app writes.
       - PUBLIC_AI_RECORDS_DIR=/app/data/public_ai_records
+      # aipt/web/store.py: where completed-run JSON docs persist across
+      # restarts (MAX_RUNS=50, oldest evicted). Volume-mounted above so
+      # host-side history/backup is possible.
+      - RUN_STORE_DIR=/app/data/runs
       # PublicAIBackend credentials -- passed through from the host/.env,
       # never baked into the image. Empty is fine; that backend's own
       # ready() check reports "not ready" rather than crashing (see
@@ -223,11 +227,15 @@ services:
       # Captured pcaps persist across container restarts and stay
       # inspectable on the host with Wireshark (tcp_congestion convention).
       - ./data/pcaps:/app/data/pcaps
-      # DESIGN.md 4.7.1: the ONLY persistent-on-disk run artifact -- Public
-      # AI (real Gemini/OpenAI) request/response JSON, one file per exec_id.
-      # Everything else (cwnd/pcap/mock/local_llm turns, CSV) stays in the
-      # in-memory store only; see aipt/web/store.py.
+      # DESIGN.md 4.7.1: Public AI (real Gemini/OpenAI) request/response
+      # JSON, one file per exec_id -- kept alongside run history below for
+      # anyone directly inspecting a real-API exchange (masked secrets).
       - ./data/public_ai_records:/app/data/public_ai_records
+      # aipt/web/store.py: full run history (turns/monitors/CSV inputs),
+      # one JSON file per exec_id, capped at MAX_RUNS=50 (oldest evicted).
+      # Survives container restarts now instead of only living in the
+      # in-process OrderedDict.
+      - ./data/runs:/app/data/runs
     depends_on:
       - gateway
       - local-llm

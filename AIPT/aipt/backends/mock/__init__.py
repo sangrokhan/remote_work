@@ -4,11 +4,11 @@ Generalizes the former ``tcp_congestion`` mock server under the
 ``aipt.backends.base.Backend`` protocol (DESIGN.md 5, A3/B1/B3):
 
   * ``server.py``       -- migrated HTTP/1.1 keep-alive mock server,
-                            extended to serve fixture answer text.
-  * ``fixtures.py``     -- Q&A JSON fixture loader + byte-size-sweep mode
-                            (B1).
+                            extended to serve scenario-record answer text.
+  * ``records.py``      -- Q&A JSON scenario-record loader + byte-size-sweep
+                            mode (B1).
   * ``replay.py``       -- turns a captured real exchange into a
-                            byte-pattern-only replay fixture (B3).
+                            byte-pattern-only replay record (B3).
   * ``conversation.py`` -- migrated multi-turn scripted ``run()``, plus
                             ``MockBackend`` (the ``Backend`` protocol
                             implementation client code actually uses).

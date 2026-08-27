@@ -520,4 +520,45 @@ Gateway(netem 프로파일 API만 있던 상태)를 실제 커널 IP 포워딩 �
   이번 작업 범위 밖(다음 단계에서 사용자가 직접 확인 예정) — 코드/설정
   파일 정확성에 집중
 
+## fixtures/perf.json 20턴 확장 + Mock 백엔드 재생 지원 (2026-08-27) — [x] 완료
+
+`fixtures/perf.json`(구 `token_traffic/fixtures/perf.json`, ATLAS SRE 인시던트
+대응 페르소나 시나리오, public_ai 백엔드용 `system`(리스트)+`steps` 스키마)을
+10턴에서 20턴으로 확장하고, 신규로 답변(`answer`)까지 채워 Mock 백엔드가
+그대로 재생할 수 있도록 로더를 확장했다.
+
+- [x] `AIPT/fixtures/perf.json` — `steps` 10개→20개로 확장. 오전 인시던트
+  (payments-api p99 breach → ledger 커넥션풀 고갈 → pool 260 증설 + us-east-1→
+  us-west-2 10% 트래픽 shift → root cause: `ledger.async_retry_v2` 플래그가
+  재시도마다 커넥션을 계속 잡고 있던 것 → 플래그 비활성화)를 turn 1~12에서
+  마무리한 뒤, turn 13~20에서 같은 근무 시간대의 후속 인시던트(settlement-worker
+  큐 증가 → query plan regression → 최장수명 replica 1대 drain_and_restart →
+  isolated 확인 → 양쪽 인시던트 종합 SLO+최종 노트)로 대명사 참조를 유지하며
+  자연스럽게 연결. `description` 필드도 "ten-turn"→"twenty-turn...spanning
+  two related incidents in one shift"로 갱신. 각 `steps[i]`에 ATLAS 페르소나
+  스타일(결론 우선 정량 수치 → 근거 → 다음 액션, mutating action은 항상
+  현재값/목표값/롤백/관찰지표 명시) `answer` 필드 신규 추가(20개 전부,
+  569~1,459바이트/턴, 평균 약 782바이트, 총 15,650바이트) — 이 필드는
+  기존 `aipt.backends.public_ai.gemini.model_steps_from_response()` 등
+  public_ai 로더에는 영향 없음(`text`만 참조), Mock 백엔드 재생 전용으로
+  추가된 것
+- [x] `AIPT/aipt/backends/mock/fixtures.py` — `load_qa_fixture()`가 기존
+  `turns`(`{question,answer}` + `system_prompt` 문자열) 스키마에 더해
+  `steps`(`{text,answer}` + `system` 리스트) 스키마도 인식하도록 확장.
+  신규 `_turn_of_step()`(steps 항목을 `Turn`으로 변환, `answer` 누락 시
+  "mock replay requires a canned answer" 명시적 에러) + `_system_prompt_of()`
+  (`system`이 리스트면 `aipt.backends.public_ai.gemini`가 시스템 프롬프트를
+  합치는 것과 동일하게 `"\n\n".join()`, 문자열이면 그대로, 없으면
+  `system_prompt` 폴백). `turns` 키가 있으면 우선(하위호환), 없으면 `steps`로
+  폴백하는 순서. `Fixture`/`Turn`/`load()`/`names()`/`byte_size_fixture()`
+  등 기존 공개 API·시그니처는 무수정
+- [x] 검증: `fixtures.load_qa_fixture("fixtures/perf.json")` → 20 turns
+  정상 로드, `system_prompt` 20,653바이트(캐싱 실험 목적대로 4096 토큰
+  이상 유지) 확인. `aipt.backends.mock.server.Server`를 실제로 기동해
+  `/inference-mock?turn=0/9/19` 3개 호출 → 응답 JSON의 `answer` 필드에
+  perf.json에 넣은 실제 텍스트가 그대로 반환됨을 wire 응답(657~1,514바이트)
+  까지 확인. `pytest tests/ -q -m "not live"` → **433 passed, 1 skipped,
+  12 deselected**(기존 430 passed 기준선 대비 회귀 없이 그린; `steps` 신규
+  브랜치 자체를 커버하는 유닛 테스트는 아직 미작성 — 다음 후속 작업 후보)
+
 
