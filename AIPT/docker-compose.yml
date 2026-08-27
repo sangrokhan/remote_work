@@ -91,6 +91,32 @@ services:
     expose:
       - "8888"
 
+  # QUIC idle-probe spike (DESIGN.md "QUIC idle-probe spike" section,
+  # aipt/backends/quic_mock/). Same net-backend-only / gateway-routed
+  # topology as mock-server, but UDP instead of TCP -- QUIC rides on UDP,
+  # and the Gateway's L3 IP forwarding + netem are protocol-agnostic (they
+  # operate on the interface, not on TCP state), so this traffic traverses
+  # the exact same impaired path mock-server's TCP traffic does without any
+  # Gateway changes. Only started when explicitly requested
+  # (`docker compose up quic-mock-server gateway web`), since it is a
+  # spike, not part of the default 4-service topology.
+  quic-mock-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.quic_mock_server
+    cap_add:
+      - NET_ADMIN
+    networks:
+      net-backend:
+        ipv4_address: ${QUIC_MOCK_SERVER_IP:-172.28.2.5}
+    environment:
+      - QUIC_MOCK_HOST=0.0.0.0
+      - QUIC_MOCK_PORT=4433
+      - GATEWAY_PEER_SUBNET=${NET_CLIENT_SUBNET:-172.28.1.0/24}
+      - GATEWAY_ROUTE_VIA=${GATEWAY_BACKEND_IP:-172.28.2.2}
+    expose:
+      - "4433/udp"
+
   gateway:
     build:
       context: .
@@ -228,6 +254,14 @@ services:
       - LOCAL_LLM_ENGINE_URL=${LOCAL_LLM_ENGINE_URL:-http://172.28.2.4:40080}
       - LOCAL_LLM_ENGINE_KIND=${LOCAL_LLM_ENGINE_KIND:-llama_cpp}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
+      # QUIC idle-probe spike (aipt/backends/quic_mock/spike_runner.py):
+      # same "must resolve to the IP, not the hostname" constraint as
+      # LOCAL_LLM_ENGINE_URL above -- `web` is net-client-only, so it can't
+      # resolve `quic-mock-server` (a net-backend hostname) via Docker's
+      # embedded DNS, even though the kernel still forwards the actual UDP
+      # packets to it via `gateway`.
+      - QUIC_MOCK_SERVER_HOST=${QUIC_MOCK_SERVER_IP:-172.28.2.5}
+      - QUIC_MOCK_SERVER_PORT=4433
     ports:
       - "${WEB_HOST_PORT:-10000}:10000"
     volumes:

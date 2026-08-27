@@ -59,7 +59,10 @@ COPY --from=builder /build/native ./native
 # export extra: dpkt for aipt/export/packets.py's pcap parsing (optional at
 # import time, but this is the image that actually produces/reads pcaps, so
 # install it here rather than relying on the pure-stdlib fallback reader).
-RUN pip install --no-cache-dir ".[web,export]"
+# quic extra: aioquic, for the QUIC idle-probe spike
+# (aipt/backends/quic_mock/spike_runner.py) run manually inside this
+# container against quic-mock-server via the Gateway.
+RUN pip install --no-cache-dir ".[web,export,quic]"
 
 # WEB_HOST/WEB_PORT: uvicorn bind (tcp_congestion's port-10000 convention,
 # DESIGN.md 4). TRAFFIC_PCAP_DIR: aipt.core.capture output dir, matches the

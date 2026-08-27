@@ -29,6 +29,14 @@ export = ["dpkt"]
 # this phase's JSON-only routes, but harmless to have and avoids a runtime
 # surprise the moment a future route accepts an upload).
 web = ["fastapi", "uvicorn", "jinja2", "python-multipart", "httpx"]
+# aipt/backends/quic_mock/* (spike, see DESIGN.md "QUIC idle-probe spike"
+# section): aioquic implements QUIC + HTTP/3 entirely in userspace, which is
+# exactly what this spike needs -- a pluggable per-connection congestion
+# control object (aioquic.quic.congestion.base.QuicCongestionControl) with
+# no kernel module/patch required to add a new algorithm. Optional because
+# only the quic_mock backend imports it; every other backend/test is
+# unaffected if it isn't installed.
+quic = ["aioquic"]
 
 [tool.setuptools.packages.find]
 include = ["aipt*"]

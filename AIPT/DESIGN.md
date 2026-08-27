@@ -513,6 +513,89 @@ flowchart LR
 | 5 | Docker 통합(web + mockserver 2-서비스 compose), 빌드 스테이지 정리 | `docker compose up --build` 통과 |
 | 6 | 문서 최종화(README/docs), 모노레포 CLAUDE.md 갱신, 원본 `token_traffic/`·`tcp_congestion/` 삭제(또는 archive) | 단일 소스 오브 트루스 확정 |
 
+## 7. QUIC idle-probe spike (2026-08-27, 신규)
+
+**배경**: idle 구간 동안 능동적으로 probe(0-size/PING)를 보내 RTT 변화를
+측정하고, 그 값으로 idle 종료 시점의 cwnd를 조정하고 싶다는 아이디어를
+검토했다. 실제 커널 소스(`net/tcp.h`의 `struct tcp_congestion_ops`,
+`tcp_output.c`의 `tcp_cwnd_restart()`/`tcp_slow_start_after_idle_check()`)를
+직접 대조한 결과 TCP에서는 이 방식이 구조적으로 불가능하다고 결론지었다:
+
+- TCP의 keepalive/window-probe 패킷(`tcp_write_wakeup()`)은 일부러 예전
+  시퀀스 번호를 재사용해 RTT 샘플링 파이프라인(Karn's algorithm, RFC 6298)에서
+  **의도적으로 배제**된다 -- probe를 보내도 RTT로 못 쓴다.
+- `tcp_congestion_ops`의 모든 콜백(`cong_avoid`/`cong_control`/`cwnd_event`
+  등)은 "이미 벌어진 전송 이벤트에 대한 cwnd 계산"만 담당하고, 새 패킷을
+  스스로 만들어 보낼 권한이 없다 -- congestion control 모듈이 능동적으로
+  probe를 쏘는 것 자체가 아키텍처 계층 분리를 어기는 것.
+- 유휴 재시작 판정 자체도 별도 타이머가 아니라, 다음 전송 시도 시점에
+  `tcp_jiffies32 - tp->lsndtime`를 사후 계산하는 방식이라(`tcp_slow_start_after_idle_check`),
+  "RTO마다 RTT를 측정" 같은 주기적 개입 지점 자체가 없다.
+
+**QUIC(aioquic)으로 전환한 이유**: QUIC은 혼잡제어가 커널이 아니라
+유저스페이스 라이브러리 안에 있고, `QuicConnection.send_ping(uid)`가
+애플리케이션이 언제든 호출 가능한 공개 API이며, PING은 ack-eliciting
+프레임이라 그 RTT 샘플이 데이터 트래픽과 **동일한 경로**
+(`aioquic.quic.recovery.QuicPacketRecovery.on_ack_received()`)로
+`on_rtt_measurement()` 콜백에 전달됨을 aioquic 실제 소스로 확인했다. 커널
+모듈/패치가 전혀 필요 없다.
+
+**구현 (`aipt/backends/quic_mock/`, mock 전용, 2026-08-27 1차 착수)**:
+
+- `congestion.py` — `IdleProbeCongestionControl`: aioquic 표준 Reno에
+  cwnd/loss 회계를 전량 위임하고, `mark_idle_probe_sent()`(idle 진입 시
+  호출)로 pre-idle RTT를 기록해두었다가 그 다음 `on_rtt_measurement()`
+  호출(=probe PING의 ACK)에서 RTT 증가율을 계산, 증가한 만큼(최대
+  `MAX_REACTED_GROWTH=0.5`로 캡) cwnd를 사전에 줄인다. RTT가 그대로거나
+  개선됐으면 아무 것도 안 하고 Reno의 정상 증가 로직에 맡긴다(한 번의
+  probe 샘플만으로 낙관적으로 판단하는 게 비관적으로 판단하는 것보다
+  위험하다는 원칙). `register_congestion_control("idle_probe", ...)`로
+  등록되어 `QuicConfiguration(congestion_control_algorithm="idle_probe")`로
+  바로 선택 가능.
+- `server.py` — aioquic 기반 QUIC echo 서버(`EchoProtocol`). 기존
+  `aipt.backends.mock.server`(HTTP/1.1)를 대체하는 게 아니라 별도
+  경로 -- 이 스파이크의 목적은 "idle-probe 메커니즘이 실제 impaired
+  path에서 cwnd를 예상대로 움직이는가"이지 mock 서버 기능 전체
+  재현이 아니다.
+- `spike_runner.py` — 이 프로젝트의 실제 `aipt/gateway/`(tc netem L3
+  포워딩 컨테이너)를 통해 baseline(순수 reno, probing 없음) vs
+  idle_probe(probing 있음) 두 congestion control을 turn/idle 대화
+  패턴으로 비교 실행하는 CLI. `POST /gateway/profile`로 Gateway의
+  netem 프리셋(clean/3g/...)을 실제로 전환한 뒤 실행하므로, loopback
+  노이즈가 아니라 진짜 주입된 지연/손실 위에서 측정한다.
+- Docker: `docker/Dockerfile.quic_mock_server` + `docker-compose.yml`의
+  `quic-mock-server` 서비스(`net-backend`에만 연결, `gateway` 경유
+  라우팅 -- `mock-server`와 동일한 L3 확정 설계 패턴, UDP 포트 4433).
+  Gateway 자체는 L3 IP 포워딩 + netem이라 프로토콜(TCP/UDP)에 무관하게
+  그대로 통과시키므로 Gateway 코드 변경은 전혀 없었다.
+
+**검증 결과 (2026-08-27, 실컨테이너)**:
+- `clean` 프로파일(지연 0): baseline/idle_probe 둘 다 cwnd가 매 턴
+  꾸준히 증가(둘 다 6000→약 16000대), probe RTT 변화가 미미해(노이즈
+  수준) 조정이 거의 발생하지 않음 -- 예상대로.
+- `3g` 프로파일(delay 150±40ms, loss 1%, reorder 0.5%): idle_probe가
+  매 턴 idle 중 RTT 증가(11.7%~19.4%)를 실제로 감지하고 cwnd를
+  사전에 줄임(예: `cwnd_before=3188 → cwnd_after=2643`). baseline은
+  cwnd가 6000에서 전혀 안 움직임(reno가 idle에 대해 아무 반응이
+  없음을 재확인 -- QUIC 표준 congestion control엔 TCP의
+  `tcp_cwnd_restart()` 같은 idle-restart 로직이 아예 없다는 이전 조사
+  결과와 일치).
+- 다만 이 결과가 곧바로 "성능이 개선된다"는 뜻은 아님 -- cwnd를 미리
+  줄이는 게 처리량/지연 트레이드오프에서 실제로 이득인지는 별도로
+  측정해야 한다(다음 단계).
+
+**남은 단계 (사용자 지시, 순서대로)**:
+1. (완료) Mock 환경에서 baseline과의 cwnd 동작 차이를 실제 Gateway netem
+   경로에서 확인.
+2. 처리량/지연 관점의 실제 "성능 개선" 여부 측정(현재는 cwnd 궤적만
+   확인, 처리량 비교는 미착수).
+3. UI에 "Use QUIC" 체크박스 + 알고리즘 선택 추가, `aipt/web/routes_run.py`
+   의 `RunRequest`/`Backend` 프로토콜에 정식 편입(현재
+   `spike_runner.py`는 독립 CLI, 웹 UI/`RunRequest`에는 미연결).
+4. HTTP/3 지원을 통한 실제 `local_llm` 백엔드 테스트(llama.cpp/vLLM의
+   HTTP/3 지원 여부 확인 필요 -- 미지원 시 게이트웨이에서 QUIC↔HTTP1
+   브리지 필요할 수 있음).
+
 각 Phase는 독립적으로 테스트 가능한 단위로 커밋하고, Phase 종료마다 사용자
 리뷰를 받는다 (`git mv` 없이 새로 복사하기로 했으므로, Phase별로 원본을 지우지
 않고 새 경로에 먼저 만든 뒤 마지막 Phase 6에서 원본을 정리한다).
