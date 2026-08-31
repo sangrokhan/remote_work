@@ -261,12 +261,24 @@ services:
       - LOCAL_LLM_ENGINE_URL=${LOCAL_LLM_ENGINE_URL:-http://172.28.2.4:40080}
       - LOCAL_LLM_ENGINE_KIND=${LOCAL_LLM_ENGINE_KIND:-llama_cpp}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
-      # QUIC idle-probe spike (aipt/backends/quic_mock/spike_runner.py):
-      # same "must resolve to the IP, not the hostname" constraint as
-      # LOCAL_LLM_ENGINE_URL above -- `web` is net-client-only, so it can't
-      # resolve `quic-mock-server` (a net-backend hostname) via Docker's
-      # embedded DNS, even though the kernel still forwards the actual UDP
-      # packets to it via `gateway`.
+      # aipt.backends.mock.conversation.MockBackend (TCP): same
+      # "must resolve to the IP, not the hostname" constraint as
+      # LOCAL_LLM_ENGINE_URL above. Without this, every web-UI Mock run
+      # spawned its own server on loopback INSIDE this container and
+      # never traversed `gateway` at all -- netem had nothing to act on
+      # (found 2026-08-31 via a Wireshark capture showing pure loopback
+      # traffic on a Mock run). Pointing at the already-built, already
+      # gateway-routed `mock-server` service closes that gap; unset this
+      # (or run outside Docker) to fall back to the original
+      # spawn-our-own-server-on-loopback behaviour.
+      - MOCK_SERVER_HOST=${MOCK_SERVER_IP:-172.28.2.3}
+      - MOCK_SERVER_PORT=8888
+      # QUIC idle-probe spike (aipt/backends/quic_mock/backend.py's
+      # QuicMockBackend, DESIGN.md 7.2): same "must resolve to the IP, not
+      # the hostname" constraint as LOCAL_LLM_ENGINE_URL above -- `web` is
+      # net-client-only, so it can't resolve `quic-mock-server` (a
+      # net-backend hostname) via Docker's embedded DNS, even though the
+      # kernel still forwards the actual UDP packets to it via `gateway`.
       - QUIC_MOCK_SERVER_HOST=${QUIC_MOCK_SERVER_IP:-172.28.2.5}
       - QUIC_MOCK_SERVER_PORT=4433
     ports:
@@ -294,3 +306,12 @@ services:
     depends_on:
       - gateway
       - local-llm
+      # mock-server/quic-mock-server: the actual targets MockBackend/
+      # QuicMockBackend now connect to via MOCK_SERVER_HOST/
+      # QUIC_MOCK_SERVER_HOST above (DESIGN.md 4.7's L3 topology) --
+      # `web` doesn't strictly need them running to boot, but listing
+      # them here means `docker compose up web` alone brings up its full
+      # dependency chain rather than silently failing every Mock run
+      # with a connection refused because mock-server was never started.
+      - mock-server
+      - quic-mock-server

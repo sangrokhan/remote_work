@@ -503,8 +503,20 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
         backend.connect(req.arm, req.model, system)
         if cap_label:
             host, port = _split_api_host(backend.api_host())
+            # QUIC (transport="http3") rides on UDP, not TCP -- a tcpdump
+            # filter hardcoded to "tcp" (Capture's own default) would
+            # silently capture zero packets for the entire run (found via
+            # a real /api/run(transport="http3") capture that came back
+            # with 0 packets despite the run itself succeeding; see
+            # aipt.core.capture._filter_expr's docstring for the full
+            # story). getattr(backend, "transport", "http1") mirrors the
+            # exact same lookup turn_record() already does a few lines
+            # below for the same reason (backend is the one place that
+            # actually knows which transport it used).
+            cap_proto = "udp" if getattr(backend, "transport", "http1") == "http3" else "tcp"
             cap = capture_mod.Capture(
-                timestamp=timestamp, label=cap_label, host=host, port=port)
+                timestamp=timestamp, label=cap_label, host=host, port=port,
+                proto=cap_proto)
             cap.__enter__()
         for i, question in enumerate(questions):
             exchange = backend.send_turn(i, question, req.measure)

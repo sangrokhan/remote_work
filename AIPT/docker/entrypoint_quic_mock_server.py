@@ -61,6 +61,7 @@ def _add_route() -> None:
 _add_route()
 
 from aipt.backends.quic_mock.server import run_server  # noqa: E402
+from aipt.backends.quic_mock.backend import _MockEchoProtocol  # noqa: E402
 
 HOST = os.environ.get("QUIC_MOCK_HOST", "0.0.0.0")
 PORT = int(os.environ.get("QUIC_MOCK_PORT", "4433"))
@@ -71,7 +72,7 @@ KEY = os.environ.get("QUIC_MOCK_KEY", "/app/quic_cert/key.pem")
 async def _main() -> None:
     import signal
 
-    server = await run_server(HOST, PORT, CERT, KEY)
+    server = await run_server(HOST, PORT, CERT, KEY, create_protocol=_MockEchoProtocol)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

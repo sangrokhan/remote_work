@@ -51,6 +51,7 @@ direction here (sync caller, async worker).
 from __future__ import annotations
 
 import asyncio
+import os
 import struct
 import threading
 import time
@@ -193,6 +194,18 @@ class QuicMockBackend:
     ARMS = ("dummy", "record")
     HEADLINE_ARMS = ("dummy", "record")
 
+    #: Env vars pointing this backend at the standalone `quic-mock-server`
+    #: Docker service (docker-compose.yml, DESIGN.md 4.7's L3 topology,
+    #: DESIGN.md 7.2) instead of spawning an in-process aioquic server on
+    #: loopback. Same "unset means spawn our own, exactly as before"
+    #: contract as aipt.backends.mock.conversation.MockBackend's
+    #: MOCK_SERVER_HOST/MOCK_SERVER_PORT (see that class's own docstring
+    #: for the full story of why this matters -- a Wireshark capture of a
+    #: web-UI Mock/QUIC run showed pure loopback traffic with zero netem
+    #: effect, because there was no gateway hop in the path at all).
+    _MOCK_SERVER_HOST_ENV = "QUIC_MOCK_SERVER_HOST"
+    _MOCK_SERVER_PORT_ENV = "QUIC_MOCK_SERVER_PORT"
+
     def __init__(
         self,
         *,
@@ -216,6 +229,19 @@ class QuicMockBackend:
         self.algorithm_requested = algorithm or ""
         self.algorithm_actual = ""
         self.algorithm_error = ""
+
+        # External target (quic-mock-server container, reached via
+        # gateway) if configured -- see _MOCK_SERVER_HOST_ENV's docstring
+        # above. Read the same way MockBackend reads MOCK_SERVER_HOST/
+        # MOCK_SERVER_PORT -- environment only, no constructor arg, so
+        # routes_run.py's _build_backend() needs no special case.
+        self._external_host = os.environ.get(self._MOCK_SERVER_HOST_ENV, "").strip()
+        _external_port_raw = os.environ.get(self._MOCK_SERVER_PORT_ENV, "").strip()
+        self._external_port = int(_external_port_raw) if _external_port_raw else None
+        #: Whether connect() spawned its own in-process server (False when
+        #: an external quic-mock-server was used instead) -- close() only
+        #: tears down a server this instance actually started.
+        self._owns_server = False
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -248,22 +274,37 @@ class QuicMockBackend:
     async def _async_connect(self) -> None:
         cert, key = _ensure_cert()
 
-        server_config = QuicConfiguration(is_client=False)
-        server_config.load_cert_chain(cert, key)
+        if self._external_host and self._external_port:
+            # External quic-mock-server (gateway-routed) -- see
+            # _MOCK_SERVER_HOST_ENV's docstring. It's a generic
+            # long-running process with no record bound to it (unlike the
+            # in-process server branch below), so record answer text is
+            # never requested from it -- only the byte length, matching
+            # MockBackend's own external-server posture (DESIGN.md 4.5:
+            # wire byte-size fidelity, not content fidelity, is what Mock
+            # replay promises). _async_send_turn() already reports the
+            # record's actual text client-side regardless of which branch
+            # ran here, so this has no visible effect on response_text.
+            self._host, self._port = self._external_host, self._external_port
+            self._owns_server = False
+        else:
+            server_config = QuicConfiguration(is_client=False)
+            server_config.load_cert_chain(cert, key)
 
-        def _make_server_protocol(*args, **kwargs):
-            proto = _MockEchoProtocol(*args, **kwargs)
-            proto.record = self.record
-            return proto
+            def _make_server_protocol(*args, **kwargs):
+                proto = _MockEchoProtocol(*args, **kwargs)
+                proto.record = self.record
+                return proto
 
-        self._server = await quic_serve(
-            self._host, self._port, configuration=server_config,
-            create_protocol=_make_server_protocol,
-        )
-        sock = self._server._transport.get_extra_info("socket")
-        if sock is not None:
-            bound_host, bound_port = sock.getsockname()[:2]
-            self._host, self._port = bound_host, bound_port
+            self._server = await quic_serve(
+                self._host, self._port, configuration=server_config,
+                create_protocol=_make_server_protocol,
+            )
+            self._owns_server = True
+            sock = self._server._transport.get_extra_info("socket")
+            if sock is not None:
+                bound_host, bound_port = sock.getsockname()[:2]
+                self._host, self._port = bound_host, bound_port
 
         client_config = QuicConfiguration(
             is_client=True, congestion_control_algorithm=self.algorithm

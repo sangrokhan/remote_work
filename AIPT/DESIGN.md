@@ -711,6 +711,86 @@ algorithm=idle_probe를 **둘 다 명시적으로** 선택해야 하며, 이는 
 개선을 증명하지 못한 실험 알고리즘을 알고 쓰는" 것으로 사용자의 결정에
 맡긴다.
 
+### 7.3 loopback 우회 버그 수정 (2026-08-31, 사용자가 Wireshark로 발견)
+
+§7.2에서 웹 UI에 편입한 직후 사용자가 실제로 QUIC을 선택해 테스트하고
+Wireshark로 캡처를 열어봤는데, **트래픽이 Gateway를 전혀 거치지 않고
+`web` 컨테이너 안의 loopback(127.0.0.1)에서만 오가는 걸 발견**했다.
+원인은 애초부터 `MockBackend`(TCP)와 신규 `QuicMockBackend` 둘 다
+**자체 서버를 프로세스 안에서 띄워 자기 자신과 통신**하는 구조였기
+때문 -- `mock-server`/`quic-mock-server` 컨테이너는
+`docker-compose.yml`에 이미 만들어져 있고 Gateway 경유 라우팅까지
+확정 설계(DESIGN.md 4.7)로 세팅돼 있었지만, **`/api/run` 경로는 그
+컨테이너들을 애초에 한 번도 참조한 적이 없었다** (스파이크 CLI인
+`spike_runner.py`/`experiment.py`만 사용).
+
+**수정 (LocalLLMBackend가 처음부터 쓰던 것과 동일한 패턴으로 통일)**:
+
+- `MockBackend`/`QuicMockBackend`에 `MOCK_SERVER_HOST`/`MOCK_SERVER_PORT`,
+  `QUIC_MOCK_SERVER_HOST`/`QUIC_MOCK_SERVER_PORT` 환경변수 추가 --
+  `LOCAL_LLM_ENGINE_URL`과 동일하게 "미설정 시 기존처럼 자체 서버 생성
+  (하위호환), 설정 시 그 주소로 접속"의 계약. 생성자 인자로는 노출하지
+  않음(다른 백엔드처럼 환경변수 전용 -- `routes_run.py`가 특별 케이스를
+  가질 필요 없음).
+- `docker-compose.yml`의 `web` 서비스에 두 쌍의 env var를
+  `mock-server`/`quic-mock-server`의 실제 IP(172.28.2.3/172.28.2.5)로
+  세팅, `depends_on`에도 두 서비스 추가.
+- `quic-mock-server`가 지금까지 `EchoProtocol`(순수 에코, DESIGN.md
+  7.1 spike 전용)을 썼는데, `QuicMockBackend`(실제 웹 UI 클라이언트)는
+  길이-프리픽스가 붙은 다른 프로토콜(`_MockEchoProtocol`)을 기대해서
+  프로토콜이 안 맞았다 -- `run_server()`에 `create_protocol` 파라미터
+  추가, entrypoint가 `_MockEchoProtocol`을 넘기도록 수정.
+
+**과정에서 발견한 진짜 버그 3개** (외부 서버 경로를 실제로 exercise해서
+드러남, 지금까지 아무도 이 경로를 안 써봤기 때문에 존재했던 버그):
+
+1. **`aipt/core/capture.py`의 tcpdump 필터가 TCP로 하드코딩** --
+   QUIC은 UDP라 필터가 아예 안 맞아 0개 패킷 캡처. `Capture`에
+   `proto` 파라미터 추가(기본값 "tcp", 하위호환), `routes_run.py`가
+   `backend.transport == "http3"`일 때 `proto="udp"`로 넘기도록 수정.
+2. **필터 문법 버그**: `"udp port N"`(공백 축약형)이 `any`
+   인터페이스(LINUX_SLL2 링크타입)에서 커널 레벨엔 매치되는데
+   (`received_by_filter`) tcpdump 프로세스가 실제로 파일에 쓰질
+   못하는 걸 실측으로 발견 -- `"udp and port N"`(명시적 `and`)으로
+   바꾸니 3회 연속 재현 가능하게 해결.
+3. **타이밍 경합 조건**: QUIC이 워낙 빨라서(수 턴이 1ms 이내 완료)
+   `SIGINT`가 tcpdump한테 소켓의 마지막 버스트를 읽어들일 기회를 주기
+   전에 도착 -- `received_by_filter`는 매치되는데 `captured`는 0.
+   `Capture.__exit__()`에 SIGINT 전송 전 `time.sleep(0.6)` 추가로
+   해결(시작 시 이미 있던 `sleep(0.4)`와 대칭).
+4. **(가장 심각) `MockBackend.send_turn()`이 외부 서버 모드에서
+   전부 실패**: 원래 `send_turn()`의 가드(`self._server is None`)와
+   호스트 조회(`self._server.host`)가 "in-process 서버를 항상
+   띄운다"는 옛 전제를 그대로 갖고 있어서, 외부 서버 모드
+   (`self._server`가 영원히 `None`)에서는 **모든 턴이
+   `RuntimeError: send_turn called before connect()`로 실패**했다.
+   `run["ok"] == true`인데 `run["turns"]`가 0개고 에러가
+   `run["error"]`에 묻혀있는 형태라 겉으로는 "성공"처럼 보였다 --
+   `self._peer_host`(외부/in-process 어느 쪽이든 실제 접속한
+   host/port를 기록하는 새 필드) 기준으로 가드/조회를 바꿔 해결.
+
+**실컨테이너 재검증** (4개 컨테이너 재기동, Gateway `3g` 프로파일 적용
+후): TCP/QUIC 둘 다 `run["ok"]==true`, `error==""`, 요청한 턴 수만큼
+`turns` 채워짐, pcap의 `host`가 컨테이너 IP(172.28.2.3/172.28.2.5,
+127.0.0.1 아님), `offload.iface=="eth0"`(`lo` 아님), `captured ==
+received_by_filter`(0 아님) 확인 -- 3회 반복 전부 재현. 다운로드한
+QUIC pcap을 `tcpdump -r`로 직접 열어 `172.28.1.3(web) <-> 172.28.2.5
+(quic-mock-server)` 간 실제 UDP 프레임 확인, 이 두 IP는 서로 다른
+Docker 서브넷(`net-client`/`net-backend`)이라 물리적으로 Gateway를
+반드시 거쳐야만 존재할 수 있는 트래픽 -- Gateway netem 적용 증거로
+`ttlt_ms`가 3g 프로파일 지연(~40ms대)을 그대로 반영함도 확인.
+
+**테스트**: `test_mock_backend_reads_external_server_from_env` 등
+env-var 유닛 6개(TCP 3 + QUIC 3), `test_mock_backend_external_server_
+full_lifecycle`(실제 두 번째 서버를 세워 외부 서버 경로 전체를
+end-to-end로 exercise -- 버그 #4를 실제로 잡아낸 테스트, 처음
+`wire_recv==300` 기대치로 작성했다가 dummy 모드 실제 동작(text 없음)
+과 안 맞아 재작성함), `test_capture_object_accepts_udp_proto...` 등
+capture proto 테스트 4개. `pytest -q -m "not live"` 481 passed(478+3),
+`-m live` 관련 신규 테스트 전부 통과 (local_llm의 무관한 기존 실패
+1건은 로컬에 실제 llama.cpp 엔진이 없어서 나는 것으로 이번 변경과
+무관, 확인함).
+
 각 Phase는 독립적으로 테스트 가능한 단위로 커밋하고, Phase 종료마다 사용자
 리뷰를 받는다 (`git mv` 없이 새로 복사하기로 했으므로, Phase별로 원본을 지우지
 않고 새 경로에 먼저 만든 뒤 마지막 Phase 6에서 원본을 정리한다).

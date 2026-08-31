@@ -168,3 +168,51 @@ def test_mock_backend_cwnd_result_available_after_connect():
         backend.close()
     result = backend.cwnd_result()
     assert result.get("label") == "mockbackend-cwnd-check"
+
+
+# --- MockBackend against an "external" server via MOCK_SERVER_HOST/PORT ---
+# (DESIGN.md 4.7/7.2, found+fixed 2026-08-31: the external-server branch
+# had a real bug -- send_turn()'s connect()-guard and its host lookup
+# both still referenced self._server, which is always None on this path,
+# so every external-server run raised RuntimeError on its first turn. A
+# real second server (srv fixture) stands in for the mock-server Docker
+# container here -- same code path MockBackend actually exercises when
+# MOCK_SERVER_HOST/PORT point at a real container, just without needing
+# Docker to run this test.)
+
+
+@skip_no_cwnd
+def test_mock_backend_external_server_full_lifecycle(monkeypatch, srv):
+    monkeypatch.setenv("MOCK_SERVER_HOST", srv.host)
+    monkeypatch.setenv("MOCK_SERVER_PORT", str(srv.port))
+    backend = conversation.MockBackend(
+        mock_response_bytes=300, inference_delay_ms=5,
+        label="mockbackend-external-test",
+    )
+    assert backend._external_host == srv.host
+    assert backend._external_port == srv.port
+
+    backend.connect(arm="dummy", model="mock-record", system="")
+    try:
+        # The bug this test guards: connect() must NOT spawn its own
+        # server when an external target is configured.
+        assert backend._server is None
+        assert backend.api_host() == f"{srv.host}:{srv.port}"
+        exchanges = [
+            backend.send_turn(turn=i, question=f"q{i}", measure="bytes")
+            for i in range(3)
+        ]
+    finally:
+        backend.close()
+
+    assert len(exchanges) == 3
+    for exc in exchanges:
+        assert exc.error is None
+        assert exc.wire_sent > 0
+        # dummy mode (no record bound): mock_response_bytes pads the JSON
+        # body on the wire, but MockBackend.send_turn() only reports
+        # wire_recv from the response's "answer" field -- which dummy
+        # mode never sets -- so 0 here is correct, matching every other
+        # dummy-mode test in this file, not a sign the external-server
+        # path dropped bytes.
+        assert exc.wire_recv == 0

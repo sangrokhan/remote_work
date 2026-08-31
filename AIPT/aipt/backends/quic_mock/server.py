@@ -33,13 +33,24 @@ class EchoProtocol(QuicConnectionProtocol):
             self.transmit()
 
 
-async def run_server(host: str, port: int, cert_path: str, key_path: str):
-    """Starts the QUIC echo server and returns the running ``QuicServer``
-    (call ``.close()`` on it to shut down)."""
+async def run_server(host: str, port: int, cert_path: str, key_path: str, *,
+                      create_protocol=EchoProtocol):
+    """Starts the QUIC server and returns the running ``QuicServer`` (call
+    ``.close()`` on it to shut down). ``create_protocol`` defaults to the
+    plain ``EchoProtocol`` above (this spike's original traffic-shape-only
+    server); the standalone ``quic-mock-server`` Docker service instead
+    passes ``aipt.backends.quic_mock.backend._MockEchoProtocol`` so it
+    speaks the same length-prefixed request protocol
+    ``aipt.backends.quic_mock.backend.QuicMockBackend`` (the real
+    Backend-protocol client) uses -- letting the web UI's Mock card, when
+    pointed at this container via ``MOCK_SERVER_HOST``/``QUIC_MOCK_SERVER_HOST``,
+    traverse the actual Gateway-routed L3 topology (DESIGN.md 4.7) instead
+    of spawning its own loopback server, the same way ``LocalLLMBackend``
+    always has."""
     config = QuicConfiguration(is_client=False)
     config.load_cert_chain(cert_path, key_path)
-    server = await serve(host, port, configuration=config, create_protocol=EchoProtocol)
-    log.info("quic_mock echo server listening on %s:%d", host, port)
+    server = await serve(host, port, configuration=config, create_protocol=create_protocol)
+    log.info("quic_mock server listening on %s:%d", host, port)
     return server
 
 

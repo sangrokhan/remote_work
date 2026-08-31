@@ -86,18 +86,48 @@ def _fake_tcpdump(monkeypatch, alive=True):
 
 def test_filter_narrows_to_the_api_host():
     assert capture._filter_expr(["1.2.3.4", "5.6.7.8"]) == (
-        "tcp port 443 and (host 1.2.3.4 or host 5.6.7.8)")
+        "tcp and port 443 and (host 1.2.3.4 or host 5.6.7.8)")
 
 
 def test_filter_falls_back_to_all_of_443_when_the_name_did_not_resolve():
     # A noisier pcap beats no pcap.
-    assert capture._filter_expr([]) == "tcp port 443"
+    assert capture._filter_expr([]) == "tcp and port 443"
 
 
 def test_filter_honors_an_explicit_port_for_synthetic_mock():
     assert capture._filter_expr(["127.0.0.1"], 8888) == (
-        "tcp port 8888 and (host 127.0.0.1)")
-    assert capture._filter_expr([], 8888) == "tcp port 8888"
+        "tcp and port 8888 and (host 127.0.0.1)")
+    assert capture._filter_expr([], 8888) == "tcp and port 8888"
+
+
+def test_filter_defaults_to_tcp_proto():
+    """Every backend before the QUIC spike rode on TCP -- the default
+    proto must stay "tcp" so no existing caller's filter changes."""
+    assert capture._filter_expr(["127.0.0.1"], 8888) == (
+        "tcp and port 8888 and (host 127.0.0.1)")
+
+
+def test_filter_honors_udp_proto_for_quic():
+    """QUIC rides on UDP -- a caller that passes proto="udp" must get a
+    udp filter, not the tcp default (this was the actual bug: capture.py
+    hardcoded "tcp" regardless of transport, so a real QUIC run's
+    capture silently came back with 0 packets)."""
+    assert capture._filter_expr(["127.0.0.1"], 4433, proto="udp") == (
+        "udp and port 4433 and (host 127.0.0.1)")
+    assert capture._filter_expr([], 4433, proto="udp") == "udp and port 4433"
+
+
+def test_capture_object_defaults_to_tcp_and_reports_proto_in_filter():
+    c = capture.Capture("2026-07-14T00:00:00", label="test", host="127.0.0.1", port=8888)
+    assert c.proto == "tcp"
+
+
+def test_capture_object_accepts_udp_proto_and_reflects_it_in_result():
+    c = capture.Capture("2026-07-14T00:00:00", label="quictest", host="127.0.0.1",
+                         port=4433, proto="udp")
+    assert c.proto == "udp"
+    result = c.result()
+    assert "udp and port 4433" in result["filter"]
 
 
 # --- naming: external_api mode, one pcap per (provider, arm[, kind]) -----------
@@ -332,7 +362,7 @@ def test_tcpdump_keeps_our_uid_so_it_can_write_the_pcap(monkeypatch, tmp_path):
     cmd = argv["cmd"]
     assert cmd[cmd.index("-Z") + 1] == getpass.getuser()
     assert cmd[cmd.index("-s") + 1] == str(capture.PCAP_SNAPLEN)
-    assert cmd[-1] == "tcp port 443 and (host 1.2.3.4)"
+    assert cmd[-1] == "tcp and port 443 and (host 1.2.3.4)"
 
 
 def test_a_second_capture_never_overwrites_the_first(monkeypatch, tmp_path):

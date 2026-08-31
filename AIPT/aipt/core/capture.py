@@ -278,13 +278,35 @@ def _resolve_ips(host: str, port: int = _DEFAULT_PORT) -> list[str]:
         return []
 
 
-def _filter_expr(ips: list[str], port: int = _DEFAULT_PORT) -> str:
-    """tcpdump filter: tcp/port to the target host's IP(s), or all of that port if
-    the name did not resolve -- a noisier pcap beats no pcap."""
+def _filter_expr(ips: list[str], port: int = _DEFAULT_PORT, proto: str = "tcp") -> str:
+    """tcpdump filter: <proto>/port to the target host's IP(s), or all of
+    that port if the name did not resolve -- a noisier pcap beats no pcap.
+
+    ``proto`` defaults to "tcp" (every backend before the QUIC spike rode
+    on TCP). QUIC rides on UDP -- a tcpdump filter hardcoded to "tcp"
+    silently captures zero packets for a QUIC run (no error, no crash,
+    just an empty pcap that looks like "no traffic happened" instead of
+    "the filter matched the wrong protocol"). Found and fixed after a
+    real /api/run(transport="http3") capture came back with 0 packets
+    captured despite the run itself succeeding -- the filter was the bug,
+    not the capture mechanism.
+
+    Explicit ``and`` between proto and port (``"udp and port N"``), not
+    the shorthand juxtaposition (``"udp port N"``) tcpdump/libpcap also
+    accepts: on the ``any`` pseudo-interface (LINUX_SLL2 link type,
+    ``TRAFFIC_PCAP_IFACE`` unset default) the shorthand form was observed
+    to compile to a BPF program that matched in "received by filter" but
+    wrote zero packets to the file -- i.e. the exact silent-empty-pcap
+    failure mode this function's own docstring warns about, this time
+    from the filter *syntax* rather than the wrong proto keyword. The
+    explicit ``and`` form was verified (same environment, same traffic)
+    to actually write packets to disk; kept as the only form used here
+    rather than re-introducing the shorthand for either proto.
+    """
     if not ips:
-        return f"tcp port {port}"
+        return f"{proto} and port {port}"
     hosts = " or ".join(f"host {ip}" for ip in ips)
-    return f"tcp port {port} and ({hosts})"
+    return f"{proto} and port {port} and ({hosts})"
 
 
 def ethtool_path() -> str | None:
@@ -384,13 +406,21 @@ class Capture:
 
     def __init__(self, timestamp: str, provider: str = "", arm: str = "",
                  host: str = "", kind: str = "", *, label: str | None = None,
-                 port: int | None = None, interface: str | None = None):
+                 port: int | None = None, interface: str | None = None,
+                 proto: str = "tcp"):
         self.timestamp = timestamp
         self.provider = provider or ""
         self.arm = arm or ""
         self.kind = kind or ""
         self.host = host or ""
         self.port = _DEFAULT_PORT if port is None else port
+        # "tcp" (default, every backend before the QUIC spike) or "udp"
+        # (QUIC/HTTP3 -- see aipt.backends.quic_mock.backend). Passed
+        # straight into the tcpdump filter (_filter_expr) -- a capture
+        # started with the wrong proto here silently captures zero
+        # packets, no error, for the entire run (see that function's
+        # docstring for how this was actually found).
+        self.proto = proto
         if label is not None:
             self.label = label
         elif self.kind:
@@ -447,7 +477,7 @@ class Capture:
         cmd = [
             tcpdump_path(), "-i", self.interface, "-w", str(self.path),
             "-s", str(self.snaplen), "-U", "-n", *_keep_uid(),
-            _filter_expr(self.ips, self.port),
+            _filter_expr(self.ips, self.port, self.proto),
         ]
         try:
             self.proc = subprocess.Popen(
@@ -469,6 +499,26 @@ class Capture:
         if self.proc is None:
             self.offload.restore()
             return
+        # Give tcpdump a moment to actually read() the last burst of
+        # traffic off the AF_PACKET socket and write it to the pcap file
+        # before signaling it to stop. "packets received by filter" is a
+        # kernel-level BPF match count, counted the instant a packet
+        # arrives -- it says nothing about whether tcpdump's own process
+        # has been scheduled to drain the socket yet. On a very fast,
+        # bursty exchange (confirmed with QUIC/aipt.backends.quic_mock:
+        # 5 turns complete in well under a millisecond on loopback) SIGINT
+        # can arrive before tcpdump ever calls read() on the last burst,
+        # so "0 captured" while "N received by filter" is a real
+        # (reproducible) failure mode, not a filter or proto bug -- see
+        # this repeated 3x with the SAME filter/proto during actual
+        # debugging (transport="http3" spike, 2026-08-27): identical
+        # commands, only the trailing settle time differed between the
+        # runs that captured 0 and the runs that captured everything.
+        # Mirrors the symmetric sleep(0.4) already used before traffic
+        # starts, above -- kept short since most callers' traffic (real
+        # network calls, TCP mock's own artificial delays) is nowhere
+        # near this fast and would never notice the wait.
+        time.sleep(0.6)
         try:
             self.proc.send_signal(signal.SIGINT)  # clean flush of the buffer
             self.proc.wait(timeout=5)
@@ -506,7 +556,7 @@ class Capture:
             "host": self.host,
             "port": self.port,
             "ips": self.ips,
-            "filter": _filter_expr(self.ips, self.port),
+            "filter": _filter_expr(self.ips, self.port, self.proto),
             "snaplen": self.snaplen,
             # Without this a reader cannot tell a 64 KB kernel super-packet from a
             # jumbo frame, or a missing slow-start burst from one that never happened.

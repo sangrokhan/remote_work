@@ -74,3 +74,27 @@ def test_quic_mock_backend_default_algorithm_is_reno():
 
     backend = QuicMockBackend()
     assert backend.algorithm == "reno"
+
+
+def test_quic_mock_backend_reads_external_server_from_env(monkeypatch):
+    """QUIC_MOCK_SERVER_HOST/QUIC_MOCK_SERVER_PORT (docker-compose.yml,
+    DESIGN.md 4.7/7.2) must be read at construction time -- same
+    "unset means spawn our own on loopback, set means use the
+    gateway-routed external server" contract as
+    aipt.backends.mock.conversation.MockBackend's MOCK_SERVER_HOST/
+    MOCK_SERVER_PORT. Found and fixed 2026-08-31: before this, every
+    web-UI QUIC run silently ignored the already-built quic-mock-server/
+    gateway topology and only ever talked to itself over loopback."""
+    monkeypatch.setenv("QUIC_MOCK_SERVER_HOST", "172.28.2.5")
+    monkeypatch.setenv("QUIC_MOCK_SERVER_PORT", "4433")
+    backend = QuicMockBackend()
+    assert backend._external_host == "172.28.2.5"
+    assert backend._external_port == 4433
+
+
+def test_quic_mock_backend_no_external_server_when_env_unset(monkeypatch):
+    monkeypatch.delenv("QUIC_MOCK_SERVER_HOST", raising=False)
+    monkeypatch.delenv("QUIC_MOCK_SERVER_PORT", raising=False)
+    backend = QuicMockBackend()
+    assert backend._external_host == ""
+    assert backend._external_port is None

@@ -28,6 +28,7 @@ Two layers, kept separate on purpose:
 
 from __future__ import annotations
 
+import os
 import socket
 import threading
 import time
@@ -308,6 +309,27 @@ class MockBackend:
     ARMS = ("dummy", "record")
     HEADLINE_ARMS = ("dummy", "record")
 
+    #: Env vars pointing MockBackend at the standalone `mock-server`
+    #: Docker service (docker-compose.yml, DESIGN.md 4.7's L3 topology)
+    #: instead of spawning an in-process server on loopback. Mirrors
+    #: LOCAL_LLM_ENGINE_URL's "read from the environment, constructor arg
+    #: wins if given" pattern (aipt.backends.local_llm.EngineAdapter):
+    #: unset (the default in every non-Docker/dev run) means "spawn our
+    #: own server exactly as before" -- fully backward compatible.
+    #:
+    #: Why this matters (found 2026-08-31, user-reported): before this,
+    #: EVERY web-UI Mock run bound its server to 127.0.0.1 inside the
+    #: `web` container and talked to itself over loopback -- never
+    #: touching `net-backend`, and therefore never traversing `gateway`.
+    #: The mock-server/quic-mock-server containers and their
+    #: gateway-routed L3 topology (docker-compose.yml, already built and
+    #: already used by aipt/backends/quic_mock/spike_runner.py's CLI)
+    #: were simply never reached by /api/run -- a Wireshark capture of a
+    #: "Mock" run showed loopback traffic with zero netem effect, because
+    #: there was no gateway hop in the path to apply netem to at all.
+    _MOCK_SERVER_HOST_ENV = "MOCK_SERVER_HOST"
+    _MOCK_SERVER_PORT_ENV = "MOCK_SERVER_PORT"
+
     def __init__(
         self,
         *,
@@ -329,6 +351,16 @@ class MockBackend:
         self.label = label
         self.transport = transport
 
+        # External target (mock-server container, reached via gateway) if
+        # configured -- see _MOCK_SERVER_HOST_ENV's docstring above.
+        # Constructor args are not exposed for this on purpose (every
+        # other backend reads its external target from the environment
+        # only, e.g. LOCAL_LLM_ENGINE_URL -- keeping this the same shape
+        # means _build_backend() in routes_run.py needs no special case).
+        self._external_host = os.environ.get(self._MOCK_SERVER_HOST_ENV, "").strip()
+        _external_port_raw = os.environ.get(self._MOCK_SERVER_PORT_ENV, "").strip()
+        self._external_port = int(_external_port_raw) if _external_port_raw else None
+
         self._server: Server | None = None
         self._server_thread: threading.Thread | None = None
         self._conn: socket.socket | None = None
@@ -337,37 +369,57 @@ class MockBackend:
         self.algorithm_requested = algorithm or ""
         self.algorithm_actual = ""
         self.algorithm_error = ""
+        #: The host/port actually connected to -- set in connect(),
+        #: whichever of external-server/in-process-server won.
+        self._peer_host: str = ""
+        self._peer_port: int = 0
 
     def ready(self) -> tuple[bool, str]:
         return True, "mock backend has no external dependency"
 
     def api_host(self) -> str:
-        if self._server is None:
-            return f"{self._bind_host}:{self._bind_port}"
-        return f"{self._server.host}:{self._server.port}"
+        if self._peer_host:
+            return f"{self._peer_host}:{self._peer_port}"
+        return f"{self._bind_host}:{self._bind_port}"
 
     def connect(self, arm: str, model: str, system: str) -> None:
-        """Start the mock server, open the keep-alive connection, and
-        start the cwnd monitor. ``system`` is accepted for protocol
-        compatibility but unused -- a record's ``system_prompt`` (set at
-        construction) is the mock backend's equivalent, since the mock
-        server never actually consults a system prompt to generate
-        anything.
-        """
-        self._server = Server(host=self._bind_host, port=self._bind_port,
-                               record=self.record)
-        self._server_thread = threading.Thread(
-            target=self._server.serve_forever, daemon=True,
-            name=f"mock-server:{self.label}")
-        self._server_thread.start()
-        time.sleep(0.05)  # let the listener come up before connecting
+        """Connect to the external `mock-server` (gateway-routed, netem
+        applies) if configured, or spawn an in-process server on loopback
+        otherwise -- see ``_MOCK_SERVER_HOST_ENV``'s docstring above.
+        ``system`` is accepted for protocol compatibility but unused -- a
+        record's ``system_prompt`` (set at construction) is the mock
+        backend's equivalent, since the mock server never actually
+        consults a system prompt to generate anything.
 
-        host, port = self._server.host, self._server.port
-        self._monitor = cwnd.Monitor(self.label, host, port=port)
+        The external server is generic (no record loaded into it) --
+        this backend always asks it for a byte-size-only dummy reply
+        (``response_bytes`` computed from the record's own answer length
+        when a record is bound) rather than relying on the server to
+        echo real answer text, matching DESIGN.md 4.5's stated Mock
+        replay philosophy ("바이트 패턴 재현이지 텍스트 동일성 아님" --
+        wire byte-size fidelity, not content fidelity). ``send_turn()``
+        below reports the record's actual answer text client-side
+        either way, so an external-server run and an in-process run
+        produce identical ``response_text`` regardless of which path
+        was taken.
+        """
+        if self._external_host and self._external_port:
+            self._peer_host, self._peer_port = self._external_host, self._external_port
+        else:
+            self._server = Server(host=self._bind_host, port=self._bind_port,
+                                   record=self.record)
+            self._server_thread = threading.Thread(
+                target=self._server.serve_forever, daemon=True,
+                name=f"mock-server:{self.label}")
+            self._server_thread.start()
+            time.sleep(0.05)  # let the listener come up before connecting
+            self._peer_host, self._peer_port = self._server.host, self._server.port
+
+        self._monitor = cwnd.Monitor(self.label, self._peer_host, port=self._peer_port)
         self._monitor.__enter__()
 
         self._conn, self.algorithm_error = _connect_with_algorithm(
-            host, port, self.algorithm, timeout=30)
+            self._peer_host, self._peer_port, self.algorithm, timeout=30)
         self._conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
             self.algorithm_actual = get_congestion_algorithm(self._conn)
@@ -378,7 +430,18 @@ class MockBackend:
     def send_turn(
         self, turn: int, question: str, measure: str, on_progress=None
     ) -> Exchange:
-        if self._conn is None or self._server is None:
+        # self._server stays None forever when connect() used the
+        # external mock-server branch (see connect()'s docstring) -- it
+        # is not "still uninitialized" in that case, self._peer_host/
+        # self._peer_port are the actual signal of a completed connect().
+        # The original check (self._server is None) predates the
+        # external-server branch and would raise on every external-server
+        # call; found via a real /api/run(transport="http1",
+        # backend="mock") run against the gateway-routed mock-server that
+        # reported ok=true with 0 turns and this exact RuntimeError
+        # buried in run["error"] -- ok=true does not mean 0 turns
+        # succeeded, always check turns/error together.
+        if self._conn is None or not self._peer_host:
             raise RuntimeError("send_turn called before connect()")
         from aipt.backends.base import progress
         progress(on_progress, backend=self.NAME, arm="record" if self.record else "dummy",
@@ -390,7 +453,11 @@ class MockBackend:
 
         t_req_start = time.monotonic()
         try:
-            resp = _http_post(self._conn, self._server.host, path, body)
+            # self._peer_host, not self._server.host -- the latter is
+            # None in external-server mode (same root cause as this
+            # method's own connect()-guard fix above: self._server is
+            # only ever set for the in-process-server branch).
+            resp = _http_post(self._conn, self._peer_host, path, body)
             error = None
         except OSError as exc:
             resp = {}
