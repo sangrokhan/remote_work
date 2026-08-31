@@ -261,33 +261,58 @@ AIPT/
 
 ## 3. 데이터 흐름
 
-### 3.1 저장되는 데이터와 관리 방식
+### 3.1 전체 데이터 흐름 (추상화)
 
-| 데이터 | 저장 위치 | 관리 방식 |
-|---|---|---|
-| **Public AI 요청/응답** | `data/public_ai_records/<exec_id>.json` (디스크, 영속) | `recording_backend()`가 매 턴 자동 기록, `mask_secrets()`로 API 키 등 마스킹. **이 프로젝트에서 유일하게 영속 저장되는 실행 산출물** — 과금이 발생한 재현 불가능한 데이터이기 때문 |
-| 그 외 실행 결과(run document, mock/local_llm 턴 기록) | `aipt/web/store.py`의 인메모리 dict | 최근 50개(MAX_RUNS) 유지, 프로세스 재시작 시 소실 — **의도된 설계** (§4.7.1). 사용자가 `bundle.zip`으로 실행 직후 다운로드해서 직접 보관 |
-| cwnd 연속 샘플 | `Monitor.result()` → 메모리 → `export.connection.connection_csv()` | 요청 시 CSV로 직렬화, 별도 DB 없음, 다운로드 후 미보관 |
-| turn 단위 레코드 | `Backend.send_turn()` → `TurnExchange` → `turn_record()` | 요청 시 `export.turns.turns_csv()`로 직렬화 |
-| pcap 캡처 | `aipt.core.capture` → `data/pcaps/` 디스크 | run당 1개 파일, `export.packets`가 파싱해 CSV 생성. 볼륨 마운트되어 호스트에 남지만 별도 보존 정책 없음(사용자 관리) |
-| packets.csv | pcap을 매 요청마다 파싱 (사전 계산 없음) | dpkt 있으면 사용, 없으면 순수 stdlib 파서 폴백 |
-| Gateway 프로파일 상태 | `aipt/gateway`가 커널 qdisc 상태에 위임 | Gateway 프로세스가 진실의 소스, 별도 저장 안 함(`GET /gateway/profile`이 매번 커널에 조회) |
-| 실측 fixture(재생용) | `recorder.py` → JSON 파일 | `MockBackend.replay`가 로드해서 재생 |
+§3.2의 3개 backend별 sequence diagram에 공통되는 뼈대만 뽑으면 아래처럼
+하나의 흐름으로 요약된다 — backend가 무엇이든 **"연결 → 턴 반복(상대가
+내부 동작 수행 → 응답) → 계측 결과 export"** 순서는 동일하고, 달라지는
+것은 상대(counterparty)가 누구인지와 그 상대가 괄호 안에서 무엇을
+하는지뿐이다.
 
-핵심 설계 원칙(§4.6 계승): **connection/turn/packet 3-레이어를 분리** —
-서로 다른 단위(tick vs turn vs packet)를 하나의 테이블에 섞지 않는다.
+```mermaid
+flowchart LR
+    U["브라우저"] -->|"POST /api/run<br/>{backend, arm, turns}"| W["aipt/web<br/>(routes_run)"]
+    W -->|"connect(arm)"| B["Backend<br/>(PublicAI / Mock / LocalLLM)"]
 
-두 번째 원칙(§4.7.1 신규): **영속 저장은 "재현 불가능하고 돈이 든 데이터"로
-한정**한다. Public AI 호출은 과금이 발생하고 실제 서비스 상태(캐시 warm-up
-등)에 의존해 재현이 어렵다 — 그래서 자동으로 남긴다. 나머지는 로컬에서
-재현 가능한 실험(mock 재생, cwnd 측정)이므로 "필요하면 다시 돌리면 된다"는
-전제로 영속화하지 않고, 사용자가 필요한 결과만 골라 zip으로 가져간다.
+    subgraph LOOP["매 turn 반복"]
+        direction LR
+        B -->|"send_turn(question)"| CP["상대(counterparty)<br/>(PublicAI=API 서버 추론 수행 /<br/>Mock=inference_delay_ms만큼 지연 /<br/>LocalLLM=서빙 엔진 추론 수행)"]
+        CP -->|"응답"| B
+    end
+
+    B -.->|"계측 훅"| Core["aipt/core<br/>(cwnd 모니터 · wire 카운터 · pcap 캡처)"]
+    B -->|"TurnExchange"| W
+    W -->|"turn_record() 누적"| Export["aipt/export<br/>(3-레이어 CSV + bundle.zip)"]
+    Export --> W
+    W -->|"실행 결과 JSON"| U
+
+    style CP fill:#3a2626,stroke:#c0392b,stroke-width:1px,color:#fff
+    style Core fill:#243447,stroke:#4a90d9,stroke-width:2px,color:#fff
+    style Export fill:#2f3b2f,stroke:#5cb85c,stroke-width:2px,color:#fff
+```
+
+**읽는 법**
+- **연결(connect)**: backend가 상대와의 세션/소켓을 열고, 동시에 `aipt/core`
+  계측(cwnd 모니터, wire 카운터, 필요시 pcap 캡처)이 훅으로 걸린다.
+- **턴 반복(send_turn)**: backend가 질문을 보내면 상대가 **자기 내부에서
+  실제 일**을 한 뒤(PublicAI는 API 서버가 추론, Mock은 `inference_delay_ms`
+  만큼만 기다렸다가 고정 응답, LocalLLM은 서빙 엔진이 실제 추론) 응답을
+  돌려준다. 이 "내부 동작"의 정체가 §3.2 다이어그램에서 `(...)`로 상세화된
+  부분이다.
+- **계측/기록**: 매 턴이 끝날 때마다 `TurnExchange`가 `aipt/web`으로
+  올라오고, 여기서 `turn_record()`로 쌓인 뒤 요청 시 `aipt/export`가
+  connection/turn/packet 3-레이어 CSV + `bundle.zip`으로 직렬화한다.
+  Public AI만 예외적으로 요청/응답 원문이 자동으로 디스크에 영속 저장되고
+  (과금이 발생해 재현 불가능하기 때문), 나머지는 인메모리에만 있다가
+  사용자가 직접 다운로드해야 남는다 — 이 차이의 구체적인 위치(어떤 파일,
+  어떤 시점)는 §3.2 각 다이어그램의 `Note`에 표기되어 있다.
 
 ### 3.2 Backend별 통신 Sequence Diagram
 
-각 화살표 옆 `(...)`는 그 모듈이 자기 내부에서 수행하는 동작(추론, 지연
-대기, 훅 실행 등)이고, `Note`는 §3.1 표에 정리된 "그 시점에 실제로 남는
-로그/추출 데이터"를 그대로 가져온 것이다.
+위 §3.1의 추상 흐름을 backend별로 구체화한 것이다. 각 화살표 옆 `(...)`는
+그 모듈이 자기 내부에서 수행하는 동작(추론, 지연 대기, 훅 실행 등)이고,
+`Note`는 그 시점에 실제로 남는 로그/추출 데이터(어떤 파일에 어떻게
+저장/비저장되는지)를 가리킨다.
 
 #### (a) PublicAIBackend — 실제 인터넷 경유
 
