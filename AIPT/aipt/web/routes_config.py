@@ -21,6 +21,7 @@ from aipt.backends.public_ai import gemini as _gemini
 from aipt.backends.public_ai import openai as _openai
 from aipt.core import capture as capture_mod
 from aipt.core import congestion as congestion_mod
+from aipt.core import quic_congestion as quic_congestion_mod
 from aipt.core import cwnd as cwndmon
 from aipt.web.routes_run import public_ai_records_dir
 
@@ -36,6 +37,19 @@ router = APIRouter()
 # kernel says it can actually run.
 def _congestion_algorithms() -> tuple[list[str], str]:
     return congestion_mod.available_algorithms()
+
+
+# QUIC congestion-control algorithms, same "read what's actually
+# available, never fabricate a fallback list" posture as
+# _congestion_algorithms() above -- but for aioquic's userspace registry
+# instead of the kernel's /proc/sys/net/ipv4/tcp_available_congestion_control
+# (DESIGN.md section 7's QUIC idle-probe spike, now surfaced as the web
+# UI's Transport picker). Includes the project's own "idle_probe"
+# algorithm alongside aioquic's stock "reno"/"cubic" -- see
+# aipt.core.quic_congestion's module docstring on why importing it has
+# that registration side effect.
+def _quic_congestion_algorithms() -> tuple[list[str], str]:
+    return quic_congestion_mod.available_algorithms()
 
 
 #: Backend display metadata for the landing page. Keyed by the same names
@@ -366,12 +380,24 @@ def config_payload() -> dict:
     cwnd_ok, cwnd_reason = cwndmon.available()
     cap_ok, cap_reason = capture_mod.available()
     algo_names, algo_reason = _congestion_algorithms()
+    quic_algo_names, quic_algo_reason = _quic_congestion_algorithms()
+    quic_ok, quic_reason = quic_congestion_mod.available()
     return {
         "backends": backends_view(),
         "ui_backends": ui_backends(),
         "public_ai_records": public_ai_record_names(),
         "congestion_algorithms": algo_names,
         "congestion_algorithms_reason": algo_reason,
+        # QUIC transport (DESIGN.md section 7/7.1): "http3" is currently
+        # mock-only (aipt.backends.quic_mock.backend.QuicMockBackend) --
+        # the UI only offers it for the mock card, gated on this being
+        # both installed (quic_available) and non-empty
+        # (quic_congestion_algorithms), same pattern the TCP algorithm
+        # dropdown already uses.
+        "quic_available": quic_ok,
+        "quic_reason": quic_reason,
+        "quic_congestion_algorithms": quic_algo_names,
+        "quic_congestion_algorithms_reason": quic_algo_reason,
         "cwnd": {
             "available": cwnd_ok,
             "reason": cwnd_reason,

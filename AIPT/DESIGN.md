@@ -654,6 +654,63 @@ RTT 증가를 감지해 cwnd를 사전에 줄인다"는 메커니즘 자체는 �
   아직 개선을 증명하지 못한 알고리즘을 사용자 대면 UI 옵션으로 노출하는
   건 시기상조.
 
+### 7.2 웹 UI 편입 (2026-08-27, 사용자 지시로 진행)
+
+부정적 A/B 결과(§7.1)에도 불구하고 사용자가 "직접 웹에서 트리거해보고
+싶다"는 명시적 요청으로 3단계(UI 편입)를 진행했다. **`idle_probe`를
+기본값으로 노출하지 않는 방식**으로 안전장치를 유지했다:
+
+- **`aipt/backends/quic_mock/backend.py` 신규** -- `QuicMockBackend`,
+  기존 `MockBackend`와 동일한 `Backend` 프로토콜 구현체. 백그라운드
+  스레드에서 전용 asyncio 이벤트 루프를 돌리고, `send_turn()`은
+  `asyncio.run_coroutine_threadsafe()`로 그 루프에 작업을 넘기고
+  블로킹 대기하는 방식(sync Backend 프로토콜 ↔ async aioquic 사이의
+  표준 브리지 패턴, `routes_run.py` docstring이 이미 SSE에서 쓰는
+  것과 동일 기법을 반대 방향으로 사용). `cwnd_result()`는 **연속
+  trace가 아니라 최종 스냅샷만** 제공 -- QUIC 혼잡제어는 유저스페이스에
+  있어 `aipt.core.cwnd`의 netlink 기반 연속 모니터가 애초에 관찰할
+  대상(커널 소켓)이 없기 때문. 이 한계를 응답의 `note` 필드에 명시.
+- **`aipt/core/quic_congestion.py` 신규** -- `aipt.core.congestion`(커널
+  TCP 모듈, `/proc/sys/net/ipv4/tcp_available_congestion_control`)과
+  동일한 "실제 사용 가능한 것만 보고, 절대 하드코딩 목록을 지어내지
+  않는다" 원칙을 QUIC(aioquic 레지스트리)에 적용. import 부작용으로
+  `idle_probe`가 aioquic 표준 `reno`/`cubic`과 함께 자동 등록됨.
+- **`RunRequest.transport`** 신규 필드(`"http1"`\|`"http3"`, 기본값
+  `"http1"`) -- `_build_backend()`가 `mock` + `transport="http3"`일 때만
+  `QuicMockBackend`를 생성(다른 백엔드 조합은 아직 미지원, 명시적으로
+  가드). **`algorithm` 필드는 재사용**하되 네임스페이스가 다름(TCP
+  커널 모듈명 vs QUIC 알고리즘명) -- `req.backend == "mock"`이면서
+  `transport == "http3"`일 때는 라우트가 `backend.algorithm`을 다시
+  덮어쓰지 않도록 가드(그렇지 않으면 생성자가 이미 해석해둔 알고리즘이
+  `None`으로 깨질 뻔했음, 실제 코드 리뷰 중 발견).
+- **UI**: `_experiment_form.html`에 **"Transport" 드롭다운** 신규
+  (`TCP (kernel, default)` / `QUIC (aioquic, mock-only spike)`,
+  **기본값 TCP**), Mock 카드 선택 시에만 노출(`app.js`의
+  `applyTransportAvailability()`). Transport를 QUIC으로 바꾸면 같은
+  "Congestion algorithm" 드롭다운의 옵션 목록 자체가
+  `config.quic_congestion_algorithms`(reno/cubic/idle_probe)로
+  교체됨(`populateAlgorithmOptions()`) -- 두 네임스페이스를 뒤섞어
+  제출할 수 없도록 UI 레벨에서도 분리.
+- **실컨테이너 검증**: `docker compose build web` 재빌드 후
+  `curl -X POST /api/run -d '{"transport":"http3","algorithm":"idle_probe",...}'`
+  실행 → 정상 완료, `turns[].transport == "http3"` 확인,
+  `/api/config`에서 `quic_available: true`,
+  `quic_congestion_algorithms: ["cubic","idle_probe","reno"]` 확인.
+- **테스트**: 유닛 3개(`tests/core/test_quic_congestion.py`) + live e2e
+  6개(`tests/backends/quic_mock/test_backend_live.py`, 실제 UDP 소켓) +
+  web API 2개(`tests/web/test_app.py`, TestClient로 `/api/run` 전체
+  경로 검증, 기본값이 여전히 http1임을 확인하는 회귀 테스트 포함) 신규.
+  `pytest -m "not live"` 471 passed(462+9), 회귀 없음.
+
+**여전히 유효한 경고**: §7.1의 실측 결과(idle_probe가 처리량 -9.9%,
+지연 +6.9%)는 바뀌지 않았다. UI에 노출은 됐지만 **기본값이 여전히
+TCP + `algorithm` 미지정**이라 아무것도 안 건드리면 idle_probe를 만날
+일이 없고, QUIC 자체를 선택해도 알고리즘 기본값은 `idle_probe`가 아니라
+aioquic 표준 `reno`다. `idle_probe`를 실제로 켜려면 Transport=QUIC +
+algorithm=idle_probe를 **둘 다 명시적으로** 선택해야 하며, 이는 "아직
+개선을 증명하지 못한 실험 알고리즘을 알고 쓰는" 것으로 사용자의 결정에
+맡긴다.
+
 각 Phase는 독립적으로 테스트 가능한 단위로 커밋하고, Phase 종료마다 사용자
 리뷰를 받는다 (`git mv` 없이 새로 복사하기로 했으므로, Phase별로 원본을 지우지
 않고 새 경로에 먼저 만든 뒤 마지막 Phase 6에서 원본을 정리한다).

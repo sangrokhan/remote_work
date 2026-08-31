@@ -138,6 +138,26 @@ class RunRequest(BaseModel):
     # pcap=None exactly as before, never a hard failure.
     capture: bool = True
 
+    # Transport this run's connection rides on. "http1" (default, kernel
+    # TCP -- every backend's original behaviour, unchanged) or "http3"
+    # (QUIC, aipt.backends.quic_mock.backend.QuicMockBackend -- mock-only
+    # for now, see that module's docstring on scope). The UI dropdown
+    # defaults to "http1" (operator decision, 2026-08-27: DESIGN.md
+    # section 7.1's idle_probe algorithm has NOT shown a measured
+    # improvement yet, so QUIC must be an opt-in the user reaches for
+    # deliberately, never the default a bare "just run it" click lands
+    # on). ``algorithm`` (below) is reused for both transports: it names
+    # a kernel TCP module under http1, or an aioquic-registered QUIC
+    # congestion control name (aipt.core.quic_congestion.available_algorithms())
+    # under http3 -- the same field, a different namespace depending on
+    # which transport is selected, matching how one dropdown already
+    # widens/narrows its own option list per other field's selection
+    # elsewhere in this form (e.g. api_type -> context_handle).
+    transport: str = Field(
+        default="http1",
+        description="'http1' (kernel TCP, default) or 'http3' (QUIC, mock-only spike).",
+    )
+
     # --- input mode ---------------------------------------------------
     # Two modes, per user decision: "dummy" and "record". The original
     # three mock arms (dummy/record/replay) collapsed to two -- a
@@ -293,6 +313,21 @@ def _build_backend(name: str, engine: str | None = None, *, req: "RunRequest | N
                 scenario_record = _load_record_scenario(req.record_id)
             except (ValueError, OSError):
                 scenario_record = None  # _resolve_turns() already reports this as a run failure
+        if req is not None and req.transport == "http3":
+            # QUIC transport, mock-only spike (DESIGN.md section 7/7.1) --
+            # imported lazily so a box without the optional [quic] extra
+            # (aioquic) never pays an import cost/failure for a request
+            # that never asks for http3. ready() (checked by the caller
+            # right after this returns) is what turns "aioquic not
+            # installed" into an honest run failure rather than a 500.
+            from aipt.backends.quic_mock.backend import QuicMockBackend
+            return QuicMockBackend(
+                record=scenario_record,
+                mock_response_bytes=req.mock_response_bytes,
+                inference_delay_ms=req.inference_delay_ms,
+                algorithm=req.algorithm,
+                label=req.label or f"{req.backend}:{req.arm}",
+            )
         return module.MockBackend(record=scenario_record)
     if name == "local_llm":
         facade = getattr(module, "LocalLLMBackend", None) or getattr(
@@ -388,7 +423,15 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
     if req.backend == "mock":
         backend.mock_response_bytes = req.mock_response_bytes
         backend.inference_delay_ms = req.inference_delay_ms
-        backend.algorithm = req.algorithm
+        # QuicMockBackend already resolved req.algorithm (possibly None)
+        # to a real QUIC algorithm name in its constructor -- an aioquic
+        # congestion control name ("reno"/"idle_probe"/...) is never the
+        # same namespace as a kernel TCP module name, so overwriting it
+        # with the raw (possibly None) request field here the way the
+        # TCP MockBackend branch below does would silently break
+        # aioquic's create_congestion_control() lookup at connect() time.
+        if req.transport != "http3":
+            backend.algorithm = req.algorithm
         backend.label = label
     else:
         # public_ai/local_llm never open their own raw socket (mock's

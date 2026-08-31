@@ -74,6 +74,71 @@ def test_api_config_lists_all_three_backends(client):
         assert isinstance(b["ready"], bool)
     assert "congestion_algorithms" in body
     assert "cwnd" in body and "capture" in body
+    # QUIC transport surfacing (DESIGN.md section 7/7.1) -- present
+    # regardless of whether aioquic is installed, so the frontend can
+    # always render the Transport dropdown's disabled state honestly.
+    assert "quic_available" in body
+    assert "quic_congestion_algorithms" in body
+
+
+def test_api_run_mock_backend_quic_transport(client):
+    """POST /api/run with transport='http3' drives
+    aipt.backends.quic_mock.backend.QuicMockBackend end-to-end (real UDP
+    sockets on loopback) instead of the default TCP MockBackend.
+    Skipped if aioquic isn't installed (optional [quic] extra)."""
+    pytest.importorskip("aioquic", reason="aioquic is an optional [quic] extra")
+
+    resp = client.post(
+        "/api/run",
+        json={
+            "backend": "mock",
+            "arm": "dummy",
+            "input_mode": "dummy",
+            "num_turns": 3,
+            "turn_user_msg_bytes": 200,
+            "system_prompt_bytes": 100,
+            "measure": "bytes",
+            "mock_response_bytes": 300,
+            "transport": "http3",
+            "algorithm": "reno",
+            "capture": False,
+        },
+    )
+    assert resp.status_code == 200
+    run = resp.json()["run"]
+    assert run["ok"] is True
+    assert len(run["turns"]) == 3
+    for turn in run["turns"]:
+        assert turn["transport"] == "http3"
+        assert turn["wire_recv"] == 300
+    # QuicMockBackend.cwnd_result() -- final-snapshot only, not a
+    # continuous trace (see that method's docstring on why).
+    assert len(run["monitors"]) == 1
+    assert run["monitors"][0]["final_cwnd"] > 0
+    assert "note" in run["monitors"][0]
+
+
+def test_api_run_mock_backend_defaults_to_tcp_transport(client):
+    """A request with no explicit 'transport' field must default to
+    'http1' (kernel TCP) -- QUIC must always be an opt-in, never
+    implicit, per DESIGN.md section 7.1's negative A/B result."""
+    resp = client.post(
+        "/api/run",
+        json={
+            "backend": "mock",
+            "arm": "dummy",
+            "input_mode": "dummy",
+            "num_turns": 1,
+            "turn_user_msg_bytes": 20,
+            "system_prompt_bytes": 10,
+            "measure": "bytes",
+            "capture": False,
+        },
+    )
+    assert resp.status_code == 200
+    run = resp.json()["run"]
+    assert run["ok"] is True
+    assert run["turns"][0]["transport"] == "http1"
 
 
 def test_api_run_mock_backend_dummy_mode_round_trips_and_lists(client):
