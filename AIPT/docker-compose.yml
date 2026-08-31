@@ -140,8 +140,15 @@ services:
       - GATEWAY_IFACE=${GATEWAY_IFACE:-eth0}
       - GATEWAY_CLIENT_IFACE=${GATEWAY_CLIENT_IFACE:-eth0}
       - GATEWAY_BACKEND_IFACE=${GATEWAY_BACKEND_IFACE:-eth1}
-      - GATEWAY_PROFILE=${GATEWAY_PROFILE:-clean}
-      - GATEWAY_DELAY_MS=${GATEWAY_DELAY_MS:-0}
+      # Default impairment: 20ms one-way delay injected on each of the
+      # Gateway's two egress interfaces (i.e. "받은 뒤 내보내기 전 20ms
+      # 대기"), so round-trip request+response each cross one gateway hop
+      # and each hop adds 20ms (client->backend leg +20ms, backend->client
+      # leg +20ms). GATEWAY_PROFILE must be "custom" for GATEWAY_DELAY_MS
+      # to take effect (named presets like "clean"/"3g" ignore the
+      # individual knobs -- see aipt/gateway/profiles.py resolve()).
+      - GATEWAY_PROFILE=${GATEWAY_PROFILE:-custom}
+      - GATEWAY_DELAY_MS=${GATEWAY_DELAY_MS:-20}
       - GATEWAY_JITTER_MS=${GATEWAY_JITTER_MS:-0}
       - GATEWAY_LOSS_PCT=${GATEWAY_LOSS_PCT:-0}
       - GATEWAY_REORDER_PCT=${GATEWAY_REORDER_PCT:-0}

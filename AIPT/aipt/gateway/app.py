@@ -35,10 +35,34 @@ Routes:
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from aipt.gateway import forwarding, netem_control, profiles
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    """DESIGN.md 4.7 설정 방식 (a): install the env-derived profile
+    (``profiles.from_env()`` -- GATEWAY_PROFILE / GATEWAY_DELAY_MS etc.) on
+    both interfaces once at container boot, mirroring what
+    :func:`set_profile` does for a runtime POST. Without this hook the env
+    vars were read but never actually installed via ``tc qdisc`` -- the
+    container booted with GATEWAY_DELAY_MS=20 set yet `tc qdisc show`
+    stayed `noqueue` until a POST /gateway/profile call. Best-effort like
+    every other netem_control call: failures (missing CAP_NET_ADMIN, no
+    `tc`) are swallowed here since GET /health already surfaces the same
+    underlying reason via netem_control.available().
+    """
+    netem_control.apply_profile_both(
+        netem_control.DEFAULT_CLIENT_IFACE,
+        netem_control.DEFAULT_BACKEND_IFACE,
+        profiles.from_env(),
+    )
+    yield
+
 
 app = FastAPI(
     title="AIPT Network Gateway",
@@ -47,6 +71,7 @@ app = FastAPI(
         "net-client and net-backend for MockBackend/LocalLLMBackend "
         "(DESIGN.md 4.7, B9, and 4.7 미해결 세부사항 1)"
     ),
+    lifespan=_lifespan,
 )
 
 
