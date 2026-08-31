@@ -43,18 +43,99 @@ def test_quic_mock_backend_transport_is_http3():
     assert backend.transport == "http3"
 
 
-def test_quic_mock_backend_cwnd_result_reports_final_snapshot():
-    backend = QuicMockBackend(mock_response_bytes=200, algorithm="idle_probe")
+def test_quic_mock_backend_cwnd_result_reports_continuous_trace():
+    """Fixed 2026-08-31 (user report): cwnd_result() used to report
+    samples=[] unconditionally for every QUIC run -- cwnd.csv/
+    cwnd_summary.csv came back empty. Now a background sampler
+    (_cwnd_sample_loop) polls aioquic's own congestion state on the
+    connection's event loop, so a run with enough turns/time actually
+    produces samples."""
+    backend = QuicMockBackend(mock_response_bytes=200, algorithm="idle_probe",
+                               label="test-cwnd-trace")
     backend.connect("dummy", "", "")
     try:
-        backend.send_turn(0, "hello", "bytes")
+        for i in range(5):
+            backend.send_turn(i, f"q{i}", "bytes")
+            time.sleep(0.1)  # let the sampler (20ms interval) collect ticks
         result = backend.cwnd_result()
         assert result["final_cwnd"] is not None
         assert result["final_cwnd"] > 0
-        assert "note" in result  # honest about not being a continuous trace
-        assert result["samples"] == []
+        assert "note" in result
+        assert len(result["samples"]) > 0, "sampler produced no ticks over 500ms"
+        assert result["sample_count"] == len(result["samples"])
+        first = result["samples"][0]
+        assert first["snd_cwnd"] is not None
+        assert first["snd_cwnd"] > 0
+        assert first["ca_state"] == "open"
     finally:
         backend.close()
+
+
+def test_quic_mock_backend_cwnd_result_samples_have_increasing_t_ms():
+    """Each sample's t_ms must strictly increase -- guards against a
+    sampler bug that stamps every row with the same (or a stale) clock
+    reading, which would make the CSV useless for plotting a trace."""
+    backend = QuicMockBackend(mock_response_bytes=100, label="test-cwnd-t-ms")
+    backend.connect("dummy", "", "")
+    try:
+        for i in range(3):
+            backend.send_turn(i, f"q{i}", "bytes")
+            time.sleep(0.08)
+        result = backend.cwnd_result()
+        t_ms_values = [s["t_ms"] for s in result["samples"]]
+        assert len(t_ms_values) >= 2
+        assert t_ms_values == sorted(t_ms_values)
+        assert t_ms_values[0] < t_ms_values[-1]
+    finally:
+        backend.close()
+
+
+def test_quic_mock_backend_cwnd_result_feeds_connection_csv():
+    """cwnd_result()'s shape must actually work as input to
+    aipt.export.connection.connection_csv()/connection_summary_csv() --
+    the whole point of fixing the empty-samples bug is that
+    /api/runs/{id}/cwnd.csv stops coming back empty for a QUIC run."""
+    from aipt.export import connection as connection_mod
+
+    backend = QuicMockBackend(mock_response_bytes=100, label="test-cwnd-csv")
+    backend.connect("dummy", "", "")
+    try:
+        for i in range(3):
+            backend.send_turn(i, f"q{i}", "bytes")
+            time.sleep(0.08)
+        result = backend.cwnd_result()
+    finally:
+        backend.close()
+
+    csv_text = connection_mod.connection_csv([result])
+    lines = csv_text.strip().splitlines()
+    assert len(lines) > 1, "cwnd.csv has a header but no data rows"
+    assert "snd_cwnd" in lines[0]
+
+    summary_text = connection_mod.connection_summary_csv([result])
+    summary_lines = summary_text.strip().splitlines()
+    assert len(summary_lines) == 2  # header + one row (one monitored label)
+    assert result["label"] in summary_lines[1]
+
+
+def test_quic_mock_backend_cwnd_result_empty_before_connect():
+    backend = QuicMockBackend()
+    assert backend.cwnd_result() == {}
+
+
+def test_quic_mock_backend_cwnd_sample_loop_stops_on_close():
+    """The sampler task must not keep running (or leak) after close() --
+    a second cwnd_result() call after close() should return whatever was
+    collected, not grow further or raise."""
+    backend = QuicMockBackend(mock_response_bytes=100, label="test-cwnd-stop")
+    backend.connect("dummy", "", "")
+    backend.send_turn(0, "hi", "bytes")
+    time.sleep(0.1)
+    backend.close()
+    result_after_close = backend.cwnd_result()
+    time.sleep(0.1)
+    result_again = backend.cwnd_result()
+    assert result_after_close["sample_count"] == result_again["sample_count"]
 
 
 def test_quic_mock_backend_algorithm_actual_reflects_requested():

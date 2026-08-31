@@ -26,12 +26,20 @@ to in the UI:
   * cwnd tracing: aioquic's congestion control lives entirely in
     userspace, so ``aipt.core.cwnd``'s netlink-based continuous monitor
     (built for kernel TCP sockets) cannot observe it at all -- there is
-    no socket inode for netlink sock_diag to query. ``cwnd_result()``
-    here reports only a final snapshot (``final_cwnd``), not the
-    continuous per-2ms trace TCP mock runs get. This is a real capability
-    gap, not a bug -- documented on the returned dict's own ``note``
-    field so the UI/CSV export can say so rather than silently showing an
-    empty chart.
+    no socket inode for netlink sock_diag to query. Instead, this module
+    runs its own lightweight sampler task on the same private asyncio
+    loop the connection lives on, polling ``QuicConnection._loss``
+    (bytes_in_flight/congestion_window/RTT stats -- the exact same
+    object ``on_rtt_measurement``/``on_packet_acked`` update) at a fixed
+    interval and appending a ``cwnd.SAMPLE_FIELDS``-shaped row each tick,
+    so ``cwnd_result()["samples"]`` is a real continuous trace, not just
+    a final value -- see ``_cwnd_sample_loop()`` below. (Earlier versions
+    of this module reported ``samples: []`` unconditionally here, which
+    meant ``cwnd.csv``/``cwnd_summary.csv`` came back empty for every
+    QUIC run -- found 2026-08-31, user report.) TCP mock still gets a
+    tighter (2ms default) trace via the real netlink monitor; the QUIC
+    sampler's interval is coarser (see ``_CWND_SAMPLE_INTERVAL_S``) since
+    it competes for the same event loop the connection's I/O runs on.
   * Packet capture: still works unmodified -- ``aipt.core.capture``
     filters tcpdump by (host, port), and QUIC's UDP traffic is exactly as
     capturable as TCP's, just a different L4 protocol in the pcap.
@@ -65,6 +73,7 @@ from aioquic.quic.events import QuicEvent, StreamDataReceived
 
 from aipt.backends.base import Transport
 from aipt.backends.record import Exchange
+from aipt.core import cwnd as cwnd_mod
 
 # Import side effect: registers "idle_probe" alongside aioquic's own
 # built-in "reno"/"cubic" (aioquic.quic.congestion.reno/cubic, imported
@@ -75,6 +84,19 @@ if TYPE_CHECKING:
     from aipt.backends.mock.records import ScenarioRecord
 
 DEFAULT_ALGORITHM = "reno"
+
+# How often _cwnd_sample_loop() polls QuicConnection._loss/._cc. Coarser
+# than aipt.core.cwnd's kernel-side 2ms default (DEFAULT_INTERVAL_MS)
+# on purpose: this poll runs as a coroutine on the SAME event loop that
+# drives the connection's actual I/O (packet send/receive, ACK
+# processing), so an aggressively short interval would compete with the
+# traffic it is trying to measure -- unlike the kernel monitor, which is
+# a wholly separate OS process (native/cwnd_monitor.c) that cannot
+# perturb the socket it watches. 20ms keeps the sampler's own CPU share
+# low while still resolving idle-reset/slow-start events, which unfold
+# over multiple RTTs (tens to hundreds of ms on any non-trivial path),
+# not single milliseconds.
+_CWND_SAMPLE_INTERVAL_S = 0.02
 
 _CERT_LOCK = threading.Lock()
 _CERT_PATHS: tuple[str, str] | None = None
@@ -280,6 +302,12 @@ class QuicMockBackend:
         self._client_cm = None
         self._client: _MockClientProtocol | None = None
         self._cc = None  # aioquic congestion control instance, for cwnd_result()
+        self._loss = None  # aioquic's QuicPacketRecovery -- RTT/bytes_in_flight source
+        #: Continuous cwnd samples, appended by _cwnd_sample_loop() while
+        #: connected -- see that method's docstring and cwnd_result().
+        self._cwnd_samples: list[dict] = []
+        self._cwnd_sample_task: asyncio.Task | None = None
+        self._cwnd_start_t: float = 0.0
         #: resolve_target() is idempotent -- connect() calls it too, so a
         #: second explicit call (routes_run.py, to learn api_host() before
         #: opening a capture window) never spawns a second server.
@@ -394,11 +422,91 @@ class QuicMockBackend:
             create_protocol=_MockClientProtocol,
         )
         self._client = await self._client_cm.__aenter__()
+        self._loss = None
         try:
-            self._cc = self._client._quic._loss._cc
+            self._loss = self._client._quic._loss
+            self._cc = self._loss._cc
         except AttributeError:
             self._cc = None
         self.algorithm_actual = self.algorithm
+
+        self._cwnd_start_t = time.monotonic()
+        self._cwnd_samples = []
+        if self._loss is not None:
+            self._cwnd_sample_task = asyncio.ensure_future(self._cwnd_sample_loop())
+
+    async def _cwnd_sample_loop(self) -> None:
+        """Poll ``QuicConnection._loss`` (the same object
+        ``on_packet_acked``/``on_rtt_measurement`` update on every ACK)
+        every ``_CWND_SAMPLE_INTERVAL_S`` and append a
+        ``cwnd.SAMPLE_FIELDS``-shaped row, so ``cwnd_result()`` returns a
+        real time series instead of a single final value -- see the
+        module docstring's "cwnd tracing" bullet for why netlink cannot
+        do this for QUIC and why this coroutine exists instead.
+
+        Runs on the same private event loop as the connection's own I/O
+        (started from ``_async_connect``, cancelled from ``_async_close``)
+        -- a background OS thread/process cannot safely read aioquic's
+        plain Python objects without risking a torn read against the
+        loop that owns them, so this deliberately trades some measurement
+        purity (the sampler shares CPU with the traffic it measures) for
+        correctness, unlike ``aipt.core.cwnd.Monitor``'s wholly separate
+        process.
+        """
+        peer = f"{self._host}:{self._port}"
+        try:
+            while True:
+                await asyncio.sleep(_CWND_SAMPLE_INTERVAL_S)
+                loss = self._loss
+                if loss is None:
+                    continue
+                now = time.monotonic()
+                sample = {
+                    "t_ms": round((now - self._cwnd_start_t) * 1000, 3),
+                    "wall": now,
+                    "local": peer,   # single connection per backend instance --
+                    "remote": peer,  # local/remote both identify it, mirroring
+                                     # cwnd.SAMPLE_FIELDS's per-socket key shape
+                                     # closely enough for idle_resets()/export
+                                     # to group this backend's own samples.
+                    "state": "",
+                    # aioquic's congestion loop never distinguishes an
+                    # explicit "recovery" ca_state the way Linux TCP does
+                    # (RenoCongestionControl just clamps cwnd on loss) --
+                    # "open" is the closest honest mapping so
+                    # aipt.core.cwnd.idle_resets() (which only counts a
+                    # drop while ca_state == "open") can still run against
+                    # this trace instead of silently counting zero resets
+                    # forever because the field never matched.
+                    "ca_state": "open",
+                    "snd_cwnd": getattr(self._cc, "congestion_window", None),
+                    "snd_ssthresh": getattr(self._cc, "ssthresh", None),
+                    "rcv_ssthresh": None,
+                    "rtt_us": round(getattr(loss, "_rtt_latest", 0.0) * 1_000_000),
+                    "rttvar_us": round(getattr(loss, "_rtt_variance", 0.0) * 1_000_000),
+                    "min_rtt_us": round(getattr(loss, "_rtt_min", 0.0) * 1_000_000)
+                    if getattr(loss, "_rtt_min", None) not in (None, float("inf"))
+                    else None,
+                    "rto_us": None, "ato_us": None,
+                    "snd_mss": None, "rcv_mss": None, "advmss": None, "pmtu": None,
+                    "unacked": None, "sacked": None, "lost": None,
+                    "retrans": None, "total_retrans": None, "reordering": None,
+                    "bytes_sent": None, "bytes_acked": None,
+                    "bytes_received": None, "bytes_retrans": None,
+                    "segs_out": None, "segs_in": None,
+                    "delivered": None, "delivery_rate": None, "pacing_rate": None,
+                    "snd_wnd": None,
+                    "rwnd_limited_us": None, "sndbuf_limited_us": None,
+                    "busy_time_us": None,
+                    "last_data_sent_ms": None, "last_data_recv_ms": None,
+                    "last_ack_recv_ms": None,
+                    "inode": None,
+                    "bytes_in_flight": getattr(self._cc, "bytes_in_flight", None),
+                }
+                if len(self._cwnd_samples) < cwnd_mod.max_samples():
+                    self._cwnd_samples.append(sample)
+        except asyncio.CancelledError:
+            pass
 
     def _request_body_text(self, turn: int, question: str) -> str:
         """See ``MockBackend._request_body_text()``'s docstring -- same
@@ -489,6 +597,13 @@ class QuicMockBackend:
         self._loop = None
 
     async def _async_close(self) -> None:
+        if self._cwnd_sample_task is not None:
+            self._cwnd_sample_task.cancel()
+            try:
+                await self._cwnd_sample_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._cwnd_sample_task = None
         if self._client_cm is not None:
             try:
                 await self._client_cm.__aexit__(None, None, None)
@@ -503,23 +618,66 @@ class QuicMockBackend:
             self._server = None
 
     def cwnd_result(self) -> dict:
-        """Final-snapshot-only cwnd info -- see module docstring on why
-        this cannot be a continuous trace the way
-        ``aipt.core.cwnd.Monitor`` produces for kernel TCP: aioquic's
-        congestion state lives in a plain Python object on this backend's
-        own event loop thread, not something netlink sock_diag can query
-        for an unrelated process. Empty dict before ``connect()``."""
+        """Continuous cwnd trace for this connection's lifetime, in the
+        same shape ``aipt.core.cwnd.Monitor.result()`` produces for
+        kernel TCP (``aipt.export.connection``'s ``connection_csv``/
+        ``connection_summary_csv`` consume either uninspected) -- see
+        the module docstring's "cwnd tracing" bullet for how the samples
+        are collected (``_cwnd_sample_loop()``, polling aioquic's
+        userspace congestion state instead of netlink). Empty dict
+        before ``connect()`` ever ran or if aioquic's internals changed
+        shape underneath ``self._cc``/``self._loss`` (defensive -- see
+        the ``AttributeError`` guard in ``_async_connect()``).
+
+        Available both while connected (live samples so far) and after
+        ``close()`` (whatever ``_cwnd_sample_loop()`` collected before
+        being cancelled) -- mirrors ``MockBackend.cwnd_result()``'s own
+        "available either side of close()" contract.
+        """
         if self._cc is None:
             return {}
+        derived = cwnd_mod.idle_resets(self._cwnd_samples)
         return {
             "label": self.label,
-            "samples": [],
-            "final_cwnd": getattr(self._cc, "congestion_window", None),
+            "host": self._host,
+            "port": self._port,
+            "ips": [self._host] if self._host else [],
+            "interval_ms": round(_CWND_SAMPLE_INTERVAL_S * 1000),
+            "interval_reason": "fixed",
+            "measurement_confidence": "degraded",
+            "samples": self._cwnd_samples,
+            "sample_count": len(self._cwnd_samples),
+            "ticks": len(self._cwnd_samples),
+            "seconds": round(
+                (self._cwnd_samples[-1]["t_ms"] / 1000) if self._cwnd_samples else 0, 3
+            ),
+            "dumps": 0,
+            "exact_queries": 0,
+            "tracked": 1 if self._cwnd_samples else 0,
+            "announced": 1,
+            "sockets": [f"{self._host}:{self._port}"] if self._host else [],
+            "truncated": len(self._cwnd_samples) >= cwnd_mod.max_samples(),
+            "error": "",
+            # QUIC-specific fields kept alongside the TCP-shaped ones above
+            # for anything that still reads them directly (e.g. the live
+            # tests this fix's own commit adds) -- final_cwnd/idle_resets/
+            # peak_cwnd below come from idle_resets() over the real trace
+            # now, not just the connection's snapshot value at call time,
+            # so they agree with what connection_summary_csv reports.
+            "final_cwnd": derived["final_cwnd"] or getattr(self._cc, "congestion_window", None),
+            "peak_cwnd": derived["peak_cwnd"],
+            "idle_resets": derived["idle_resets"],
+            "reset_events": derived["reset_events"],
             "idle_adjustments": len(getattr(self._cc, "idle_adjustments", [])),
             "note": (
                 "QUIC congestion control runs in userspace (aioquic); "
-                "aipt.core.cwnd's netlink monitor cannot observe it, so "
-                "this is a final-value snapshot, not a continuous trace."
+                "aipt.core.cwnd's netlink monitor cannot observe the kernel "
+                "socket (there isn't one for a UDP-carried QUIC stream), so "
+                "these samples come from polling aioquic's own congestion "
+                "state on the connection's event loop every "
+                f"{_CWND_SAMPLE_INTERVAL_S * 1000:.0f}ms instead -- coarser "
+                "and shares CPU with the connection's own I/O, unlike the "
+                "kernel monitor's separate-process sampling for TCP."
             ),
         }
 
