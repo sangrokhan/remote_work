@@ -317,7 +317,7 @@ flowchart LR
 #### (a) PublicAIBackend — 실제 인터넷 경유
 
 ```mermaid
-%%{init: {'theme': 'dark', 'themeVariables': {'fontSize': '18px'}, 'sequence': {'actorFontSize': 16, 'messageFontSize': 16, 'noteFontSize': 15, 'width': 160}}}%%
+%%{init: {'themeVariables': {'fontSize': '18px'}, 'sequence': {'actorFontSize': 16, 'messageFontSize': 16, 'noteFontSize': 15, 'width': 160}}}%%
 sequenceDiagram
     participant U as 브라우저
     participant W as aipt/web (routes_run)
@@ -346,7 +346,7 @@ sequenceDiagram
 #### (b) MockBackend — Network Gateway 경유 (L3 IP 포워딩)
 
 ```mermaid
-%%{init: {'theme': 'dark', 'themeVariables': {'fontSize': '18px'}, 'sequence': {'actorFontSize': 16, 'messageFontSize': 16, 'noteFontSize': 15, 'width': 160}}}%%
+%%{init: {'themeVariables': {'fontSize': '18px'}, 'sequence': {'actorFontSize': 16, 'messageFontSize': 16, 'noteFontSize': 15, 'width': 160}}}%%
 sequenceDiagram
     participant U as 브라우저
     participant W as aipt/web (routes_run, net-client)
@@ -380,7 +380,7 @@ sequenceDiagram
 #### (c) LocalLLMBackend — engine gateway(애플리케이션) + Network Gateway(L3) 이중 경유
 
 ```mermaid
-%%{init: {'theme': 'dark', 'themeVariables': {'fontSize': '18px'}, 'sequence': {'actorFontSize': 16, 'messageFontSize': 16, 'noteFontSize': 15, 'width': 160}}}%%
+%%{init: {'themeVariables': {'fontSize': '18px'}, 'sequence': {'actorFontSize': 16, 'messageFontSize': 16, 'noteFontSize': 15, 'width': 160}}}%%
 sequenceDiagram
     participant U as 브라우저
     participant W as aipt/web (routes_run)
