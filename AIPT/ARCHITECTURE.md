@@ -74,7 +74,7 @@ flowchart TB
     EXPORT --> WEBAPP
 
     BACKENDS <-->|"public_ai — 인터넷 직행"| TARGETS
-    BACKENDS ==>|"mock/local_llm — L3 forward"| GATEWAY
+    BACKENDS ==>|"L3 forward"| GATEWAY
     GATEWAY ==> TARGETS
 
     style GATEWAY fill:#2d2d3a,stroke:#e0a030,stroke-width:2px,color:#fff
