@@ -293,6 +293,38 @@ def test_api_run_capture_false_leaves_pcap_none(client, tmp_path, monkeypatch):
     assert resp.json()["run"]["pcap"] is None
 
 
+def test_api_run_capture_requested_but_unavailable_reports_why(client, monkeypatch):
+    """Found 2026-08-31 (user report): a run with capture=true and a
+    completely successful conversation (ok=true, all turns succeeded)
+    came back with pcap=null and NO way to tell why -- capture.available()
+    's own (ok, reason) tuple was being read and silently discarded right
+    at the call site. When capture WAS requested but capture.available()
+    says no (tcpdump missing, no NET_RAW, disabled via env, whatever),
+    run["pcap"] must now carry {"ok": False, "error": <the actual reason>}
+    instead of a bare None that is indistinguishable from 'never asked'."""
+    from aipt.web import routes_run
+
+    monkeypatch.setattr(
+        routes_run.capture_mod, "available",
+        lambda: (False, "tcpdump not installed"),
+    )
+    resp = client.post(
+        "/api/run",
+        json={
+            "backend": "mock", "arm": "dummy", "input_mode": "dummy",
+            "num_turns": 1, "turn_user_msg_bytes": 20, "system_prompt_bytes": 10,
+            "measure": "bytes", "mock_response_bytes": 32,
+            "capture": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    run = resp.json()["run"]
+    assert run["ok"] is True  # the conversation itself still succeeded
+    assert run["pcap"] is not None
+    assert run["pcap"]["ok"] is False
+    assert run["pcap"]["error"] == "tcpdump not installed"
+
+
 def test_split_api_host_handles_all_three_backend_shapes():
     from aipt.web.routes_run import _split_api_host
 

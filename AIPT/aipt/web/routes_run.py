@@ -481,8 +481,19 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
     records: list[dict] = []
     error = "" 
     cap = None
+    # Reason pcap ends up None in the result, surfaced to the caller instead
+    # of silently dropped -- found 2026-08-31 (user report): a run with
+    # capture=true came back with ok=true, 20/20 turns succeeded, and
+    # pcap=null with NO way to tell whether that meant "capture was off",
+    # "tcpdump/NET_RAW unavailable in this container", or "capture crashed
+    # after connect()". capture_mod.available()'s own (ok, reason) tuple
+    # was being read and then thrown away right here -- every other
+    # capability check in this codebase (aipt.core.capture/cwnd/offload's
+    # own module docstrings: "every no names the knob that turns it into a
+    # yes") reports why, and this call site was the one place that didn't.
+    cap_skip_reason = ""
     if req.capture:
-        cap_ok, _cap_reason = capture_mod.available()
+        cap_ok, cap_reason = capture_mod.available()
         if cap_ok:
             # api_host() is only meaningful once connect() has picked a
             # concrete target (mock starts its own server on a random
@@ -496,8 +507,13 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
             cap_label = re.sub(r"[^a-z0-9_-]", "_", label.lower()) or "run"
         else:
             cap_label = ""
+            cap_skip_reason = cap_reason
     else:
         cap_label = ""
+        # capture=false is an intentional no-op, not a failure -- pcap
+        # stays plain None here (test_api_run_capture_false_leaves_pcap_none),
+        # unlike the cap_ok=False branch above where the user DID ask for
+        # a capture and it could not happen.
     t0 = time.monotonic()
     try:
         # Capture must open BEFORE the connection handshake, not after --
@@ -601,7 +617,9 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
         "elapsed_s": round(elapsed_s, 3),
         "turns": records,
         "monitors": [cwnd_result] if cwnd_result else [],
-        "pcap": cap.result() if cap is not None else None,
+        "pcap": cap.result() if cap is not None else (
+            {"ok": False, "error": cap_skip_reason} if cap_skip_reason else None
+        ),
         "algorithm": algorithm_result,
         "exec_id": exec_id,
     }
