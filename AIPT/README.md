@@ -64,9 +64,10 @@ cc -O2 -Wall -o native/cwnd_monitor native/cwnd_monitor.c
 
 ```bash
 cd AIPT
-cp .env.example .env   # GEMINI_API_KEY / OPENAI_API_KEY 등 필요시 채우기
-docker compose up --build
+make up   # .env 없으면 scripts/ensure_env.sh가 .env.example -> .env로 자동 생성 후 docker compose up --build
 ```
+
+`.env`가 이미 있으면 `make up`은 그 파일을 그대로 사용하고(절대 덮어쓰지 않음), `GEMINI_API_KEY`/`OPENAI_API_KEY` 등 필요한 값만 채우면 된다. 직접 `docker compose`를 쓰고 싶다면 먼저 `./scripts/ensure_env.sh`(idempotent, 이미 있으면 스킵)를 한 번 실행하거나 수동으로 `cp .env.example .env`를 해도 된다 -- `docker-compose.yml`의 모든 서비스는 `${VAR:-default}` 형태로 기본값이 박혀 있어 `.env`가 아예 없어도 부팅은 되지만(`.env.example`과 동일한 기본값), 실제로 그 기본값이 뭔지 매번 `docker compose config`로 확인하는 대신 `.env`가 항상 존재하도록 만드는 쪽이 더 명시적이다.
 
 기동 후 웹 UI: <http://localhost:10000>
 

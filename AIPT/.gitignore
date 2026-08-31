@@ -9,3 +9,7 @@ native/cwnd_monitor
 
 # Runtime data (pcaps, run history) -- not source
 data/
+
+# Local secrets/overrides (API keys) -- generated from .env.example by
+# scripts/ensure_env.sh / `make up`, never checked in.
+.env
