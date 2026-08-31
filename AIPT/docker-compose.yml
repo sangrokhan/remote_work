@@ -277,6 +277,13 @@ services:
       # Survives container restarts now instead of only living in the
       # in-process OrderedDict.
       - ./data/runs:/app/data/runs
+      # aipt.backends.mock.records.RECORD_DIR -- hand-authored Q&A
+      # scenarios (perf.json/smoke.json) that also feed the "Record"
+      # dropdown (routes_config.public_ai_record_names()). Volume-mounted
+      # (not just baked in by the Dockerfile COPY) so editing/adding a
+      # record on the host is picked up on container restart without a
+      # rebuild.
+      - ./records:/app/records
     depends_on:
       - gateway
       - local-llm

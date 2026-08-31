@@ -68,6 +68,7 @@ from pydantic import BaseModel, Field
 
 import aipt.backends as backends_registry
 from aipt.backends.mock import conversation as mock_conversation
+from aipt.backends.mock import records as mock_records
 from aipt.backends.mock import replay as mock_replay
 from aipt.backends.record import turn_record
 from aipt.backends.public_ai import recorder as public_ai_recorder
@@ -180,17 +181,38 @@ class RunRequest(BaseModel):
 
 
 def _load_record_scenario(record_id: str):
-    """Loads ``data/public_ai_records/<record_id>.json`` and rebuilds it as
-    a byte-pattern-only replay :class:`~aipt.backends.mock.records.ScenarioRecord`
-    (question verbatim, answer -> same-length placeholder). Raises
-    ``ValueError``/``OSError`` on a bad/missing record -- callers turn that
-    into a normal run failure, never a raw 500.
+    """Loads a record by id/exec_id, trying both record sources that feed
+    the "Record" dropdown (``routes_config.public_ai_record_names()`` lists
+    both, so any name shown there must resolve here too):
+
+    1. ``data/public_ai_records/<record_id>.json`` -- a *captured* real
+       public_ai exchange (DESIGN.md 4.7.1). Its ``response_text`` is a
+       real model's actual answer from a *previous* run, not this one, so
+       it is byte-pattern-only replayed (``mock_replay.from_public_ai_record_doc``
+       -- question verbatim, answer -> same-length placeholder) to avoid
+       presenting a stale answer as if it just came back live.
+    2. ``records/<record_id>.json`` (``aipt.backends.mock.records.RECORD_DIR``)
+       -- a *hand-authored* Q&A scenario (e.g. ``records/perf.json``,
+       ``records/smoke.json``). This is canned test data, not a captured
+       live exchange, so its answer text is real content meant to be
+       replayed verbatim (``mock_records.load_scenario_record`` keeps it
+       as-is, no placeholder).
+
+    Either way, only the *question* half is ever used for public_ai/local_llm
+    runs (see ``_resolve_turns``) -- the answer half only matters to the
+    Mock backend, which has no real model to ask (``_build_backend``).
+
+    Raises ``ValueError``/``OSError`` on a bad/missing record -- callers
+    turn that into a normal run failure, never a raw 500.
     """
     if not record_id:
         raise ValueError("record_id is required")
-    path = public_ai_records_dir() / f"{record_id}.json"
-    doc = json.loads(path.read_text())
-    return mock_replay.from_public_ai_record_doc(doc, name=record_id)
+    captured_path = public_ai_records_dir() / f"{record_id}.json"
+    if captured_path.exists():
+        doc = json.loads(captured_path.read_text())
+        return mock_replay.from_public_ai_record_doc(doc, name=record_id)
+    scenario_path = mock_records.RECORD_DIR / f"{record_id}.json"
+    return mock_records.load_scenario_record(scenario_path)
 
 
 def _resolve_turns(req: RunRequest) -> tuple[list[str], str, str | None]:

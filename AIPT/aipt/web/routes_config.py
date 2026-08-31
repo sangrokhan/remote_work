@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 import aipt.backends as backends_registry
+from aipt.backends.mock import records as mock_records
 from aipt.backends.public_ai import gemini as _gemini
 from aipt.backends.public_ai import openai as _openai
 from aipt.core import capture as capture_mod
@@ -331,17 +332,29 @@ def backends_view() -> list[dict]:
 
 
 def public_ai_record_names() -> list[str]:
-    """exec_ids under ``data/public_ai_records/`` -- what the "replay:
-    record:<exec_id>" dropdown in the experiment form picks from. Same
-    honest-empty-list-not-500 posture as the other listing helpers here:
-    a missing/unreadable directory just means no records yet."""
+    """Names for the "Record" dropdown in the experiment form: unions two
+    sources so both feed the same ``record_id`` field (see
+    ``routes_run._load_record_scenario``, which resolves either):
+
+    * ``data/public_ai_records/<exec_id>.json`` -- captured real public_ai
+      exchanges (DESIGN.md 4.7.1), auto-written by a previous public_ai run.
+    * ``records/<name>.json`` (``aipt.backends.mock.records.RECORD_DIR``)
+      -- hand-authored Q&A scenarios shipped with the repo (``perf.json``,
+      ``smoke.json``).
+
+    Same honest-empty-list-not-500 posture as the other listing helpers
+    here: a missing/unreadable directory just means no records yet.
+    A name present in both dirs is deduped (set union) rather than shown
+    twice."""
+    names: set[str] = set()
     base = public_ai_records_dir()
-    if not base.exists():
-        return []
-    try:
-        return sorted(p.stem for p in base.glob("*.json"))
-    except OSError:
-        return []
+    if base.exists():
+        try:
+            names.update(p.stem for p in base.glob("*.json"))
+        except OSError:
+            pass
+    names.update(mock_records.names())
+    return sorted(names)
 
 
 def config_payload() -> dict:

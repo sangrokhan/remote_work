@@ -53,6 +53,7 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY aipt ./aipt
+COPY records ./records
 COPY --from=builder /build/native ./native
 
 # web extra: fastapi/uvicorn/jinja2/python-multipart/httpx (aipt/web/*).
