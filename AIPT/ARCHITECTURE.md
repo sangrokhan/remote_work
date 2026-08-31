@@ -283,126 +283,98 @@ AIPT/
 재현 가능한 실험(mock 재생, cwnd 측정)이므로 "필요하면 다시 돌리면 된다"는
 전제로 영속화하지 않고, 사용자가 필요한 결과만 골라 zip으로 가져간다.
 
-### 3.2 Backend별 데이터 흐름 (모듈 → 화살표, 로그/추출 데이터 관점)
+### 3.2 Backend별 통신 Sequence Diagram
 
-아래는 mermaid 시퀀스가 아니라 **"어떤 모듈이 무엇을 하고(괄호 = 내부 동작),
-그 시점에 어떤 로그/추출 데이터가 남는가"** 를 한 줄씩 따라가는 표기다.
-`(...)` 는 화살표를 던진 모듈이 자기 내부에서 수행하는 동작(추론, 지연,
-훅 실행 등), `［로그/추출］` 은 그 홉에서 실제로 기록되거나 3-레이어
-CSV/영속 파일로 빠져나가는 데이터를 가리킨다.
+각 화살표 옆 `(...)`는 그 모듈이 자기 내부에서 수행하는 동작(추론, 지연
+대기, 훅 실행 등)이고, `Note`는 §3.1 표에 정리된 "그 시점에 실제로 남는
+로그/추출 데이터"를 그대로 가져온 것이다.
 
-#### (a) PublicAIBackend — 실제 인터넷 직행 (Gateway 미경유)
+#### (a) PublicAIBackend — 실제 인터넷 경유
 
-```
-브라우저
-  → aipt/web routes_run  (POST /api/run 파싱)
-    → PublicAIBackend.connect(arm)
-        (wire 소켓 카운터 세션 오픈, cwnd.Monitor 시작 — 옵션)
-      ［로그/추출: cwnd.csv 헤더 시작, label=public_ai:<arm>］
+```mermaid
+sequenceDiagram
+    participant U as 브라우저
+    participant W as aipt/web (routes_run)
+    participant B as PublicAIBackend
+    participant Core as aipt.core (wire/cwnd)
+    participant Ext as Gemini/OpenAI API
 
-    ┌─ loop: send_turn(turn, question) ───────────────────────────┐
-    │ PublicAIBackend → Gemini/OpenAI API  (HTTPS 요청, 실제 인터넷) │
-    │   (API 서버가 자체적으로 추론 수행 — SSE 스트리밍 or blocking)   │
-    │ Gemini/OpenAI API → PublicAIBackend  (응답 바이트 도착)         │
-    │   (streaming.read_stream()로 SSE 파싱 / wire 카운트 갱신)       │
-    │ ［로그/추출: TurnExchange → turn_record()                      │
-    │   → turns.csv 1행 (wire_sent/recv, ttft_ms/ttlt_ms, tokens,   │
-    │     goodput_bps); recorder.py가 request/response 원문을        │
-    │     mask_secrets() 후 data/public_ai_records/<exec_id>.json    │
-    │     에 즉시 영속 저장 — 이 프로젝트에서 유일하게 디스크에 남는     │
-    │     실행 산출물］                                               │
-    └───────────────────────────────────────────────────────────────┘
-
-    → PublicAIBackend.close()  (cwnd 결과 확정, wire_counter 종료)
-      ［로그/추출: cwnd.csv 종료 + connection 요약(reset_events 등,
-        인메모리)］
-  → aipt/web  (턴 결과 누적 → 실행 결과 JSON, bundle.zip 요청 시 3-레이어
-    CSV + public_ai_records JSON 함께 묶음)
-→ 브라우저
+    U->>W: POST /api/run {backend: public_ai, arm, turns}
+    W->>B: connect(arm)
+    B->>Core: wire_counter() 진입, cwnd.Monitor 시작(옵션)
+    loop 각 turn
+        W->>B: send_turn(turn, question)
+        B->>Ext: HTTPS 요청 (실제 인터넷, Gateway 미경유)
+        Ext-->>B: 응답 (API 서버가 자체적으로 추론 수행 후 SSE 또는 blocking으로 전송)
+        B->>Core: streaming.read_stream() / wire 카운트 갱신
+        B-->>W: TurnExchange (wire_sent/recv, ttft/ttlt, tokens)
+        Note right of W: turn_record() → turns.csv 1행.<br/>recorder.py가 요청/응답 원문을<br/>mask_secrets() 후 data/public_ai_records/<exec_id>.json<br/>에 즉시 영속 저장 — 이 프로젝트에서<br/>유일하게 디스크에 자동으로 남는 실행 산출물
+    end
+    W->>B: close()
+    B->>Core: cwnd 결과 확정, wire_counter 종료
+    Note right of Core: cwnd 연속 샘플은 Monitor.result() → 메모리에만 존재,<br/>요청 시 export.connection.connection_csv()로 직렬화<br/>(별도 DB 없음, 다운로드 후 미보관)
+    W->>W: turn_record() 누적, public_ai면 recorder로 JSON 영속 저장
+    W-->>U: 실행 결과 JSON
 ```
 
 #### (b) MockBackend — Network Gateway 경유 (L3 IP 포워딩)
 
-```
-[사전 조건] 브라우저 → aipt/web → Gateway API POST /gateway/profile
-  (Gateway 커널이 client-facing + backend-facing 양쪽 인터페이스 egress에
-   tc netem 지연/손실 프로파일을 동시 적용 — apply_profile_both())
-  ［로그/추출: 없음 — 커널 qdisc 상태 자체가 진실의 소스, GET /gateway/profile
-    조회 시마다 실시간으로 읽음］
+```mermaid
+sequenceDiagram
+    participant U as 브라우저
+    participant W as aipt/web (routes_run, net-client)
+    participant B as MockBackend
+    participant Core as aipt.core (cwnd/capture)
+    participant K as Gateway 커널 (ip_forward + tc netem, L3)
+    participant M as mock-server (net-backend)
 
-브라우저 → aipt/web routes_run (net-client)
-  → MockBackend.connect(arm)
-      (cwnd.Monitor 시작 — 2ms 고정 또는 경로 RTT 기반 적응형 주기,
-       capture.py로 tcpdump 캡처 시작 — 옵션)
-    ［로그/추출: pcap 파일 오픈 (data/pcaps/), cwnd.csv 헤더 시작］
-
-    ┌─ loop: 각 turn (누적 컨텍스트, fixture 또는 byte-size) ─────────┐
-    │ MockBackend → Gateway 커널 (ip_forward, TCP 연결)                │
-    │   (entrypoint가 추가한 라우트로 Gateway를 next-hop 경유)          │
-    │ Gateway 커널 → mock-server  (netem 지연/손실 적용된 IP 포워딩,     │
-    │   TCP 페이로드는 들여다보지 않음)                                  │
-    │ mock-server  (fixture 텍스트 또는 지정 byte 크기로 응답 생성,       │
-    │   inference_delay_ms 만큼 대기 — 실측 지연 재생 아님, 순수 설정값)  │
-    │ mock-server → Gateway 커널 → MockBackend  (응답도 동일 경로 왕복,   │
-    │   netem이 양쪽에 걸려 있으므로 응답도 지연/손실 겪음)               │
-    │ ［로그/추출: TurnExchange → turn_record() → turns.csv 1행;         │
-    │   pcap에 해당 구간 패킷 계속 누적 기록됨］                          │
-    └─────────────────────────────────────────────────────────────────┘
-
-    → MockBackend  (idle 구간에 idle RTT probe — 옵션, cwnd 리셋 이벤트 관찰)
-      ［로그/추출: cwnd.csv에 idle_resets/reset_events 카운트 기록
-        — "idle 후 slow-start-after-idle 리셋"이 이 프로젝트의 핵심 관측값］
-    → MockBackend.close()
-  → aipt/web  (turn_record 누적 + connection 결과, 전부 인메모리·비영속
-    — store.py에 최근 50개만 유지, 재시작 시 소실)
-    ［로그/추출: packets.csv는 요청 시점에 pcap을 매번 새로 파싱해서 생성
-      (사전 계산 없음); 사용자가 GET /api/runs/{id}/bundle.zip으로 직접
-      받아야만 cwnd/turn/packet CSV + pcap이 실제로 보존됨］
-→ 브라우저  (실행 결과 JSON, idle_resets 등 포함)
+    U->>W: POST /api/run {backend: mock, arm: fixture, turns}
+    Note over K: 사전에 POST /gateway/profile 로<br/>양쪽 인터페이스에 지연/손실 프로파일 적용됨<br/>(apply_profile_both). 별도 저장 없음 —<br/>Gateway 프로세스가 진실의 소스, GET /gateway/profile이<br/>매번 커널 qdisc 상태를 직접 조회
+    W->>B: connect(arm)
+    B->>Core: cwnd.Monitor 시작 (2ms 또는 적응형 주기), capture 시작(옵션)
+    Note right of Core: pcap 캡처는 aipt.core.capture → data/pcaps/ 디스크에<br/>run당 1개 파일로 남음 (볼륨 마운트, 별도 보존 정책 없음)
+    loop 각 turn (누적 컨텍스트)
+        B->>K: TCP 연결 (entrypoint가 추가한 라우트로 Gateway를 next-hop 경유)
+        K->>M: 커널 IP 포워딩 (TCP 페이로드 미검사, netem 지연/손실 적용됨)
+        M-->>K: mock 응답 (fixture 텍스트 또는 지정 byte 크기 생성,<br/>inference_delay_ms 만큼 지연 후 전송 — 실측 재현 아님, 설정값)
+        K-->>B: 커널 IP 포워딩 (응답도 동일 경로로 왕복)
+        B-->>W: TurnExchange
+        Note right of W: Backend.send_turn() → TurnExchange → turn_record(),<br/>요청 시 export.turns.turns_csv()로 직렬화
+    end
+    B->>Core: idle probe(옵션), cwnd 리셋 이벤트 관찰
+    W->>B: close()
+    Core-->>W: cwnd 결과 + pcap
+    Note right of W: packets.csv는 pcap을 매 요청마다 새로 파싱해서 생성<br/>(사전 계산 없음, dpkt 있으면 사용 없으면 stdlib 폴백)
+    W->>W: turn_record() + connection 결과 (인메모리, 비영속)
+    Note right of W: run document/턴 기록은 aipt/web/store.py의 인메모리 dict —<br/>최근 50개(MAX_RUNS) 유지, 프로세스 재시작 시 소실(의도된 설계, §4.7.1).<br/>사용자가 bundle.zip으로 실행 직후 다운로드해야 보관됨
+    W-->>U: 실행 결과 JSON (idle_resets 등 포함)
 ```
 
 #### (c) LocalLLMBackend — engine gateway(애플리케이션) + Network Gateway(L3) 이중 경유
 
+```mermaid
+sequenceDiagram
+    participant U as 브라우저
+    participant W as aipt/web (routes_run)
+    participant B as LocalLLMBackend
+    participant EG as engine gateway (gateway.py, 애플리케이션 레벨)
+    participant K as Network Gateway 커널 (ip_forward + tc netem, L3)
+    participant E as 서빙 엔진 (llama.cpp/vLLM)
+
+    U->>W: POST /api/run {backend: local_llm, turns}
+    W->>B: connect()
+    B->>EG: 요청 준비 (on_request 훅, transport 헤더 주입)
+    EG->>K: TCP 연결 (라우트를 통해 Gateway 경유)
+    K->>E: 커널 IP 포워딩 → OpenAI 호환 /v1/chat/completions
+    E-->>K: 응답 (추론은 표준 엔진이 수행 — AIPT는 엔진 프로세스 자체를 재구현하지 않음)
+    K-->>EG: 커널 IP 포워딩 (지연/손실 반영됨)
+    EG->>EG: on_response 훅
+    EG-->>B: 응답 + wire 계측
+    B-->>W: TurnExchange
+    Note right of W: turn_record() → turns.csv 1행 (blocking 호출이라<br/>ttft_ms=ttlt_ms=turn_end_ms로 동일하게 기록).<br/>Public AI와 달리 자동 영속 저장 없음 — 인메모리(store.py)만 유지,<br/>bundle.zip으로만 보존
+    W->>B: close()
+    W-->>U: 실행 결과 JSON
 ```
-브라우저 → aipt/web routes_run
-  → LocalLLMBackend.connect()
-      (wire.reset_session()으로 이전 run의 커넥션 재사용 방지,
-       wire.watch_connections()로 소켓 오픈을 감시 등록,
-       cwnd.Monitor 시작)
-    ［로그/추출: cwnd.csv 헤더 시작, label=local_llm］
-
-    ┌─ loop: send_turn(turn, question) ────────────────────────────────┐
-    │ LocalLLMBackend → engine gateway (gateway.py, 애플리케이션 레벨)   │
-    │   (on_request 훅 — X-AIPT-Transport 헤더 등 transport 슬롯 주입)  │
-    │ engine gateway → Network Gateway 커널 (ip_forward + tc netem, L3)  │
-    │   (라우트를 통해 Gateway 경유하도록 강제됨)                        │
-    │ Network Gateway 커널 → 서빙 엔진(llama.cpp/vLLM)                  │
-    │   (커널 IP 포워딩 → OpenAI 호환 /v1/chat/completions)             │
-    │ 서빙 엔진  (표준 엔진이 실제 토큰 생성/추론 수행 — AIPT는 엔진      │
-    │   프로세스 자체를 재구현하지 않음)                                 │
-    │ 서빙 엔진 → Network Gateway 커널 → engine gateway                 │
-    │   (netem 지연/손실 반영된 응답)                                    │
-    │ engine gateway  (on_response 훅 실행)                             │
-    │ engine gateway → LocalLLMBackend  (응답 + wire 바이트 계측)        │
-    │ ［로그/추출: TurnExchange → turn_record() → turns.csv 1행           │
-    │   (blocking 호출이라 ttft_ms=ttlt_ms=turn_end_ms로 동일하게 기록)］ │
-    └──────────────────────────────────────────────────────────────────┘
-
-    → LocalLLMBackend.close()  (watch_connections 구독 해제)
-      ［로그/추출: cwnd.csv 종료; pcap은 client↔Gateway 구간만 관찰
-        (Gateway↔엔진 구간은 별도 관찰 대상 아님)］
-  → aipt/web  (turn_record 누적, 전부 인메모리·비영속 — public_ai와 달리
-    자동 영속 저장 없음, bundle.zip으로만 보존)
-→ 브라우저  (실행 결과 JSON)
-```
-
-**세 backend의 로그/추출 관점 요약**
-
-| Backend | 내부 동작이 일어나는 지점 | 지연 표현 방식 | 영속 저장 여부 |
-|---|---|---|---|
-| PublicAIBackend | 상대 API 서버 자체 (`(API 서버가 추론 수행)`) | 실제 인터넷 RTT 그대로 (조작 없음) | **자동 영속** — `data/public_ai_records/<exec_id>.json` |
-| MockBackend | mock-server 핸들러 (`(fixture 생성 + inference_delay_ms 대기)`) | 설정값 `inference_delay_ms` (실측 재생 아님) + Gateway netem | 비영속(인메모리) — bundle.zip으로만 |
-| LocalLLMBackend | 서빙 엔진 프로세스 (`(표준 엔진이 실제 추론 수행)`) | 실제 엔진 추론 시간 + Gateway netem (엔진 앞단 engine gateway는 순수 훅) | 비영속(인메모리) — bundle.zip으로만 |
 
 ---
 
