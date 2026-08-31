@@ -100,15 +100,18 @@ make up   # .env 없으면 scripts/ensure_env.sh가 .env.example -> .env로 자�
 ```
 AIPT/
 ├── aipt/
-│   ├── core/       # 3-backend 공통 계측: cwnd, capture, offload, wire, streaming, netem
+│   ├── core/       # 3-backend 공통 계측: cwnd, capture, offload, wire, streaming, netem,
+│   │                 congestion(TCP 커널 가용 알고리즘 조회), quic_congestion(QUIC 가용 조회)
 │   ├── backends/   # Backend 프로토콜 + public_ai / mock / local_llm 구현체
+│   │                 + quic_mock/ (idle-probe QUIC 혼잡제어 실험용 스파이크, Backend 미구현)
 │   ├── gateway/    # Network Gateway (tc netem 제어 + 프로파일 API, 별도 컨테이너)
 │   ├── export/     # connection.csv / turns.csv(+goodput_bps) / packets.csv / bundle.zip
 │   └── web/        # FastAPI 단일 앱 (backend 선택형 실험 UI)
 ├── native/         # cwnd_monitor.c — netlink 연속 샘플링, 별도 프로세스
-├── docker/          # Dockerfile.{web,gateway,mockserver}
-├── docker-compose.yml
-├── tests/           # core / backends / export / web / gateway — 440+ tests
+├── docker/          # Dockerfile.{web,gateway,mockserver,local_llm,quic_mock_server}
+│                      + entrypoint_{web,mockserver,local_llm,quic_mock_server}.py
+├── docker-compose.yml  # web + gateway + mock-server + local-llm + quic-mock-server (5-service)
+├── tests/           # core / backends / export / web / gateway — 519 tests
 ├── ARCHITECTURE.md  # 최종 아키텍처 레퍼런스 (다이어그램 포함)
 ├── DESIGN.md        # 설계 결정 이력
 └── MIGRATION.md     # 이관 기록

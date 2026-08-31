@@ -109,7 +109,7 @@ AIPT/
 ├── MIGRATION.md                   # 파일 단위 이관 체크리스트
 ├── README.md
 ├── pyproject.toml                 # base deps=requests, extras: dev/export/web
-├── docker-compose.yml             # web + gateway + mock-server 3-service
+├── docker-compose.yml             # web + gateway + mock-server + local-llm + quic-mock-server 5-service
 │
 ├── aipt/                          # 설치 가능한 패키지 루트
 │   ├── core/                      # ★ 3-backend 공통 계측 계층
@@ -120,9 +120,11 @@ AIPT/
 │   │   ├── wire.py                 #   소켓 바이트 카운터
 │   │   ├── streaming.py            #   SSE 리더
 │   │   ├── tcpinfo.py              #   1회성 TCP_INFO 스냅샷
+│   │   ├── congestion.py           #   TCP 커널 가용 혼잡제어 알고리즘 조회 (/proc 실측)
+│   │   ├── quic_congestion.py      #   QUIC(aioquic) 가용 혼잡제어 알고리즘 조회 (userspace)
 │   │   └── config.py               #   env 플래그 판독
 │   │
-│   ├── backends/                  # ★ Backend 프로토콜 + 3개 구현체
+│   ├── backends/                  # ★ Backend 프로토콜 + 3개 구현체 + 1개 실험 스파이크
 │   │   ├── base.py                 #   Backend 프로토콜(connect/send_turn/close), TurnExchange
 │   │   ├── record.py               #   turn_record() 공통 스키마
 │   │   ├── public_ai/              #   ① Public AI backend
@@ -131,13 +133,17 @@ AIPT/
 │   │   │   └── _call.py / _cachebust.py
 │   │   ├── mock/                   #   ② Mock backend
 │   │   │   ├── server.py               (keep-alive HTTP mock 서버)
-│   │   │   ├── fixtures.py             (Q&A JSON / byte-sweep)
+│   │   │   ├── records.py              (ScenarioRecord: byte-sweep + Q&A JSON 통합 로딩)
 │   │   │   ├── replay.py               (실측 재생, 바이트만)
 │   │   │   ├── conversation.py         (MockBackend, core 연동)
 │   │   │   └── probe.py                (idle RTT probe)
-│   │   └── local_llm/              #   ③ Local LLM backend
-│   │       ├── engine_adapter.py       (표준 엔진 OpenAI 호환 클라이언트)
-│   │       └── gateway.py              ("engine gateway" — 애플리케이션 레벨 프록시)
+│   │   ├── local_llm/              #   ③ Local LLM backend
+│   │   │   ├── engine_adapter.py       (표준 엔진 OpenAI 호환 클라이언트)
+│   │   │   └── gateway.py              ("engine gateway" — 애플리케이션 레벨 프록시)
+│   │   └── quic_mock/               #   QUIC idle-probe 혼잡제어 실험 스파이크 (Backend 미구현,
+│   │       ├── backend.py / server.py    번호 없는 4번째 backend 후보 — Mock 전용 측정 실험,
+│   │       ├── congestion.py             aipt/web에서 아직 호출 불가)
+│   │       ├── experiment.py / spike_runner.py    ("idle_probe" QUIC 알고리즘 — PING으로 idle-gap 능동 측정)
 │   │
 │   ├── gateway/                   # ★ ④ Network Gateway (L3 IP 포워딩, 별도 컨테이너)
 │   │   ├── profiles.py             #   clean/broadband/3g/satellite/lossy/custom
@@ -163,9 +169,11 @@ AIPT/
 │   ├── Dockerfile.web              # web 서비스 (cwnd 헬퍼 빌드 + tcpdump + iproute2)
 │   ├── Dockerfile.gateway          # gateway 서비스 (iproute2, NET_ADMIN 필요)
 │   ├── Dockerfile.mockserver       # mock-server 서비스
-│   └── entrypoint_mockserver.py
+│   ├── Dockerfile.local_llm        # local-llm 서비스 (engine gateway 컨테이너)
+│   ├── Dockerfile.quic_mock_server # quic-mock-server 서비스 (idle-probe 실험용)
+│   └── entrypoint_{web,mockserver,local_llm,quic_mock_server}.py
 │
-└── tests/                          # core(7) / backends(15) / export(4) / web(1) / gateway(3)
+└── tests/                          # core(8) / backends(19) / export(4) / web(4) / gateway(4) / top-level(1) — 40 test files, 519 tests
 ```
 
 ---
