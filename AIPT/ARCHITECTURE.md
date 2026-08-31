@@ -17,40 +17,40 @@ flowchart TB
     end
 
     subgraph WEBAPP["aipt/web — FastAPI 단일 앱 (컴포넌트 ⑤ 프론트)"]
-        Routes["실행/설정 API 라우팅"]
-        Store["실행 이력 관리 (인메모리, 최근 50개)"]
-        Records["Public AI 요청/응답 영속 저장소"]
+        Routes["API 라우팅"]
+        Store["실행 이력 저장"]
+        Records["AI 기록 저장소"]
     end
 
     subgraph CORE["aipt/core — 3-backend 공통 계측 (모든 backend가 공유)"]
         direction LR
-        Cwnd["혼잡윈도우(cwnd) 연속 모니터링"]
+        Cwnd["cwnd 모니터링"]
         Capture["패킷 캡처"]
-        Wire["소켓 바이트 계측 / 스트리밍 응답 판독"]
-        Offload["NIC 오프로드(TSO/GSO) 제어"]
+        Wire["소켓 계측"]
+        Offload["NIC 오프로드"]
         Cwnd ~~~ Capture ~~~ Wire ~~~ Offload
     end
 
     subgraph BACKENDS["aipt/backends — Backend 프로토콜 (컴포넌트 ①②③)"]
         direction LR
-        PublicAI["① Public AI 연동 (Gemini/OpenAI 호출)"]
-        Mock["② 로컬 재현 트래픽 생성 (Mock 서버)"]
-        LocalLLM["③ 로컬 서빙 엔진 연동 (엔진 게이트웨이)"]
+        PublicAI["① PublicAI 연동"]
+        Mock["② Mock 트래픽"]
+        LocalLLM["③ LocalLLM 연동"]
         PublicAI ~~~ Mock ~~~ LocalLLM
     end
 
     subgraph GATEWAY["aipt/gateway — Network Gateway (컴포넌트 ④, L3 IP 포워딩)"]
         direction LR
-        Forward["커널 IP 포워딩 상태 확인"]
-        Netem["네트워크 프로파일 적용 (지연/손실/재정렬)"]
-        ProfileAPI["프로파일 제어 API"]
+        Forward["포워딩 확인"]
+        Netem["netem 적용"]
+        ProfileAPI["Gateway API"]
         Forward ~~~ Netem ~~~ ProfileAPI
     end
 
     subgraph TARGETS["연결 대상"]
         direction LR
-        MockNet["mock-server<br/>(net-backend 172.28.2.0/24)"]
-        Engine["로컬 서빙 엔진<br/>llama.cpp / vLLM (외부 실행)"]
+        MockNet["mock-server"]
+        Engine["서빙 엔진"]
         Gemini["Gemini API"]
         OpenAI["OpenAI API"]
         MockNet ~~~ Engine ~~~ Gemini ~~~ OpenAI
@@ -58,10 +58,10 @@ flowchart TB
 
     subgraph EXPORT["aipt/export — 3-레이어 산출물 (다운로드 전용, 비영속)"]
         direction LR
-        Connection["연결 레벨(cwnd) 산출물 생성"]
-        Turns["턴 레벨 처리량 산출물 생성"]
-        Packets["패킷 레벨 산출물 생성"]
-        Bundle["산출물 번들 압축"]
+        Connection["cwnd 산출물"]
+        Turns["turn 산출물"]
+        Packets["packet 산출물"]
+        Bundle["번들 압축"]
         Connection ~~~ Turns ~~~ Packets ~~~ Bundle
     end
 
@@ -73,8 +73,8 @@ flowchart TB
     CORE --> EXPORT
     EXPORT --> WEBAPP
 
-    BACKENDS <-->|"public_ai만 — 실제 인터넷,<br/>Gateway 미경유"| TARGETS
-    BACKENDS ==>|"mock/local_llm — L3 forward<br/>(커널 IP 포워딩, TCP 미검사)"| GATEWAY
+    BACKENDS <-->|"public_ai — 인터넷 직행"| TARGETS
+    BACKENDS ==>|"mock/local_llm — L3 forward"| GATEWAY
     GATEWAY ==> TARGETS
 
     style GATEWAY fill:#2d2d3a,stroke:#e0a030,stroke-width:2px,color:#fff
