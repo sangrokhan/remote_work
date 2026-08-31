@@ -17,33 +17,33 @@ flowchart TB
     end
 
     subgraph WEBAPP["aipt/web — FastAPI 단일 앱 (컴포넌트 ⑤ 프론트)"]
-        Routes["routes_config / routes_run / routes_runs"]
-        Store["store.py (인메모리, 최근 50개)"]
-        Records["data/public_ai_records/*.json<br/>(Public AI 요청/응답, 유일한 영속 저장)"]
+        Routes["실행/설정 API 라우팅<br/><sub>routes_config / routes_run / routes_runs</sub>"]
+        Store["실행 이력 관리 (인메모리, 최근 50개)<br/><sub>store.py</sub>"]
+        Records["Public AI 요청/응답 영속 저장소<br/><sub>data/public_ai_records/*.json</sub>"]
     end
 
     subgraph CORE["aipt/core — 3-backend 공통 계측 (모든 backend가 공유)"]
         direction LR
-        Cwnd["cwnd.py + native/cwnd_monitor.c<br/>(별도 프로세스)"]
-        Capture["capture.py (tcpdump + timestamp_source)"]
-        Wire["wire.py / streaming.py"]
-        Offload["offload.py"]
+        Cwnd["혼잡윈도우(cwnd) 연속 모니터링<br/><sub>cwnd.py + native/cwnd_monitor.c (별도 프로세스)</sub>"]
+        Capture["패킷 캡처<br/><sub>capture.py (tcpdump + timestamp_source)</sub>"]
+        Wire["소켓 바이트 계측 / 스트리밍 응답 판독<br/><sub>wire.py / streaming.py</sub>"]
+        Offload["NIC 오프로드(TSO/GSO) 제어<br/><sub>offload.py</sub>"]
         Cwnd ~~~ Capture ~~~ Wire ~~~ Offload
     end
 
     subgraph BACKENDS["aipt/backends — Backend 프로토콜 (컴포넌트 ①②③)"]
         direction LR
-        PublicAI["① PublicAIBackend<br/>gemini.py / openai.py"]
-        Mock["② MockBackend<br/>server.py / fixtures.py / replay.py"]
-        LocalLLM["③ LocalLLMBackend<br/>engine_adapter.py / gateway.py(engine gateway)"]
+        PublicAI["① Public AI 연동 (Gemini/OpenAI 호출)<br/><sub>gemini.py / openai.py</sub>"]
+        Mock["② 로컬 재현 트래픽 생성 (Mock 서버)<br/><sub>server.py / fixtures.py / replay.py</sub>"]
+        LocalLLM["③ 로컬 서빙 엔진 연동 (엔진 게이트웨이)<br/><sub>engine_adapter.py / gateway.py</sub>"]
         PublicAI ~~~ Mock ~~~ LocalLLM
     end
 
     subgraph GATEWAY["aipt/gateway — Network Gateway (컴포넌트 ④, L3 IP 포워딩)"]
         direction LR
-        Forward["forwarding.py<br/>ip_forward=1 확인"]
-        Netem["netem_control.py<br/>apply_profile_both()"]
-        ProfileAPI["app.py<br/>/gateway/profile"]
+        Forward["커널 IP 포워딩 상태 확인<br/><sub>forwarding.py</sub>"]
+        Netem["네트워크 프로파일 적용 (지연/손실/재정렬)<br/><sub>netem_control.py</sub>"]
+        ProfileAPI["프로파일 제어 API<br/><sub>app.py — /gateway/profile</sub>"]
         Forward ~~~ Netem ~~~ ProfileAPI
     end
 
@@ -58,10 +58,10 @@ flowchart TB
 
     subgraph EXPORT["aipt/export — 3-레이어 산출물 (다운로드 전용, 비영속)"]
         direction LR
-        Connection["connection.py → cwnd.csv"]
-        Turns["turns.py → turns.csv (+goodput_bps)"]
-        Packets["packets.py → packets.csv"]
-        Bundle["bundle.py → bundle.zip"]
+        Connection["연결 레벨(cwnd) 산출물 생성<br/><sub>connection.py → cwnd.csv</sub>"]
+        Turns["턴 레벨 처리량 산출물 생성<br/><sub>turns.py → turns.csv (+goodput_bps)</sub>"]
+        Packets["패킷 레벨 산출물 생성<br/><sub>packets.py → packets.csv</sub>"]
+        Bundle["산출물 번들 압축<br/><sub>bundle.py → bundle.zip</sub>"]
         Connection ~~~ Turns ~~~ Packets ~~~ Bundle
     end
 
