@@ -119,15 +119,16 @@
       <label for="num_turns">Multi-turn 횟수</label>
       <input type="number" id="num_turns" name="num_turns" value="10" min="1">
     </div>
-    <div class="field">
-      <label for="inference_delay_ms">추론 시간 (ms)</label>
-      <input type="number" id="inference_delay_ms" name="inference_delay_ms" value="1000" min="0">
-    </div>
     <p class="hint">turn마다 이전 turn까지의 요청+응답이 누적되어(stateless 재전송) 요청 크기가 커진다.</p>
   </fieldset>
 
   <fieldset id="mock-fields" class="backend-fields" data-key="mock">
     <legend>Mock options</legend>
+    <div class="field">
+      <label for="inference_delay_ms">추론 지연시간 (ms)</label>
+      <input type="number" id="inference_delay_ms" name="inference_delay_ms" value="1000" min="0">
+      <p class="hint">응답이 오기까지 mock 서버가 대기하는 시간. Record/Dummy 두 입력 모드 모두 적용되고, Transport(TCP/QUIC) 어느 쪽을 선택해도 동일하게 적용된다.</p>
+    </div>
   </fieldset>
 
   <fieldset id="gemini-fields" class="backend-fields" data-key="gemini">

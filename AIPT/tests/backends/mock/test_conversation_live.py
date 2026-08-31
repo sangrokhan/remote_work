@@ -216,3 +216,71 @@ def test_mock_backend_external_server_full_lifecycle(monkeypatch, srv):
         # dummy-mode test in this file, not a sign the external-server
         # path dropped bytes.
         assert exc.wire_recv == 0
+
+
+# --- inference_delay_ms (server-side, aipt.backends.mock.server's `delay`
+# query param) -- applies on both input modes, checked here because
+# QuicMockBackend's own delay support (added 2026-08-31, this same fix)
+# needed a wire-format change TCP's already-working HTTP path did not. ------
+
+
+@skip_no_cwnd
+def test_mock_backend_inference_delay_ms_holds_reply_back():
+    """A nonzero inference_delay_ms measurably delays send_turn()'s
+    return -- not just an accepted-but-ignored parameter."""
+    backend = conversation.MockBackend(
+        host="127.0.0.1", port=0, mock_response_bytes=100,
+        inference_delay_ms=400, label="mockbackend-delay-check",
+    )
+    backend.connect(arm="dummy", model="mock-record", system="")
+    try:
+        t0 = time.monotonic()
+        exchange = backend.send_turn(turn=0, question="hi", measure="bytes")
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        assert exchange.error is None
+        assert elapsed_ms >= 400 * 0.8
+    finally:
+        backend.close()
+
+
+@skip_no_cwnd
+def test_mock_backend_inference_delay_ms_applies_in_record_mode():
+    """The delay must also apply in input_mode='record' (a ScenarioRecord
+    bound) -- delay is a server-side query param independent of whether
+    the reply body comes from record.turns[i].answer or dummy padding."""
+    record = ScenarioRecord(
+        name="tcp-delay-record-test",
+        turns=[Turn(question="q0", answer="a real recorded answer")],
+    )
+    backend = conversation.MockBackend(
+        record=record, host="127.0.0.1", port=0,
+        inference_delay_ms=350, label="mockbackend-delay-record-check",
+    )
+    backend.connect(arm="record", model="mock-record", system=record.system_prompt)
+    try:
+        t0 = time.monotonic()
+        exchange = backend.send_turn(turn=0, question=record.turns[0].question, measure="bytes")
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        assert exchange.error is None
+        assert exchange.text == "a real recorded answer"
+        assert elapsed_ms >= 350 * 0.8
+    finally:
+        backend.close()
+
+
+@skip_no_cwnd
+def test_mock_backend_zero_delay_replies_fast():
+    """delay=0 (default) should not introduce a multi-hundred-ms wait."""
+    backend = conversation.MockBackend(
+        host="127.0.0.1", port=0, mock_response_bytes=100,
+        label="mockbackend-delay-zero-check",
+    )
+    backend.connect(arm="dummy", model="mock-record", system="")
+    try:
+        t0 = time.monotonic()
+        exchange = backend.send_turn(turn=0, question="hi", measure="bytes")
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        assert exchange.error is None
+        assert elapsed_ms < 300
+    finally:
+        backend.close()

@@ -500,7 +500,24 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
         cap_label = ""
     t0 = time.monotonic()
     try:
-        backend.connect(req.arm, req.model, system)
+        # Capture must open BEFORE the connection handshake, not after --
+        # resolve_target() (Mock/QuicMock only; a no-op via getattr for
+        # public_ai/local_llm, whose api_host() is already known pre-
+        # connect) picks the concrete peer host/port without putting any
+        # packet on the wire, so api_host() is valid here and the tcpdump
+        # window below can open while the connection is still unopened.
+        # Found 2026-08-31 (user report): a QUIC run's pcap showed zero
+        # Initial/Handshake packets, so Wireshark had nothing to identify
+        # the connection as QUIC by and displayed the encrypted 1-RTT
+        # remainder as plain UDP -- root cause was capture starting only
+        # after connect() (which QuicMockBackend used to run the entire
+        # handshake inside) had already finished it. The same ordering
+        # bug existed for every other backend too (TCP's SYN/ACK just
+        # degrades less visibly, since a mid-stream TCP capture is still
+        # recognizable as TCP from the port/flags alone).
+        resolve_target = getattr(backend, "resolve_target", None)
+        if callable(resolve_target):
+            resolve_target()
         if cap_label:
             host, port = _split_api_host(backend.api_host())
             # QUIC (transport="http3") rides on UDP, not TCP -- a tcpdump
@@ -518,6 +535,7 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
                 timestamp=timestamp, label=cap_label, host=host, port=port,
                 proto=cap_proto)
             cap.__enter__()
+        backend.connect(req.arm, req.model, system)
         for i, question in enumerate(questions):
             exchange = backend.send_turn(i, question, req.measure)
             record = turn_record(

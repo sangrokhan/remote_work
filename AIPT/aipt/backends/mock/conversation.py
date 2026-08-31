@@ -369,10 +369,23 @@ class MockBackend:
         self.algorithm_requested = algorithm or ""
         self.algorithm_actual = ""
         self.algorithm_error = ""
-        #: The host/port actually connected to -- set in connect(),
+        #: The host/port actually connected to -- set in resolve_target(),
         #: whichever of external-server/in-process-server won.
         self._peer_host: str = ""
         self._peer_port: int = 0
+        #: resolve_target() is idempotent -- connect() calls it too (for a
+        #: caller that never calls resolve_target() itself, e.g. direct
+        #: test/CLI use), so a second call from routes_run.py (which now
+        #: calls it explicitly, before opening a capture window) must not
+        #: spawn a second server or overwrite an already-resolved target.
+        self._target_resolved = False
+        #: System prompt bound at connect() (only meaningful in record
+        #: mode -- see _request_body_text()'s docstring) and the growing
+        #: (question, answer) history built up as send_turn() completes
+        #: each turn, both consumed by _request_body_text() to reproduce
+        #: real stateless-multi-turn-client cumulative upload growth.
+        self._system: str = ""
+        self._history: list[tuple[str, str]] = []
 
     def ready(self) -> tuple[bool, str]:
         return True, "mock backend has no external dependency"
@@ -382,14 +395,47 @@ class MockBackend:
             return f"{self._peer_host}:{self._peer_port}"
         return f"{self._bind_host}:{self._bind_port}"
 
+    def resolve_target(self) -> None:
+        """Pick (and, for the in-process case, start) the server this
+        connection will talk to -- *without* opening the client socket or
+        putting a packet on the wire.
+
+        Split out of ``connect()`` (idempotent, safe to call first) so a
+        caller that wants a packet capture to see the TCP handshake can
+        call this to learn ``api_host()`` and open the capture window
+        *before* calling ``connect()`` -- which is exactly what
+        ``aipt/web/routes_run.py`` does now. Found via a Wireshark capture
+        of a QUIC mock run showing zero handshake packets: capture opened
+        after ``connect()`` had already finished the handshake, on every
+        backend, TCP included -- this fixes it for Mock/TCP the same way
+        ``QuicMockBackend.resolve_target()`` fixes it for QUIC.
+        """
+        if self._target_resolved:
+            return
+        if self._external_host and self._external_port:
+            self._peer_host, self._peer_port = self._external_host, self._external_port
+        else:
+            self._server = Server(host=self._bind_host, port=self._bind_port,
+                                   record=self.record)
+            self._server_thread = threading.Thread(
+                target=self._server.serve_forever, daemon=True,
+                name=f"mock-server:{self.label}")
+            self._server_thread.start()
+            time.sleep(0.05)  # let the listener come up before connecting
+            self._peer_host, self._peer_port = self._server.host, self._server.port
+        self._target_resolved = True
+
     def connect(self, arm: str, model: str, system: str) -> None:
-        """Connect to the external `mock-server` (gateway-routed, netem
-        applies) if configured, or spawn an in-process server on loopback
-        otherwise -- see ``_MOCK_SERVER_HOST_ENV``'s docstring above.
-        ``system`` is accepted for protocol compatibility but unused -- a
-        record's ``system_prompt`` (set at construction) is the mock
-        backend's equivalent, since the mock server never actually
-        consults a system prompt to generate anything.
+        """Open the client TCP connection (the actual handshake) to
+        whichever target ``resolve_target()`` picked -- external
+        `mock-server` (gateway-routed, netem applies) or an in-process
+        server on loopback; see ``_MOCK_SERVER_HOST_ENV``'s docstring
+        above. ``system`` is accepted for protocol compatibility but
+        unused -- a record's ``system_prompt`` (set at construction) is
+        the mock backend's equivalent, since the mock server never
+        actually consults a system prompt to generate anything (it IS,
+        however, sent on the wire as part of turn 0's request body -- see
+        ``send_turn()``'s cumulative-history accounting).
 
         The external server is generic (no record loaded into it) --
         this backend always asks it for a byte-size-only dummy reply
@@ -403,17 +449,8 @@ class MockBackend:
         produce identical ``response_text`` regardless of which path
         was taken.
         """
-        if self._external_host and self._external_port:
-            self._peer_host, self._peer_port = self._external_host, self._external_port
-        else:
-            self._server = Server(host=self._bind_host, port=self._bind_port,
-                                   record=self.record)
-            self._server_thread = threading.Thread(
-                target=self._server.serve_forever, daemon=True,
-                name=f"mock-server:{self.label}")
-            self._server_thread.start()
-            time.sleep(0.05)  # let the listener come up before connecting
-            self._peer_host, self._peer_port = self._server.host, self._server.port
+        self._system = system or ""
+        self.resolve_target()
 
         self._monitor = cwnd.Monitor(self.label, self._peer_host, port=self._peer_port)
         self._monitor.__enter__()
@@ -426,6 +463,58 @@ class MockBackend:
         except OSError:
             self.algorithm_actual = ""
         self._monitor.announce(self._conn)
+
+    def _request_body_text(self, turn: int, question: str) -> str:
+        """The actual text this turn puts on the wire.
+
+        ``input_mode="dummy"`` (no record bound) already hands ``question``
+        in as the *full* cumulative-context text -- ``routes_run._resolve_turns()``
+        pre-computed it via ``build_turns()`` (system prompt folded into
+        turn 0, running history folded into every turn after), so this
+        just passes it through unchanged.
+
+        ``input_mode="record"`` (a ``ScenarioRecord`` bound, e.g.
+        ``records/perf.json``) used to do the opposite: ``question`` was
+        only that turn's own short question text, sent alone, with no
+        system prompt and no prior turns re-sent -- so a 20-turn record
+        whose system prompt is 20KB and whose real per-turn text is a few
+        hundred bytes came out on the wire as a few-hundred-byte request
+        every turn, never growing, which is not what any real stateless
+        multi-turn client (the thing Mock's dummy mode explicitly models,
+        per ``build_turns``'s own docstring) actually sends -- a real
+        client re-uploads the system prompt plus every prior turn's
+        question+answer on every new turn. Found 2026-08-31 (user report:
+        wire sizes captured under 1000 bytes on every turn of a 20-turn
+        record run, implausible for a record with a >=20KB system prompt).
+
+        Fixed the same way for both modes now: reconstruct the growing
+        transcript from ``self._system`` (bound at ``connect()``) and
+        ``self._history`` (this turn's own prior turns, appended after
+        each ``send_turn()`` call below) -- system prompt on EVERY turn
+        (not just turn 0), then every prior (question, answer) pair, then
+        this turn's own question. System prompt is resent every turn, not
+        just folded into turn 0, to match ``build_turns()``'s dummy-mode
+        semantics: there, ``system_prompt_bytes`` is added into turn 0's
+        ``prompt_bytes``, and that whole figure (system prompt included)
+        becomes part of ``history``, which then keeps compounding into
+        every later turn's total via ``history = prompt_bytes + mock_response_bytes``
+        -- i.e. the system prompt's byte weight never drops out of the
+        running total, so a faithful text reconstruction must resend it
+        every turn too, not just once. ``self.record is None`` (dummy
+        mode) skips this and keeps the old pass-through behaviour, since
+        that text is already cumulative from the caller's side and
+        re-growing it here would double-count.
+        """
+        if self.record is None:
+            return question
+        parts: list[str] = []
+        if self._system:
+            parts.append(self._system)
+        for prior_question, prior_answer in self._history:
+            parts.append(prior_question)
+            parts.append(prior_answer)
+        parts.append(question)
+        return "\n\n".join(parts)
 
     def send_turn(
         self, turn: int, question: str, measure: str, on_progress=None
@@ -447,7 +536,8 @@ class MockBackend:
         progress(on_progress, backend=self.NAME, arm="record" if self.record else "dummy",
                   phase="steady", turn=turn, turns=len(self.record) if self.record else 0)
 
-        body = question.encode()
+        request_text = self._request_body_text(turn, question)
+        body = request_text.encode()
         path = (f"/inference-mock?delay={self.inference_delay_ms}"
                 f"&response_bytes={self.mock_response_bytes}&turn={turn}")
 
@@ -466,6 +556,14 @@ class MockBackend:
 
         answer = resp.get("answer", "") if isinstance(resp, dict) else ""
         req_ms = int((t_req_end - t_req_start) * 1000)
+
+        if self.record is not None:
+            # Grow history AFTER this turn, from the real question/answer
+            # pair -- never from the accumulated request_text itself
+            # (which already contains every earlier turn; appending it
+            # again would double every turn's contribution on the next
+            # request).
+            self._history.append((question, answer))
 
         return Exchange(
             wire_sent=len(body),

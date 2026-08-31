@@ -105,15 +105,29 @@ def _ensure_cert() -> tuple[str, str]:
 
 class _MockEchoProtocol(QuicConnectionProtocol):
     """Server side. Each turn's request is
-    ``struct.pack(">I", desired_reply_bytes) + question_text`` on its own
-    stream (one stream per turn, matching HTTP/1.1 MockBackend's
-    one-request-per-turn shape over its single keep-alive connection);
-    the reply is ``desired_reply_bytes`` bytes of filler, or (if this
-    protocol instance has ``self.record`` bound) the record's actual
-    answer text for that turn, sized to its own byte length regardless of
-    what the client asked for -- same "record answer wins over a byte-size
-    request" precedence as ``aipt.backends.mock.server``'s
-    ``_record_answer()``.
+    ``struct.pack(">II", desired_reply_bytes, inference_delay_ms) +
+    question_text`` on its own stream (one stream per turn, matching
+    HTTP/1.1 MockBackend's one-request-per-turn shape over its single
+    keep-alive connection); the reply is ``desired_reply_bytes`` bytes of
+    filler, or (if this protocol instance has ``self.record`` bound) the
+    record's actual answer text for that turn, sized to its own byte
+    length regardless of what the client asked for -- same "record
+    answer wins over a byte-size request" precedence as
+    ``aipt.backends.mock.server``'s ``_record_answer()``. If
+    ``inference_delay_ms`` is nonzero, the reply is held back that long
+    before being sent -- the QUIC-side equivalent of
+    ``aipt.backends.mock.server``'s ``delay`` query param /
+    ``time.sleep(delay_ms / 1000)`` (found missing 2026-08-31: user report
+    that a QUIC mock run showed no inference delay at all, verified true
+    -- MockBackend's TCP path applies ``inference_delay_ms`` server-side
+    on every ``/inference-mock`` request regardless of input_mode, but
+    this protocol had no delay field in its wire format at all).
+
+    Backward compatible with an 8-byte-short (4-byte, no delay field)
+    request -- an older/mismatched client is treated as delay_ms=0
+    rather than a protocol error, since a length-prefix-only client
+    (pre-delay-field) is otherwise a legitimate, if outdated, caller of
+    this echo protocol.
     """
 
     def __init__(self, *args, **kwargs) -> None:
@@ -132,7 +146,12 @@ class _MockEchoProtocol(QuicConnectionProtocol):
         data = bytes(buf)
         del self._buffers[event.stream_id]
 
-        requested_len = struct.unpack(">I", data[:4])[0] if len(data) >= 4 else 400
+        if len(data) >= 8:
+            requested_len, delay_ms = struct.unpack(">II", data[:8])
+        elif len(data) >= 4:
+            requested_len, delay_ms = struct.unpack(">I", data[:4])[0], 0
+        else:
+            requested_len, delay_ms = 400, 0
         turn_idx = self._turn_counter
         self._turn_counter += 1
 
@@ -142,7 +161,19 @@ class _MockEchoProtocol(QuicConnectionProtocol):
         else:
             body = b"x" * requested_len
 
-        self._quic.send_stream_data(event.stream_id, body, end_stream=True)
+        if delay_ms > 0:
+            # quic_event_received is a synchronous callback -- the sleep
+            # has to happen on a scheduled task, not inline, or it would
+            # block aioquic's whole event-processing loop (every other
+            # connection/stream too, not just this turn) for delay_ms.
+            asyncio.ensure_future(self._send_after_delay(event.stream_id, body, delay_ms))
+        else:
+            self._quic.send_stream_data(event.stream_id, body, end_stream=True)
+            self.transmit()
+
+    async def _send_after_delay(self, stream_id: int, body: bytes, delay_ms: int) -> None:
+        await asyncio.sleep(delay_ms / 1000)
+        self._quic.send_stream_data(stream_id, body, end_stream=True)
         self.transmit()
 
 
@@ -249,6 +280,19 @@ class QuicMockBackend:
         self._client_cm = None
         self._client: _MockClientProtocol | None = None
         self._cc = None  # aioquic congestion control instance, for cwnd_result()
+        #: resolve_target() is idempotent -- connect() calls it too, so a
+        #: second explicit call (routes_run.py, to learn api_host() before
+        #: opening a capture window) never spawns a second server.
+        self._target_resolved = False
+        #: System prompt bound at connect() and the growing (question,
+        #: answer) history built as send_turn() completes each turn --
+        #: same cumulative-context accounting as MockBackend's own
+        #: _request_body_text()/self._history (see that docstring for the
+        #: full story: a record-mode run without this sends only each
+        #: turn's own short question, never growing, which is not what a
+        #: real stateless multi-turn client sends).
+        self._system: str = ""
+        self._history: list[tuple[str, str]] = []
 
     def ready(self) -> tuple[bool, str]:
         try:
@@ -260,18 +304,52 @@ class QuicMockBackend:
     def api_host(self) -> str:
         return f"{self._host}:{self._port}"
 
-    def connect(self, arm: str, model: str, system: str) -> None:
-        """``system`` accepted for protocol compatibility, unused --
-        same posture as ``MockBackend.connect()``."""
-        self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(
-            target=self._loop.run_forever, daemon=True, name=f"quic-mock:{self.label}"
+    def resolve_target(self) -> None:
+        """Start the private asyncio loop + (for the in-process case)
+        the aioquic server -- everything short of the actual QUIC
+        handshake -- so a caller can learn ``api_host()`` and open a
+        packet capture *before* ``connect()`` performs the handshake.
+
+        Split out of ``connect()`` (idempotent, safe to call first) for
+        the same reason ``MockBackend.resolve_target()`` was: a Wireshark
+        capture of a QUIC mock run showed zero Initial/Handshake packets
+        because tcpdump only started after ``connect()`` had already
+        finished the full TLS 1.3 handshake -- with no long-header
+        packets in the pcap, Wireshark has nothing to identify the
+        connection as QUIC by, and displays the (fully 1-RTT-encrypted)
+        remainder as plain UDP. ``aipt/web/routes_run.py`` now calls this
+        first, opens the capture, and only then calls ``connect()``.
+        """
+        if self._target_resolved:
+            return
+        fut = asyncio.run_coroutine_threadsafe(
+            self._async_resolve_target(), self._ensure_loop()
         )
-        self._thread.start()
-        fut = asyncio.run_coroutine_threadsafe(self._async_connect(), self._loop)
+        fut.result(timeout=15)
+        self._target_resolved = True
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+            self._thread = threading.Thread(
+                target=self._loop.run_forever, daemon=True, name=f"quic-mock:{self.label}"
+            )
+            self._thread.start()
+        return self._loop
+
+    def connect(self, arm: str, model: str, system: str) -> None:
+        """``system`` accepted for protocol compatibility; also bound to
+        ``self._system`` for turn-0 cumulative-context accounting -- see
+        ``_request_body_text()``'s docstring (shared logic with
+        ``MockBackend``, mirrored here since aioquic's async client
+        protocol can't share that sync implementation directly)."""
+        self._system = system or ""
+        loop = self._ensure_loop()
+        self.resolve_target()
+        fut = asyncio.run_coroutine_threadsafe(self._async_connect(), loop)
         fut.result(timeout=15)
 
-    async def _async_connect(self) -> None:
+    async def _async_resolve_target(self) -> None:
         cert, key = _ensure_cert()
 
         if self._external_host and self._external_port:
@@ -306,6 +384,7 @@ class QuicMockBackend:
                 bound_host, bound_port = sock.getsockname()[:2]
                 self._host, self._port = bound_host, bound_port
 
+    async def _async_connect(self) -> None:
         client_config = QuicConfiguration(
             is_client=True, congestion_control_algorithm=self.algorithm
         )
@@ -320,6 +399,22 @@ class QuicMockBackend:
         except AttributeError:
             self._cc = None
         self.algorithm_actual = self.algorithm
+
+    def _request_body_text(self, turn: int, question: str) -> str:
+        """See ``MockBackend._request_body_text()``'s docstring -- same
+        cumulative-context reconstruction, duplicated here rather than
+        shared because the two backends' send_turn() call this from
+        different sync/async contexts."""
+        if self.record is None:
+            return question
+        parts: list[str] = []
+        if self._system:
+            parts.append(self._system)
+        for prior_question, prior_answer in self._history:
+            parts.append(prior_question)
+            parts.append(prior_answer)
+        parts.append(question)
+        return "\n\n".join(parts)
 
     def send_turn(
         self, turn: int, question: str, measure: str, on_progress=None
@@ -342,7 +437,11 @@ class QuicMockBackend:
         if self.record is not None and turn < len(self.record.turns):
             response_bytes = len(self.record.turns[turn].answer.encode())
 
-        payload = struct.pack(">I", response_bytes) + question.encode()
+        request_text = self._request_body_text(turn, question)
+        payload = (
+            struct.pack(">II", response_bytes, self.inference_delay_ms)
+            + request_text.encode()
+        )
         t0 = time.monotonic()
         try:
             reply = await self._client.send_turn(payload)
@@ -357,6 +456,15 @@ class QuicMockBackend:
             text = self.record.turns[turn].answer
         else:
             text = reply.decode("utf-8", errors="replace")
+
+        if self.record is not None:
+            # Grow history from the real (question, answer) pair, not
+            # request_text (which already contains every earlier turn --
+            # appending it again would double-count on the next request).
+            # `text` here is the record's own canned answer (server-side
+            # precedence, see _MockEchoProtocol), matching what a real
+            # server would have actually returned for this turn.
+            self._history.append((question, text))
 
         return Exchange(
             wire_sent=len(payload), wire_recv=len(reply),
