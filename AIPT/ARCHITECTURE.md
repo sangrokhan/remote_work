@@ -616,14 +616,20 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 
 | 영역 | 파일 수 | 대표 검증 포인트 |
 |---|---|---|
-| `tests/core/` | 7 | cwnd reset 판정(idle 후 리셋 vs loss recovery 구분), AppArmor 감지, 적응형 주기(interval_from_rtt), timestamp_source 판별 |
-| `tests/backends/` | 15 | 3개 backend 각각의 Backend 프로토콜 준수, arm별 body 빌드, fixture/replay 왕복, engine gateway 훅 |
+| `tests/core/` | 9 | cwnd reset 판정(idle 후 리셋 vs loss recovery 구분), AppArmor 감지, 적응형 주기(interval_from_rtt), timestamp_source 판별, idle-reset 실험 인프라, QUIC congestion 파라미터 |
+| `tests/backends/` (public_ai/mock/local_llm) | 15 | 3개 backend 각각의 Backend 프로토콜 준수, arm별 body 빌드, fixture/replay 왕복, engine gateway 훅 |
+| `tests/backends/quic_mock/` | 4 | QUIC mock backend 프로토콜 준수, congestion 실험 파라미터, experiment 시나리오, live e2e(`@pytest.mark.live`) |
 | `tests/export/` | 4 | 3-레이어 CSV 스키마 불변성, goodput_bps 계산, pcap 라운드트립(합성 pcap으로 dpkt/stdlib 파서 교차검증) |
-| `tests/web/` | 1 | FastAPI TestClient로 실제 mock backend 실행까지 포함한 라우트 스모크 |
-| `tests/gateway/` | 3 | 프로파일 값 정의, tc 명령 구성(subprocess mock), 프로파일 API 라우트 |
+| `tests/web/` | 5 | FastAPI TestClient로 실제 mock backend 실행까지 포함한 라우트 스모크, gateway 프로파일 라우트, public_ai/scenario 레코드 조회, 세션 store |
+| `tests/gateway/` | 4 | 프로파일 값 정의, tc 명령 구성(subprocess mock), 프로파일 API 라우트, client-link-only L3 forwarding 로직 |
 
-**현재 스위트 규모**: 410 passed, 1 skipped(플랫폼 가드), 12 deselected
+**현재 스위트 규모**: 512 passed, 1 skipped(플랫폼 가드), 36 deselected
 (`@pytest.mark.live` — 실제 소켓/커널 netlink 필요, CI 기본 실행에서 제외).
+
+> 이 표/카운트는 실측(`pytest -m "not live"` 실행 결과 + `tests/` 파일 수 카운트) 기준으로
+> 2026-09-01에 갱신함. 신규 backend/gateway/web 테스트 추가 시 이 표도 같이 갱신할 것 —
+> 과거 §6.1이 최초 작성(`0433d11c`) 이후 여러 기능 커밋(quic_mock, web 라우트 확장,
+> gateway forwarding 등)에서 갱신되지 않고 방치된 이력이 있음.
 
 핵심 설계: 실제 커널 자원(netlink, tc, tcpdump)이 필요한 테스트는 전부
 `live` 마커로 분리해서 샌드박스/CI에서도 스위트 전체가 깨지지 않게 하고,
