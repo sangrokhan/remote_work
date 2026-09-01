@@ -614,14 +614,16 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 
 ### 6.1 단위 테스트 — 핵심 모듈
 
-| 영역 | 파일 수 | 대표 검증 포인트 |
-|---|---|---|
-| `tests/core/` | 9 | cwnd reset 판정(idle 후 리셋 vs loss recovery 구분), AppArmor 감지, 적응형 주기(interval_from_rtt), timestamp_source 판별, idle-reset 실험 인프라, QUIC congestion 파라미터 |
-| `tests/backends/` (public_ai/mock/local_llm) | 15 | 3개 backend 각각의 Backend 프로토콜 준수, arm별 body 빌드, fixture/replay 왕복, engine gateway 훅 |
-| `tests/backends/quic_mock/` | 4 | QUIC mock backend 프로토콜 준수, congestion 실험 파라미터, experiment 시나리오, live e2e(`@pytest.mark.live`) |
-| `tests/export/` | 4 | 3-레이어 CSV 스키마 불변성, goodput_bps 계산, pcap 라운드트립(합성 pcap으로 dpkt/stdlib 파서 교차검증) |
-| `tests/web/` | 5 | FastAPI TestClient로 실제 mock backend 실행까지 포함한 라우트 스모크, gateway 프로파일 라우트, public_ai/scenario 레코드 조회, 세션 store |
-| `tests/gateway/` | 4 | 프로파일 값 정의, tc 명령 구성(subprocess mock), 프로파일 API 라우트, client-link-only L3 forwarding 로직 |
+| 영역 | 파일 수 | 테스트 수(`not live`) | 대표 검증 포인트 |
+|---|---|---|---|
+| `tests/core/` | 9 | 170 | cwnd reset 판정(idle 후 리셋 vs loss recovery 구분), AppArmor 감지, 적응형 주기(interval_from_rtt), timestamp_source 판별, idle-reset 실험 인프라, QUIC congestion 파라미터 |
+| `tests/backends/` (public_ai/mock/local_llm) | 15 | 163 | 3개 backend 각각의 Backend 프로토콜 준수, arm별 body 빌드, fixture/replay 왕복, engine gateway 훅 |
+| `tests/backends/quic_mock/` | 4 | 11 | QUIC mock backend 프로토콜 준수, congestion 실험 파라미터, experiment 시나리오, live e2e(`@pytest.mark.live`) |
+| `tests/export/` | 4 | 42 | 3-레이어 CSV 스키마 불변성, goodput_bps 계산, pcap 라운드트립(합성 pcap으로 dpkt/stdlib 파서 교차검증) |
+| `tests/web/` | 5 | 51 | FastAPI TestClient로 실제 mock backend 실행까지 포함한 라우트 스모크, gateway 프로파일 라우트, public_ai/scenario 레코드 조회, 세션 store |
+| `tests/gateway/` | 4 | 65 | 프로파일 값 정의, tc 명령 구성(subprocess mock), 프로파일 API 라우트, client-link-only L3 forwarding 로직 |
+| `tests/test_backends_base.py` (루트) | 1 | 11 | Backend 레지스트리(등록/조회/미등록 이름 거부) 단위 검증 |
+| **합계** | **42** | **513** (512 passed + 1 skipped) | |
 
 **현재 스위트 규모**: 512 passed, 1 skipped(플랫폼 가드), 36 deselected
 (`@pytest.mark.live` — 실제 소켓/커널 netlink 필요, CI 기본 실행에서 제외).
