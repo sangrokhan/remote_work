@@ -222,9 +222,14 @@ AIPT/
 - 요청/응답 훅 포인트 제공 — 향후 HTTP/QUIC 확장을 위한 transport 슬롯
   마련(현재는 미구현)
 - Network Gateway를 L3로 경유 — Mock과 동일한 네트워크 특성 주입 대상
+- **요청 본문 leaf-hash 중복 제거 캐싱**(2026-09-01 구현 완료,
+  §3.3 참고) — 멀티턴 대화에서 매 턴 재전송되는 이전 `messages` 텍스트를
+  session(TCP 커넥션) 단위로 hash 치환해 전송량을 절감. `X-AIPT-Cache:
+  enable` 헤더로 opt-in, local_llm backend 전용, 기본값 off.
 
 > ⚠️ 이 "engine gateway"(애플리케이션 레벨 프록시)와 아래 ④ "Network
-> Gateway"(L3 커널 레벨)는 이름이 비슷하지만 서로 다른 컴포넌트.
+> Gateway"(L3 커널 레벨)는 이름이 비슷하지만 서로 다른 컴포넌트. 이번
+> 캐싱 기능은 전자("engine gateway")에만 구현되며 후자와는 무관하다.
 
 ### ④ Network Gateway
 
@@ -405,6 +410,84 @@ sequenceDiagram
     W-->>U: 실행 결과 JSON
 ```
 
+### 3.3 요청 leaf-hash 중복 제거 캐싱 (2026-09-01 구현 완료)
+
+**동기**: LLM 멀티턴 대화는 매 요청마다 `messages` 배열 전체(이전 턴
+누적분 포함)를 재전송하는 게 일반적인 API 관례라, 턴이 쌓일수록 요청
+바디 대부분이 "이미 서버가 받았던 내용"의 반복이 되어 HTTP 전송량이
+선형으로 증가한다. 이를 애플리케이션 코드가 아니라 **HTTP 프로토콜
+계층**에서 능동적으로 줄이는 것이 이 기능의 목적이다. 상세 설계 근거·
+와이어 포맷 worked example·해시 충돌 확률 계산은
+`docs/engine_gateway_caching_seed.md`(Seed 문서)를 참고 — 이 절은 그
+확정 설계가 실제로 어떻게 배치·동작하는지만 요약한다.
+
+**적용 범위**: `local_llm` backend 전용, 기본값 off, `X-AIPT-Cache:
+enable` 헤더로 opt-in(양단 모두 지원할 때만 동작 — 헤더가 없으면 기존
+패스스루와 동일).
+
+**컴포넌트 배치** (`aipt/core/cache_protocol.py`가 클라이언트/서버 양쪽이
+공유하는 stdlib-only 프로토콜 모듈 — `hashlib`/`json` 외 의존성 없음,
+`local-llm` 이미지의 최소 `aipt` 슬라이스에도 그대로 복사됨):
+
+| 위치 | 역할 | 실행 위치 |
+|---|---|---|
+| `aipt/backends/local_llm/gateway.py`의 `Gateway.send()` | **클라이언트측**: 요청 바디 leaf 순회 → 이미 본 값은 hash로 치환(`cache_protocol.encode_body`) → 전송. 409(cache_miss) 응답을 가로채 미스난 경로만 원본으로 복원해 1회 재전송 | `web` 프로세스 안 (backend 어댑터 코드지만 발신측) |
+| `docker/engine_gateway.py`(`_Handler._relay_cacheable`) | **서버측**: `$aipt_cache_map`에 나열된 경로를 세션 캐시에서 조회해 원본 복원(`cache_protocol.decode_body`), 없으면 HTTP 409 + `missing_paths` 반환. 항상 완전한 원본 body만 llama-server로 포워딩 | `local-llm` 컨테이너 안, L7 리버스 프록시 sidecar (포트 40079) |
+
+**세션 경계**: 캐시 저장소는 HTTP keep-alive TCP 커넥션 그 자체와 생애를
+같이 한다 — 별도 세션 ID/TTL 없음. 클라이언트측은 `Gateway` 인스턴스,
+서버측은 `_Handler`(`BaseHTTPRequestHandler`) 인스턴스에 각각
+`SessionCache` 하나씩을 붙여 구현한다.
+
+**토폴로지 변화**: `web`이 이제 `local-llm:40080`(llama-server 직접)이
+아니라 `local-llm:40079`(engine Gateway sidecar)를 향한다 —
+`docker-compose.yml`의 `LOCAL_LLM_ENGINE_URL` 기본값이 이 커밋에서
+바뀌었다 (§4.8 다이어그램 및 DESIGN.md §4.10 참고).
+
+```mermaid
+sequenceDiagram
+    participant B as LocalLLMBackend (Gateway.send)
+    participant EG as engine Gateway (docker/engine_gateway.py, :40079)
+    participant E as llama-server (:40080)
+
+    Note over B: 캐시 on 시 X-AIPT-Cache: enable 헤더 부착
+    B->>B: encode_body() — 이미 본 leaf는 hash로 치환 + $aipt_cache_map 기록
+    B->>EG: POST (일부 leaf가 hash로 치환된 body)
+    alt 서버 세션 캐시에 hash 있음
+        EG->>EG: decode_body() — 원본 복원, $aipt_cache_map 제거
+        EG->>E: 완전한 원본 body 포워딩
+        E-->>EG: 응답
+        EG-->>B: 200 응답
+    else 서버 세션 캐시가 hash를 모름 (cache miss)
+        EG-->>B: 409 {"error":"cache_miss","missing_paths":[...]}
+        B->>B: 미스난 경로만 원본으로 복원(자신의 캐시에서), 재전송
+        B->>EG: POST (미스 경로는 원본, 나머지는 여전히 hash)
+        EG->>E: 완전한 원본 body 포워딩
+        E-->>EG: 응답
+        EG-->>B: 200 응답
+    end
+```
+
+**실측 결과** (`scripts/measure_perf_cache_savings.py`,
+`records/perf_short_smoketest.json` 20턴 시나리오, 실컨테이너 대상 —
+`data/runs/cache_savings_multiturn.csv` 원본):
+
+| 지표 | 캐싱 off (baseline) | 캐싱 on | 절감 |
+|---|---|---|---|
+| 요청 payload 총합(bytes) | 529,002 | 67,592 | **87.2%** |
+| 실제 wire 전송량 총합(bytes) | 533,942 | 72,952 | **86.3%** |
+
+턴이 쌓일수록(누적 컨텍스트가 길어질수록) 턴별 절감률도 함께 증가하는
+추세(turn 1: 96.0% → turn 19: 86.3%, 캐싱 자체의 고정 오버헤드
+`$aipt_cache_map` 필드 비중이 body 대비 상대적으로 커지며 완만히
+낮아짐). turn 0(최초 등장)은 캐시가 비어 있어 저장 대상이 없으므로
+절감이 0에 가깝다(오히려 헤더/캐시 정합성 확인 오버헤드로 미세하게
+음수). 측정값은 `turns.csv`의 신규 컬럼 `cache_bytes_saved`(§4.6/DESIGN.md
+§4.10)로 실행별로도 확인 가능.
+
+**남은 과제**: Seed 문서 §9 참고 — 멀티모달 `content`(현재 코드베이스엔
+없음, 항상 plain string 전제) 확장 시 leaf 순회 로직 재검토 필요.
+
 ---
 
 ## 4. API 설계
@@ -546,7 +629,7 @@ congestion algorithm 목록도 같은 소스). 요청한 알고리즘
 | `GET /api/config` | backend 목록/준비 상태, congestion algorithm 목록, cwnd/capture 가용성 |
 | `POST /api/run` | 실험 실행 (backend 이름 + arm + turns). `public_ai`는 응답에 `record_saved`/`record_path` 포함 |
 | `GET /api/runs`, `GET/DELETE /api/runs/{id}` | 실행 이력 (인메모리, 비영속) |
-| `GET /api/runs/{id}/{turns,summary,cwnd,cwnd_summary,packets}.csv` | 3-레이어 CSV |
+| `GET /api/runs/{id}/{turns,summary,cwnd,cwnd_summary,packets}.csv` | 3-레이어 CSV (`turns.csv`에 `cache_bytes_saved` 컬럼 포함 — local_llm 캐싱 활성 시 턴별 절감 bytes, §3.3/DESIGN.md §4.10) |
 | `GET /api/runs/{id}/bundle.zip` | 전체 산출물 zip — **비영속 데이터를 보관하는 유일한 방법**, 실행 직후 받아야 함 |
 | `GET /api/pcaps/{name}` | pcap 원본 다운로드 |
 | `GET /api/public-ai-records` | `data/public_ai_records/`(디스크, 영속) 파일 목록 — 인메모리 store와 무관 |
@@ -665,6 +748,8 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 - **QUIC/HTTP 신기능 실험** — `LocalLLMBackend`의 engine gateway에
   `transport` 슬롯(현재 `X-AIPT-Transport` 헤더로 반영되는 것까지만)만
   마련되어 있고, 실제 QUIC 구현이나 신규 HTTP 기능 실험 로직은 아직 없다.
+  단, **요청 leaf-hash 중복 제거 캐싱**(§3.3)은 이 슬롯을 실제로 활용한
+  첫 신기능 실험으로 2026-09-01 구현 완료됨.
 - **local-llm 서빙 엔진의 docker-compose 서비스화** — ~~현재는 외부에서 실행
   중인 엔진에 `LOCAL_LLM_ENGINE_URL`로 연결하는 방식만 지원한다. 실제
   llama.cpp/vLLM 컨테이너를 compose에 포함시키는 건 무겁다는 이유로 범위

@@ -510,6 +510,53 @@ flowchart LR
 | B12 | 적응형 cwnd 샘플링 주기 | `aipt/core/cwnd.py`에 `interval_from_rtt(rtt_ms, k=...)` 헬퍼 추가, Mock/LocalLLM backend의 `connect()`가 경로 RTT(Gateway 프로파일의 delay 설정값 또는 실측 RTT)를 넘기도록 연동. 결과에 `interval_reason`/`measurement_confidence` 필드 추가 |
 | B13 (검토) | pcap 타임스탬프 정밀도 확인 | `capture.py`가 캡처 인터페이스의 타임스탬프 소스(소프트웨어 vs 하드웨어)를 확인하고 결과에 기록. 짧은 RTT 경로에서 `packets.csv`의 inter-arrival gap 신뢰도 판단 근거로 사용 |
 
+## 4.10 engine Gateway 요청 leaf-hash 중복 제거 캐싱 (2026-09-01 설계+구현 완료)
+
+**배경**: §4.5 v2 개정에서 `LocalLLMBackend`용으로 마련해 둔 "표준 서빙
+엔진 앞단 자체 프록시(engine gateway)"의 첫 실제 활용 사례. 최초에는 이
+프록시의 `on_request`/`on_response` 훅을 "LLM *응답*을 캐싱"하는
+용도로 상상했으나, 2026-09-01 Slack 설계 논의에서 실제 필요는 "매 턴
+재전송되는 요청 *컨텍스트*의 중복 제거"임이 확인되어 정정됐다 —
+`docker/engine_gateway.py`의 `on_cacheable_request`/`on_cacheable_response`
+(응답 캐싱용 훅, 여전히 no-op)와는 다른, 별도의 요청 dedup 프로토콜로
+구현됨.
+
+**Seed 문서**: `docs/engine_gateway_caching_seed.md`가 SSoT — 문제 정의,
+opt-in 헤더, 세션 경계(TCP 커넥션), 와이어 포맷(leaf-hash 치환 +
+`$aipt_cache_map`), 해시 함수/길이(SHA-256 앞 20자, 충돌확률 계산 포함),
+캐시 미스 처리(HTTP 409 + 부분 재전송), 임계값(200 bytes), 구현
+위치(`Gateway.send()`의 `on_request` 훅 실행 지점) 등 모든 설계 결정과
+근거를 담고 있다. 이 절은 아키텍처 문서 관점에서 **어디에 무엇이
+배치됐는지**만 요약한다 — 상세 근거는 Seed 문서를 따라갈 것.
+
+**핵심 구현 산출물**:
+
+| 파일 | 역할 |
+|---|---|
+| `aipt/core/cache_protocol.py` (신규) | 클라이언트/서버 공유 stdlib-only 프로토콜 모듈 — leaf 순회, hash 치환/복원, `SessionCache`, `CacheMiss` |
+| `aipt/backends/local_llm/gateway.py` (수정) | `Gateway.send()`에 캐싱 로직 통합: 캐싱 시 uncached baseline과 실제 전송량을 같은 호출에서 비교해 `GatewayResult.cache_bytes_saved` 산출, 409 수신 시 1회 재전송 |
+| `docker/engine_gateway.py` (수정) | `_Handler`에 커넥션 단위 `SessionCache` 부착, `_relay_cacheable()`가 캐시 디코드/409 응답 처리 |
+| `aipt/backends/local_llm/__init__.py`, `aipt/web/routes_run.py` | `cache_enabled`/`cache_threshold_bytes`를 env(`LOCAL_LLM_CACHE_ENABLED` 등) 또는 `RunRequest` 필드로 opt-in, 웹 폼 체크박스까지 연결 |
+| `aipt/backends/record.py`, `aipt/export/turns.py`, `aipt/web/static/app.js` | `cache_bytes_saved`를 `turn_record()`/`turns.csv`/웹 결과 테이블에 신규 컬럼으로 노출 |
+| `docker-compose.yml`, `docker/Dockerfile.local_llm`, `docker/entrypoint_local_llm.py` | engine Gateway를 `local-llm` 컨테이너 안 별도 sidecar 프로세스(포트 40079)로 승격, `web`이 바라보는 `LOCAL_LLM_ENGINE_URL` 기본값을 40080(llama-server 직접)에서 40079(engine Gateway 경유)로 변경 |
+
+**실측 검증**: `scripts/measure_perf_cache_savings.py`가 실제
+docker-compose 4-서비스 토폴로지(web → Network Gateway L3/L4 →
+engine Gateway L7 → llama-server) 위에서 동일 20턴 시나리오
+(`records/perf_short_smoketest.json`)를 캐싱 off/on 두 번 실행해 턴별
+`req_payload_bytes`/`wire_sent`를 비교 — 결과는 `data/runs/
+cache_savings_multiturn.csv`, 요약 수치는 ARCHITECTURE.md §3.3 참고
+(요청 payload 87.2%, 실제 wire 전송량 86.3% 절감).
+
+**§4.8 다이어그램 갱신 필요 사항(반영 완료)**: `LocalLLM` 노드가 이제
+`gateway.py`(클라이언트측 캐싱 로직 포함)를 가리키고, `Netem`(Network
+Gateway) 뒤에 있던 `Engine`(llama.cpp/vLLM) 노드 앞에 engine Gateway
+L7 sidecar 홉이 추가로 존재한다 — 상세 시퀀스는 ARCHITECTURE.md §3.3의
+Mermaid 다이어그램 참고 (DESIGN.md의 §4.8은 backend 조합의 개괄
+다이어그램이라 L7 sidecar 세부 홉까지는 그리지 않고, "LocalLLM <-->
+Netem <--> Engine" 화살표가 실제로는 "LocalLLM → Netem → engine
+Gateway(L7, 캐싱 처리) → Engine"임을 텍스트로만 명시).
+
 ## 5.2 문서-코드 정합성 점검 (2026-09-01, ooo 인터뷰 기반 전수 감사)
 
 AIPT를 ooo(Ouroboros) 워크플로우로 재정의하면서, 실제 코드를 병렬 서브에이전트로
