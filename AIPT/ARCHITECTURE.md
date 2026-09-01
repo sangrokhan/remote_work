@@ -708,6 +708,20 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 | `tests/test_backends_base.py` (루트) | 1 | 11 | Backend 레지스트리(등록/조회/미등록 이름 거부) 단위 검증 |
 | **합계** | **42** | **513** (512 passed + 1 skipped) | |
 
+> ⚠️ **`cache_protocol.py`는 이 pytest 스위트에 포함되어 있지 않다** (2026-09-01
+> 구현, `git log`에 포착된 시점 기준 최신 기능). 대신 `scripts/` 아래 별도의
+> **standalone 스크립트**(`python3 scripts/... .py`, plain `assert` 기반, pytest
+> 아님)로만 검증되어 있다 — 즉 위 513개 카운트/CI 기본 실행(`pytest -m "not
+> live"`)에 **잡히지 않는다**. 이는 실제 커버리지 공백이며, 후속 작업으로
+> `tests/core/test_cache_protocol.py`(pytest화)를 추가해야 한다.
+>
+> | 스크립트 | 성격 | 커버 범위 |
+> |---|---|---|
+> | `scripts/_smoketest_cache_protocol.py` | 순수 유닛(네트워크 불필요) | leaf 순회/치환, path↔label 라운드트립, encode/decode 대칭성, `CacheMiss` 예외, 원본 body 불변성 — 10개 assert 함수, 10/10 pass 확인 (`python3 scripts/_smoketest_cache_protocol.py`) |
+> | `scripts/_smoketest_e2e_cache.py` | 통합(실 HTTP, echo 업스트림) | `Gateway.send()` ↔ `engine_gateway.py` 실제 와이어 라운드트립 — hash 치환이 실제로 발생하고 업스트림은 항상 원본을 받는지 |
+> | `scripts/_smoketest_cache_miss_recovery.py` | 통합 | 서버 세션 캐시 소실(재연결 시나리오) 시 클라이언트가 자기 캐시로 복구·재전송하는지 |
+> | `scripts/_smoketest_gateway_409_path.py` | 통합(실컨테이너) | `Gateway.send()`의 409 캐치→복구→재전송 실제 분기(테스트 코드가 아니라 프로덕션 코드 경로)가 실제로 타는지, `docker compose`로 띄운 실컨테이너 대상으로 확인 |
+
 **현재 스위트 규모**: 512 passed, 1 skipped(플랫폼 가드), 36 deselected
 (`@pytest.mark.live` — 실제 소켓/커널 netlink 필요, CI 기본 실행에서 제외).
 
@@ -734,6 +748,7 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 | **cwnd 회복/리셋** | `cwnd.csv`의 `reset_events`, `idle_resets` 카운트 | idle 구간 후 실제로 슬로우스타트 재진입이 발생하는지, 알고리즘별로 회복 곡선이 어떻게 다른지 |
 | **완료 시간(turn_end_ms)** | `turns.csv`의 `req_sent_ms`~`turn_end_ms` 마크 5종 | 히스토리 관리 전략(stateless/stateful/cached)별로 턴당 소요 시간이 실제로 얼마나 차이나는지 — 특히 `store_tail_ms`(서버가 응답 완료 후 상태 저장에 쓰는 시간)가 stateful arm에서 눈에 띄게 존재하는지 |
 | **네트워크 손실 영향** | Gateway `custom` 프로파일(loss_pct를 명시적으로 올린 설정) 적용 후 재시도/재전송으로 인한 `turn_end_ms` 증가폭 | TCP 재전송이 애플리케이션 레벨 지연에 미치는 실제 영향 |
+| **캐싱으로 인한 트래픽 볼륨 감소**(신규, 2026-09-01) | `scripts/measure_perf_cache_savings.py` — 동일한 20턴 멀티턴 시나리오(`records/perf_short_smoketest.json`)를 실제 docker-compose 4-서비스 토폴로지(web → Network Gateway L3/L4 → engine Gateway L7 → llama-server) 위에서 `X-AIPT-Cache: enable` **off/on 두 번 실행**해, 턴별 `req_payload_bytes`(캐싱 로직이 보는 JSON 직렬화 크기)와 `wire_sent`(`aipt.core.wire`의 실제 소켓 바이트 카운터, TCP/HTTP 프레이밍 오버헤드까지 포함한 진짜 온와이어 값) 두 지표를 각각 baseline/cached로 나란히 기록 | leaf-hash 중복 제거 프로토콜(§3.3/DESIGN.md §4.10)이 **애플리케이션 레벨 절감(payload)뿐 아니라 실제 커널 소켓 레벨 전송량(wire)까지** 줄이는지 — payload만 재고 wire를 확인하지 않으면 "JSON은 작아졌는데 TCP 재전송/헤더 오버헤드로 실제 온와이어 비용은 그대로"인 착시를 놓칠 수 있어 두 지표를 반드시 함께 본다. 결과(`data/runs/cache_savings_multiturn.csv`, ARCHITECTURE.md §3.3 표): 20턴 누적 기준 요청 payload **87.2%**, 실제 wire 전송량 **86.3%** 절감 — 두 수치가 거의 일치해 애플리케이션 레벨 절감이 실제 네트워크 트래픽 절감으로 고스란히 이어짐을 확인. 턴 0(캐시 미보유)은 절감 거의 0(오히려 `$aipt_cache_map` 헤더/필드 오버헤드로 미세 음수), 턴이 쌓일수록 턴별 절감률은 최대 96.0%(turn 1)에서 86.3%(turn 19)로 완만히 낮아지는 추세(누적 컨텍스트가 길어지며 캐시맵 오버헤드 비중이 상대적으로 커짐) |
 
 **검증 절차 원칙**: 위 지표들은 반드시 **같은 시나리오(fixture)를 여러
 조건(알고리즘, Gateway 프로파일, backend)으로 반복 실행**해서 비교해야
