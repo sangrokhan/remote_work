@@ -315,7 +315,16 @@ Client (측정 코드: cwnd/capture/export — 공통)
    `client → Network Gateway(L3 forward) → engine gateway(애플리케이션 프록시) →
    서빙 엔진` 순서로 체인된다.
 
-## 4.7.1 실행 결과 저장 정책 (확정, 2026-08-26)
+## 4.7.1 실행 결과 저장 정책 (확정, 2026-08-26 → 2026-08-27 실제 동작으로 변경, 아래 갱신 참고)
+
+> **2026-09-01 갱신 — 이 절의 "인메모리 최근 50개" 방침은 stale.** 아래
+> 2026-08-27 개정을 실제 코드가 구현하고 있다: `aipt/web/store.py`가
+> `RUN_STORE_DIR`(기본 `data/runs/`)에 **모든 backend의 모든 run을 JSON으로
+> 디스크 영속화**한다(2026-08-27 "Run store 디스크 영속화" 작업,
+> MIGRATION.md 참고). 원래의 "한 대의 머신에서 도는 실험실이라 영속 저장
+> 안 함" 철학은 실제로는 폐기되었다 — 재시작해도 과거 run 목록이 남는 쪽을
+> 선택했다는 뜻이다. 아래 원문은 그 결정 이전의 정책으로, 역사적 기록 목적으로
+> 남겨두고 위 문단이 실제 동작을 대표한다.
 
 기존 §6 미해결 결정 5번("data/ 저장 위치")을 아래로 확정한다:
 
@@ -349,15 +358,16 @@ flowchart TB
     end
 
     subgraph WEBAPP["aipt/web — FastAPI 단일 앱"]
-        Routes["routes_config / routes_run /<br/>routes_runs / routes_gateway"]
+        Routes["routes_config / routes_run /<br/>routes_runs<br/>(routes_gateway: 미구현, B11 TODO)"]
         Templates["templates + static<br/>(backend 선택 + 공통 실험 폼)"]
     end
 
     subgraph BACKENDS["aipt/backends — Backend 프로토콜 (connect / send_turn / close)"]
         direction LR
         PublicAI["PublicAIBackend<br/>gemini.py / openai.py<br/>(6+4 arm)"]
-        Mock["MockBackend<br/>server.py / fixtures.py /<br/>replay.py / conversation.py"]
-        LocalLLM["LocalLLMBackend<br/>gateway.py(프록시) +<br/>engine_adapter.py<br/>(신규 구현 예정)"]
+        Mock["MockBackend<br/>server.py / records.py /<br/>replay.py / conversation.py"]
+        LocalLLM["LocalLLMBackend<br/>gateway.py(프록시) +<br/>engine_adapter.py<br/>(구현 완료, §4.5c)"]
+        QuicMock["QuicMockBackend<br/>(§7 스파이크,<br/>transport=http3)"]
     end
 
     subgraph GATEWAY["Network Gateway 컨테이너 (신규, B9)"]
@@ -399,19 +409,21 @@ flowchart TB
     Routes --> PublicAI
     Routes --> Mock
     Routes --> LocalLLM
-    Routes --> ProfileAPI
+    Routes -.->|"TODO B11, §5.2"| ProfileAPI
 
     PublicAI <-->|"실제 인터넷 경로<br/>(이미 실제 RTT/손실 보유)"| Gemini
     PublicAI <-->|"실제 인터넷 경로"| OpenAI
 
     Mock <--> Netem
     LocalLLM <--> Netem
+    QuicMock <--> Netem
     Netem <--> MockServer
     Netem <--> Engine
 
     PublicAI -. 계측 훅 .- CORE
     Mock -. 계측 훅 .- CORE
     LocalLLM -. 계측 훅 .- CORE
+    QuicMock -. 계측 훅 .- CORE
 
     CORE --> EXPORT
     EXPORT --> Routes
@@ -423,9 +435,11 @@ flowchart TB
 ```
 
 **읽는 법**:
-- **점선 화살표**(`-. 계측 훅 .-`)는 "이 backend가 core 모니터링을 훅으로 사용한다"는 관계 — 3개 backend 모두 동일한 `aipt/core`를 공유하며, backend별로 별도의 cwnd/capture 구현을 갖지 않는다.
+- **점선 화살표**(`-. 계측 훅 .-`)는 "이 backend가 core 모니터링을 훅으로 사용한다"는 관계 — 4개 backend 모두 동일한 `aipt/core`를 공유하며, backend별로 별도의 cwnd/capture 구현을 갖지 않는다.
 - **PublicAIBackend**만 Gateway를 거치지 않고 실제 인터넷으로 직행 — 이미 진짜 네트워크 특성(RTT/손실/혼잡)을 갖고 있기 때문 (§4.7).
-- **Mock/LocalLLM**은 반드시 **Gateway**를 경유 — Gateway가 `tc netem`으로 지연/손실/재정렬을 주입해 "완벽한 로컬 네트워크"라는 암묵적 가정을 제거한다.
+- **Mock/LocalLLM/QuicMock**은 반드시 **Gateway**를 경유 — Gateway가 `tc netem`으로 지연/손실/재정렬을 주입해 "완벽한 로컬 네트워크"라는 암묵적 가정을 제거한다. Gateway는 L3 IP 포워딩이라 TCP/UDP(QUIC)에 무관하게 동일하게 적용된다.
+- **QuicMockBackend**(§7)는 원래 3-backend 설계(§4.5)에는 없던 후속 스파이크다 — idle-probe congestion control 실험을 위해 mock 전용 4번째 백엔드로 `Backend` 프로토콜에 정식 편입되었고, `RunRequest`/웹 UI 폼에는 아직 연결되어 있지 않다(§7 "남은 단계" 3번, TODO).
+- **`routes_gateway`는 미구현(B11 TODO, §5.2)** — Gateway 컨테이너의 `/gateway/profile` API 자체는 완성·실동작하지만, 웹 UI에서 그 API를 호출하는 라우트/폼 필드가 없어 점선으로 표시했다.
 - **LocalLLMBackend**의 게이트웨이(프록시, 애플리케이션 레벨 HTTP 신기능 실험 지점)와 **Network Gateway 컨테이너**(순수 네트워크 특성 주입, L3/L4)는 서로 다른 컴포넌트다 — 이름이 비슷해 혼동하기 쉬우므로 문서/코드에서 전자는 "engine gateway/proxy", 후자는 "network gateway"로 구분 표기할 것을 권장.
 - 모든 backend의 turn 결과는 `aipt/core`가 관찰한 데이터와 함께 `aipt/export`의 3-레이어 CSV(connection/turns/packets) + bundle.zip으로 수렴한다.
 
@@ -490,14 +504,54 @@ flowchart LR
 | B12 | 적응형 cwnd 샘플링 주기 | `aipt/core/cwnd.py`에 `interval_from_rtt(rtt_ms, k=...)` 헬퍼 추가, Mock/LocalLLM backend의 `connect()`가 경로 RTT(Gateway 프로파일의 delay 설정값 또는 실측 RTT)를 넘기도록 연동. 결과에 `interval_reason`/`measurement_confidence` 필드 추가 |
 | B13 (검토) | pcap 타임스탬프 정밀도 확인 | `capture.py`가 캡처 인터페이스의 타임스탬프 소스(소프트웨어 vs 하드웨어)를 확인하고 결과에 기록. 짧은 RTT 경로에서 `packets.csv`의 inter-arrival gap 신뢰도 판단 근거로 사용 |
 
-## 6. 미해결 설계 결정 (구현 전 확인 필요)
+## 5.2 문서-코드 정합성 점검 (2026-09-01, ooo 인터뷰 기반 전수 감사)
+
+AIPT를 ooo(Ouroboros) 워크플로우로 재정의하면서, 실제 코드를 병렬 서브에이전트로
+전수 조사(빌드/기동/실측 포함)해 DESIGN.md와의 괴리를 확정했다. §6의 6개
+미해결 결정은 **모두 확정 완료**(코드 레벨로 재확인, 아래 §6에 확정 내용 갱신).
+남은 괴리는 다음 3가지뿐이다:
+
+1. **§4.7.1 저장 정책 stale** — "Public AI 기록만 영속 저장, 나머지는 인메모리
+   최근 50개"라고 확정했었으나, 실제로는 `RUN_STORE_DIR`(`data/runs/`)에 모든
+   backend의 run을 디스크 영속화하고 있다(2026-08-27 "Run store 디스크 영속화"
+   작업, MIGRATION.md 참고). 문서가 실제보다 뒤처짐 — 이 절을 실제 동작에 맞게
+   갱신 필요.
+2. **§4.8 아키텍처 다이어그램이 quic_mock 미반영** — §7의 QUIC idle-probe
+   스파이크(2026-08-27)가 `QuicMockBackend`로 `Backend` 프로토콜에 정식
+   편입되고 `docker-compose.yml`에 `quic-mock-server` 5번째 서비스로 실존하는데,
+   §4.8 Mermaid 다이어그램의 BACKENDS 서브그래프에는 3개(PublicAI/Mock/LocalLLM)만
+   남아 있다.
+3. **B11(웹 UI Network Profile 선택) 미구현** — Gateway 컨테이너의
+   `GET/POST /gateway/profile` API는 완성되어 실동작 확인됐으나(§4.7),
+   `aipt/web`에 `routes_gateway` 모듈 자체가 없고 실험 폼에도 프로파일
+   드롭다운이 없다. `GATEWAY_HOST`/`GATEWAY_PORT` env가 `web` 서비스에
+   주입만 되고 코드에서 전혀 쓰이지 않는 dead config로 확인됨 — 사용자가
+   프로파일을 바꾸려면 컨테이너에 직접 curl해야 하는 상태.
+
+또한 이번 감사에서 **Docker HEALTHCHECK 버그**를 신규 발견했다: `local-llm`
+컨테이너의 llama.cpp 서버는 `--port 40080`으로 정상 기동·응답하지만
+(`curl -s http://127.0.0.1:40080/health` → `{"status":"ok"}`, 컨테이너 내부에서
+직접 확인), base 이미지가 물려주는 HEALTHCHECK가 여전히 기본 포트 8080을
+찔러 항상 `unhealthy`로 표시된다. 기능 장애는 아니지만(2026-09-01 실측:
+Qwen2.5-0.5B-Instruct-GGUF 모델로 `local_llm` 백엔드 end-to-end 3턴 실행
+성공 — TTFT 583ms, wire_sent/recv 정상 계측) `docker compose ps`만 보고
+"고장났다"고 오판할 여지가 있어 `docker/Dockerfile.local_llm`의
+HEALTHCHECK 정의를 40080으로 고쳐야 한다.
+
+## 6. 미해결 설계 결정 (구현 전 확인 필요) — [x] 2026-09-01 전항목 확정 완료 (아래 각 항목 참고)
 
 1. **`aipt/core/cwnd.py` 최종 API** — token_traffic의 `provider/arm/kind` 3필드 라벨링 vs tcp_congestion의 단일 `label` 문자열. 제안: `label` 하나로 통일하고 호출측에서 `f"{provider}:{arm}:{kind}"` 형태로 조립 (synthetic_mock은 조립 없이 그대로 label 사용).
+   **확정 (2026-09-01, 코드 재확인): 제안대로 `label: str` 단일 문자열로 통일됨.** `aipt/core/cwnd.py`의 `Monitor.__init__(label, ...)`. 호출측이 `f"{provider}:{arm}:{kind}"` 조립(docstring 명시), synthetic_mock은 조립 없이 그대로 사용.
 2. **`core/capture.py`의 caller당 pcap 개수** — external_api는 (provider, arm, kind)당 1개, synthetic_mock은 run당 1개. `label` 파라미터로 이미 일반화 가능해 보이나, external_api의 dual-pass(bytes/latency 분리 캡처) 요구사항까지 커버되는지 이관 시 재검증 필요.
+   **확정 (2026-09-01): `Capture` 클래스가 `label` 직접 전달(synthetic_mock, run당 1개) / `provider・arm・kind` 자동 조립(`{provider}_{arm}_{kind}`, external_api) 두 방식 모두 지원. dual-pass 요구사항도 `kind`가 파일명에 포함되어 별도 pcap으로 분리되는 것으로 재검증됨.**
 3. **의존성 통합** — token_traffic은 `requests` 기반, google-genai/openai SDK는 사용 안 함(SDK가 httpx라 소켓 카운터 훅이 안 걸림). synthetic_mock은 표준 라이브러리 위주. `pyproject.toml` 하나로 합칠 때 optional-dependency 그룹(`[external-api]`, `[dev]`)으로 나눌지 결정 필요.
+   **확정 (2026-09-01): `[external-api]` 대신 기능별 4개 그룹으로 결정.** base `dependencies=["requests"]`, optional `dev`(pytest) / `export`(dpkt) / `web`(fastapi/uvicorn/jinja2/python-multipart/httpx) / `quic`(aioquic, §7 스파이크 이후 추가).
 4. **테스트 마킹** — 기존 `test_conversation_live.py`, `test_cwnd_live.py` 등 "live"(실제 소켓/커널 필요) 테스트를 pytest 마커(`@pytest.mark.live`)로 통합 표시할지, 두 프로젝트 관례가 달랐다면 통일 필요.
+   **확정 (2026-09-01): `@pytest.mark.live`로 통일.** `pyproject.toml`의 `[tool.pytest.ini_options] markers`에 등록, 9개 테스트 파일이 사용 중(`test_cwnd.py`, `test_capture.py`, `test_conversation_live.py`, `test_backend_live.py`, `test_engine_live.py` 등). CI 기본 실행은 `-m "not live"`.
 5. **`data/` 저장 위치** — token_traffic은 `TRAFFIC_DATA_DIR`(런 JSON), tcp_congestion은 `data/pcaps/`(pcap만, 메모리에 최근 1건만 유지). 병합 후 두 lab이 저장소를 공유할지, `data/external-api/`·`data/synthetic-mock/`으로 분리할지 결정 필요. **권장: 분리** — 두 lab의 보존 정책이 다르다(external_api는 20개 런 유지 pruning, synthetic_mock은 최근 1건만 메모리 유지).
+   **확정 (2026-09-01, 권장안과 다르게 결정): lab별 분리가 아니라 기능별 공유 구조로 최종 결정됨.** `data/pcaps/`(capture.py), `data/runs/`(web/store.py — 전 backend 공통, §4.7.1과 달리 영속화됨, §5.2 참고), `data/public_ai_records/`(recorder.py) 3종 — 3개 backend가 이 디렉터리들을 모두 공유하며 lab 단위 구분은 없음. 3-backend 통합 아키텍처(§4.5 v2)로 개정되며 애초에 "lab"이라는 개념 자체가 폐기되었으므로 이 편차는 자연스러운 결과.
 6. **모노레포 `CLAUDE.md` 갱신** — `remote_work/CLAUDE.md`의 프로젝트 테이블에서 `token_traffic` 행을 `AIPT`로 교체하고, `tcp_congestion`(테이블에 없었음 — 등록 필요했을 수도)도 정리. 실제 코드 이관 완료 후 반영.
+   **확정 (2026-09-01): 완료 확인.** 커밋 `fabadc48`에서 `token_traffic` 행을 `AIPT`로 교체. `tcp_congestion` 행은 원래 테이블에 없었으므로 별도 조치 불요. 현재 `remote_work/CLAUDE.md`에 `AIPT` 행만 존재함을 재확인.
 
 ## 6. 실행 계획 (다음 단계, 리뷰 후 진행)
 

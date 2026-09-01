@@ -36,4 +36,15 @@ ENV LLAMA_HOST=0.0.0.0 \
 
 EXPOSE 40080
 
+# The base image (ghcr.io/ggml-org/llama.cpp:server) ships its own
+# HEALTHCHECK hardcoded to the classic llama-server default port 8080.
+# This project runs the engine on 40080 instead (see the port-convention
+# comment above), so that inherited healthcheck always fails even when
+# the engine is serving correctly -- `docker compose ps` reports
+# "unhealthy" while `curl 127.0.0.1:40080/health` returns `{"status":"ok"}`.
+# Override it to point at the actual port (found + fixed during the
+# 2026-09-01 ooo end-to-end verification of the local_llm backend).
+HEALTHCHECK --interval=5s --timeout=2s --start-period=60s --retries=3 \
+    CMD curl -sf http://127.0.0.1:40080/health || exit 1
+
 ENTRYPOINT ["python3", "/app/entrypoint_local_llm.py"]
