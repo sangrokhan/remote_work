@@ -89,11 +89,12 @@ flowchart TB
 > 모두에 속해 커널(`net.ipv4.ip_forward=1`)로 그 사이를 라우팅한다. 컨테이너
 > 시작 시 `entrypoint_web.py`/`entrypoint_mockserver.py`가 상대 서브넷으로
 > 가는 경로를 Gateway 경유로 명시적으로 추가(`ip route add`)해서, 왕복
-> 트래픽(요청+응답)이 반드시 Gateway를 통과하게 한다. `tc netem`은 Gateway의
-> 양쪽 인터페이스(client-facing + backend-facing) egress에 동시에
-> 적용된다(`apply_profile_both()`) — 편도만 영향받는 일이 없다. Gateway는
-> TCP 상태를 전혀 보지 않는 순수 L3 라우팅이며, 애플리케이션 레벨 프록시
-> 코드는 없다.
+> 트래픽(요청+응답)이 반드시 Gateway를 통과하게 한다. `tc netem`은
+> **client-facing leg에만** 적용된다(egress 직접 + ingress는 IFB 경유,
+> `apply_gateway_profile()`) — backend-facing leg는 항상 고정된
+> `ETHERNET_BASELINE`(무손상에 가까움)만 적용된다, 자세한 근거는 §4.2
+> 참고. Gateway는 TCP 상태를 전혀 보지 않는 순수 L3 라우팅이며, 애플리케이션
+> 레벨 프록시 코드는 없다.
 
 > 실행 결과 저장 범위는 §3.1에서 자세히 다룬다:
 > **Public AI(상용 API) 요청/응답 JSON만** `data/public_ai_records/`에
@@ -147,7 +148,7 @@ AIPT/
 │   │
 │   ├── gateway/                   # ★ ④ Network Gateway (L3 IP 포워딩, 별도 컨테이너)
 │   │   ├── profiles.py             #   clean/wired/wireless/custom (근거: ITU-T Y.1541 / 3GPP TS 23.501)
-│   │   ├── netem_control.py        #   apply_profile_both() — 양쪽 인터페이스에 tc qdisc
+│   │   ├── netem_control.py        #   apply_gateway_profile() — client leg(egress+IFB ingress)만 shaping, backend leg는 고정 baseline
 │   │   ├── forwarding.py           #   net.ipv4.ip_forward 상태 확인
 │   │   └── app.py                  #   독립 FastAPI 미니앱 (/health, /gateway/profile)
 │   │
@@ -236,8 +237,8 @@ AIPT/
   포워딩 수행 — TCP 페이로드/헤더는 들여다보지 않음
 - 커널 sysctl(ip_forward) 활성 여부를 런타임에 직접 검증 후 상태 노출 —
   설정 반영을 가정하지 않고 확인
-- 클라이언트/백엔드 양쪽 인터페이스 egress에 동일 프로파일 동시 적용 —
-  편도만 영향받는 비대칭 방지
+- 클라이언트-facing leg에만(egress+IFB ingress 양방향) 사용자 선택 프로파일
+  적용 — backend-facing leg는 항상 고정 Ethernet baseline (§4.2 참고)
 - 프로파일 프리셋(clean/wired/wireless/custom, 근거는 §4.2 참고) + 런타임
   API 교체 지원
 - 실패 시 예외 대신 개별 인터페이스 단위로 원인 보고 (정직한 실패 보고 원칙)
@@ -356,7 +357,7 @@ sequenceDiagram
     participant M as mock-server (net-backend)
 
     U->>W: POST /api/run {backend: mock, arm: fixture, turns}
-    Note over K: 사전에 POST /gateway/profile 로<br/>양쪽 인터페이스에 지연/손실 프로파일 적용됨<br/>(apply_profile_both). 별도 저장 없음 —<br/>Gateway 프로세스가 진실의 소스, GET /gateway/profile이<br/>매번 커널 qdisc 상태를 직접 조회
+    Note over K: 사전에 POST /gateway/profile 로<br/>client-facing leg(egress+IFB ingress)에만 지연/손실 프로파일 적용됨<br/>(apply_gateway_profile, backend leg는 고정 baseline). 별도 저장 없음 —<br/>Gateway 프로세스가 진실의 소스, GET /gateway/profile이<br/>매번 커널 qdisc 상태를 직접 조회
     W->>B: connect(arm)
     B->>Core: cwnd.Monitor 시작 (2ms 또는 적응형 주기), capture 시작(옵션)
     Note right of Core: pcap 캡처는 aipt.core.capture → data/pcaps/ 디스크에<br/>run당 1개 파일로 남음 (볼륨 마운트, 별도 보존 정책 없음)
@@ -430,14 +431,46 @@ L3 IP 포워딩 컨테이너이므로, 이 API는 트래픽 자체를 다루지 
 Gateway는 netem 프로파일(지연/지터/손실/재정렬)만 제어한다 — **TCP 혼잡제어
 알고리즘은 Gateway API의 관할이 아니다** (아래 별도 항목 참고).
 
+**2026-09 client-link-only 재설계 (중요, 토폴로지 반영)**: Gateway는 두
+Docker 브리지 네트워크(`net-client`, `net-backend`)에 양쪽 인터페이스로
+걸쳐 있지만, **두 leg를 동일하게 취급하지 않는다**:
+
+- **client_iface** (`net-client`, client↔Gateway): 사용자가 고른
+  프로파일(clean/wired/wireless/custom)을 **양방향** 모두에 적용한다 —
+  실제 인터넷의 access network(마지막 구간)를 흉내내는 대상이므로 여기가
+  손상을 겪어야 하는 구간이다.
+- **backend_iface** (`net-backend`, Gateway↔backend): 사용자가 고른
+  프로파일과 **무관하게 항상 고정된 `ETHERNET_BASELINE`**(사실상 무손상,
+  delay 1ms만)만 적용된다 — 이 구간은 실제로는 같은 데이터센터/호스트 내부의
+  Docker 브리지 위 Ethernet 홉이라 손상을 흉내낼 이유가 없다.
+
+이전 설계(2026-08)는 "왕복 지연을 재현"하려고 양쪽 egress에 사용자가 고른
+프로파일을 똑같이 걸었는데, 이는 client↔backend 전체를 하나의 논리적 링크로
+뭉뚱그린 근사였고 실제 토폴로지(access network는 client 쪽에만 있음)와
+맞지 않는다는 지적을 받아 재설계했다.
+
+**tc netem이 egress 전용이라 ingress shaping에 IFB가 필요하다**: `tc
+netem`은 나가는 방향(egress)에만 걸 수 있고 들어오는 방향(ingress)에는
+직접 걸 수 없다. client_iface 기준으로 "응답"(Gateway→client)은 egress라서
+바로 걸리지만, "요청"(client→Gateway)은 client_iface 입장에서 ingress라서
+그냥은 손상을 줄 수 없다. 이를 위해 client_iface의 ingress를 IFB
+(Intermediate Functional Block) 가상 디바이스로 리다이렉트(`tc filter ...
+action mirred egress redirect dev ifb0`)한 뒤, 그 IFB 디바이스의 egress에
+동일한 netem을 걸어 "요청 방향도 결국 shaping된 egress를 통과"하게
+만든다(`aipt/gateway/netem_control.py`의 `apply_ingress_profile`/
+`build_ingress_redirect_commands`/`build_ifb_setup_commands`). 컨테이너에
+`ifb` 커널 모듈이 없거나 CAP_NET_ADMIN이 없으면 `{"ok": false, "reason":
+...}`로 정직하게 실패를 보고한다(500 없음, 기존 원칙 유지).
+
 | 엔드포인트 | 메서드 | 역할 |
 |---|---|---|
-| `/health` | GET | liveness + `tc netem` 사용 가능 여부(`netem_control.available()`) + **양쪽** 인터페이스(`client_iface`/`backend_iface`) 이름 + `net.ipv4.ip_forward`가 실제로 켜져 있는지(`ip_forward_available`/`ip_forward_reason`) |
-| `/gateway/profile` | GET | **양쪽** 인터페이스에 적용된 프로파일을 각각 조회 (커널 qdisc 상태 직접 조회, `current_profile_both()`) |
-| `/gateway/profile` | POST | 프로파일 교체. **양쪽** 인터페이스에 동시 적용(`apply_profile_both()`) — 응답에 `client`/`backend` 각각의 성공 여부가 개별로 담긴다 |
+| `/health` | GET | liveness + `tc netem` 사용 가능 여부(`netem_control.available()`) + client_iface/backend_iface/**ifb_dev** 이름 + `net.ipv4.ip_forward`가 실제로 켜져 있는지(`ip_forward_available`/`ip_forward_reason`) |
+| `/gateway/profile` | GET | client leg의 egress+ingress 프로파일과 backend leg의(고정) 프로파일을 각각 조회 (`current_gateway_profile()`) |
+| `/gateway/profile` | POST | **client leg**의 프로파일을 교체(egress 직접 + ingress는 IFB 경유 양방향 적용) — **backend leg는 요청 내용과 무관하게 항상 `ETHERNET_BASELINE`으로 재적용**됨 (`apply_gateway_profile()`) |
 
 `POST /gateway/profile`의 Body로 설정 가능한 값(`aipt/gateway/app.py`의
-`ProfileRequest`, `aipt/gateway/profiles.py`):
+`ProfileRequest`, `aipt/gateway/profiles.py`) — **이 Body는 client leg에만
+적용되고, backend leg에는 아무 영향을 주지 않는다**:
 
 | 필드 | 타입 | 의미 |
 |---|---|---|
@@ -455,15 +488,24 @@ Gateway는 netem 프로파일(지연/지터/손실/재정렬)만 제어한다 �
 | `wired` | 15 (illustrative) | 3 (illustrative) | **0.1** | loss_pct는 **ITU-T Rec. Y.1541** Table 1, QoS Class 0–4의 IP Packet Loss Ratio 상한(1×10⁻³)에 근거. delay/jitter는 실측/공식자료 기반 아님(상대적 크기 구분용) |
 | `wireless` | 40 (illustrative) | 15 (illustrative) | **0.001** | loss_pct는 **3GPP TS 23.501** Table 5.7.4-1, 5QI=9(일반 인터넷 트래픽이 타는 비GBR 기본 베어러)의 Packet Error Rate 목표(10⁻⁶)를 netem이 표현 가능한 스케일로 반올림한 근사치 |
 
+그리고 client leg의 값과 별도로, backend leg에 항상 고정 적용되는
+`ETHERNET_BASELINE`(`PRESETS`에 없음, 사용자가 요청할 수 없는 값):
+
+| 이름 | delay_ms | jitter_ms | loss_pct | 근거 |
+|---|---|---|---|---|
+| `ethernet_baseline` | 1 (illustrative, 무시 가능한 수준) | 0 | 0 | Gateway↔backend가 사실상 같은 데이터센터/호스트 내부의 Ethernet 홉이라는 토폴로지 반영. 공식 Ethernet-LAN 지연 표준을 인용한 값이 아니라, "0(=clean, Gateway가 없는 것처럼 보임)과 구분되는 무시 가능한 수준"을 의도한 illustrative 상수 |
+
 - `wired`/`wireless`는 `PRESETS`에 고정된 값(`profiles.py`)을 그대로
   적용하고, Body에 함께 온 `delay_ms` 등 숫자 필드는 **무시**된다
   (`resolve()`의 "선택하면 그 프리셋" 규칙).
 - `profile: "custom"`일 때만 `delay_ms`/`jitter_ms`/`loss_pct`/`reorder_pct`
   가 실제로 읽혀 임의 조합의 netem 프로파일을 만든다(`custom_profile()`).
+  이 커스텀 값도 client leg에만 적용되고 backend leg는 여전히
+  `ETHERNET_BASELINE` 고정.
 - 예: `{"profile": "wireless"}` (프리셋) 또는 `{"profile": "custom", "delay_ms": 80, "jitter_ms": 10, "loss_pct": 0.2, "reorder_pct": 0.0}` (커스텀).
-- 컨테이너 기동 시 초기 프로파일은 `GATEWAY_PROFILE` 등 환경변수로도 설정
-  가능(`profiles.from_env()`, DESIGN.md 4.7 설정 방식 (a)) — 이 POST API와
-  동일한 값 체계를 공유한다.
+- 컨테이너 기동 시 초기 프로파일(client leg만)은 `GATEWAY_PROFILE` 등
+  환경변수로도 설정 가능(`profiles.from_env()`, DESIGN.md 4.7 설정 방식
+  (a)) — 이 POST API와 동일한 값 체계를 공유한다.
 
 **"wireless"가 loss를 낮게 유지하는 이유(중요, 모델링 한계 명시)**:
 LTE/NR 무선 구간은 MAC 계층 HARQ + RLC AM(Acknowledged Mode) ARQ로 프레임

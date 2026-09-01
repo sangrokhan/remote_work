@@ -28,12 +28,21 @@
 
 FROM python:3.12-slim
 
-# iproute2 provides the `tc` binary this whole container exists to call.
-# fq (the child qdisc aipt.gateway.netem_control chains under netem for
-# BBR pacing) ships in the kernel, not a userspace package -- nothing
-# extra needed for it here.
+# iproute2 provides the `tc` binary this whole container exists to call
+# (and `ip link add ... type ifb` for the ingress-shaping workaround --
+# 2026-09 client-link-only redesign, aipt.gateway.netem_control module
+# docstring: tc netem only ever shapes egress, so the client_iface's
+# ingress -- the request leg, client -> Gateway -- is redirected to an IFB
+# device and shaped there). kmod lets the container `modprobe ifb` if the
+# host kernel has the module built as a loadable module rather than
+# built-in; if the host's kernel lacks CONFIG_IFB entirely, ingress
+# shaping reports {"ok": false, "reason": "... _NO_IFB ..."} same honest
+# posture as the CAP_NET_ADMIN case (module docstring). fq (the child
+# qdisc aipt.gateway.netem_control chains under netem for BBR pacing)
+# ships in the kernel, not a userspace package -- nothing extra needed for
+# it here.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends iproute2 \
+    && apt-get install -y --no-install-recommends iproute2 kmod \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -54,11 +63,19 @@ RUN pip install --no-cache-dir ".[web]"
 # 설계 1) tc commands target for the client-facing vs backend-facing leg.
 # Docker's interface attach order is not guaranteed, so docker-compose.yml
 # should set these explicitly rather than relying on the eth0/eth1 default.
+# GATEWAY_IFB_DEV: the IFB device client_iface's ingress is redirected to
+# for ingress shaping (2026-09 client-link-only redesign) -- only the
+# client-facing leg needs one, since only it carries the user-selected
+# profile in both directions; the backend-facing leg is always the fixed
+# ETHERNET_BASELINE and its ingress is left unshaped.
 # GATEWAY_PROFILE / GATEWAY_DELAY_MS / GATEWAY_JITTER_MS / GATEWAY_LOSS_PCT
-# / GATEWAY_REORDER_PCT: startup preset (aipt.gateway.profiles.from_env).
+# / GATEWAY_REORDER_PCT: startup preset for the client-facing leg
+# (aipt.gateway.profiles.from_env). The backend-facing leg ignores these
+# entirely -- it always gets ETHERNET_BASELINE regardless.
 ENV GATEWAY_IFACE=eth0 \
     GATEWAY_CLIENT_IFACE=eth0 \
-    GATEWAY_BACKEND_IFACE=eth1
+    GATEWAY_BACKEND_IFACE=eth1 \
+    GATEWAY_IFB_DEV=ifb0
 
 EXPOSE 8080
 

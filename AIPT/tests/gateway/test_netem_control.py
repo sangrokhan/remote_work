@@ -181,15 +181,16 @@ class TestApplyProfile:
         assert netem_control.current_profile("eth0").name == "clean"
 
 
-class TestApplyProfileBoth:
-    """DESIGN.md 4.7 확정 설계 1: netem must be applied to BOTH the
-    client-facing and backend-facing interfaces so round-trip traffic is
-    impaired identically in each direction, not just one leg."""
+class TestApplyGatewayProfile:
+    """2026-09 client-link-only redesign: only the client-facing leg
+    carries the user-selected profile (in both directions, egress direct +
+    ingress via IFB); the backend-facing leg always gets the fixed
+    ETHERNET_BASELINE regardless of what was requested."""
 
     def setup_method(self):
         netem_control._STATE.clear()
 
-    def test_apply_profile_both_runs_commands_on_both_ifaces(self, monkeypatch):
+    def test_apply_gateway_profile_shapes_client_link_both_directions(self, monkeypatch):
         monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
         calls = []
 
@@ -198,38 +199,59 @@ class TestApplyProfileBoth:
             return _Proc(returncode=0)
 
         monkeypatch.setattr(netem_control.subprocess, "run", fake_run)
-        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["wireless"])
+        result = netem_control.apply_gateway_profile("eth0", "eth1", "ifb0", PRESETS["wireless"])
 
         assert result["ok"] is True
         assert result["client_iface"] == "eth0"
         assert result["backend_iface"] == "eth1"
+        assert result["ifb_dev"] == "ifb0"
         assert result["client"]["ok"] is True
-        assert result["backend"]["ok"] is True
-        # 3 commands (del, netem, fq) per interface = 6 total
-        assert len(calls) == 6
+        assert result["client"]["egress"]["ok"] is True
+        assert result["client"]["ingress"]["ok"] is True
+        # client egress (del/netem/fq) + IFB setup (modprobe/link add/link
+        # set) + ingress redirect (del/qdisc add/filter add) + ifb0 netem
+        # (del/netem/fq) + backend baseline egress (del/netem/fq, since
+        # ETHERNET_BASELINE has a nonzero delay) = 3+3+3+3+3 = 15
+        assert len(calls) == 15
         assert netem_control.current_profile("eth0").name == "wireless"
-        assert netem_control.current_profile("eth1").name == "wireless"
+        assert netem_control.current_ingress_profile("eth0").name == "wireless"
 
-    def test_apply_profile_both_dry_run_does_not_execute(self, monkeypatch):
+    def test_apply_gateway_profile_always_applies_ethernet_baseline_to_backend(self, monkeypatch):
+        # Even when the caller asks for "wireless" on the client link, the
+        # backend leg must get ETHERNET_BASELINE -- not "wireless".
+        monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
+        monkeypatch.setattr(netem_control.subprocess, "run", lambda *a, **k: _Proc(returncode=0))
+
+        result = netem_control.apply_gateway_profile("eth0", "eth1", "ifb0", PRESETS["wireless"])
+
+        assert result["backend"]["profile"]["profile"] == "ethernet_baseline"
+        assert netem_control.current_profile("eth1").name == "ethernet_baseline"
+        # The top-level "profile" field reports what was requested for the
+        # client link, not what the backend actually got.
+        assert result["profile"]["profile"] == "wireless"
+
+    def test_apply_gateway_profile_dry_run_does_not_execute(self, monkeypatch):
         monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
         calls = []
         monkeypatch.setattr(netem_control.subprocess, "run", lambda *a, **k: calls.append(a))
-        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["wired"], dry_run=True)
+        result = netem_control.apply_gateway_profile("eth0", "eth1", "ifb0", PRESETS["wired"], dry_run=True)
         assert result["ok"] is True
-        assert result["client"]["dry_run"] is True
+        assert result["client"]["egress"]["dry_run"] is True
+        assert result["client"]["ingress"]["dry_run"] is True
         assert result["backend"]["dry_run"] is True
         assert calls == []
 
-    def test_apply_profile_both_without_tc_reports_ok_false_with_both_reasons(self, monkeypatch):
+    def test_apply_gateway_profile_without_tc_reports_ok_false(self, monkeypatch):
         monkeypatch.setattr(netem_control.shutil, "which", lambda name: None)
-        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["wireless"])
+        result = netem_control.apply_gateway_profile("eth0", "eth1", "ifb0", PRESETS["wireless"])
         assert result["ok"] is False
         assert "eth0" in result["reason"]
-        assert "eth1" in result["reason"]
 
-    def test_apply_profile_both_partial_failure_names_failing_side(self, monkeypatch):
-        # client (eth0) succeeds, backend (eth1) fails -- e.g. one bridge
-        # interface lost NET_ADMIN visibility but not the other.
+    def test_apply_gateway_profile_ok_gated_by_client_link_only(self, monkeypatch):
+        # Backend baseline failing (e.g. no CAP_NET_ADMIN on that leg)
+        # must not be silently hidden, but it also must not flip top-level
+        # "ok" -- only the client link (what the caller actually asked to
+        # change) gates "ok" (module docstring's explicit rationale).
         monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
 
         def fake_run(argv, **kwargs):
@@ -240,27 +262,35 @@ class TestApplyProfileBoth:
             return _Proc(returncode=0)
 
         monkeypatch.setattr(netem_control.subprocess, "run", fake_run)
-        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["wireless"])
+        result = netem_control.apply_gateway_profile("eth0", "eth1", "ifb0", PRESETS["wireless"])
 
-        assert result["ok"] is False
         assert result["client"]["ok"] is True
         assert result["backend"]["ok"] is False
-        assert "backend_iface=eth1" in result["reason"]
-        assert "client_iface=eth0" not in result["reason"]
+        assert result["ok"] is True  # client link succeeded, so overall ok
+        assert "reason" not in result  # only set when client link fails
 
-    def test_current_profile_both_defaults_to_clean_both_sides(self):
-        result = netem_control.current_profile_both("eth0", "eth1")
-        assert result["client"]["profile"] == "clean"
+    def test_current_gateway_profile_defaults_to_clean_and_baseline_reported_separately(self):
+        result = netem_control.current_gateway_profile("eth0", "eth1", "ifb0")
+        assert result["client"]["egress"]["profile"] == "clean"
+        assert result["client"]["ingress"]["profile"] == "clean"
+        # current_profile() has no special-case for the backend leg -- it
+        # just reports whatever was last applied there (defaults to
+        # "clean" until a real apply_gateway_profile call installs the
+        # baseline; the *policy* that it should always be
+        # ETHERNET_BASELINE lives in apply_backend_link_baseline, not in
+        # this read path).
         assert result["backend"]["profile"] == "clean"
 
-    def test_clear_both_applies_clean_to_both(self, monkeypatch):
+    def test_clear_gateway_reapplies_clean_client_and_baseline_backend(self, monkeypatch):
         monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
         monkeypatch.setattr(netem_control.subprocess, "run", lambda *a, **k: _Proc(returncode=0))
-        result = netem_control.clear_both("eth0", "eth1")
+        result = netem_control.clear_gateway("eth0", "eth1", "ifb0")
         assert result["ok"] is True
         assert netem_control.current_profile("eth0").name == "clean"
-        assert netem_control.current_profile("eth1").name == "clean"
+        assert netem_control.current_ingress_profile("eth0").name == "clean"
+        assert netem_control.current_profile("eth1").name == "ethernet_baseline"
 
-    def test_default_client_backend_iface_constants_exist(self):
+    def test_default_client_backend_ifb_constants_exist(self):
         assert netem_control.DEFAULT_CLIENT_IFACE
         assert netem_control.DEFAULT_BACKEND_IFACE
+        assert netem_control.DEFAULT_IFB_DEV

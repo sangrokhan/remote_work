@@ -305,9 +305,15 @@ Client (측정 코드: cwnd/capture/export — 공통)
    - Gateway 자체는 두 네트워크 모두에 속하며, `net.ipv4.ip_forward=1` +
      `NET_ADMIN`으로 커널 레벨 포워딩만 수행한다. TCP 페이로드나 헤더를
      들여다보지 않는다 — 순수 L3/L4-무관 패킷 라우팅.
-   - `tc netem`은 Gateway의 **양쪽 인터페이스 egress**(client-facing,
-     backend-facing)에 동일 프로파일을 적용한다 — 왕복(request/response) 모두
-     같은 지연/손실 특성을 겪게 하기 위함. 한쪽에만 적용하면 편도만 영향받는다.
+   - `tc netem`은 **client-facing leg에만** (egress 직접 + ingress는 IFB
+     리다이렉트, 2026-09 client-link-only 재설계) 적용된다 — 왕복
+     (request/response) 모두 client-facing leg를 겪게 하기 위함.
+     backend-facing leg는 사용자 선택과 무관하게 항상 고정된
+     `ETHERNET_BASELINE`(사실상 무손상)만 적용 — Gateway↔backend가 실제로는
+     같은 데이터센터/호스트 내부의 Ethernet 홉이라는 토폴로지를 반영한
+     것. 자세한 근거와 IFB 구현은 ARCHITECTURE.md §4.2 참고. (이전
+     2026-08-26 확정 설계는 양쪽 인터페이스에 동일 프로파일을 걸었으나,
+     실제 토폴로지와 맞지 않는다는 지적으로 재설계됨.)
 2. 런타임 프로파일 전환 시 기존 연결(keep-alive)에도 즉시 반영되는지 — tc netem은
    인터페이스 단위라 기존 연결에도 즉시 적용됨 (재현성에 유리, 확정 유지).
 3. LocalLLMBackend(B4)의 "자체 프록시"(engine gateway, 애플리케이션 레벨)와

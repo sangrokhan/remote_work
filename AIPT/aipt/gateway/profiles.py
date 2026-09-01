@@ -104,6 +104,20 @@ PRESETS: dict[str, Profile] = {
     "wireless": Profile(name="wireless", delay_ms=40, jitter_ms=15, loss_pct=0.001, reorder_pct=0.0),
 }
 
+#: Fixed profile always applied to the Gateway<->backend leg (2026-09
+#: client-link-only redesign, ``aipt.gateway.netem_control`` module
+#: docstring): that leg is an intra-datacenter/same-host Docker bridge hop,
+#: not the access network the user is trying to model, so it never carries
+#: the user-selected profile -- it always gets this near-zero baseline
+#: regardless of what ``clean``/``wired``/``wireless``/``custom`` was
+#: requested for the client-facing link. Not literally 0 like ``clean``:
+#: a small illustrative delay is kept so the leg still shows up as a real
+#: (if negligible) hop in RTT/packet-timing measurements rather than being
+#: indistinguishable from "no Gateway at all" -- no official Ethernet-LAN
+#: latency standard is cited here, this is a deliberately negligible,
+#: illustrative constant.
+ETHERNET_BASELINE = Profile(name="ethernet_baseline", delay_ms=1, jitter_ms=0, loss_pct=0.0, reorder_pct=0.0)
+
 
 def get_preset(name: str) -> Profile:
     """Look up a named preset. Raises ``KeyError`` for unknown names (and
@@ -197,6 +211,7 @@ __all__ = [
     "Profile",
     "PRESETS",
     "PRESET_NAMES",
+    "ETHERNET_BASELINE",
     "get_preset",
     "custom_profile",
     "resolve",

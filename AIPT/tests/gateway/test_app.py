@@ -34,13 +34,16 @@ def test_get_profile_defaults_to_clean(client):
     resp = client.get("/gateway/profile")
     assert resp.status_code == 200
     body = resp.json()
-    # DESIGN.md 4.7 확정 설계: profile is now reported per-interface
-    # (client-facing + backend-facing), both defaulting to clean.
-    assert body["client"]["profile"] == "clean"
-    assert body["client"]["delay_ms"] == 0
+    # 2026-09 client-link-only redesign: client leg reports egress+ingress
+    # (both default clean), backend leg reports whatever was last applied
+    # there (also defaults to clean until an apply_gateway_profile call
+    # installs ETHERNET_BASELINE -- see current_gateway_profile's own
+    # docstring/tests for that nuance).
+    assert body["client"]["egress"]["profile"] == "clean"
+    assert body["client"]["egress"]["delay_ms"] == 0
+    assert body["client"]["ingress"]["profile"] == "clean"
     assert body["backend"]["profile"] == "clean"
-    assert body["backend"]["delay_ms"] == 0
-    assert "client_iface" in body and "backend_iface" in body
+    assert "client_iface" in body and "backend_iface" in body and "ifb_dev" in body
 
 
 def test_post_profile_preset(client):
@@ -96,8 +99,11 @@ def test_post_then_get_reflects_applied_profile_when_tc_available(client, monkey
 
     get_resp = client.get("/gateway/profile")
     body = get_resp.json()
-    assert body["client"]["profile"] == "wireless"
-    assert body["backend"]["profile"] == "wireless"
+    assert body["client"]["egress"]["profile"] == "wireless"
+    assert body["client"]["ingress"]["profile"] == "wireless"
+    # Backend leg always gets the fixed baseline, not "wireless" -- the
+    # whole point of the 2026-09 client-link-only redesign.
+    assert body["backend"]["profile"] == "ethernet_baseline"
 
 
 # --- Startup lifespan: env-derived profile must actually be *applied*, not
@@ -113,7 +119,7 @@ def test_post_then_get_reflects_applied_profile_when_tc_available(client, monkey
 
 def test_startup_applies_env_derived_profile(monkeypatch):
     """Booting the app (entering the TestClient's lifespan context) must
-    call netem_control.apply_profile_both with the profile derived from
+    call netem_control.apply_gateway_profile with the profile derived from
     GATEWAY_PROFILE/GATEWAY_DELAY_MS -- this is the actual "does 20ms get
     installed at container boot" behaviour, not just "is the env var
     readable"."""
@@ -127,9 +133,9 @@ def test_startup_applies_env_derived_profile(monkeypatch):
     calls = []
     monkeypatch.setattr(
         netem_control,
-        "apply_profile_both",
-        lambda client_iface, backend_iface, profile, **k: calls.append(
-            (client_iface, backend_iface, profile)
+        "apply_gateway_profile",
+        lambda client_iface, backend_iface, ifb_dev, profile, **k: calls.append(
+            (client_iface, backend_iface, ifb_dev, profile)
         )
         or {"ok": True, "profile": profile.as_dict()},
     )
@@ -138,21 +144,22 @@ def test_startup_applies_env_derived_profile(monkeypatch):
         pass  # lifespan startup runs on __enter__, shutdown on __exit__
 
     assert len(calls) == 1, (
-        "expected exactly one netem_control.apply_profile_both call during "
+        "expected exactly one netem_control.apply_gateway_profile call during "
         "startup -- if this is 0, the env-derived profile is being read but "
         "never installed via tc (the original bug); if >1, startup is "
         "re-applying on every request instead of once at boot"
     )
-    client_iface, backend_iface, profile = calls[0]
+    client_iface, backend_iface, ifb_dev, profile = calls[0]
     assert client_iface == netem_control.DEFAULT_CLIENT_IFACE
     assert backend_iface == netem_control.DEFAULT_BACKEND_IFACE
+    assert ifb_dev == netem_control.DEFAULT_IFB_DEV
     assert profile.delay_ms == 20
     assert profile.name == "custom"
 
 
 def test_startup_with_default_env_installs_clean(monkeypatch):
     """No GATEWAY_* env set at all -> startup still calls
-    apply_profile_both, just with the "clean" (no-op) profile -- startup
+    apply_gateway_profile, just with the "clean" (no-op) profile -- startup
     application happens unconditionally, not only when impairment is
     requested."""
     netem_control._STATE.clear()
@@ -170,8 +177,8 @@ def test_startup_with_default_env_installs_clean(monkeypatch):
     calls = []
     monkeypatch.setattr(
         netem_control,
-        "apply_profile_both",
-        lambda client_iface, backend_iface, profile, **k: calls.append(profile)
+        "apply_gateway_profile",
+        lambda client_iface, backend_iface, ifb_dev, profile, **k: calls.append(profile)
         or {"ok": True, "profile": profile.as_dict()},
     )
 
@@ -187,8 +194,9 @@ def test_startup_profile_is_actually_installed_end_to_end(monkeypatch):
     """End-to-end (still without real tc/CAP_NET_ADMIN): after entering the
     TestClient's lifespan with GATEWAY_DELAY_MS=20 in the environment, a
     plain GET /gateway/profile (no POST in between) must already report
-    delay_ms=20 on both interfaces -- proving the startup hook, not a
-    request handler, is what installed it."""
+    delay_ms=20 on the client leg -- proving the startup hook, not a
+    request handler, is what installed it. The backend leg gets the fixed
+    ETHERNET_BASELINE (delay_ms=1), not the env-derived 20ms."""
     netem_control._STATE.clear()
     monkeypatch.setenv("GATEWAY_PROFILE", "custom")
     monkeypatch.setenv("GATEWAY_DELAY_MS", "20")
@@ -204,5 +212,7 @@ def test_startup_profile_is_actually_installed_end_to_end(monkeypatch):
     with TestClient(app) as client:
         resp = client.get("/gateway/profile")  # no POST first
         body = resp.json()
-        assert body["client"]["delay_ms"] == 20
-        assert body["backend"]["delay_ms"] == 20
+        assert body["client"]["egress"]["delay_ms"] == 20
+        assert body["client"]["ingress"]["delay_ms"] == 20
+        assert body["backend"]["delay_ms"] == 1
+        assert body["backend"]["profile"] == "ethernet_baseline"

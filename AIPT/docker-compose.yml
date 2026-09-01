@@ -139,8 +139,14 @@ services:
       context: .
       dockerfile: docker/Dockerfile.gateway
     # NET_ADMIN: tc qdisc netem (aipt/gateway/netem_control.py) targeting
-    # both GATEWAY_CLIENT_IFACE/GATEWAY_BACKEND_IFACE inside this
-    # container's network namespace.
+    # GATEWAY_CLIENT_IFACE egress+ingress(via GATEWAY_IFB_DEV) and
+    # GATEWAY_BACKEND_IFACE egress inside this container's network
+    # namespace (2026-09 client-link-only redesign -- only the
+    # client-facing leg is shaped both directions; the backend-facing leg
+    # always gets a fixed near-zero baseline, see
+    # aipt.gateway.netem_control's module docstring). NET_ADMIN also
+    # covers `ip link add <ifb> type ifb` for the ingress-shaping
+    # workaround (tc netem has no native ingress mode).
     cap_add:
       - NET_ADMIN
     # DESIGN.md 4.7 확정 설계 1: kernel-level IP forwarding between
@@ -157,13 +163,24 @@ services:
       - GATEWAY_IFACE=${GATEWAY_IFACE:-eth0}
       - GATEWAY_CLIENT_IFACE=${GATEWAY_CLIENT_IFACE:-eth0}
       - GATEWAY_BACKEND_IFACE=${GATEWAY_BACKEND_IFACE:-eth1}
-      # Default impairment: 20ms one-way delay injected on each of the
-      # Gateway's two egress interfaces (i.e. "받은 뒤 내보내기 전 20ms
-      # 대기"), so round-trip request+response each cross one gateway hop
-      # and each hop adds 20ms (client->backend leg +20ms, backend->client
-      # leg +20ms). GATEWAY_PROFILE must be "custom" for GATEWAY_DELAY_MS
-      # to take effect (named presets like "clean"/"wired"/"wireless" ignore
-      # the individual knobs -- see aipt/gateway/profiles.py resolve()).
+      # GATEWAY_IFB_DEV: virtual device GATEWAY_CLIENT_IFACE's ingress
+      # (client -> Gateway request leg) is redirected to so it can be
+      # shaped like any other egress (2026-09 client-link-only redesign).
+      # Not needed on the backend leg -- it never carries the
+      # user-selected profile, only the fixed ETHERNET_BASELINE.
+      - GATEWAY_IFB_DEV=${GATEWAY_IFB_DEV:-ifb0}
+      # Default impairment: 20ms one-way delay on the client-facing leg,
+      # applied to BOTH directions (egress direct on GATEWAY_CLIENT_IFACE
+      # for the response leg, ingress-via-IFB on GATEWAY_IFB_DEV for the
+      # request leg) -- so a round trip picks up ~40ms total, all of it on
+      # the client-facing (access-network) leg. The backend-facing leg
+      # (GATEWAY_BACKEND_IFACE) ignores these knobs entirely: it always
+      # gets the fixed ETHERNET_BASELINE regardless of GATEWAY_PROFILE/
+      # GATEWAY_DELAY_MS (aipt/gateway/netem_control.py's
+      # apply_backend_link_baseline). GATEWAY_PROFILE must be "custom" for
+      # GATEWAY_DELAY_MS to take effect (named presets like
+      # "clean"/"wired"/"wireless" ignore the individual knobs -- see
+      # aipt/gateway/profiles.py resolve()).
       - GATEWAY_PROFILE=${GATEWAY_PROFILE:-custom}
       - GATEWAY_DELAY_MS=${GATEWAY_DELAY_MS:-20}
       - GATEWAY_JITTER_MS=${GATEWAY_JITTER_MS:-0}
