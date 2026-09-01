@@ -118,6 +118,28 @@ def test_inference_mock_post_echoes_prompt_bytes(srv):
     assert "tokens" in data
 
 
+def test_inference_mock_post_reports_recv_ms(srv):
+    # recv_ms (2026-09-01 idle-reset experiment redesign, docs/experiments/
+    # 2026-09-01-idle-reset-results.md): server-observed request-upload
+    # latency, the metric the experiment actually needs -- present and
+    # non-negative on every POST /inference-mock, GET-only requests never
+    # carry it (there is no body to time).
+    body = b"x" * 10000
+    status, _, resp_body = _post(srv.host, srv.port, "/inference-mock", body)[0]
+    assert status == 200
+    data = json.loads(resp_body)
+    assert "recv_ms" in data
+    assert isinstance(data["recv_ms"], (int, float))
+    assert data["recv_ms"] >= 0
+
+
+def test_inference_mock_get_has_no_recv_ms(srv):
+    status, _, resp_body = _get(srv.host, srv.port, "/inference-mock")[0]
+    assert status == 200
+    data = json.loads(resp_body)
+    assert "recv_ms" not in data
+
+
 def test_inference_mock_get_response_bytes_pads_body_to_exact_size(srv):
     status, headers, body = _get(
         srv.host, srv.port, "/inference-mock?response_bytes=1000")[0]

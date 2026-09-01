@@ -183,3 +183,65 @@ def test_local_llm_engine_url_env_override_admin_port(client, monkeypatch):
     monkeypatch.setattr("aipt.web.routes_gateway.requests.get", fake_get)
     client.get("/api/idle-reset?backend=local_llm")
     assert captured["url"] == "http://172.28.2.4:40081/admin/idle-reset"
+
+
+# -- web_client idle-reset (in-process, no HTTP proxy) ---------------------
+#
+# Redesigned 2026-09-01 (docs/experiments/2026-09-01-idle-reset-results.md):
+# it's `web`'s own send-side cwnd that slow-start-after-idle resets for the
+# metric that matters (next-turn request upload latency), so this path
+# calls aipt.core.idle_reset directly rather than proxying to another
+# container -- no network hop, no `requests` mock needed.
+
+def test_get_idle_reset_web_client_calls_idle_reset_read(client, monkeypatch):
+    monkeypatch.setattr(
+        "aipt.web.routes_gateway._idle_reset.read",
+        lambda path=None: (True, "ready"),
+    )
+    res = client.get("/api/idle-reset?backend=web_client")
+    assert res.status_code == 200
+    assert res.json() == {"ok": True, "enabled": True, "reason": "ready"}
+
+
+def test_set_idle_reset_web_client_calls_idle_reset_write(client, monkeypatch):
+    calls = []
+
+    def fake_write(enabled, path=None):
+        calls.append(enabled)
+        return True, "ready"
+
+    monkeypatch.setattr("aipt.web.routes_gateway._idle_reset.write", fake_write)
+    monkeypatch.setattr("aipt.web.routes_gateway._idle_reset.read", lambda path=None: (False, "ready"))
+    res = client.post("/api/idle-reset?backend=web_client&enabled=false")
+    assert res.status_code == 200
+    assert calls == [False]
+    body = res.json()
+    assert body["write_ok"] is True
+    assert body["enabled"] is False
+
+
+def test_set_idle_reset_web_client_write_failure_reported(client, monkeypatch):
+    monkeypatch.setattr(
+        "aipt.web.routes_gateway._idle_reset.write",
+        lambda enabled, path=None: (False, "could not be written: denied"),
+    )
+    monkeypatch.setattr("aipt.web.routes_gateway._idle_reset.read", lambda path=None: (None, "n/a"))
+    res = client.post("/api/idle-reset?backend=web_client&enabled=true")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["write_ok"] is False
+    assert "denied" in body["write_reason"]
+
+
+def test_web_client_idle_reset_never_makes_http_call(client, monkeypatch):
+    # Guard against a regression that routes web_client through the HTTP
+    # proxy path by mistake -- both requests.get/post must stay untouched.
+    def fail(*a, **k):
+        raise AssertionError("web_client must not go through requests.get/post")
+
+    monkeypatch.setattr("aipt.web.routes_gateway.requests.get", fail)
+    monkeypatch.setattr("aipt.web.routes_gateway.requests.post", fail)
+    monkeypatch.setattr("aipt.web.routes_gateway._idle_reset.read", lambda path=None: (True, "ready"))
+    monkeypatch.setattr("aipt.web.routes_gateway._idle_reset.write", lambda enabled, path=None: (True, "ready"))
+    assert client.get("/api/idle-reset?backend=web_client").status_code == 200
+    assert client.post("/api/idle-reset?backend=web_client&enabled=true").status_code == 200

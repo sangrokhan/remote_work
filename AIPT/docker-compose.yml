@@ -230,6 +230,16 @@ services:
     # NET_ADMIN: netlink cwnd monitor (aipt.core.cwnd) + NIC offload toggle
     # (aipt.core.offload) + entrypoint_web.py's `ip route add` to
     # net-backend via `gateway` (DESIGN.md 4.7 확정 설계 1).
+    #
+    # privileged: true (2026-09-01, idle-reset TTFT experiment, redesign):
+    # same reasoning as mock-server's/local-llm's `privileged: true` --
+    # web is the CLIENT sending each turn's request, and it is web's own
+    # send-side cwnd that slow-start-after-idle resets after an idle gap
+    # (aipt.core.idle_reset's GET/POST /api/idle-reset?backend=web_client,
+    # aipt/web/routes_gateway.py). CAP_NET_ADMIN alone cannot write
+    # /proc/sys/net/ipv4/tcp_slow_start_after_idle (Docker's default
+    # read-only masking of most of /proc/sys).
+    privileged: true
     cap_add:
       - NET_ADMIN
       - NET_RAW

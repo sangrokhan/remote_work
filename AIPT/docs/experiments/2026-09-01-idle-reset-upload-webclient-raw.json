@@ -1,0 +1,302 @@
+{
+  "web_client_enabled": [
+    {
+      "ok": true,
+      "label": "upload2_web_client_enabled_rep0",
+      "elapsed_s": 32.74008393287659,
+      "turns": [
+        {
+          "turn": 0,
+          "wire_sent": 1000000,
+          "recv_ms": 244.012
+        },
+        {
+          "turn": 1,
+          "wire_sent": 1501000,
+          "recv_ms": 245.775
+        },
+        {
+          "turn": 2,
+          "wire_sent": 2002000,
+          "recv_ms": 285.972
+        },
+        {
+          "turn": 3,
+          "wire_sent": 2503000,
+          "recv_ms": 287.387
+        },
+        {
+          "turn": 4,
+          "wire_sent": 3004000,
+          "recv_ms": 292.834
+        },
+        {
+          "turn": 5,
+          "wire_sent": 3505000,
+          "recv_ms": 740.754
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "label": "upload2_web_client_enabled_rep1",
+      "elapsed_s": 29.188467979431152,
+      "turns": [
+        {
+          "turn": 0,
+          "wire_sent": 1000000,
+          "recv_ms": 243.885
+        },
+        {
+          "turn": 1,
+          "wire_sent": 1501000,
+          "recv_ms": 246.686
+        },
+        {
+          "turn": 2,
+          "wire_sent": 2002000,
+          "recv_ms": 285.197
+        },
+        {
+          "turn": 3,
+          "wire_sent": 2503000,
+          "recv_ms": 288.406
+        },
+        {
+          "turn": 4,
+          "wire_sent": 3004000,
+          "recv_ms": 292.106
+        },
+        {
+          "turn": 5,
+          "wire_sent": 3505000,
+          "recv_ms": 821.77
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "label": "upload2_web_client_enabled_rep2",
+      "elapsed_s": 28.76192879676819,
+      "turns": [
+        {
+          "turn": 0,
+          "wire_sent": 1000000,
+          "recv_ms": 244.088
+        },
+        {
+          "turn": 1,
+          "wire_sent": 1501000,
+          "recv_ms": 247.394
+        },
+        {
+          "turn": 2,
+          "wire_sent": 2002000,
+          "recv_ms": 284.992
+        },
+        {
+          "turn": 3,
+          "wire_sent": 2503000,
+          "recv_ms": 284.849
+        },
+        {
+          "turn": 4,
+          "wire_sent": 3004000,
+          "recv_ms": 293.244
+        },
+        {
+          "turn": 5,
+          "wire_sent": 3505000,
+          "recv_ms": 822.736
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "label": "upload2_web_client_enabled_rep3",
+      "elapsed_s": 29.18834948539734,
+      "turns": [
+        {
+          "turn": 0,
+          "wire_sent": 1000000,
+          "recv_ms": 243.445
+        },
+        {
+          "turn": 1,
+          "wire_sent": 1501000,
+          "recv_ms": 246.737
+        },
+        {
+          "turn": 2,
+          "wire_sent": 2002000,
+          "recv_ms": 288.211
+        },
+        {
+          "turn": 3,
+          "wire_sent": 2503000,
+          "recv_ms": 287.293
+        },
+        {
+          "turn": 4,
+          "wire_sent": 3004000,
+          "recv_ms": 293.849
+        },
+        {
+          "turn": 5,
+          "wire_sent": 3505000,
+          "recv_ms": 783.903
+        }
+      ]
+    }
+  ],
+  "web_client_disabled": [
+    {
+      "ok": true,
+      "label": "upload2_web_client_disabled_rep0",
+      "elapsed_s": 28.78264284133911,
+      "turns": [
+        {
+          "turn": 0,
+          "wire_sent": 1000000,
+          "recv_ms": 243.189
+        },
+        {
+          "turn": 1,
+          "wire_sent": 1501000,
+          "recv_ms": 42.561
+        },
+        {
+          "turn": 2,
+          "wire_sent": 2002000,
+          "recv_ms": 584.447
+        },
+        {
+          "turn": 3,
+          "wire_sent": 2503000,
+          "recv_ms": 717.361
+        },
+        {
+          "turn": 4,
+          "wire_sent": 3004000,
+          "recv_ms": 86.144
+        },
+        {
+          "turn": 5,
+          "wire_sent": 3505000,
+          "recv_ms": 89.578
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "label": "upload2_web_client_disabled_rep1",
+      "elapsed_s": 27.20053482055664,
+      "turns": [
+        {
+          "turn": 0,
+          "wire_sent": 1000000,
+          "recv_ms": 243.251
+        },
+        {
+          "turn": 1,
+          "wire_sent": 1501000,
+          "recv_ms": 46.034
+        },
+        {
+          "turn": 2,
+          "wire_sent": 2002000,
+          "recv_ms": 86.28
+        },
+        {
+          "turn": 3,
+          "wire_sent": 2503000,
+          "recv_ms": 85.848
+        },
+        {
+          "turn": 4,
+          "wire_sent": 3004000,
+          "recv_ms": 91.827
+        },
+        {
+          "turn": 5,
+          "wire_sent": 3505000,
+          "recv_ms": 127.818
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "label": "upload2_web_client_disabled_rep2",
+      "elapsed_s": 28.801482915878296,
+      "turns": [
+        {
+          "turn": 0,
+          "wire_sent": 1000000,
+          "recv_ms": 243.806
+        },
+        {
+          "turn": 1,
+          "wire_sent": 1501000,
+          "recv_ms": 43.883
+        },
+        {
+          "turn": 2,
+          "wire_sent": 2002000,
+          "recv_ms": 664.779
+        },
+        {
+          "turn": 3,
+          "wire_sent": 2503000,
+          "recv_ms": 658.333
+        },
+        {
+          "turn": 4,
+          "wire_sent": 3004000,
+          "recv_ms": 87.206
+        },
+        {
+          "turn": 5,
+          "wire_sent": 3505000,
+          "recv_ms": 88.458
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "label": "upload2_web_client_disabled_rep3",
+      "elapsed_s": 28.290181636810303,
+      "turns": [
+        {
+          "turn": 0,
+          "wire_sent": 1000000,
+          "recv_ms": 246.129
+        },
+        {
+          "turn": 1,
+          "wire_sent": 1501000,
+          "recv_ms": 44.811
+        },
+        {
+          "turn": 2,
+          "wire_sent": 2002000,
+          "recv_ms": 587.446
+        },
+        {
+          "turn": 3,
+          "wire_sent": 2503000,
+          "recv_ms": 660.305
+        },
+        {
+          "turn": 4,
+          "wire_sent": 3004000,
+          "recv_ms": 83.685
+        },
+        {
+          "turn": 5,
+          "wire_sent": 3505000,
+          "recv_ms": 88.049
+        }
+      ]
+    }
+  ]
+}

@@ -131,10 +131,40 @@ def _admin_url_for(backend: str) -> str | None:
     return None  # public_ai/quic_mock: no admin toggle (real internet / spike-only)
 
 
+# -- idle-reset toggle for the CLIENT side (`web` itself) -----------------
+#
+# Found during the 2026-09-01 ooo idle-reset experiment (redesign after
+# operator correction): the metric that matters is how long it takes the
+# CLIENT's *next* request to finish uploading after an idle gap, and
+# slow-start-after-idle resets whichever side is about to SEND -- for that
+# metric, that's `web`'s own send-side cwnd, not mock-server's/local-llm's.
+# The first experiment toggled the wrong side (the responding backend) and
+# measured the wrong direction (response download), which is why it found
+# no attributable effect. `web` is this same process's own container, so
+# unlike mock/local_llm there is no separate admin server to proxy to --
+# aipt.core.idle_reset is called in-process, directly against this
+# container's own /proc/sys.
+from aipt.core import idle_reset as _idle_reset  # noqa: E402
+
+
+def _web_client_idle_reset_status() -> dict:
+    return _idle_reset.status()
+
+
+def _web_client_idle_reset_write(enabled: bool) -> dict:
+    ok, reason = _idle_reset.write(enabled)
+    body = _idle_reset.status()
+    body["write_ok"] = ok
+    body["write_reason"] = reason
+    return body
+
+
 @router.get("/api/idle-reset")
-def get_idle_reset(backend: str = Query(..., description="mock|local_llm")):
+def get_idle_reset(backend: str = Query(..., description="mock|local_llm|web_client")):
     """Current net.ipv4.tcp_slow_start_after_idle state on *backend*'s
     responding side. Proxies GET {backend admin}/admin/idle-reset."""
+    if backend == "web_client":
+        return JSONResponse(_web_client_idle_reset_status())
     url = _admin_url_for(backend)
     if url is None:
         return JSONResponse(
@@ -151,11 +181,13 @@ def get_idle_reset(backend: str = Query(..., description="mock|local_llm")):
 
 
 @router.post("/api/idle-reset")
-def set_idle_reset(backend: str = Query(..., description="mock|local_llm"),
+def set_idle_reset(backend: str = Query(..., description="mock|local_llm|web_client"),
                     enabled: bool = Query(..., description="True=Linux default (reset), False=disabled")):
     """Toggle net.ipv4.tcp_slow_start_after_idle on *backend*'s responding
     side -- the causal idle-reset TTFT experiment's control knob
     (2026-09-01 ooo interview). Proxies POST {backend admin}/admin/idle-reset."""
+    if backend == "web_client":
+        return JSONResponse(_web_client_idle_reset_write(enabled))
     url = _admin_url_for(backend)
     if url is None:
         return JSONResponse(

@@ -144,8 +144,27 @@ class _Handler(BaseHTTPRequestHandler):
 
         if path == "/inference-mock":
             length = int(self.headers.get("Content-Length", "0"))
+            # Server-observed request-upload-complete latency (2026-09-01
+            # ooo idle-reset experiment, redesigned per operator direction):
+            # the metric that actually matters for user-perceived latency
+            # is "how long until the server has received the FULL request",
+            # not response download time -- the server cannot start
+            # inference until the last request byte arrives, and it is
+            # exactly the client's OWN send-side cwnd (reset by
+            # slow-start-after-idle when the client's next request follows
+            # an idle gap longer than the RTO) that gates how fast this
+            # upload completes. t_recv_start is when the connection handed
+            # control to this handler (headers already parsed, so this is
+            # ~the first request byte); t_recv_end is the instant the last
+            # body byte has been read off the socket -- recv_ms is that
+            # span, in milliseconds, echoed back so a client-side harness
+            # can attribute the delay to the network/cwnd rather than to
+            # request-handling overhead on this end.
+            t_recv_start = time.monotonic()
             body = self.rfile.read(length) if length else b""
-            self._handle_inference(query, prompt_bytes=len(body))
+            t_recv_end = time.monotonic()
+            recv_ms = (t_recv_end - t_recv_start) * 1000
+            self._handle_inference(query, prompt_bytes=len(body), recv_ms=recv_ms)
         elif path == "/admin/idle-reset":
             raw = query.get("enabled", [None])[0]
             if raw not in ("0", "1"):
@@ -159,7 +178,8 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._json(404, {"error": "not found"})
 
-    def _handle_inference(self, query: dict, prompt_bytes: int | None) -> None:
+    def _handle_inference(self, query: dict, prompt_bytes: int | None,
+                           recv_ms: float | None = None) -> None:
         delay_ms = int(query.get("delay", ["0"])[0])
         response_bytes = int(query.get("response_bytes", ["0"])[0])
         if delay_ms > 0:
@@ -171,6 +191,14 @@ class _Handler(BaseHTTPRequestHandler):
         body: dict = {"tokens": 100, "ts": time.time()}
         if prompt_bytes is not None:
             body["prompt_bytes"] = prompt_bytes
+        if recv_ms is not None:
+            # See do_POST's comment: this is the request-upload-complete
+            # latency the idle-reset experiment actually needs (server-
+            # observed time from first to last request body byte), not
+            # response download time -- echoed back so a client harness
+            # doesn't have to trust its own wall-clock estimate of when
+            # the server finished receiving.
+            body["recv_ms"] = round(recv_ms, 3)
         target_bytes = response_bytes
         if answer is not None:
             body["answer"] = answer
