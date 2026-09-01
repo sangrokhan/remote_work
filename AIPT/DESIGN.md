@@ -283,8 +283,8 @@ Client (측정 코드: cwnd/capture/export — 공통)
 | 위치 | `aipt/gateway/` 신규 패키지 + `docker/Dockerfile.gateway` — 별도 컨테이너로 배포 |
 | 트래픽 제어 수단 | `tc qdisc netem` (지연/지터/손실/재정렬/중복), 기존 `aipt/core/netem.py`를 얇은 wrapper가 아니라 **Gateway 컨테이너의 제어 루프 본체**로 승격 |
 | 적용 대상 | `MockBackend`, `LocalLLMBackend`만 경유. `PublicAIBackend`는 경유하지 않음 (실제 인터넷이 이미 그 역할) |
-| 설정 방식 | (a) 컨테이너 기동 시 env 프리셋(`GATEWAY_DELAY_MS`, `GATEWAY_JITTER_MS`, `GATEWAY_LOSS_PCT`, `GATEWAY_REORDER_PCT` 등, 기존 `CLIENT_NETEM_DELAY_MS` 계열 대체) — (b) **런타임 API** `POST /gateway/profile` 로 실행 중 프로파일 교체 지원 (실험 웹 UI에서 "3G 프로파일", "위성 링크 프로파일" 같은 프리셋 선택 가능하게) |
-| 웹 UI 연동 | `aipt/web` 실험 설정 폼에 "Network profile" 드롭다운 추가 (`clean`/`broadband`/`3g`/`satellite`/`lossy`/`custom`) — 선택값을 Gateway의 `/gateway/profile`로 전달 |
+| 설정 방식 | (a) 컨테이너 기동 시 env 프리셋(`GATEWAY_DELAY_MS`, `GATEWAY_JITTER_MS`, `GATEWAY_LOSS_PCT`, `GATEWAY_REORDER_PCT` 등, 기존 `CLIENT_NETEM_DELAY_MS` 계열 대체) — (b) **런타임 API** `POST /gateway/profile` 로 실행 중 프로파일 교체 지원 (실험 웹 UI에서 "wired 프로파일", "wireless 프로파일" 같은 프리셋 선택 가능하게) |
+| 웹 UI 연동 | `aipt/web` 실험 설정 폼에 "Network profile" 드롭다운 추가 (`clean`/`wired`/`wireless`/`custom`, 2026-09 재설계 — 값 근거는 ARCHITECTURE.md §4.2 참고) — 선택값을 Gateway의 `/gateway/profile`로 전달 |
 | 계측과의 관계 | Gateway 자체는 순수 L3/L4 트래픽 셰이핑만 하고 애플리케이션 로직에는 개입하지 않는다. `aipt/core/cwnd.py`/`capture.py`가 관찰하는 소켓은 client↔gateway 구간이며, Gateway↔backend 구간은 별도 관찰 대상이 아니다 (필요시 후속 확장) |
 | Docker 토폴로지 | `docker-compose.yml`에 서비스 3~4개: `web`(client), `gateway`, `mock-server`, `local-llm-gateway`(+엔진). `web`은 `gateway`의 주소로 mock/local_llm에 접속하고, `gateway`가 `mock-server`/`local-llm-gateway`로 forward하며 그 경로에 netem을 건다 |
 | PublicAI와의 대칭성 참고 | 이 구조 덕분에 3개 backend 모두 "클라이언트가 겪는 경로 특성"이 명시적으로 기술된다: PublicAI=실제 인터넷, Mock/LocalLLM=Gateway가 흉내낸 네트워크. 지금까지처럼 "로컬은 공짜 네트워크"라는 암묵적 가정이 제거된다 |
@@ -372,7 +372,7 @@ flowchart TB
 
     subgraph GATEWAY["Network Gateway 컨테이너 (신규, B9)"]
         Netem["tc netem 제어 루프<br/>delay / jitter / loss / reorder"]
-        ProfileAPI["/gateway/profile API<br/>clean·broadband·3g·satellite·lossy"]
+        ProfileAPI["/gateway/profile API<br/>clean·wired·wireless·custom"]
     end
 
     subgraph EXT["외부 실제 인터넷"]
@@ -700,10 +700,12 @@ RTT 증가를 감지해 cwnd를 사전에 줄인다"는 메커니즘 자체는 �
   idle 중 probe를 N회 반복해 평균/중앙값을 쓰거나, `MAX_REACTED_GROWTH`를
   훨씬 보수적으로(예 0.1~0.2) 낮추거나, 일정 threshold 이하 성장은
   완전히 무시.
-- 서로 다른 netem 프로파일(clean/broadband/satellite/lossy)과 payload
+- 서로 다른 netem 프로파일(clean/wired/wireless)과 payload
   크기 조합으로 반복 측정해, 이번 3g+30KB 조합에 국한된 결과인지 일반적
   경향인지 확인 필요 -- 현재는 단일 프로파일·단일 payload 크기 1회
-  시리즈(반복 3회)만 측정한 상태.
+  시리즈(반복 3회)만 측정한 상태. (참고: 측정 당시 프리셋 이름은 `3g`였으며
+  2026-09 재설계로 `wireless`로 개명 — 실측 로그의 `3g`/`broadband`/`satellite`/
+  `lossy` 표기는 당시 이름 그대로 보존, 현재 코드의 프리셋 이름과는 다름)
 - **이 시점에서 3단계(UI 편입)로 바로 넘어가는 것은 권장하지 않는다** --
   아직 개선을 증명하지 못한 알고리즘을 사용자 대면 UI 옵션으로 노출하는
   건 시기상조.

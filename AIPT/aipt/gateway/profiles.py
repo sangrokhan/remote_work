@@ -1,6 +1,5 @@
 """aipt.gateway.profiles -- named netem parameter presets (DESIGN.md 4.7,
-"구성" table, 웹 UI dropdown values: clean/broadband/3g/satellite/lossy/
-custom).
+"구성" table, 웹 UI dropdown values: clean/wired/wireless/custom).
 
 Each :class:`Profile` is the full set of ``tc netem`` knobs this package
 controls: ``delay_ms``/``jitter_ms`` (variable one-way delay),
@@ -13,6 +12,40 @@ the first, concrete cut.
 a caller (env vars, the POST /gateway/profile body) supply arbitrary
 values, still expressed as the same :class:`Profile` shape so
 ``netem_control`` never has to special-case it.
+
+2026-09 재설계 (3-profile, 근거 명시): 원래 5개 프리셋(broadband/3g/satellite/
+lossy)은 illustrative 숫자였고 근거 문서가 없었다. 세 가지 문제로 재설계했다:
+
+1. netem 원산지: ``tc netem``에는 "profile" 개념 자체가 없다 -- delay/loss/
+   reorder는 순수 raw 파라미터고, 이름 붙은 프리셋은 이 모듈이 만든 추상화다.
+2. 무선(LTE/NR) 구간은 MAC 계층 HARQ + RLC AM ARQ로 로컬 재전송을 하기 때문에,
+   IP/TCP 계층에 실제로 보이는 것은 "패킷 손실"이 아니라 "재전송으로 인한
+   지연/지터 증가"인 경우가 대부분이다. 즉 netem의 ``loss``(균등 확률로 그냥
+   드롭)로 무선 구간을 모사하면, 실제로는 상위 계층까지 새지 않는 손실을
+   인위적으로 만들어 TCP 재전송/cwnd 감소를 과대 유발한다 -- 3GPP 5QI PER
+   목표치가 유선보다도 낮게 잡히는 이유가 이것이다.
+3. 그래서 프리셋을 clean/wired/wireless 3개 + custom으로 줄이고, wireless는
+   loss를 낮게 유지하는 대신 jitter로 "재전송에 의해 늦게 도착하지만 결국은
+   전달됨"을 근사한다. 여전히 근사 모델이다 -- HARQ/RLC의 최대 재전송 횟수를
+   다 쓰고도 실패하는 드문 진짜 IP-loss 케이스는 표현하지 못한다(그건
+   ``custom``으로 별도 설정).
+
+값 근거:
+  - wired loss_pct=0.1: ITU-T Rec. Y.1541 (Network performance objectives
+    for IP-based services) Table 1, QoS Class 0-4의 IP Packet Loss Ratio
+    상한 1×10⁻³.
+  - wireless loss_pct=0.001: 3GPP TS 23.501 Table 5.7.4-1, 5QI=9(비GBR
+    기본 베어러, 일반 인터넷 트래픽이 타는 클래스)의 Packet Error Rate
+    목표 10⁻⁶를 tc netem이 표현 가능한 스케일로 반올림한 근사치 -- "무선
+    구간은 재전송으로 거의 다 복구되어 IP 계층 손실은 유선보다도 드물다"는
+    사실을 반영한다.
+  - wireless jitter_ms=15: HARQ(서브프레임 단위, 라운드당 수 ms) + RLC AM
+    재전송이 겹쳐 발생시키는 지연 변동을 정성적으로 반영한 illustrative
+    값 -- 특정 논문/스펙의 실측치는 아니며, 실측 캘리브레이션은 후속 과제.
+  - delay_ms(wired=15, wireless=40)는 여전히 illustrative(실측/공식 자료
+    기반 아님) -- 유무선 간 상대적 크기 구분만 의도한 값.
+
+각 프리셋 정의부에 근거를 다시 인용해 둔다.
 """
 
 from __future__ import annotations
@@ -22,7 +55,7 @@ from dataclasses import dataclass
 
 #: The names the web UI dropdown (DESIGN.md B11) and the runtime API are
 #: expected to offer, in the order DESIGN.md 4.7 lists them.
-PRESET_NAMES = ("clean", "broadband", "3g", "satellite", "lossy", "custom")
+PRESET_NAMES = ("clean", "wired", "wireless", "custom")
 
 
 @dataclass(frozen=True)
@@ -47,27 +80,28 @@ class Profile:
         }
 
 
-# Presets, DESIGN.md 4.7's dropdown list. Numbers are illustrative
-# real-world-ish figures (not measured against a real 3G/satellite link --
-# a later phase can recalibrate), chosen so the six presets are clearly
-# distinguishable from each other in an experiment:
-#   clean      -- no injected impairment at all (the "perfect network" the
-#                 project used to implicitly assume, now explicit and
-#                 opt-in rather than the only option).
-#   broadband  -- typical wired/cable home connection: small delay, no
-#                 meaningful loss.
-#   3g         -- mobile network: noticeable delay + jitter + a little loss.
-#   satellite  -- GEO satellite link: large one-way delay dominates, plus
-#                 some jitter and loss.
-#   lossy      -- deliberately loss/reorder-heavy, low delay -- for
-#                 exercising retransmission/reordering handling rather than
-#                 RTT itself.
+# Presets, DESIGN.md 4.7's dropdown list. 3-profile design (2026-09
+# 재설계, 근거는 모듈 독스트링 참고):
+#   clean     -- no injected impairment at all (the "perfect network" the
+#                project used to implicitly assume, now explicit and
+#                opt-in rather than the only option).
+#   wired     -- typical wired/broadband internet path: small delay/jitter
+#                (illustrative), loss_pct=0.1 grounded in ITU-T Y.1541
+#                Table 1 (QoS Class 0-4 IP Packet Loss Ratio upper bound
+#                1e-3).
+#   wireless  -- LTE/NR radio access: larger delay + jitter dominated by
+#                HARQ/RLC-AM local retransmission (illustrative -- no
+#                single measured source), but loss_pct kept LOW
+#                (0.001, ~3GPP TS 23.501 Table 5.7.4-1's 5QI=9 residual
+#                Packet Error Rate target 1e-6, rounded to netem's
+#                expressible scale) because most radio-layer errors are
+#                recovered before reaching IP -- see module docstring for
+#                why this profile deliberately does NOT model wireless
+#                with a high loss_pct.
 PRESETS: dict[str, Profile] = {
     "clean": Profile(name="clean", delay_ms=0, jitter_ms=0, loss_pct=0.0, reorder_pct=0.0),
-    "broadband": Profile(name="broadband", delay_ms=15, jitter_ms=3, loss_pct=0.01, reorder_pct=0.0),
-    "3g": Profile(name="3g", delay_ms=150, jitter_ms=40, loss_pct=1.0, reorder_pct=0.5),
-    "satellite": Profile(name="satellite", delay_ms=600, jitter_ms=20, loss_pct=0.5, reorder_pct=0.1),
-    "lossy": Profile(name="lossy", delay_ms=20, jitter_ms=5, loss_pct=5.0, reorder_pct=3.0),
+    "wired": Profile(name="wired", delay_ms=15, jitter_ms=3, loss_pct=0.1, reorder_pct=0.0),
+    "wireless": Profile(name="wireless", delay_ms=40, jitter_ms=15, loss_pct=0.001, reorder_pct=0.0),
 }
 
 

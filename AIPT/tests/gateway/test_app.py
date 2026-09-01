@@ -44,10 +44,10 @@ def test_get_profile_defaults_to_clean(client):
 
 
 def test_post_profile_preset(client):
-    resp = client.post("/gateway/profile", json={"profile": "3g"})
+    resp = client.post("/gateway/profile", json={"profile": "wireless"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["profile"]["profile"] == "3g"
+    assert body["profile"]["profile"] == "wireless"
     # Whether ok is True/False depends on whether this sandbox has tc/NET_ADMIN
     # -- either way the response must not 500 and must explain itself.
     assert "ok" in body
@@ -91,13 +91,13 @@ def test_post_then_get_reflects_applied_profile_when_tc_available(client, monkey
 
     monkeypatch.setattr(netem_control.subprocess, "run", lambda *a, **k: _Proc())
 
-    post_resp = client.post("/gateway/profile", json={"profile": "satellite"})
+    post_resp = client.post("/gateway/profile", json={"profile": "wireless"})
     assert post_resp.json()["ok"] is True
 
     get_resp = client.get("/gateway/profile")
     body = get_resp.json()
-    assert body["client"]["profile"] == "satellite"
-    assert body["backend"]["profile"] == "satellite"
+    assert body["client"]["profile"] == "wireless"
+    assert body["backend"]["profile"] == "wireless"
 
 
 # --- Startup lifespan: env-derived profile must actually be *applied*, not

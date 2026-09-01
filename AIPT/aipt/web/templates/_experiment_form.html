@@ -30,6 +30,48 @@
     <label><input type="checkbox" id="capture" name="capture" checked> Capture packets (tcpdump)</label>
   </div>
 
+  <!-- Network Gateway profile (DESIGN.md 4.7 B11) -- tc netem preset on
+       the Network Gateway container's L3 hop. Only meaningful for
+       Mock/LocalLLM (PublicAI goes straight to the real internet and
+       never touches the Gateway, DESIGN.md 4.7) -- app.js hides this
+       field for the PublicAI card the same way it hides transport-field.
+       This does NOT ride in RunRequest: it's a standing state change on
+       the Gateway container (every subsequent run is affected until
+       changed again), applied immediately via GET/POST
+       /api/gateway/profile (aipt/web/routes_gateway.py) rather than as a
+       per-run parameter, which is why it has its own Apply button instead
+       of just being another form field submitted with the run. -->
+  <div class="field" id="gateway-profile-field">
+    <label for="gateway-profile-select">Network profile (Gateway)</label>
+    <select id="gateway-profile-select" name="gateway_profile">
+      <option value="clean">clean (0ms, no impairment)</option>
+      <option value="wired">wired (broadband, ITU-T Y.1541 loss bound)</option>
+      <option value="wireless">wireless (LTE/NR, HARQ/RLC retransmission delay)</option>
+      <option value="custom" selected>custom (GATEWAY_DELAY_MS etc., default 20ms)</option>
+    </select>
+    <button type="button" id="gateway-profile-apply">Apply</button>
+    <p class="hint" id="gateway-profile-status"></p>
+  </div>
+
+  <!-- idle-reset toggle (net.ipv4.tcp_slow_start_after_idle) -- the causal
+       control for the idle-reset TTFT experiment (2026-09-01 ooo
+       interview): flips the sysctl on the *responding* backend
+       container's netns via GET/POST /api/idle-reset
+       (aipt/web/routes_gateway.py -> aipt.core.idle_reset). Same
+       "standing state, own Apply button, not a RunRequest field" posture
+       as gateway-profile-field above -- only meaningful for mock/local_llm
+       (the containers this project owns the netns of); app.js hides it
+       for public_ai/quic_mock. -->
+  <div class="field" id="idle-reset-field">
+    <label for="idle-reset-select">TCP idle-reset (slow-start-after-idle)</label>
+    <select id="idle-reset-select" name="idle_reset_enabled">
+      <option value="1" selected>enabled (Linux default -- cwnd resets after idle)</option>
+      <option value="0">disabled (cwnd persists across idle gaps)</option>
+    </select>
+    <button type="button" id="idle-reset-apply">Apply</button>
+    <p class="hint" id="idle-reset-status"></p>
+  </div>
+
   <!-- Transport: "http1" (kernel TCP, default) or "http3" (QUIC, mock-only
        spike -- aipt.backends.quic_mock.backend.QuicMockBackend). Only
        shown for the Mock card (app.js toggles visibility) since that's

@@ -43,6 +43,86 @@
     populateAlgorithmOptions(transportSelect.value);
   }
 
+  // Network Gateway profile (DESIGN.md 4.7 B11) and idle-reset toggle
+  // (2026-09-01 ooo interview) are both standing state on a backend
+  // container, not a RunRequest field -- only meaningful for mock/local_llm
+  // (the containers this project's Gateway/idle-reset admin actually
+  // reach; public_ai is the real internet, quic_mock is a UDP spike with
+  // no admin route). Hidden entirely for every other card, same pattern
+  // as applyTransportAvailability above.
+  const gatewayProfileField = document.getElementById("gateway-profile-field");
+  const gatewayProfileSelect = document.getElementById("gateway-profile-select");
+  const gatewayProfileApply = document.getElementById("gateway-profile-apply");
+  const gatewayProfileStatus = document.getElementById("gateway-profile-status");
+  const idleResetField = document.getElementById("idle-reset-field");
+  const idleResetSelect = document.getElementById("idle-reset-select");
+  const idleResetApply = document.getElementById("idle-reset-apply");
+  const idleResetStatus = document.getElementById("idle-reset-status");
+
+  function applyGatewayIdleResetAvailability(key) {
+    // Gateway sits between web and {mock-server, local-llm} -- both
+    // backends' traffic crosses it (DESIGN.md 4.7), so the profile
+    // control is relevant for either.
+    const gatewayAllowed = key === "mock" || key === "local_llm";
+    gatewayProfileField.style.display = gatewayAllowed ? "block" : "none";
+    // idle-reset is per-backend-container (aipt.core.idle_reset run inside
+    // that specific netns), so it's the same availability set as Gateway
+    // here (mock/local_llm), even though the two controls are otherwise
+    // independent of each other.
+    idleResetField.style.display = gatewayAllowed ? "block" : "none";
+    if (gatewayAllowed) {
+      refreshIdleResetStatus(key);
+    }
+  }
+
+  async function refreshIdleResetStatus(backend) {
+    idleResetStatus.textContent = "checking...";
+    try {
+      const res = await fetch(`/api/idle-reset?backend=${encodeURIComponent(backend)}`);
+      const payload = await res.json();
+      if (payload.ok && payload.enabled !== null) {
+        idleResetSelect.value = payload.enabled ? "1" : "0";
+        idleResetStatus.textContent = `current: ${payload.enabled ? "enabled" : "disabled"} (${payload.reason})`;
+      } else {
+        idleResetStatus.textContent = `unavailable: ${payload.reason || "unknown"}`;
+      }
+    } catch (e) {
+      idleResetStatus.textContent = `check failed: ${String(e)}`;
+    }
+  }
+
+  gatewayProfileApply.addEventListener("click", async () => {
+    gatewayProfileStatus.textContent = "applying...";
+    try {
+      const res = await fetch(`/api/gateway/profile?profile=${encodeURIComponent(gatewayProfileSelect.value)}`, {
+        method: "POST",
+      });
+      const payload = await res.json();
+      gatewayProfileStatus.textContent = payload.ok
+        ? `applied: ${gatewayProfileSelect.value}`
+        : `failed: ${payload.reason || JSON.stringify(payload)}`;
+    } catch (e) {
+      gatewayProfileStatus.textContent = `request failed: ${String(e)}`;
+    }
+  });
+
+  idleResetApply.addEventListener("click", async () => {
+    const backend = backendSelect.value;
+    idleResetStatus.textContent = "applying...";
+    try {
+      const res = await fetch(
+        `/api/idle-reset?backend=${encodeURIComponent(backend)}&enabled=${idleResetSelect.value === "1"}`,
+        { method: "POST" }
+      );
+      const payload = await res.json();
+      idleResetStatus.textContent = payload.write_ok
+        ? `applied: ${payload.enabled ? "enabled" : "disabled"}`
+        : `failed: ${payload.write_reason || payload.reason || JSON.stringify(payload)}`;
+    } catch (e) {
+      idleResetStatus.textContent = `request failed: ${String(e)}`;
+    }
+  });
+
   // Swaps the Congestion algorithm dropdown's option list between the
   // kernel's TCP modules (config.congestion_algorithms) and aioquic's
   // registered QUIC algorithms (config.quic_congestion_algorithms) -- the
@@ -163,6 +243,7 @@
     toggleBackendFields(key);
     applyInputModeAvailability(key);
     applyTransportAvailability(key);
+    applyGatewayIdleResetAvailability(key);
   }
 
   document.querySelectorAll(".select-backend").forEach((btn) => {

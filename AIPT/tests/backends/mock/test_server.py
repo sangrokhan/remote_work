@@ -153,8 +153,71 @@ def test_keep_alive_reuses_connection(srv):
 
 
 def test_unknown_path_returns_404(srv):
-    status, _, _ = _get(srv.host, srv.port, "/does-not-exist")[0]
+    status, _, _ = _get(srv.host, srv.port, "/nope")[0]
     assert status == 404
+
+
+def test_admin_idle_reset_get_proxies_idle_reset_status(srv, monkeypatch):
+    monkeypatch.setattr(
+        "aipt.core.idle_reset.read",
+        lambda path=None: (True, "ready"),
+    )
+    status, _, body = _get(srv.host, srv.port, "/admin/idle-reset")[0]
+    assert status == 200
+    data = json.loads(body)
+    assert data == {"ok": True, "enabled": True, "reason": "ready"}
+
+
+def test_admin_idle_reset_post_enabled_1_calls_write_true(srv, monkeypatch):
+    calls = []
+
+    def fake_write(enabled, path=None):
+        calls.append(enabled)
+        return True, "ready"
+
+    monkeypatch.setattr("aipt.core.idle_reset.write", fake_write)
+    monkeypatch.setattr("aipt.core.idle_reset.read", lambda path=None: (True, "ready"))
+    status, _, body = _post(srv.host, srv.port, "/admin/idle-reset?enabled=1", b"")[0]
+    assert status == 200
+    data = json.loads(body)
+    assert calls == [True]
+    assert data["write_ok"] is True
+    assert data["enabled"] is True
+
+
+def test_admin_idle_reset_post_enabled_0_calls_write_false(srv, monkeypatch):
+    calls = []
+
+    def fake_write(enabled, path=None):
+        calls.append(enabled)
+        return True, "ready"
+
+    monkeypatch.setattr("aipt.core.idle_reset.write", fake_write)
+    monkeypatch.setattr("aipt.core.idle_reset.read", lambda path=None: (False, "ready"))
+    status, _, body = _post(srv.host, srv.port, "/admin/idle-reset?enabled=0", b"")[0]
+    assert status == 200
+    assert calls == [False]
+    assert json.loads(body)["enabled"] is False
+
+
+def test_admin_idle_reset_post_invalid_enabled_returns_400(srv):
+    status, _, body = _post(srv.host, srv.port, "/admin/idle-reset?enabled=maybe", b"")[0]
+    assert status == 400
+    assert "error" in json.loads(body)
+
+
+def test_admin_idle_reset_post_write_failure_returns_500(srv, monkeypatch):
+    monkeypatch.setattr(
+        "aipt.core.idle_reset.write",
+        lambda enabled, path=None: (False, "could not be written: denied"),
+    )
+    monkeypatch.setattr("aipt.core.idle_reset.read", lambda path=None: (None, "n/a"))
+    status, _, body = _post(srv.host, srv.port, "/admin/idle-reset?enabled=1", b"")[0]
+    assert status == 500
+    data = json.loads(body)
+    assert data["write_ok"] is False
+    assert "denied" in data["write_reason"]
+
 
 
 # --- scenario-record answer serving (new, DESIGN.md B1) --------------------

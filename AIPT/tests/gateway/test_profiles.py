@@ -9,8 +9,8 @@ from aipt.gateway import profiles
 
 
 def test_preset_names_match_design_dropdown():
-    # DESIGN.md 4.7 B11: clean/broadband/3g/satellite/lossy/custom, in that order.
-    assert profiles.PRESET_NAMES == ("clean", "broadband", "3g", "satellite", "lossy", "custom")
+    # DESIGN.md 4.7 B11 (2026-09 재설계): clean/wired/wireless/custom, in that order.
+    assert profiles.PRESET_NAMES == ("clean", "wired", "wireless", "custom")
 
 
 def test_all_non_custom_presets_are_defined():
@@ -28,26 +28,30 @@ def test_clean_preset_has_no_impairment():
     assert p.reorder_pct == 0.0
 
 
-@pytest.mark.parametrize("name", ["broadband", "3g", "satellite", "lossy"])
+@pytest.mark.parametrize("name", ["wired", "wireless"])
 def test_impaired_presets_have_positive_delay_or_loss(name):
     p = profiles.PRESETS[name]
     assert p.delay_ms > 0 or p.loss_pct > 0 or p.reorder_pct > 0
 
 
-def test_satellite_has_the_largest_delay():
-    # Satellite (GEO) RTT dominates every other preset -- the whole point
-    # of the preset is to model that.
-    sat = profiles.PRESETS["satellite"].delay_ms
-    for name in ("clean", "broadband", "3g", "lossy"):
-        assert sat > profiles.PRESETS[name].delay_ms
+def test_wireless_has_more_delay_and_jitter_than_wired():
+    # Wireless (LTE/NR, HARQ/RLC-AM retransmission-dominated) models most
+    # of its impairment as delay/jitter, not loss -- see profiles.py
+    # docstring for why.
+    wired = profiles.PRESETS["wired"]
+    wireless = profiles.PRESETS["wireless"]
+    assert wireless.delay_ms > wired.delay_ms
+    assert wireless.jitter_ms > wired.jitter_ms
 
 
-def test_lossy_has_the_highest_loss_and_reorder():
-    lossy = profiles.PRESETS["lossy"]
-    for name in ("clean", "broadband", "3g", "satellite"):
-        other = profiles.PRESETS[name]
-        assert lossy.loss_pct >= other.loss_pct
-        assert lossy.reorder_pct >= other.reorder_pct
+def test_wireless_loss_stays_low_despite_larger_delay():
+    # Deliberate: unlike a naive "wireless = more loss" model, this preset
+    # keeps loss_pct low (grounded in 3GPP TS 23.501 5QI=9 residual PER)
+    # because HARQ/RLC-AM recover most radio-layer errors before they
+    # reach IP -- what leaks through to TCP is delay/jitter, not drops.
+    wired = profiles.PRESETS["wired"]
+    wireless = profiles.PRESETS["wireless"]
+    assert wireless.loss_pct < wired.loss_pct
 
 
 def test_get_preset_unknown_name_raises_keyerror():
@@ -79,9 +83,9 @@ def test_custom_profile_clamps_negative_values():
 
 
 def test_resolve_preset_ignores_overrides():
-    p = profiles.resolve("3g", delay_ms=999)
-    assert p.name == "3g"
-    assert p.delay_ms == profiles.PRESETS["3g"].delay_ms
+    p = profiles.resolve("wireless", delay_ms=999)
+    assert p.name == "wireless"
+    assert p.delay_ms == profiles.PRESETS["wireless"].delay_ms
 
 
 def test_resolve_custom_uses_overrides():
@@ -91,10 +95,10 @@ def test_resolve_custom_uses_overrides():
 
 
 def test_profile_as_dict_shape():
-    p = profiles.PRESETS["broadband"]
+    p = profiles.PRESETS["wired"]
     d = p.as_dict()
     assert set(d.keys()) == {"profile", "delay_ms", "jitter_ms", "loss_pct", "reorder_pct"}
-    assert d["profile"] == "broadband"
+    assert d["profile"] == "wired"
 
 
 class TestFromEnv:
@@ -117,16 +121,16 @@ class TestFromEnv:
 
     def test_gateway_profile_selects_named_preset(self, monkeypatch):
         self._clear(monkeypatch)
-        monkeypatch.setenv("GATEWAY_PROFILE", "3g")
+        monkeypatch.setenv("GATEWAY_PROFILE", "wireless")
         p = profiles.from_env()
-        assert p.name == "3g"
-        assert p.delay_ms == profiles.PRESETS["3g"].delay_ms
+        assert p.name == "wireless"
+        assert p.delay_ms == profiles.PRESETS["wireless"].delay_ms
 
     def test_gateway_profile_is_case_insensitive(self, monkeypatch):
         self._clear(monkeypatch)
-        monkeypatch.setenv("GATEWAY_PROFILE", "SATELLITE")
+        monkeypatch.setenv("GATEWAY_PROFILE", "WIRED")
         p = profiles.from_env()
-        assert p.name == "satellite"
+        assert p.name == "wired"
 
     def test_gateway_knobs_build_custom_profile(self, monkeypatch):
         self._clear(monkeypatch)

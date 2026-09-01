@@ -81,7 +81,7 @@ make up   # .env 없으면 scripts/ensure_env.sh가 .env.example -> .env로 자�
   사이를 라우팅한다. TCP 페이로드를 들여다보는 애플리케이션 프록시가
   아니다. `NET_ADMIN` capability로 양쪽 인터페이스에 `tc netem`
   프로파일을 동시 적용(`GET`/`POST /gateway/profile`, 프리셋:
-  `clean`/`broadband`/`3g`/`satellite`/`lossy`/`custom`) — 왕복 요청과
+  `clean`/`wired`/`wireless`/`custom`, 값 근거는 ARCHITECTURE.md §4.2 참고) — 왕복 요청과
   응답 모두 같은 지연/손실을 겪는다.
 - `mock-server`: `aipt.backends.mock.server`를 구동하는 경량 컨테이너.
   호스트에 포트를 노출하지 않고 `net-backend` 네트워크에서만 도달 가능하다.

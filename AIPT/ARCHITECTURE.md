@@ -146,7 +146,7 @@ AIPT/
 │   │       ├── experiment.py / spike_runner.py    ("idle_probe" QUIC 알고리즘 — PING으로 idle-gap 능동 측정)
 │   │
 │   ├── gateway/                   # ★ ④ Network Gateway (L3 IP 포워딩, 별도 컨테이너)
-│   │   ├── profiles.py             #   clean/broadband/3g/satellite/lossy/custom
+│   │   ├── profiles.py             #   clean/wired/wireless/custom (근거: ITU-T Y.1541 / 3GPP TS 23.501)
 │   │   ├── netem_control.py        #   apply_profile_both() — 양쪽 인터페이스에 tc qdisc
 │   │   ├── forwarding.py           #   net.ipv4.ip_forward 상태 확인
 │   │   └── app.py                  #   독립 FastAPI 미니앱 (/health, /gateway/profile)
@@ -238,7 +238,7 @@ AIPT/
   설정 반영을 가정하지 않고 확인
 - 클라이언트/백엔드 양쪽 인터페이스 egress에 동일 프로파일 동시 적용 —
   편도만 영향받는 비대칭 방지
-- 프로파일 프리셋(clean/broadband/3g/satellite/lossy/custom) + 런타임
+- 프로파일 프리셋(clean/wired/wireless/custom, 근거는 §4.2 참고) + 런타임
   API 교체 지원
 - 실패 시 예외 대신 개별 인터페이스 단위로 원인 보고 (정직한 실패 보고 원칙)
 
@@ -427,23 +427,72 @@ L3 IP 포워딩 컨테이너이므로, 이 API는 트래픽 자체를 다루지 
 "인터페이스에 어떤 netem 특성을 걸지"와 "커널 포워딩이 켜져 있는지"만
 제어/보고한다.
 
+Gateway는 netem 프로파일(지연/지터/손실/재정렬)만 제어한다 — **TCP 혼잡제어
+알고리즘은 Gateway API의 관할이 아니다** (아래 별도 항목 참고).
+
 | 엔드포인트 | 메서드 | 역할 |
 |---|---|---|
 | `/health` | GET | liveness + `tc netem` 사용 가능 여부(`netem_control.available()`) + **양쪽** 인터페이스(`client_iface`/`backend_iface`) 이름 + `net.ipv4.ip_forward`가 실제로 켜져 있는지(`ip_forward_available`/`ip_forward_reason`) |
 | `/gateway/profile` | GET | **양쪽** 인터페이스에 적용된 프로파일을 각각 조회 (커널 qdisc 상태 직접 조회, `current_profile_both()`) |
-| `/gateway/profile` | POST | 프로파일 교체. Body: `{"profile": "3g"}` 또는 `{"profile": "custom", "delay_ms", "jitter_ms", "loss_pct", "reorder_pct"}`. **양쪽** 인터페이스에 동시 적용(`apply_profile_both()`) — 응답에 `client`/`backend` 각각의 성공 여부가 개별로 담긴다 |
+| `/gateway/profile` | POST | 프로파일 교체. **양쪽** 인터페이스에 동시 적용(`apply_profile_both()`) — 응답에 `client`/`backend` 각각의 성공 여부가 개별로 담긴다 |
 
-**TCP 혼잡제어 알고리즘 변경**: Gateway API 자체가 아니라 접속을 여는 코드 경로가
-직접 `connect()` 이전에 `TCP_CONGESTION` 소켓옵션으로 적용한다. Mock은 raw
-socket을 직접 여는 `aipt/backends/mock/conversation.py`(tcp_congestion 원본
-기능 승계)에서, Public AI(Gemini/ChatGPT)/Local LLM은 `aipt.core.wire`가
-관리하는 pooled HTTP 세션의 커넥션 클래스(`_CountingConnection._new_conn`)에서
-동일하게 적용한다 — 이전에는 Mock에서만 가능했던 알고리즘 선택이 이제 모든
-backend에서 동작한다(`aipt/web/routes_run.py`가 `req.algorithm`을
-`wire.set_congestion_algorithm()` + `wire.reset_session()`으로 연결). 선택
-가능한 목록도 고정 리스트가 아니라 `aipt/core/congestion.py`가
+`POST /gateway/profile`의 Body로 설정 가능한 값(`aipt/gateway/app.py`의
+`ProfileRequest`, `aipt/gateway/profiles.py`):
+
+| 필드 | 타입 | 의미 |
+|---|---|---|
+| `profile` | string (필수) | 프리셋 이름 3개 중 하나 — `clean` / `wired` / `wireless` / `custom` (`PRESET_NAMES`) |
+| `delay_ms` | int, ≥0 | (`custom`일 때만 적용) 편도 지연 |
+| `jitter_ms` | int, ≥0 | (`custom`일 때만 적용) 지연 지터 |
+| `loss_pct` | float, ≥0 | (`custom`일 때만 적용) 패킷 손실 % |
+| `reorder_pct` | float, ≥0 | (`custom`일 때만 적용) 패킷 재정렬 % |
+
+각 프리셋(`aipt/gateway/profiles.py`의 `PRESETS`)의 값과 근거:
+
+| 프리셋 | delay_ms | jitter_ms | loss_pct | 근거 |
+|---|---|---|---|---|
+| `clean` | 0 | 0 | 0 | 무손상 기준선 (경로 자체가 완벽하다고 가정하던 이전 암묵적 전제를 명시적·선택적으로 전환) |
+| `wired` | 15 (illustrative) | 3 (illustrative) | **0.1** | loss_pct는 **ITU-T Rec. Y.1541** Table 1, QoS Class 0–4의 IP Packet Loss Ratio 상한(1×10⁻³)에 근거. delay/jitter는 실측/공식자료 기반 아님(상대적 크기 구분용) |
+| `wireless` | 40 (illustrative) | 15 (illustrative) | **0.001** | loss_pct는 **3GPP TS 23.501** Table 5.7.4-1, 5QI=9(일반 인터넷 트래픽이 타는 비GBR 기본 베어러)의 Packet Error Rate 목표(10⁻⁶)를 netem이 표현 가능한 스케일로 반올림한 근사치 |
+
+- `wired`/`wireless`는 `PRESETS`에 고정된 값(`profiles.py`)을 그대로
+  적용하고, Body에 함께 온 `delay_ms` 등 숫자 필드는 **무시**된다
+  (`resolve()`의 "선택하면 그 프리셋" 규칙).
+- `profile: "custom"`일 때만 `delay_ms`/`jitter_ms`/`loss_pct`/`reorder_pct`
+  가 실제로 읽혀 임의 조합의 netem 프로파일을 만든다(`custom_profile()`).
+- 예: `{"profile": "wireless"}` (프리셋) 또는 `{"profile": "custom", "delay_ms": 80, "jitter_ms": 10, "loss_pct": 0.2, "reorder_pct": 0.0}` (커스텀).
+- 컨테이너 기동 시 초기 프로파일은 `GATEWAY_PROFILE` 등 환경변수로도 설정
+  가능(`profiles.from_env()`, DESIGN.md 4.7 설정 방식 (a)) — 이 POST API와
+  동일한 값 체계를 공유한다.
+
+**"wireless"가 loss를 낮게 유지하는 이유(중요, 모델링 한계 명시)**:
+LTE/NR 무선 구간은 MAC 계층 HARQ + RLC AM(Acknowledged Mode) ARQ로 프레임
+오류를 국소적으로 재전송·복구한다. 그 결과 IP/TCP 계층까지 실제로 새어
+올라오는 것은 "패킷 손실"이 아니라 "재전송으로 인한 지연/지터 증가"인
+경우가 대부분이며, 이것이 3GPP 5QI=9의 잔여 PER 목표가 유선(Y.1541)보다도
+낮게 잡히는 이유다. 따라서 `wireless` 프리셋은 손상을 주로 delay/jitter로
+표현하고 loss는 낮게 유지한다 — "무선=손실 많음"이라는 통념과 다르게
+설계된 것이 의도된 결과다. 다만 이 역시 근사 모델이며, HARQ/RLC의 최대
+재전송 횟수를 다 쓰고도 실패하는 드문 진짜 IP-loss 케이스는 표현하지
+못한다(그런 시나리오가 필요하면 `custom`으로 loss_pct를 직접 올려서
+구성). netem 자체에는 "profile"이라는 개념이 없다는 점도 유의 — 이름
+붙은 프리셋은 `tc netem`의 raw 파라미터(delay/loss/reorder)를 이 프로젝트가
+추상화한 것이다.
+
+**TCP 혼잡제어 알고리즘 변경 — Gateway가 아니라 `aipt/web`(웹 서버) 쪽 관심사**:
+Gateway API(`/gateway/profile`)에는 혼잡제어 관련 필드가 전혀 없다. 알고리즘
+선택은 웹 서버(`aipt/web`)가 실험을 실행하며 접속을 여는 코드 경로에서, `connect()`
+이전에 `TCP_CONGESTION` 소켓옵션으로 직접 적용한다. Mock은 raw socket을 직접 여는
+`aipt/backends/mock/conversation.py`(tcp_congestion 원본 기능 승계)에서, Public
+AI(Gemini/ChatGPT)/Local LLM은 `aipt.core.wire`가 관리하는 pooled HTTP 세션의
+커넥션 클래스(`_CountingConnection._new_conn`)에서 동일하게 적용한다 — 이전에는
+Mock에서만 가능했던 알고리즘 선택이 이제 모든 backend에서 동작한다
+(`aipt/web/routes_run.py`가 `POST /api/run` 요청 바디의 `algorithm` 필드를
+`wire.set_congestion_algorithm()` + `wire.reset_session()`으로 연결 — 4.3절
+`/api/run` 참고). 선택 가능한 목록도 고정 리스트가 아니라 `aipt/core/congestion.py`가
 `/proc/sys/net/ipv4/tcp_available_congestion_control`을 매 요청마다 실시간
-으로 읽어 이 커널에 실제로 로드된 알고리즘만 노출한다. 요청한 알고리즘
+으로 읽어 이 커널에 실제로 로드된 알고리즘만 노출한다(`GET /api/config`의
+congestion algorithm 목록도 같은 소스). 요청한 알고리즘
 (`algorithm.requested`)과 실제 적용값(`algorithm.actual`, `getsockopt`로
 재확인)이 다르면 `algorithm.error`에 사유가 남는다 — 로드되지 않은 알고리즘
 요청 시 조용히 폴백되는 것을 방지하기 위함.
@@ -547,11 +596,11 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 
 | 지표 | 측정 방법 | 무엇을 검증하는가 |
 |---|---|---|
-| **RTT** | Gateway 프로파일 전환 전/후 `aipt.core.probe`(idle-gap HTTP PING) 또는 pcap의 SYN-ACK 왕복 시간 | Gateway의 `tc netem delay` 설정이 실제로 경로 RTT에 반영되는지 (`3g` 프로파일 적용 시 RTT가 설정값 근방으로 올라가는지) |
+| **RTT** | Gateway 프로파일 전환 전/후 `aipt.core.probe`(idle-gap HTTP PING) 또는 pcap의 SYN-ACK 왕복 시간 | Gateway의 `tc netem delay` 설정이 실제로 경로 RTT에 반영되는지 (`wireless` 프로파일 적용 시 RTT가 설정값 근방으로 올라가는지) |
 | **대역폭(처리량)** | `aipt/export/turns.py`의 `goodput_bps` | congestion algorithm(cubic/reno/bbr/vegas) 및 idle-reset 발생 여부에 따라 실질 처리량이 어떻게 달라지는지 |
 | **cwnd 회복/리셋** | `cwnd.csv`의 `reset_events`, `idle_resets` 카운트 | idle 구간 후 실제로 슬로우스타트 재진입이 발생하는지, 알고리즘별로 회복 곡선이 어떻게 다른지 |
 | **완료 시간(turn_end_ms)** | `turns.csv`의 `req_sent_ms`~`turn_end_ms` 마크 5종 | 히스토리 관리 전략(stateless/stateful/cached)별로 턴당 소요 시간이 실제로 얼마나 차이나는지 — 특히 `store_tail_ms`(서버가 응답 완료 후 상태 저장에 쓰는 시간)가 stateful arm에서 눈에 띄게 존재하는지 |
-| **네트워크 손실 영향** | Gateway `lossy` 프로파일 적용 후 재시도/재전송으로 인한 `turn_end_ms` 증가폭 | TCP 재전송이 애플리케이션 레벨 지연에 미치는 실제 영향 |
+| **네트워크 손실 영향** | Gateway `custom` 프로파일(loss_pct를 명시적으로 올린 설정) 적용 후 재시도/재전송으로 인한 `turn_end_ms` 증가폭 | TCP 재전송이 애플리케이션 레벨 지연에 미치는 실제 영향 |
 
 **검증 절차 원칙**: 위 지표들은 반드시 **같은 시나리오(fixture)를 여러
 조건(알고리즘, Gateway 프로파일, backend)으로 반복 실행**해서 비교해야

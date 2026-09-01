@@ -12,6 +12,12 @@ includes the three route modules:
     and ``POST /api/run/stream`` (SSE, one event per turn as it finishes).
   * ``routes_runs``   -- ``GET/DELETE /api/runs*``, the CSV/bundle/pcap
     download endpoints.
+  * ``routes_gateway`` -- ``GET/POST /api/gateway/profile`` (Network
+    Gateway netem preset, DESIGN.md 4.7 B11) and ``GET/POST
+    /api/idle-reset`` (per-backend ``net.ipv4.tcp_slow_start_after_idle``
+    toggle for the idle-reset TTFT experiment, 2026-09-01 ooo interview).
+    Both proxy to the actual backend container rather than implementing
+    the control themselves.
 
 Run store persists to disk now (``aipt/web/store.py``, ``RUN_STORE_DIR``,
 default ``data/runs/``) -- a restart rehydrates recent runs instead of
@@ -28,7 +34,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from aipt.web import routes_config, routes_run, routes_runs
+from aipt.web import routes_config, routes_gateway, routes_run, routes_runs
 
 _HERE = Path(__file__).resolve().parent
 TEMPLATES_DIR = _HERE / "templates"
@@ -43,6 +49,7 @@ def create_app() -> FastAPI:
     routes_config.register(app, templates)
     app.include_router(routes_run.router)
     app.include_router(routes_runs.router)
+    app.include_router(routes_gateway.router)
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

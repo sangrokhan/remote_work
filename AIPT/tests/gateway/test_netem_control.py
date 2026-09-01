@@ -98,17 +98,17 @@ class TestApplyProfile:
 
     def test_apply_profile_without_tc_reports_ok_false(self, monkeypatch):
         monkeypatch.setattr(netem_control.shutil, "which", lambda name: None)
-        result = netem_control.apply_profile("eth0", PRESETS["3g"])
+        result = netem_control.apply_profile("eth0", PRESETS["wireless"])
         assert result["ok"] is False
         assert "iproute2" in result["reason"] or "tc" in result["reason"]
-        assert result["profile"]["profile"] == "3g"
+        assert result["profile"]["profile"] == "wireless"
         assert len(result["commands"]) >= 1
 
     def test_apply_profile_dry_run_does_not_execute(self, monkeypatch):
         monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
         calls = []
         monkeypatch.setattr(netem_control.subprocess, "run", lambda *a, **k: calls.append(a))
-        result = netem_control.apply_profile("eth0", PRESETS["broadband"], dry_run=True)
+        result = netem_control.apply_profile("eth0", PRESETS["wired"], dry_run=True)
         assert result["ok"] is True
         assert result["dry_run"] is True
         assert calls == []
@@ -122,10 +122,10 @@ class TestApplyProfile:
             return _Proc(returncode=0)
 
         monkeypatch.setattr(netem_control.subprocess, "run", fake_run)
-        result = netem_control.apply_profile("eth0", PRESETS["3g"])
+        result = netem_control.apply_profile("eth0", PRESETS["wireless"])
         assert result["ok"] is True
         assert len(calls) == 3  # del, add netem, add fq
-        assert netem_control.current_profile("eth0").name == "3g"
+        assert netem_control.current_profile("eth0").name == "wireless"
 
     def test_apply_profile_permission_denied_reports_ok_false(self, monkeypatch):
         # Simulates the sandbox's real condition: tc exists but the
@@ -138,7 +138,7 @@ class TestApplyProfile:
             return _Proc(returncode=2, stderr="RTNETLINK answers: Operation not permitted")
         monkeypatch.setattr(netem_control.subprocess, "run", fake_run)
 
-        result = netem_control.apply_profile("eth0", PRESETS["3g"])
+        result = netem_control.apply_profile("eth0", PRESETS["wireless"])
         assert result["ok"] is False
         assert "Operation not permitted" in result["reason"]
         assert "NET_ADMIN" in result["reason"]
@@ -155,7 +155,7 @@ class TestApplyProfile:
             return _Proc(returncode=0)
         monkeypatch.setattr(netem_control.subprocess, "run", fake_run)
 
-        result = netem_control.apply_profile("eth0", PRESETS["broadband"])
+        result = netem_control.apply_profile("eth0", PRESETS["wired"])
         assert result["ok"] is True
 
     def test_apply_profile_subprocess_exception_reports_ok_false(self, monkeypatch):
@@ -165,7 +165,7 @@ class TestApplyProfile:
             raise OSError("boom")
         monkeypatch.setattr(netem_control.subprocess, "run", fake_run)
 
-        result = netem_control.apply_profile("eth0", PRESETS["3g"])
+        result = netem_control.apply_profile("eth0", PRESETS["wireless"])
         assert result["ok"] is False
         assert "boom" in result["reason"]
 
@@ -198,7 +198,7 @@ class TestApplyProfileBoth:
             return _Proc(returncode=0)
 
         monkeypatch.setattr(netem_control.subprocess, "run", fake_run)
-        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["3g"])
+        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["wireless"])
 
         assert result["ok"] is True
         assert result["client_iface"] == "eth0"
@@ -207,14 +207,14 @@ class TestApplyProfileBoth:
         assert result["backend"]["ok"] is True
         # 3 commands (del, netem, fq) per interface = 6 total
         assert len(calls) == 6
-        assert netem_control.current_profile("eth0").name == "3g"
-        assert netem_control.current_profile("eth1").name == "3g"
+        assert netem_control.current_profile("eth0").name == "wireless"
+        assert netem_control.current_profile("eth1").name == "wireless"
 
     def test_apply_profile_both_dry_run_does_not_execute(self, monkeypatch):
         monkeypatch.setattr(netem_control.shutil, "which", lambda name: "/sbin/tc")
         calls = []
         monkeypatch.setattr(netem_control.subprocess, "run", lambda *a, **k: calls.append(a))
-        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["broadband"], dry_run=True)
+        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["wired"], dry_run=True)
         assert result["ok"] is True
         assert result["client"]["dry_run"] is True
         assert result["backend"]["dry_run"] is True
@@ -222,7 +222,7 @@ class TestApplyProfileBoth:
 
     def test_apply_profile_both_without_tc_reports_ok_false_with_both_reasons(self, monkeypatch):
         monkeypatch.setattr(netem_control.shutil, "which", lambda name: None)
-        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["3g"])
+        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["wireless"])
         assert result["ok"] is False
         assert "eth0" in result["reason"]
         assert "eth1" in result["reason"]
@@ -240,7 +240,7 @@ class TestApplyProfileBoth:
             return _Proc(returncode=0)
 
         monkeypatch.setattr(netem_control.subprocess, "run", fake_run)
-        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["3g"])
+        result = netem_control.apply_profile_both("eth0", "eth1", PRESETS["wireless"])
 
         assert result["ok"] is False
         assert result["client"]["ok"] is True

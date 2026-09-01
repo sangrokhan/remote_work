@@ -33,6 +33,10 @@ Env vars:
   CTX_SIZE          default "4096"
   GATEWAY_PEER_SUBNET -- net-client CIDR to route via gateway
   GATEWAY_ROUTE_VIA   -- gateway's own IP address on net-backend
+  IDLE_RESET_ADMIN_PORT -- default "40081" (idle_reset_admin.py sidecar,
+                    see that module's docstring for why local-llm needs a
+                    separate admin server rather than an in-process route
+                    the way mock-server has).
 """
 import os
 import subprocess
@@ -74,6 +78,25 @@ def _add_route() -> None:
 
 
 _add_route()
+
+# Spawn the idle-reset admin sidecar as its own DETACHED PROCESS, not an
+# in-process thread. This matters: os.execvp() below replaces this entire
+# process image (that's the whole point -- PID 1 becomes the real
+# llama-server, exactly as documented above), which destroys every thread
+# this process was running, including a daemon thread. A first version of
+# this file started the admin server as a thread via
+# idle_reset_admin.start_background() and it silently vanished the moment
+# execvp() ran -- found during the 2026-09-01 ooo end-to-end verification
+# (GET /admin/idle-reset via the web proxy returned "connection refused"
+# even though the code looked correct and the import worked fine under
+# `docker compose exec`). subprocess.Popen here creates a genuinely
+# separate OS process that survives this parent's exec unaffected.
+_ADMIN_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "idle_reset_admin.py")
+try:
+    subprocess.Popen([sys.executable, _ADMIN_SCRIPT])
+    print(f"[entrypoint_local_llm] idle-reset admin sidecar spawned ({_ADMIN_SCRIPT})")
+except Exception as exc:  # pragma: no cover - defensive
+    print(f"[entrypoint_local_llm] failed to spawn idle-reset admin sidecar: {exc} -- continuing anyway.")
 
 host = os.environ.get("LLAMA_HOST", "0.0.0.0")
 port = os.environ.get("LLAMA_PORT", "40080")

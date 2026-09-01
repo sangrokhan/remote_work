@@ -64,6 +64,23 @@ services:
     # NET_ADMIN: entrypoint_mockserver.py's `ip route add` back to
     # net-client via `gateway` (DESIGN.md 4.7 확정 설계 1 -- forces response
     # traffic through gateway instead of a shortcut return path).
+    #
+    # privileged: true (2026-09-01, idle-reset TTFT experiment, operator
+    # decision): CAP_NET_ADMIN alone is NOT enough to write
+    # /proc/sys/net/ipv4/tcp_slow_start_after_idle -- Docker masks most of
+    # /proc/sys read-only regardless of capabilities (only a narrow
+    # allowlist like ip_forward, already handled via the `sysctls:` block
+    # on `gateway`, is writable through capabilities alone). The
+    # aipt.core.idle_reset module (aipt/backends/mock/server.py's
+    # /admin/idle-reset route) needs to actually flip this value inside
+    # this container's netns for the causal idle-reset experiment to work
+    # at all -- read-only would make the control silently unusable.
+    # Accepted trade-off: this is a local research-lab container, not a
+    # production service exposed to untrusted input, so the reduced
+    # isolation (full device access, no seccomp/apparmor confinement) is
+    # judged acceptable in exchange for a working experiment control. Do
+    # NOT copy this pattern to a container that handles untrusted traffic.
+    privileged: true
     cap_add:
       - NET_ADMIN
     networks:
@@ -145,8 +162,8 @@ services:
       # 대기"), so round-trip request+response each cross one gateway hop
       # and each hop adds 20ms (client->backend leg +20ms, backend->client
       # leg +20ms). GATEWAY_PROFILE must be "custom" for GATEWAY_DELAY_MS
-      # to take effect (named presets like "clean"/"3g" ignore the
-      # individual knobs -- see aipt/gateway/profiles.py resolve()).
+      # to take effect (named presets like "clean"/"wired"/"wireless" ignore
+      # the individual knobs -- see aipt/gateway/profiles.py resolve()).
       - GATEWAY_PROFILE=${GATEWAY_PROFILE:-custom}
       - GATEWAY_DELAY_MS=${GATEWAY_DELAY_MS:-20}
       - GATEWAY_JITTER_MS=${GATEWAY_JITTER_MS:-0}
@@ -170,6 +187,12 @@ services:
     # NET_ADMIN: entrypoint_local_llm.py's `ip route add` back to
     # net-client via `gateway` (same DESIGN.md 4.7 확정 설계 1 reasoning as
     # mock-server).
+    #
+    # privileged: true (2026-09-01, idle-reset TTFT experiment) -- same
+    # reasoning as mock-server's `privileged: true` above: CAP_NET_ADMIN
+    # alone cannot write /proc/sys/net/ipv4/tcp_slow_start_after_idle,
+    # which docker/idle_reset_admin.py's sidecar needs to actually flip.
+    privileged: true
     cap_add:
       - NET_ADMIN
     networks:
