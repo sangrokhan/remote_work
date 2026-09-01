@@ -91,6 +91,11 @@ class Exchange:
     request_json: Any = None
     response_json: Any = None
     error: str | None = None
+    # Request-body leaf-hash dedup savings for this turn (docs/
+    # engine_gateway_caching_seed.md), local_llm-only, 0 for every other
+    # backend/when caching is off. See Gateway.send()'s docstring for how
+    # this is computed from the same call rather than a separate baseline.
+    cache_bytes_saved: int = 0
 
 
 def _store_tail(exchange: TurnExchange) -> int:
@@ -169,6 +174,15 @@ def turn_record(
         # here because computing it needs the export layer's byte/window
         # conventions, not just this one exchange.
         "goodput_bps": 0.0,
+
+        # local_llm-only leaf-hash request dedup savings (docs/
+        # engine_gateway_caching_seed.md) -- getattr rather than direct
+        # attribute access because TurnExchange implementations that
+        # predate this field (mock/public_ai's own exchange types) are
+        # not required to carry it; 0 there reads the same as "caching
+        # not applicable to this backend", matching how a mock/local_llm
+        # backend's absent probe_rtt_* optional columns already read.
+        "cache_bytes_saved": getattr(exchange, "cache_bytes_saved", 0),
 
         "question": question,
         "response_text": exchange.text,

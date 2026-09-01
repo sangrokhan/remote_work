@@ -98,6 +98,20 @@ try:
 except Exception as exc:  # pragma: no cover - defensive
     print(f"[entrypoint_local_llm] failed to spawn idle-reset admin sidecar: {exc} -- continuing anyway.")
 
+# engine Gateway sidecar (docker/engine_gateway.py, 2026-09 design chat): an
+# L7 HTTP reverse proxy in front of this container's own llama-server,
+# giving `web` a caching/experiment hook point between the Network Gateway
+# (aipt/gateway/, L3/L4 tc netem) and the real engine. Same "separate OS
+# process, survives this parent's later execvp()" reasoning as the
+# idle-reset admin sidecar above -- a thread would vanish when this
+# process image is replaced by llama-server below.
+_ENGINE_GATEWAY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "engine_gateway.py")
+try:
+    subprocess.Popen([sys.executable, _ENGINE_GATEWAY_SCRIPT])
+    print(f"[entrypoint_local_llm] engine Gateway sidecar spawned ({_ENGINE_GATEWAY_SCRIPT})")
+except Exception as exc:  # pragma: no cover - defensive
+    print(f"[entrypoint_local_llm] failed to spawn engine Gateway sidecar: {exc} -- continuing anyway.")
+
 host = os.environ.get("LLAMA_HOST", "0.0.0.0")
 port = os.environ.get("LLAMA_PORT", "40080")
 model_repo = os.environ.get("MODEL_REPO", "bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M")

@@ -277,6 +277,7 @@
           <td>${t.wire_recv}</td>
           <td>${t.ttlt_ms}</td>
           <td>${t.goodput_bps}</td>
+          <td>${t.cache_bytes_saved || 0}</td>
           <td>${escapeHtml(t.error || "")}</td>
         </tr>`
       )
@@ -287,7 +288,7 @@
          <strong>arm:</strong> ${run.arm} &middot;
          <strong>elapsed:</strong> ${run.elapsed_s}s</p>
       <table class="turns-table">
-        <thead><tr><th>turn</th><th>wire_sent</th><th>wire_recv</th><th>ttlt_ms</th><th>goodput_bps</th><th>error</th></tr></thead>
+        <thead><tr><th>turn</th><th>wire_sent</th><th>wire_recv</th><th>ttlt_ms</th><th>goodput_bps</th><th>cache_bytes_saved</th><th>error</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
       <p class="downloads">
@@ -365,6 +366,14 @@
       // checkbox entirely, so its *presence* is the true/false signal,
       // not a value comparison.
       capture: fd.has("capture"),
+      // local_llm-only request cache (docs/engine_gateway_caching_seed.md).
+      // Default UNCHECKED in the HTML (opt-in, unlike capture above), so
+      // fd.has() correctly reads "off" when the local_llm card wasn't even
+      // showing this fieldset (a non-local_llm run never has this field
+      // checked, and the backend ignores these fields for other backends
+      // anyway -- see routes_run._build_backend()).
+      cache_enabled: fd.has("cache_enabled"),
+      cache_threshold_bytes: Number(fd.get("cache_threshold_bytes") || 200),
     };
 
     output.textContent = "Running...";

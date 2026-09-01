@@ -32,7 +32,7 @@ from typing import Callable
 
 from aipt.backends.base import DEFAULT_TRANSPORT, Transport
 from aipt.backends.local_llm.engine_adapter import EngineAdapter
-from aipt.core import wire
+from aipt.core import cache_protocol, wire
 
 #: Header the gateway sets from the ``Backend.transport`` slot on every
 #: request it forwards, so an engine/proxy hop downstream (or a pcap
@@ -69,6 +69,13 @@ class GatewayResult:
     req_sent_ms: int = 0
     ttfb_ms: int = 0
     elapsed_ms: int = 0
+    # Request-body leaf-hash dedup measurement (docs/
+    # engine_gateway_caching_seed.md): how many bytes THIS turn's actual
+    # wire payload is smaller than the same request would have been with
+    # caching off, computed from the SAME single call (no separate
+    # baseline run needed) -- see Gateway.send()'s cache_bytes_saved
+    # computation. 0 when cache_enabled is False.
+    cache_bytes_saved: int = 0
 
 
 class Gateway:
@@ -93,12 +100,22 @@ class Gateway:
         *,
         transport: Transport = DEFAULT_TRANSPORT,
         timeout: int | None = None,
+        cache_enabled: bool = False,
+        cache_threshold_bytes: int = cache_protocol.DEFAULT_THRESHOLD_BYTES,
     ) -> None:
         self.adapter = adapter
         self.transport = transport
         self.timeout = timeout or adapter.timeout
         self._request_hooks: list[RequestHook] = []
         self._response_hooks: list[ResponseHook] = []
+        # Request-body leaf-hash dedup (docs/engine_gateway_caching_seed.md).
+        # Session = this Gateway instance's lifetime, which in turn tracks
+        # the underlying wire.session() keep-alive connection's lifetime
+        # (LocalLLMBackend.connect() builds a fresh Gateway per run) -- see
+        # the Seed doc's section 8.6 for why this is the right scope.
+        self.cache_enabled = cache_enabled
+        self.cache_threshold_bytes = cache_threshold_bytes
+        self._cache = cache_protocol.SessionCache() if cache_enabled else None
 
     # -- hook registration ---------------------------------------------
 
@@ -182,6 +199,54 @@ class Gateway:
         req = self._build_request(messages, **kwargs)
         req = self._run_request_hooks(req)
 
+        uncached_payload_bytes = 0
+        if self.cache_enabled:
+            assert self._cache is not None
+            # Snapshot what this exact request would have cost WITHOUT
+            # caching -- the body at this point is still the real,
+            # unhashed dict (encode_body runs next), so this is the
+            # honest "baseline" for this one turn, computed from the same
+            # call rather than a separate uncached run. Cheap: one more
+            # json.dumps of a dict already fully built.
+            uncached_payload_bytes = len(_json.dumps(req["body"]).encode("utf-8"))
+            req["headers"][cache_protocol.CACHE_HEADER] = cache_protocol.CACHE_HEADER_VALUE
+            req["body"] = cache_protocol.encode_body(
+                req["body"], self._cache, self.cache_threshold_bytes,
+            )
+
+        result = self._send_once(req)
+
+        # Cache-miss recovery (docs/engine_gateway_caching_seed.md §8.2):
+        # the server's session-side store lost one or more hashes this
+        # connection's client-side store still has. Restore exactly those
+        # paths to their plaintext (from this Gateway's own cache -- it is
+        # authoritative regardless of what the server forgot) and resend
+        # ONCE. A second miss on the retry is treated as a real error
+        # (falls through with whatever _send_once returned) rather than
+        # looping -- a server that keeps missing after being handed the
+        # plaintext back has a bug this layer cannot paper over.
+        if (
+            self.cache_enabled
+            and result.status == 409
+            and cache_protocol.CACHE_MAP_FIELD in req["body"]
+        ):
+            missing = _parse_cache_miss_paths(result)
+            if missing:
+                req["body"] = _revert_missing_paths(req["body"], missing, self._cache)
+                result = self._send_once(req)
+
+        if self.cache_enabled and result.status and result.status != 409:
+            # Only credit a saving on a request that actually went out
+            # under the cached body (a 409 that never recovered leaves
+            # req_payload_bytes reflecting the failed cached attempt, not
+            # a real successful uncached-equivalent comparison).
+            result.cache_bytes_saved = max(0, uncached_payload_bytes - result.req_payload_bytes)
+
+        return result
+
+    def _send_once(self, req: dict) -> GatewayResult:
+        import json as _json
+
         payload = _json.dumps(req["body"])
         result = GatewayResult(request_body=req["body"])
         t0 = time.monotonic()
@@ -210,6 +275,7 @@ class Gateway:
 
         if resp.status_code != 200:
             result.error = f"http_{resp.status_code}: {resp.text[:200]}"
+            result.response_body = _safe_json(resp)
             return result
         try:
             body = resp.json()
@@ -223,6 +289,53 @@ class Gateway:
         # (it reads body["choices"][0] itself) -- see engine_adapter.py.
         result.text = self.adapter.text_of(body)
         return result
+
+
+def _safe_json(resp) -> dict:
+    try:
+        return resp.json()
+    except ValueError:
+        return {}
+
+
+def _parse_cache_miss_paths(result: GatewayResult) -> list[str]:
+    body = result.response_body or {}
+    if not isinstance(body, dict) or body.get("error") != "cache_miss":
+        return []
+    return list(body.get("missing_paths") or [])
+
+
+def _revert_missing_paths(body: dict, missing_labels: list[str],
+                           cache: "cache_protocol.SessionCache") -> dict:
+    """Restore exactly the paths the server reported missing to their
+    plaintext value (read back from this Gateway's own cache, which still
+    has value<->hash for anything it has ever sent), and drop them from
+    ``$aipt_cache_map`` so the resend carries them as plain leaves again."""
+    import copy
+
+    new_body = copy.deepcopy(body)
+    cache_map = dict(new_body.get(cache_protocol.CACHE_MAP_FIELD) or {})
+    reverse_map = {v: k for k, v in cache_map.items()}
+    for label in missing_labels:
+        path = cache_protocol.parse_label(label)
+        h = cache_protocol.get_at_path(new_body, path)
+        original = cache.value_for(h)
+        if original is None:
+            # Nothing this Gateway can do -- it never actually held this
+            # value itself, which should not happen (it is the one that
+            # substituted the hash in the first place), but don't crash a
+            # whole run over it: leave the hash in place, the server will
+            # 409 again and _send_once's plain error path takes over.
+            continue
+        cache_protocol.set_at_path(new_body, path, original)
+        map_key = reverse_map.get(label)
+        if map_key is not None:
+            cache_map.pop(map_key, None)
+    if cache_map:
+        new_body[cache_protocol.CACHE_MAP_FIELD] = cache_map
+    else:
+        new_body.pop(cache_protocol.CACHE_MAP_FIELD, None)
+    return new_body
 
 
 def _since(t0: float, mark, fallback: int) -> int:

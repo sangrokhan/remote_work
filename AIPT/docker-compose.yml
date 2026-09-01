@@ -223,16 +223,29 @@ services:
       - LLAMA_PORT=40080
       - MODEL_REPO=${LOCAL_LLM_MODEL_REPO:-bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M}
       - CTX_SIZE=${LOCAL_LLM_CTX_SIZE:-4096}
+      # engine Gateway sidecar (docker/engine_gateway.py, L7 reverse proxy
+      # in front of this container's own llama-server) -- see that file's
+      # module docstring. `web` targets this port (LOCAL_LLM_ENGINE_URL
+      # below), not llama-server's 40080 directly, so caching/experiment
+      # hooks sit on the request path: web -> Network Gateway (L3/L4) ->
+      # engine Gateway (L7, this) -> llama-server (127.0.0.1:40080, same
+      # container/netns).
+      - ENGINE_GATEWAY_HOST=0.0.0.0
+      - ENGINE_GATEWAY_PORT=40079
+      - ENGINE_GATEWAY_UPSTREAM_HOST=127.0.0.1
+      - ENGINE_GATEWAY_UPSTREAM_PORT=40080
       # Route setup (docker/entrypoint_local_llm.py): net-client subnet,
       # reached via gateway's IP on net-backend.
       - GATEWAY_PEER_SUBNET=${NET_CLIENT_SUBNET:-172.28.1.0/24}
       - GATEWAY_ROUTE_VIA=${GATEWAY_BACKEND_IP:-172.28.2.2}
     # No `ports:` mapping on purpose -- same DESIGN.md 4.7 topology as
     # mock-server: reachable only via `gateway` (and, from the host, not at
-    # all). Other services reach it at local-llm:40080, but only `gateway`
-    # (on net-backend) actually can.
+    # all). Other services reach the engine Gateway at local-llm:40079
+    # (which itself forwards to llama-server on 40080 inside this
+    # container); only `gateway` (on net-backend) actually can reach either.
     expose:
       - "40080"
+      - "40079"
     # First boot downloads the GGUF from the HF Hub (bartowski/
     # Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M by default, ~400MB) -- can take a
     # while on a slow connection; the upstream image's own HEALTHCHECK
@@ -298,17 +311,24 @@ services:
       - GATEWAY_ROUTE_VIA=${GATEWAY_CLIENT_IP:-172.28.1.2}
       # LocalLLMBackend (aipt/backends/local_llm/engine_adapter.py) targets
       # this URL. Default: the `local-llm` service's fixed IP on
-      # net-backend (172.28.2.4, port 40080 -- this project's local_llm
-      # convention, see docker/Dockerfile.local_llm /
-      # scripts/run_local_llm_engine.sh). Must be the IP, not the
-      # `local-llm` hostname: `web` is only joined to net-client, and
-      # Docker's embedded DNS only resolves names within networks a
-      # container is actually a member of -- the kernel still forwards the
-      # *packets* to net-backend via `gateway` (DESIGN.md 4.7 확정 설계 1),
-      # but `web` itself can never resolve a net-backend-only hostname.
+      # net-backend (172.28.2.4), port 40079 -- the engine Gateway sidecar
+      # (docker/engine_gateway.py), NOT llama-server's own 40080 directly.
+      # This is the 2026-09 caching-experiment topology change: web ->
+      # Network Gateway (L3/L4 netem, `gateway` service) -> engine Gateway
+      # (L7, this port) -> llama-server (127.0.0.1:40080 inside the
+      # local-llm container). The engine Gateway is a transparent
+      # OpenAI-API-compatible reverse proxy today (empty cache hooks --
+      # see that module's docstring), so pointing here vs. straight at
+      # 40080 changes nothing observable yet, only adds the L7 hop.
+      # Must be the IP, not the `local-llm` hostname: `web` is only joined
+      # to net-client, and Docker's embedded DNS only resolves names within
+      # networks a container is actually a member of -- the kernel still
+      # forwards the *packets* to net-backend via `gateway` (DESIGN.md 4.7
+      # 확정 설계 1), but `web` itself can never resolve a net-backend-only
+      # hostname.
       # Override to point at a host-run engine instead, e.g.
       # LOCAL_LLM_ENGINE_URL=http://host.docker.internal:40080.
-      - LOCAL_LLM_ENGINE_URL=${LOCAL_LLM_ENGINE_URL:-http://172.28.2.4:40080}
+      - LOCAL_LLM_ENGINE_URL=${LOCAL_LLM_ENGINE_URL:-http://172.28.2.4:40079}
       - LOCAL_LLM_ENGINE_KIND=${LOCAL_LLM_ENGINE_KIND:-llama_cpp}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
       # aipt.backends.mock.conversation.MockBackend (TCP): same

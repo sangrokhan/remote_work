@@ -158,6 +158,21 @@ class RunRequest(BaseModel):
         description="'http1' (kernel TCP, default) or 'http3' (QUIC, mock-only spike).",
     )
 
+    # local_llm-only: request-body leaf-hash dedup cache (docs/
+    # engine_gateway_caching_seed.md), opt-in per run via the web form's
+    # "Enable Cache" checkbox on the local_llm card. Ignored by every
+    # other backend (they never read these fields) -- kept flat here
+    # rather than a nested per-backend object, same posture as the
+    # existing mock-only knobs above.
+    cache_enabled: bool = Field(
+        default=False,
+        description="local_llm only: request-body leaf-hash dedup cache toggle.",
+    )
+    cache_threshold_bytes: int = Field(
+        default=200,
+        description="local_llm only: minimum leaf value size (bytes) to be a dedup candidate.",
+    )
+
     # --- input mode ---------------------------------------------------
     # Two modes, per user decision: "dummy" and "record". The original
     # three mock arms (dummy/record/replay) collapsed to two -- a
@@ -335,6 +350,11 @@ def _build_backend(name: str, engine: str | None = None, *, req: "RunRequest | N
         )
         if facade is None:
             raise NotImplementedError(f"local_llm backend module has no usable class")
+        if req is not None:
+            return facade(
+                cache_enabled=req.cache_enabled,
+                cache_threshold_bytes=req.cache_threshold_bytes,
+            )
         return facade()
     raise KeyError(f"unhandled backend: {name!r}")
 

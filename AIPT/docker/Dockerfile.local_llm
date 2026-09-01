@@ -29,6 +29,7 @@ RUN apt-get update \
 
 COPY docker/entrypoint_local_llm.py /app/entrypoint_local_llm.py
 COPY docker/idle_reset_admin.py /app/idle_reset_admin.py
+COPY docker/engine_gateway.py /app/engine_gateway.py
 # Minimal `aipt` package slice for idle_reset_admin.py's
 # `from aipt.core import idle_reset` -- this image wraps upstream
 # llama-server and deliberately does not install the full aipt package
@@ -39,13 +40,19 @@ COPY docker/idle_reset_admin.py /app/idle_reset_admin.py
 COPY aipt/__init__.py /app/aipt/__init__.py
 COPY aipt/core/__init__.py /app/aipt/core/__init__.py
 COPY aipt/core/idle_reset.py /app/aipt/core/idle_reset.py
+COPY aipt/core/cache_protocol.py /app/aipt/core/cache_protocol.py
 
 ENV LLAMA_HOST=0.0.0.0 \
     LLAMA_PORT=40080 \
     MODEL_REPO=bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M \
-    CTX_SIZE=4096
+    CTX_SIZE=4096 \
+    ENGINE_GATEWAY_HOST=0.0.0.0 \
+    ENGINE_GATEWAY_PORT=40079 \
+    ENGINE_GATEWAY_UPSTREAM_HOST=127.0.0.1 \
+    ENGINE_GATEWAY_UPSTREAM_PORT=40080 \
+    ENGINE_GATEWAY_CACHE_THRESHOLD_BYTES=200
 
-EXPOSE 40080
+EXPOSE 40080 40079
 
 # The base image (ghcr.io/ggml-org/llama.cpp:server) ships its own
 # HEALTHCHECK hardcoded to the classic llama-server default port 8080.

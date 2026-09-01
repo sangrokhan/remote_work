@@ -32,6 +32,7 @@ in front of it.
 
 from __future__ import annotations
 
+import os
 import socket
 import time
 
@@ -40,7 +41,7 @@ from aipt.backends.local_llm import engine_adapter as engine_adapter_mod
 from aipt.backends.local_llm.engine_adapter import EngineAdapter
 from aipt.backends.local_llm.gateway import Gateway
 from aipt.backends.record import Exchange
-from aipt.core import cwnd
+from aipt.core import cwnd, cache_protocol
 from aipt.core import wire
 
 NAME = "local_llm"
@@ -96,6 +97,8 @@ class LocalLLMBackend:
         transport: Transport = "http1",
         label: str = "local-llm",
         timeout: int = 120,
+        cache_enabled: bool | None = None,
+        cache_threshold_bytes: int | None = None,
     ) -> None:
         self._engine_url = engine_url or engine_adapter_mod.engine_url()
         self._engine_kind = engine_kind or engine_adapter_mod.engine_kind()
@@ -103,6 +106,23 @@ class LocalLLMBackend:
         self.transport = transport
         self.label = label
         self.timeout = timeout
+        # Request-body leaf-hash dedup (docs/engine_gateway_caching_seed.md),
+        # opt-in and defaulting from env so the web UI/API layer can toggle
+        # it per run without a code change -- mirrors how engine_url/model
+        # already default from env at call time (see docstring above).
+        # LOCAL_LLM_CACHE_ENABLED: "1"/"true"/"yes" (case-insensitive) to
+        # default on; unset/anything else defaults off.
+        if cache_enabled is None:
+            cache_enabled = os.environ.get(
+                "LOCAL_LLM_CACHE_ENABLED", ""
+            ).strip().lower() in ("1", "true", "yes")
+        self.cache_enabled = cache_enabled
+        if cache_threshold_bytes is None:
+            cache_threshold_bytes = int(
+                os.environ.get("LOCAL_LLM_CACHE_THRESHOLD_BYTES", "")
+                or cache_protocol.DEFAULT_THRESHOLD_BYTES
+            )
+        self.cache_threshold_bytes = cache_threshold_bytes
 
         self._adapter: EngineAdapter | None = None
         self._gateway: Gateway | None = None
@@ -158,7 +178,11 @@ class LocalLLMBackend:
             model=model or self._model,
             timeout=self.timeout,
         )
-        self._gateway = Gateway(self._adapter, transport=self.transport, timeout=self.timeout)
+        self._gateway = Gateway(
+            self._adapter, transport=self.transport, timeout=self.timeout,
+            cache_enabled=self.cache_enabled,
+            cache_threshold_bytes=self.cache_threshold_bytes,
+        )
 
         host, port = _host_port_from_url(self._adapter.base_url)
         wire.reset_session()
@@ -208,6 +232,7 @@ class LocalLLMBackend:
             request_json=result.request_body,
             response_json=result.response_body,
             error=result.error or None,
+            cache_bytes_saved=result.cache_bytes_saved,
         )
 
     def close(self) -> None:

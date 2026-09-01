@@ -33,6 +33,11 @@ New in this merge, not in either ancestor:
                    the only place that fills it in for real.
   ``transport``    DESIGN.md 4.5 B5's extension slot (``"http1"``/``"http3"``),
                    already on every ``turn_record()`` row.
+  ``cache_bytes_saved``  local_llm-only (docs/engine_gateway_caching_seed.md):
+                   bytes this turn's request payload was smaller than an
+                   uncached-equivalent request would have been, from the
+                   engine Gateway leaf-hash dedup protocol. 0 for every
+                   other backend and for local_llm runs with caching off.
 """
 
 from __future__ import annotations
@@ -48,6 +53,7 @@ _CORE_COLUMNS = [
     "input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens",
     "total_tokens",
     "goodput_bps",
+    "cache_bytes_saved",
     "error",
 ]
 
