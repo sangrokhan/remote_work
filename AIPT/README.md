@@ -55,6 +55,26 @@ cc -O2 -Wall -o native/cwnd_monitor native/cwnd_monitor.c
 `-m "not live"`를 빼면 실제 소켓/커널 netlink/tcpdump가 필요한 테스트도 함께
 돌아간다(환경에 따라 skip 처리됨).
 
+### 테스트 결과 저장 (`test-results/latest.json`)
+
+pytest 실행 결과를 STD(`docs/std/std_*.json`, 최신 파일 자동 선택)와 묶어서
+`test-results/latest.json` 한 파일에 덮어쓴다 — 히스토리는 JSON 안에 쌓지
+않고 `git log -- test-results/latest.json`으로 추적한다.
+
+```bash
+.venv/bin/python3.12 scripts/save_test_results.py            # 로컬 저장만
+.venv/bin/python3.12 scripts/save_test_results.py --commit    # 저장 + git commit + push
+.venv/bin/python3.12 scripts/save_test_results.py --commit --no-push  # 로컬 커밋만
+```
+
+주의: `.venv/bin/python`은 환경에 따라 venv 밖 인터프리터로 심링크될 수
+있어(uv 등) `pytest-json-report`를 못 찾는 경우가 있다 — 반드시
+`.venv/bin/python3.12`(venv 자체 인터프리터)로 실행할 것.
+
+STD 테이블(`docs/srs-jira-tickets-and-std-2026-09-01.md` §2)이 바뀌면
+`docs/std/std_<date>.json`도 같이 갱신하고 새 날짜로 저장 — 스크립트는
+파일명 정렬 기준 최신 `docs/std/std_*.json`을 자동으로 집어간다.
+
 ### Docker
 
 `docker-compose.yml`은 `web` → `gateway` → `mock-server` 3-service 토폴로지로

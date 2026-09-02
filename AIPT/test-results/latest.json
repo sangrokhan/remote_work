@@ -1,0 +1,83 @@
+{
+  "generated_at": "2026-09-02T02:31:41.337910+00:00",
+  "git": {
+    "commit": "40a6d7be7aa04cf9e0a715d6792a7fc9aba896b0",
+    "branch": "main",
+    "dirty": true
+  },
+  "pytest": {
+    "exit_code": 0,
+    "targets": [
+      "tests/"
+    ],
+    "duration_s": 59.081417083740234,
+    "summary": {
+      "total": 513,
+      "passed": 512,
+      "failed": 0,
+      "skipped": 1,
+      "error": 0,
+      "xfailed": 0,
+      "xpassed": 0
+    },
+    "failed_tests": []
+  },
+  "std": {
+    "_comment": "docs/srs-jira-tickets-and-std-2026-09-01.md 의 §2 STD 테이블을 구조화한 소스. 마크다운 문서가 바뀌면 이 파일도 수동으로 같이 갱신해야 함. scripts/save_test_results.py 가 이 파일을 그대로 읽어 test-results/latest.json 의 std 섹션에 삽입함.",
+    "source_doc": "docs/srs-jira-tickets-and-std-2026-09-01.md",
+    "doc_date": "2026-09-01",
+    "cases": [
+      {
+        "test_id": "TC-AIPT-11",
+        "description": "3개 backend 공통 프로토콜 준수 및 레지스트리 동작 검증",
+        "precondition": "venv 활성화, tests/backends/, tests/test_backends_base.py 존재",
+        "test_step": "1) pytest -m \"not live\" tests/test_backends_base.py -v 실행 2) pytest -m \"not live\" tests/backends/ -v 실행 3) 미등록 backend 이름 조회 시 예외 확인",
+        "expected_results": "tests/test_backends_base.py 11건, tests/backends/ 163건 모두 pass, 미등록 이름 조회 시 명시적 예외 발생",
+        "documented_result": "pass",
+        "documented_pass_count": 174
+      },
+      {
+        "test_id": "TC-AIPT-12",
+        "description": "Network Gateway client-link-only netem 프로파일 적용 검증",
+        "precondition": "docker-compose로 gateway/mock-server 컨테이너 기동, wireless 프로파일 정의 존재",
+        "test_step": "1) POST /gateway/profile 로 wireless 프로파일 설정 2) mock backend로 실험 실행 3) aipt.core.probe 또는 pcap SYN-ACK로 RTT 측정 4) backend_iface 구간은 ETHERNET_BASELINE 고정 여부 확인",
+        "expected_results": "client_iface 구간 RTT가 wireless 프로파일 delay 설정값 근방으로 관측되고, backend_iface 구간은 baseline(약 1ms)으로 유지",
+        "documented_result": "pass",
+        "documented_pass_count": 65
+      },
+      {
+        "test_id": "TC-AIPT-13",
+        "description": "engine Gateway 캐싱 트래픽 절감 실측 재현 검증",
+        "precondition": "docker-compose 4-service 토폴로지 기동, records/perf_short_smoketest.json 존재",
+        "test_step": "1) X-AIPT-Cache: enable off로 scripts/measure_perf_cache_savings.py 실행(baseline) 2) on으로 재실행(cached) 3) data/runs/cache_savings_multiturn.csv 에서 턴별 req_payload_bytes/wire_sent 비교 4) scripts/_smoketest_cache_miss_recovery.py, scripts/_smoketest_gateway_409_path.py 실행",
+        "expected_results": "20턴 누적 payload 절감률 87.2%, wire 전송량 절감률 86.3% 근방 재현, 캐시 미스(409) 발생 시 자기 복원 후 1회 재전송 성공, 두 smoketest 스크립트 모두 pass",
+        "documented_result": "pass",
+        "documented_pass_count": null
+      },
+      {
+        "test_id": "TC-AIPT-14",
+        "description": "3-레이어 CSV export 스키마 불변성 및 goodput 산출 검증",
+        "precondition": "venv 활성화, tests/export/ 존재, 3개 backend 실행 가능 환경",
+        "test_step": "1) pytest -m \"not live\" tests/export/ -v 실행 2) Mock backend로 실험 1건 실행 후 cwnd.csv/turns.csv/packets.csv/bundle.zip 생성 확인 3) PublicAI/LocalLLM backend로도 동일 실행해 3개 CSV 스키마(컴럼) 동일한지 비교 4) turns.csv 의 goodput_bps 값이 계산식과 일치하는지 확인",
+        "expected_results": "42개 유닛 테스트 pass, 3개 backend 모두 동일 컴럼 스키마의 CSV 3종을 생성하고 bundle.zip에 pcap과 함께 포함됨, goodput_bps 계산값이 수식과 일치",
+        "documented_result": "pass",
+        "documented_pass_count": 42
+      },
+      {
+        "test_id": "TC-AIPT-15",
+        "description": "Public AI 실측 캐처 → Mock 재생 파이프라인 마스킹/재현 검증",
+        "precondition": "Public AI API 키 설정 완료, recorder.py/replay.py 구현 완료",
+        "test_step": "1) PublicAIBackend로 실제 API 호출 1건 실행해 recorder가 fixture 저장 2) 저장된 fixture 파일을 열어 API 키/인증 헤더 등 민감정보가 마스킹되어 있는지 확인 3) 동일 fixture를 Mock backend의 replay 경로로 로드해 재생 실행 4) 재생된 응답의 payload 바이트 크기를 원본 캐처와 비교",
+        "expected_results": "fixture에 민감정보가 마스킹되어 원문 그대로 노출되지 않고, Mock 재생 시 payload 바이트 패턴(크기)이 원본과 일치",
+        "documented_result": "pass",
+        "documented_pass_count": null
+      }
+    ],
+    "totals": {
+      "total_functions_verified": 5,
+      "total_pytest_cases_in_suite": 513,
+      "note": "전체 513건은 pytest -m 'not live' 기준 스위트 전체 건수(docs 비고 §3). 개별 TC의 documented_pass_count는 해당 기능 관련 서브셋만을 가리킴."
+    },
+    "_std_source_file": "docs/std/std_2026-09-01.json"
+  }
+}

@@ -17,7 +17,7 @@ requires-python = ">=3.10"
 dependencies = ["requests"]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pytest-json-report"]
 # aipt/export/packets.py (DESIGN.md 4.6 B6) parses pcaps with dpkt when it is
 # installed, and falls back to a small pure-stdlib classic-pcap reader
 # otherwise -- so this group is optional, not required to run the test

@@ -1,0 +1,57 @@
+{
+  "_comment": "docs/srs-jira-tickets-and-std-2026-09-01.md \uc758 \u00a72 STD \ud14c\uc774\ube14\uc744 \uad6c\uc870\ud654\ud55c \uc18c\uc2a4. \ub9c8\ud06c\ub2e4\uc6b4 \ubb38\uc11c\uac00 \ubc14\ub00c\uba74 \uc774 \ud30c\uc77c\ub3c4 \uc218\ub3d9\uc73c\ub85c \uac19\uc774 \uac31\uc2e0\ud574\uc57c \ud568. scripts/save_test_results.py \uac00 \uc774 \ud30c\uc77c\uc744 \uadf8\ub300\ub85c \uc77d\uc5b4 test-results/latest.json \uc758 std \uc139\uc158\uc5d0 \uc0bd\uc785\ud568.",
+  "source_doc": "docs/srs-jira-tickets-and-std-2026-09-01.md",
+  "doc_date": "2026-09-01",
+  "cases": [
+    {
+      "test_id": "TC-AIPT-11",
+      "description": "3\uac1c backend \uacf5\ud1b5 \ud504\ub85c\ud1a0\ucf5c \uc900\uc218 \ubc0f \ub808\uc9c0\uc2a4\ud2b8\ub9ac \ub3d9\uc791 \uac80\uc99d",
+      "precondition": "venv \ud65c\uc131\ud654, tests/backends/, tests/test_backends_base.py \uc874\uc7ac",
+      "test_step": "1) pytest -m \"not live\" tests/test_backends_base.py -v \uc2e4\ud589 2) pytest -m \"not live\" tests/backends/ -v \uc2e4\ud589 3) \ubbf8\ub4f1\ub85d backend \uc774\ub984 \uc870\ud68c \uc2dc \uc608\uc678 \ud655\uc778",
+      "expected_results": "tests/test_backends_base.py 11\uac74, tests/backends/ 163\uac74 \ubaa8\ub450 pass, \ubbf8\ub4f1\ub85d \uc774\ub984 \uc870\ud68c \uc2dc \uba85\uc2dc\uc801 \uc608\uc678 \ubc1c\uc0dd",
+      "documented_result": "pass",
+      "documented_pass_count": 174
+    },
+    {
+      "test_id": "TC-AIPT-12",
+      "description": "Network Gateway client-link-only netem \ud504\ub85c\ud30c\uc77c \uc801\uc6a9 \uac80\uc99d",
+      "precondition": "docker-compose\ub85c gateway/mock-server \ucee8\ud14c\uc774\ub108 \uae30\ub3d9, wireless \ud504\ub85c\ud30c\uc77c \uc815\uc758 \uc874\uc7ac",
+      "test_step": "1) POST /gateway/profile \ub85c wireless \ud504\ub85c\ud30c\uc77c \uc124\uc815 2) mock backend\ub85c \uc2e4\ud5d8 \uc2e4\ud589 3) aipt.core.probe \ub610\ub294 pcap SYN-ACK\ub85c RTT \uce21\uc815 4) backend_iface \uad6c\uac04\uc740 ETHERNET_BASELINE \uace0\uc815 \uc5ec\ubd80 \ud655\uc778",
+      "expected_results": "client_iface \uad6c\uac04 RTT\uac00 wireless \ud504\ub85c\ud30c\uc77c delay \uc124\uc815\uac12 \uadfc\ubc29\uc73c\ub85c \uad00\uce21\ub418\uace0, backend_iface \uad6c\uac04\uc740 baseline(\uc57d 1ms)\uc73c\ub85c \uc720\uc9c0",
+      "documented_result": "pass",
+      "documented_pass_count": 65
+    },
+    {
+      "test_id": "TC-AIPT-13",
+      "description": "engine Gateway \uce90\uc2f1 \ud2b8\ub798\ud53d \uc808\uac10 \uc2e4\uce21 \uc7ac\ud604 \uac80\uc99d",
+      "precondition": "docker-compose 4-service \ud1a0\ud3f4\ub85c\uc9c0 \uae30\ub3d9, records/perf_short_smoketest.json \uc874\uc7ac",
+      "test_step": "1) X-AIPT-Cache: enable off\ub85c scripts/measure_perf_cache_savings.py \uc2e4\ud589(baseline) 2) on\uc73c\ub85c \uc7ac\uc2e4\ud589(cached) 3) data/runs/cache_savings_multiturn.csv \uc5d0\uc11c \ud134\ubcc4 req_payload_bytes/wire_sent \ube44\uad50 4) scripts/_smoketest_cache_miss_recovery.py, scripts/_smoketest_gateway_409_path.py \uc2e4\ud589",
+      "expected_results": "20\ud134 \ub204\uc801 payload \uc808\uac10\ub960 87.2%, wire \uc804\uc1a1\ub7c9 \uc808\uac10\ub960 86.3% \uadfc\ubc29 \uc7ac\ud604, \uce90\uc2dc \ubbf8\uc2a4(409) \ubc1c\uc0dd \uc2dc \uc790\uae30 \ubcf5\uc6d0 \ud6c4 1\ud68c \uc7ac\uc804\uc1a1 \uc131\uacf5, \ub450 smoketest \uc2a4\ud06c\ub9bd\ud2b8 \ubaa8\ub450 pass",
+      "documented_result": "pass",
+      "documented_pass_count": null
+    },
+    {
+      "test_id": "TC-AIPT-14",
+      "description": "3-\ub808\uc774\uc5b4 CSV export \uc2a4\ud0a4\ub9c8 \ubd88\ubcc0\uc131 \ubc0f goodput \uc0b0\ucd9c \uac80\uc99d",
+      "precondition": "venv \ud65c\uc131\ud654, tests/export/ \uc874\uc7ac, 3\uac1c backend \uc2e4\ud589 \uac00\ub2a5 \ud658\uacbd",
+      "test_step": "1) pytest -m \"not live\" tests/export/ -v \uc2e4\ud589 2) Mock backend\ub85c \uc2e4\ud5d8 1\uac74 \uc2e4\ud589 \ud6c4 cwnd.csv/turns.csv/packets.csv/bundle.zip \uc0dd\uc131 \ud655\uc778 3) PublicAI/LocalLLM backend\ub85c\ub3c4 \ub3d9\uc77c \uc2e4\ud589\ud574 3\uac1c CSV \uc2a4\ud0a4\ub9c8(\ucef4\ub7fc) \ub3d9\uc77c\ud55c\uc9c0 \ube44\uad50 4) turns.csv \uc758 goodput_bps \uac12\uc774 \uacc4\uc0b0\uc2dd\uacfc \uc77c\uce58\ud558\ub294\uc9c0 \ud655\uc778",
+      "expected_results": "42\uac1c \uc720\ub2db \ud14c\uc2a4\ud2b8 pass, 3\uac1c backend \ubaa8\ub450 \ub3d9\uc77c \ucef4\ub7fc \uc2a4\ud0a4\ub9c8\uc758 CSV 3\uc885\uc744 \uc0dd\uc131\ud558\uace0 bundle.zip\uc5d0 pcap\uacfc \ud568\uaed8 \ud3ec\ud568\ub428, goodput_bps \uacc4\uc0b0\uac12\uc774 \uc218\uc2dd\uacfc \uc77c\uce58",
+      "documented_result": "pass",
+      "documented_pass_count": 42
+    },
+    {
+      "test_id": "TC-AIPT-15",
+      "description": "Public AI \uc2e4\uce21 \uce90\ucc98 \u2192 Mock \uc7ac\uc0dd \ud30c\uc774\ud504\ub77c\uc778 \ub9c8\uc2a4\ud0b9/\uc7ac\ud604 \uac80\uc99d",
+      "precondition": "Public AI API \ud0a4 \uc124\uc815 \uc644\ub8cc, recorder.py/replay.py \uad6c\ud604 \uc644\ub8cc",
+      "test_step": "1) PublicAIBackend\ub85c \uc2e4\uc81c API \ud638\ucd9c 1\uac74 \uc2e4\ud589\ud574 recorder\uac00 fixture \uc800\uc7a5 2) \uc800\uc7a5\ub41c fixture \ud30c\uc77c\uc744 \uc5f4\uc5b4 API \ud0a4/\uc778\uc99d \ud5e4\ub354 \ub4f1 \ubbfc\uac10\uc815\ubcf4\uac00 \ub9c8\uc2a4\ud0b9\ub418\uc5b4 \uc788\ub294\uc9c0 \ud655\uc778 3) \ub3d9\uc77c fixture\ub97c Mock backend\uc758 replay \uacbd\ub85c\ub85c \ub85c\ub4dc\ud574 \uc7ac\uc0dd \uc2e4\ud589 4) \uc7ac\uc0dd\ub41c \uc751\ub2f5\uc758 payload \ubc14\uc774\ud2b8 \ud06c\uae30\ub97c \uc6d0\ubcf8 \uce90\ucc98\uc640 \ube44\uad50",
+      "expected_results": "fixture\uc5d0 \ubbfc\uac10\uc815\ubcf4\uac00 \ub9c8\uc2a4\ud0b9\ub418\uc5b4 \uc6d0\ubb38 \uadf8\ub300\ub85c \ub178\ucd9c\ub418\uc9c0 \uc54a\uace0, Mock \uc7ac\uc0dd \uc2dc payload \ubc14\uc774\ud2b8 \ud328\ud134(\ud06c\uae30)\uc774 \uc6d0\ubcf8\uacfc \uc77c\uce58",
+      "documented_result": "pass",
+      "documented_pass_count": null
+    }
+  ],
+  "totals": {
+    "total_functions_verified": 5,
+    "total_pytest_cases_in_suite": 513,
+    "note": "\uc804\uccb4 513\uac74\uc740 pytest -m 'not live' \uae30\uc900 \uc2a4\uc704\ud2b8 \uc804\uccb4 \uac74\uc218(docs \ube44\uace0 \u00a73). \uac1c\ubcc4 TC\uc758 documented_pass_count\ub294 \ud574\ub2f9 \uae30\ub2a5 \uad00\ub828 \uc11c\ube0c\uc14b\ub9cc\uc744 \uac00\ub9ac\ud0b4."
+  }
+}
