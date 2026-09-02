@@ -48,8 +48,8 @@
       {
         "test_id": "TC-AIPT-13",
         "description": "engine Gateway 캐싱 트래픽 절감 실측 재현 검증",
-        "precondition": "docker-compose 4-service 토폴로지 기동, records/perf_short_smoketest.json 존재",
-        "test_step": "1) X-AIPT-Cache: enable off로 scripts/measure_perf_cache_savings.py 실행(baseline) 2) on으로 재실행(cached) 3) data/runs/cache_savings_multiturn.csv 에서 턴별 req_payload_bytes/wire_sent 비교 4) scripts/_smoketest_cache_miss_recovery.py, scripts/_smoketest_gateway_409_path.py 실행",
+        "precondition": "docker-compose 4-service 토폴로지 기동, records/perf.json 존재(스크립트 기본 경로, PERF_RECORD_PATH 환경변수로 변경 가능)",
+        "test_step": "1) docker compose exec web python3 scripts/measure_perf_cache_savings.py 1회 실행 -- off/on은 CLI 인자가 아니라 스크립트 내부 run_conversation() 호출이 cache_enabled=False(baseline, X-AIPT-Cache 헤더 미전송) 후 cache_enabled=True(cached, X-AIPT-Cache: enable 헤더 전송) 순서로 자동 2회 수행함 2) data/runs/cache_savings_multiturn.csv 에서 턴별 req_payload_bytes/wire_sent 비교 3) python3 scripts/_smoketest_cache_miss_recovery.py 실행 4) python3 scripts/_smoketest_gateway_409_path.py 실행",
         "expected_results": "20턴 누적 payload 절감률 87.2%, wire 전송량 절감률 86.3% 근방 재현, 캐시 미스(409) 발생 시 자기 복원 후 1회 재전송 성공, 두 smoketest 스크립트 모두 pass",
         "documented_result": "pass",
         "documented_pass_count": null
