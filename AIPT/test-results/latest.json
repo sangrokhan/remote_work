@@ -40,7 +40,7 @@
         "test_id": "TC-AIPT-12",
         "description": "Network Gateway client-link-only netem 프로파일 적용 검증",
         "precondition": "docker-compose로 gateway/mock-server 컨테이너 기동, wireless 프로파일 정의 존재",
-        "test_step": "1) POST /gateway/profile 로 wireless 프로파일 설정 2) mock backend로 실험 실행 3) aipt.core.probe 또는 pcap SYN-ACK로 RTT 측정 4) backend_iface 구간은 ETHERNET_BASELINE 고정 여부 확인",
+        "test_step": "1) curl -X POST \"http://localhost:10000/api/gateway/profile?profile=wireless\" (또는 web UI의 Gateway 설정 화면)로 wireless 프로파일 설정 2) POST /api/run으로 mock backend 실험 1건 실행 (예: curl -X POST http://localhost:10000/api/run -d '{\"backend\":\"mock\",\"arm\":\"dummy\"}' -H \"Content-Type: application/json\") -- capture(기본 True)와 무관하게 idle-gap ping probe(실제 모듈은 aipt/backends/mock/probe.py, enable_ping_probes 기본 True; 문서상 \"aipt.core.probe\"는 오기)가 각 턴의 idle 구간마다 자동으로 RTT를 측정함 3) RTT 확인은 두 가지 중 하나: (a) /api/run 실행 결과 JSON에 포함된 ping probe 샘플의 rtt_ms 값을 읽거나, (b) capture=true로 저장된 pcap(data/pcaps/)을 열어 SYN-ACK 왕복시간을 직접 측정 -- 별도로 실행하는 스크립트는 없음 4) GET /api/gateway/profile 응답의 backend.profile 필드가 항상 ethernet_baseline인지 확인",
         "expected_results": "client_iface 구간 RTT가 wireless 프로파일 delay 설정값 근방으로 관측되고, backend_iface 구간은 baseline(약 1ms)으로 유지",
         "documented_result": "pass",
         "documented_pass_count": 65
@@ -76,7 +76,7 @@
         "test_id": "TC-AIPT-16",
         "description": "적응형 cwnd 계측 인프라(별도 프로세스 + RTT 비례 샘플링) 검증",
         "precondition": "venv 활성화, tests/core/ 존재, native/cwnd_monitor.c 빌드 가능 환경",
-        "test_step": "1) pytest -m \"not live\" tests/core/ -v 실행 2) idle 후 IW 리셋 시나리오와 loss recovery 시나리오를 각각 구성해 Monitor가 서로 다른 이벤트로 구분 판정하는지 확인 3) interval_from_rtt가 RTT 값에 비례해 샘플링 주기를 계산하는지 여러 RTT 입력으로 확인 4) RTT/K 계산값이 물리적 하한(1ms) 아래로 내려가는 케이스에서 floor_clamped + measurement_confidence: \"degraded\"가 보고되는지 확인 5) timestamp_source 판별 로직이 소프트웨어/하드웨어 타임스탬프를 올바르게 구분하는지 확인",
+        "test_step": "1) pytest -m \"not live\" tests/core/ -v 실행 -- 아래 2~5번은 별도 절차가 아니라 이 한 번의 pytest 실행에 포함된 서로 다른 테스트 함수들의 결과를 각각 확인하는 것 2) idle 후 IW 리셋 vs loss recovery 구분 판정: tests/core/test_cwnd.py::test_a_grown_window_falling_back_to_ten_counts_as_a_reset(리셋 1회로 판정)와 ::test_a_collapse_during_loss_recovery_is_not_counted(리셋 0회로 판정) 두 테스트의 pass 여부 확인 3) RTT 비례 적응형 샘플링 주기 계산: tests/core/test_cwnd.py::test_interval_from_rtt_normal_path(10ms→2ms), ::test_interval_from_rtt_scales_with_rtt(100ms→20ms) 등 interval_from_rtt() 관련 테스트들의 pass 여부 확인 4) 물리적 하한(1ms) 클램프 + degraded confidence 보고: ::test_interval_from_rtt_very_short_path_hits_the_floor, ::test_monitor_with_short_rtt_hint_clamps_and_degrades_confidence 의 pass 여부 확인 5) timestamp_source 판별: tests/core/test_capture.py::test_timestamp_source_reports_hardware_when_ethtool_says_so, ::test_timestamp_source_reports_software_only 등의 pass 여부 확인",
         "expected_results": "tests/core/ 170건 전량 pass, idle 후 IW 리셋과 loss recovery가 서로 다른 이벤트로 정확히 구분 판정되며, 짧은 RTT 경로에서도 floor_clamped 하한 클램프와 degraded confidence 보고가 정상 동작함",
         "documented_result": "pass",
         "documented_pass_count": 170
