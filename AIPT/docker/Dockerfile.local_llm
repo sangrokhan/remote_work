@@ -28,18 +28,16 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY docker/entrypoint_local_llm.py /app/entrypoint_local_llm.py
-COPY docker/idle_reset_admin.py /app/idle_reset_admin.py
 COPY docker/engine_gateway.py /app/engine_gateway.py
-# Minimal `aipt` package slice for idle_reset_admin.py's
-# `from aipt.core import idle_reset` -- this image wraps upstream
+# Minimal `aipt` package slice for engine_gateway.py's
+# `from aipt.core import cache_protocol` -- this image wraps upstream
 # llama-server and deliberately does not install the full aipt package
 # (its dependencies are irrelevant here); aipt/__init__.py and
 # aipt/core/__init__.py are docstring-only (no imports of their own), so
-# copying just the package-marker files plus idle_reset.py is enough to
-# make the import resolve without pulling in requests/fastapi/etc.
+# copying just the package-marker files plus cache_protocol.py is enough
+# to make the import resolve without pulling in requests/fastapi/etc.
 COPY aipt/__init__.py /app/aipt/__init__.py
 COPY aipt/core/__init__.py /app/aipt/core/__init__.py
-COPY aipt/core/idle_reset.py /app/aipt/core/idle_reset.py
 COPY aipt/core/cache_protocol.py /app/aipt/core/cache_protocol.py
 
 ENV LLAMA_HOST=0.0.0.0 \

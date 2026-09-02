@@ -12,25 +12,6 @@ HTTP/1.1 keep-alive so a client can reuse one TCP connection across turns
   GET  /health                     -> {"status": "ok"}
   GET|POST /inference-mock?delay=<ms>&response_bytes=<n>&turn=<i>
                                     -> JSON body (see below)
-  GET  /admin/idle-reset           -> {"ok", "enabled", "reason"}
-                                       (aipt.core.idle_reset.status())
-  POST /admin/idle-reset?enabled=0|1
-                                    -> same shape, after attempting the
-                                       write (aipt.core.idle_reset.write()).
-                                       This toggles
-                                       net.ipv4.tcp_slow_start_after_idle in
-                                       *this container's* netns -- the
-                                       responding side of the connection,
-                                       which is where the LLM-turn response
-                                       (the much larger of the two
-                                       directions) actually re-enters slow
-                                       start. Needs CAP_NET_ADMIN (already
-                                       granted to this service in
-                                       docker-compose.yml for the L3 routing
-                                       fix-up); a write attempt without it
-                                       reports ok=false with a reason
-                                       instead of a raw 500 (aipt.core.
-                                       idle_reset's never-raises contract).
 
 ``/inference-mock`` behaviour:
 
@@ -65,8 +46,6 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 from typing import TYPE_CHECKING
-
-from aipt.core import idle_reset
 
 if TYPE_CHECKING:
     from aipt.backends.mock.records import ScenarioRecord
@@ -132,8 +111,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"status": "ok"})
         elif path == "/inference-mock":
             self._handle_inference(query, prompt_bytes=None)
-        elif path == "/admin/idle-reset":
-            self._json(200, idle_reset.status())
         else:
             self._json(404, {"error": "not found"})
 
@@ -165,16 +142,6 @@ class _Handler(BaseHTTPRequestHandler):
             t_recv_end = time.monotonic()
             recv_ms = (t_recv_end - t_recv_start) * 1000
             self._handle_inference(query, prompt_bytes=len(body), recv_ms=recv_ms)
-        elif path == "/admin/idle-reset":
-            raw = query.get("enabled", [None])[0]
-            if raw not in ("0", "1"):
-                self._json(400, {"error": "enabled must be 0 or 1"})
-                return
-            ok, reason = idle_reset.write(raw == "1")
-            body = idle_reset.status()
-            body["write_ok"] = ok
-            body["write_reason"] = reason
-            self._json(200 if ok else 500, body)
         else:
             self._json(404, {"error": "not found"})
 

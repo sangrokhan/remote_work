@@ -1,5 +1,5 @@
 """aipt/web/routes_gateway.py -- web-UI proxy for two kinds of runtime
-toggle that live on the *backend* containers, not on `web` itself:
+toggle:
 
 1. Network Gateway profile (`/gateway/profile`, DESIGN.md 4.7 B11) --
    tc netem delay/jitter/loss/reorder presets on the `gateway` container.
@@ -11,22 +11,24 @@ toggle that live on the *backend* containers, not on `web` itself:
    backend was complete and directly curl-able, but the web UI had no way
    to reach it.
 
-2. idle-reset (`net.ipv4.tcp_slow_start_after_idle`) toggle on the
-   *responding* backend -- mock-server's own `/admin/idle-reset` route
-   (aipt/backends/mock/server.py) or local-llm's sidecar admin server
-   (docker/idle_reset_admin.py) -- for the causal idle-reset TTFT
-   experiment (2026-09-01 ooo interview). This is deliberately proxied
-   through `web` rather than exposed directly: mock-server/local-llm have
-   no `ports:` mapping (DESIGN.md 4.7 topology -- reachable only via
-   `gateway`'s L3 forwarding or, for admin traffic that must not be
-   netem-impaired, via `web`'s direct net-backend route, the same one
-   LOCAL_LLM_ENGINE_URL/MOCK_SERVER_HOST already use for inference calls).
+2. idle-reset (`net.ipv4.tcp_slow_start_after_idle`) toggle -- ALWAYS on
+   `web` itself (this process's own /proc/sys, via aipt.core.idle_reset,
+   in-process, no network hop). REDESIGNED 2026-09-02 (operator
+   correction) after the 2026-09-01 causal experiment
+   (docs/experiments/2026-09-01-idle-reset-results.md) found the original
+   design measured the wrong side: it's `web`'s own send-side cwnd that
+   slow-start-after-idle resets for the metric that matters (next-turn
+   request upload latency), not the responding backend's (mock-server's/
+   local-llm's). The original design proxied this toggle to an admin route
+   on the *responding* backend container (mock-server's `/admin/idle-reset`,
+   local-llm's `docker/idle_reset_admin.py` sidecar) -- that whole proxy
+   path, those containers' admin routes/sidecars, and the `privileged: true`
+   grant they only needed for this write were removed once the redesign
+   made them dead code (2026-09-02 operator direction: "제거해"). See
+   git history for that code if it's ever needed again.
 
-Both proxies share the same posture as `aipt.gateway.forwarding`/
-`netem_control`: never a raw 500 to the browser. A backend that is
-unreachable, lacks CAP_NET_ADMIN, or isn't running this build yet reports
-`{"ok": false, "reason": ...}` with a 200 (or the backend's own non-2xx,
-passed through) rather than an unhandled exception.
+Never a raw 500 to the browser for either endpoint: `write_ok`/`ok` false
+with a reason string instead of an unhandled exception.
 """
 
 from __future__ import annotations
@@ -83,67 +85,12 @@ def set_gateway_profile(profile: str = Query(..., description="clean|wired|wirel
         return JSONResponse({"ok": False, "reason": f"gateway unreachable: {exc}"}, status_code=200)
 
 
-# -- idle-reset toggle proxy (mock-server / local-llm) --------------------
-
-# Same env-var names + defaults aipt.backends.mock.conversation and
-# aipt.backends.local_llm.engine_adapter already use to *reach* these
-# backends for inference calls -- reused here so the admin toggle targets
-# exactly the container a run against that backend will actually talk to,
-# with no separate config surface to keep in sync.
-_MOCK_SERVER_HOST_ENV = "MOCK_SERVER_HOST"
-_MOCK_SERVER_PORT_ENV = "MOCK_SERVER_PORT"
-_DEFAULT_MOCK_HOST = "mock-server"
-_DEFAULT_MOCK_PORT = "8888"
-
-_LOCAL_LLM_ENGINE_URL_ENV = "LOCAL_LLM_ENGINE_URL"
-_DEFAULT_LOCAL_LLM_ENGINE_URL = "http://127.0.0.1:40080"
-# The idle-reset sidecar (docker/idle_reset_admin.py) listens one port
-# above the engine port by convention (40081 next to 40080) -- see that
-# module's own IDLE_RESET_ADMIN_PORT default.
-_DEFAULT_IDLE_RESET_ADMIN_PORT_OFFSET = 1
-
-
-def _mock_admin_url() -> str:
-    host = os.environ.get(_MOCK_SERVER_HOST_ENV, _DEFAULT_MOCK_HOST)
-    port = os.environ.get(_MOCK_SERVER_PORT_ENV, _DEFAULT_MOCK_PORT)
-    return f"http://{host}:{port}/admin/idle-reset"
-
-
-def _local_llm_admin_url() -> str:
-    engine_url = os.environ.get(_LOCAL_LLM_ENGINE_URL_ENV, _DEFAULT_LOCAL_LLM_ENGINE_URL)
-    # engine_url is like "http://172.28.2.4:40080" -- the admin sidecar is
-    # the same host, port+1, same reasoning as
-    # docker/idle_reset_admin.py's IDLE_RESET_ADMIN_PORT default (40081).
-    scheme, _, rest = engine_url.partition("://")
-    host, _, port_s = rest.partition(":")
-    try:
-        admin_port = int(port_s or "40080") + _DEFAULT_IDLE_RESET_ADMIN_PORT_OFFSET
-    except ValueError:
-        admin_port = 40081
-    return f"{scheme}://{host}:{admin_port}/admin/idle-reset"
-
-
-def _admin_url_for(backend: str) -> str | None:
-    if backend == "mock":
-        return _mock_admin_url()
-    if backend == "local_llm":
-        return _local_llm_admin_url()
-    return None  # public_ai/quic_mock: no admin toggle (real internet / spike-only)
-
-
-# -- idle-reset toggle for the CLIENT side (`web` itself) -----------------
+# -- idle-reset toggle (CLIENT side, `web` itself) -------------------------
 #
-# Found during the 2026-09-01 ooo idle-reset experiment (redesign after
-# operator correction): the metric that matters is how long it takes the
-# CLIENT's *next* request to finish uploading after an idle gap, and
-# slow-start-after-idle resets whichever side is about to SEND -- for that
-# metric, that's `web`'s own send-side cwnd, not mock-server's/local-llm's.
-# The first experiment toggled the wrong side (the responding backend) and
-# measured the wrong direction (response download), which is why it found
-# no attributable effect. `web` is this same process's own container, so
-# unlike mock/local_llm there is no separate admin server to proxy to --
-# aipt.core.idle_reset is called in-process, directly against this
-# container's own /proc/sys.
+# `web` is this same process's own container: no separate admin server to
+# proxy to -- aipt.core.idle_reset is called in-process, directly against
+# this container's own /proc/sys. See the module docstring above for why
+# this always targets `web`, never a backend container.
 from aipt.core import idle_reset as _idle_reset  # noqa: E402
 
 
@@ -160,42 +107,15 @@ def _web_client_idle_reset_write(enabled: bool) -> dict:
 
 
 @router.get("/api/idle-reset")
-def get_idle_reset(backend: str = Query(..., description="mock|local_llm|web_client")):
-    """Current net.ipv4.tcp_slow_start_after_idle state on *backend*'s
-    responding side. Proxies GET {backend admin}/admin/idle-reset."""
-    if backend == "web_client":
-        return JSONResponse(_web_client_idle_reset_status())
-    url = _admin_url_for(backend)
-    if url is None:
-        return JSONResponse(
-            {"ok": False, "reason": f"idle-reset toggle not available for backend={backend!r} "
-                                     "(only mock and local_llm run inside this project's own "
-                                     "containers; public_ai is the real internet, quic_mock is UDP)"},
-            status_code=200,
-        )
-    try:
-        resp = requests.get(url, timeout=_ADMIN_TIMEOUT_S)
-        return JSONResponse(resp.json(), status_code=resp.status_code)
-    except requests.RequestException as exc:
-        return JSONResponse({"ok": False, "reason": f"{backend} admin unreachable: {exc}"}, status_code=200)
+def get_idle_reset():
+    """Current net.ipv4.tcp_slow_start_after_idle state on `web` itself
+    (the CLIENT side -- see module docstring)."""
+    return JSONResponse(_web_client_idle_reset_status())
 
 
 @router.post("/api/idle-reset")
-def set_idle_reset(backend: str = Query(..., description="mock|local_llm|web_client"),
-                    enabled: bool = Query(..., description="True=Linux default (reset), False=disabled")):
-    """Toggle net.ipv4.tcp_slow_start_after_idle on *backend*'s responding
-    side -- the causal idle-reset TTFT experiment's control knob
-    (2026-09-01 ooo interview). Proxies POST {backend admin}/admin/idle-reset."""
-    if backend == "web_client":
-        return JSONResponse(_web_client_idle_reset_write(enabled))
-    url = _admin_url_for(backend)
-    if url is None:
-        return JSONResponse(
-            {"ok": False, "reason": f"idle-reset toggle not available for backend={backend!r}"},
-            status_code=200,
-        )
-    try:
-        resp = requests.post(url, params={"enabled": "1" if enabled else "0"}, timeout=_ADMIN_TIMEOUT_S)
-        return JSONResponse(resp.json(), status_code=resp.status_code)
-    except requests.RequestException as exc:
-        return JSONResponse({"ok": False, "reason": f"{backend} admin unreachable: {exc}"}, status_code=200)
+def set_idle_reset(enabled: bool = Query(..., description="True=Linux default (reset), False=disabled")):
+    """Toggle net.ipv4.tcp_slow_start_after_idle on `web` itself -- the
+    causal idle-reset TTFT experiment's control knob (2026-09-01 ooo
+    interview, redesigned 2026-09-02 to target the client)."""
+    return JSONResponse(_web_client_idle_reset_write(enabled))

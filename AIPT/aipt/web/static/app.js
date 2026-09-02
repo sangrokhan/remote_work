@@ -26,6 +26,14 @@
   const form = document.getElementById("experiment-form");
   const output = document.getElementById("run-output");
   const runsTableBody = document.querySelector("#runs-table tbody");
+  // Referenced by updateParamSummary(), which selectBackend() calls during
+  // page-load initialization (near the bottom of this file) -- must be a
+  // top-level const alongside the other DOM refs so it's already
+  // initialized by the time that first call happens (a const declared
+  // further down is in the temporal dead zone until its own line runs,
+  // which caused a ReferenceError here when this lived next to
+  // updateParamSummary() instead).
+  const paramSummaryContent = document.getElementById("param-summary-content");
 
   // Transport (TCP/QUIC) is only meaningful for the Mock card today --
   // aipt.backends.quic_mock.backend.QuicMockBackend is the only QUIC
@@ -59,26 +67,31 @@
   const idleResetApply = document.getElementById("idle-reset-apply");
   const idleResetStatus = document.getElementById("idle-reset-status");
 
+  // idle-reset ALWAYS targets `web` itself (see routes_gateway.py's
+  // 2026-09-02 redesign docstring): it's the CLIENT's (this `web`
+  // container's) own send-side cwnd that slow-start-after-idle resets for
+  // the metric that matters (next-turn request upload latency), and that
+  // is true no matter which backend card is selected -- unlike Gateway
+  // profile (which only means something for traffic that actually
+  // crosses the `gateway` netem hop, i.e. mock/local_llm), so the
+  // idle-reset field/Apply is never hidden and never keyed by backend.
+  // /api/idle-reset takes no backend query param at all any more (the
+  // mock/local_llm admin-proxy path was removed 2026-09-02, dead code
+  // after the redesign above).
+
   function applyGatewayIdleResetAvailability(key) {
     // Gateway sits between web and {mock-server, local-llm} -- both
     // backends' traffic crosses it (DESIGN.md 4.7), so the profile
-    // control is relevant for either.
+    // control is relevant for either, but not public_ai (real internet)
+    // or quic_mock (UDP spike, no Gateway route).
     const gatewayAllowed = key === "mock" || key === "local_llm";
     gatewayProfileField.style.display = gatewayAllowed ? "block" : "none";
-    // idle-reset is per-backend-container (aipt.core.idle_reset run inside
-    // that specific netns), so it's the same availability set as Gateway
-    // here (mock/local_llm), even though the two controls are otherwise
-    // independent of each other.
-    idleResetField.style.display = gatewayAllowed ? "block" : "none";
-    if (gatewayAllowed) {
-      refreshIdleResetStatus(key);
-    }
   }
 
-  async function refreshIdleResetStatus(backend) {
+  async function refreshIdleResetStatus() {
     idleResetStatus.textContent = "checking...";
     try {
-      const res = await fetch(`/api/idle-reset?backend=${encodeURIComponent(backend)}`);
+      const res = await fetch(`/api/idle-reset`);
       const payload = await res.json();
       if (payload.ok && payload.enabled !== null) {
         idleResetSelect.value = payload.enabled ? "1" : "0";
@@ -89,6 +102,7 @@
     } catch (e) {
       idleResetStatus.textContent = `check failed: ${String(e)}`;
     }
+    updateParamSummary();
   }
 
   gatewayProfileApply.addEventListener("click", async () => {
@@ -104,24 +118,68 @@
     } catch (e) {
       gatewayProfileStatus.textContent = `request failed: ${String(e)}`;
     }
+    updateParamSummary();
   });
 
-  idleResetApply.addEventListener("click", async () => {
-    const backend = backendSelect.value;
+  async function applyIdleReset(enabledValue) {
     idleResetStatus.textContent = "applying...";
     try {
       const res = await fetch(
-        `/api/idle-reset?backend=${encodeURIComponent(backend)}&enabled=${idleResetSelect.value === "1"}`,
+        `/api/idle-reset?enabled=${enabledValue === "1"}`,
         { method: "POST" }
       );
       const payload = await res.json();
       idleResetStatus.textContent = payload.write_ok
         ? `applied: ${payload.enabled ? "enabled" : "disabled"}`
         : `failed: ${payload.write_reason || payload.reason || JSON.stringify(payload)}`;
+      return payload;
     } catch (e) {
       idleResetStatus.textContent = `request failed: ${String(e)}`;
+      return null;
+    } finally {
+      updateParamSummary();
     }
-  });
+  }
+
+  idleResetApply.addEventListener("click", () => applyIdleReset(idleResetSelect.value));
+
+  // -- Reset-to-defaults after a run (operator request, 2026-09-02) -------
+  //
+  // These two controls are standing state, not per-run parameters (see
+  // both fields' comments in _experiment_form.html), so a run leaves them
+  // exactly as they were even after the run that needed them is over. To
+  // stop a forgotten "disabled"/"wireless" setting from silently biasing
+  // the *next* operator's next run, every completed /api/run POST (success
+  // or failure -- see the finally in the submit handler below) re-applies
+  // the documented defaults: idle-reset -> enabled (Linux default,
+  // idle-reset-select's own `selected` option) and Gateway profile ->
+  // custom (GATEWAY_DELAY_MS-based, gateway-profile-select's own
+  // `selected` option). This actually re-POSTs to the two APIs -- it is
+  // not just an HTML dropdown reset -- so the container/kernel state is
+  // truly back to baseline, not just the UI's display of it.
+  const IDLE_RESET_DEFAULT = "1"; // matches the <option selected> in the form
+  const GATEWAY_PROFILE_DEFAULT = "custom"; // matches the <option selected> in the form
+
+  async function resetStandingStateToDefaults() {
+    gatewayProfileSelect.value = GATEWAY_PROFILE_DEFAULT;
+    idleResetSelect.value = IDLE_RESET_DEFAULT;
+    await Promise.all([
+      (async () => {
+        gatewayProfileStatus.textContent = "resetting to default...";
+        try {
+          const res = await fetch(`/api/gateway/profile?profile=${GATEWAY_PROFILE_DEFAULT}`, { method: "POST" });
+          const payload = await res.json();
+          gatewayProfileStatus.textContent = payload.ok
+            ? `reset to default: ${GATEWAY_PROFILE_DEFAULT}`
+            : `reset failed: ${payload.reason || JSON.stringify(payload)}`;
+        } catch (e) {
+          gatewayProfileStatus.textContent = `reset request failed: ${String(e)}`;
+        }
+      })(),
+      applyIdleReset(IDLE_RESET_DEFAULT),
+    ]);
+    updateParamSummary();
+  }
 
   // Swaps the Congestion algorithm dropdown's option list between the
   // kernel's TCP modules (config.congestion_algorithms) and aioquic's
@@ -244,6 +302,7 @@
     applyInputModeAvailability(key);
     applyTransportAvailability(key);
     applyGatewayIdleResetAvailability(key);
+    updateParamSummary();
   }
 
   document.querySelectorAll(".select-backend").forEach((btn) => {
@@ -255,11 +314,27 @@
     });
   });
 
-  inputModeSelect.addEventListener("change", () => toggleInputModeFields(inputModeSelect.value));
+  inputModeSelect.addEventListener("change", () => {
+    toggleInputModeFields(inputModeSelect.value);
+    updateParamSummary();
+  });
+
+  // Any other form field changing (measure, capture, transport, algorithm,
+  // input mode, record/dummy fields, per-backend model fields, cache
+  // options...) should also refresh the summary -- rather than wiring a
+  // listener per field, delegate on the form itself for both "change"
+  // (selects/checkboxes) and "input" (free-typed text/number fields).
+  form.addEventListener("change", updateParamSummary);
+  form.addEventListener("input", updateParamSummary);
 
   // Initial state: first implemented card (Gemini, if it's ready to run).
   const firstImplemented = (CONFIG.ui_backends || []).find((b) => b.implemented);
   if (firstImplemented) selectBackend(firstImplemented.key);
+
+  // idle-reset always targets web_client regardless of backend selection
+  // (see IDLE_RESET_BACKEND above), so its status is fetched once at
+  // load time rather than re-fetched on every backend switch.
+  refreshIdleResetStatus();
 
   function renderResult(payload) {
     if (!payload.ok) {
@@ -321,21 +396,21 @@
     }
   }
 
-  form.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
+  // Builds the exact JSON body the next /api/run POST would carry, given
+  // the form's CURRENT field values -- shared by the submit handler and
+  // updateParamSummary() so the pre-run summary can never drift from what
+  // actually gets sent (single source of truth, not two hand-maintained
+  // copies of the same field list).
+  function buildRunBody() {
     const fd = new FormData(form);
     const key = backendSelect.value;
     const card = BACKENDS_BY_KEY[key] || {};
     const backend = card.backend || key;
     const engine = card.engine || null;
-    // Model field is namespaced per engine/backend (gemini_model,
-    // openai_model, local_llm_model, ...) so each card's fieldset can
-    // carry its own placeholder/default without one shared "model" field
-    // silently applying the wrong vendor's model name.
     const model = fd.get(`${key}_model`) || "";
     const inputMode = key === "mock" ? (fd.get("input_mode") || "record") : "record";
 
-    const body = {
+    return {
       backend,
       engine,
       arm: armSelect.value,
@@ -375,6 +450,38 @@
       cache_enabled: fd.has("cache_enabled"),
       cache_threshold_bytes: Number(fd.get("cache_threshold_bytes") || 200),
     };
+  }
+
+  // Parameter summary panel (operator request, 2026-09-02): shows every
+  // value the next /api/run POST would carry (from buildRunBody(), so it
+  // can never fall out of sync with what actually gets sent) plus the two
+  // standing-state controls' *applied* status lines (idleResetStatus.
+  // textContent / gatewayProfileStatus.textContent), which reflect the
+  // real container/kernel state as last confirmed by the backend, not
+  // merely the dropdown's current selection. paramSummaryContent itself is
+  // declared at the top of this file, next to the other DOM refs (see
+  // that declaration's comment for why).
+  function updateParamSummary() {
+    if (!paramSummaryContent) return;
+    let body;
+    try {
+      body = buildRunBody();
+    } catch (e) {
+      paramSummaryContent.textContent = `(unable to build summary: ${String(e)})`;
+      return;
+    }
+    const lines = [
+      `gateway_profile (applied): ${gatewayProfileStatus.textContent || "(unknown -- not yet checked)"}`,
+      `idle_reset (applied, client-side): ${idleResetStatus.textContent || "(unknown -- not yet checked)"}`,
+      "--- next run body ---",
+      JSON.stringify(body, null, 2),
+    ];
+    paramSummaryContent.textContent = lines.join("\n");
+  }
+
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const body = buildRunBody();
 
     output.textContent = "Running...";
     try {
@@ -387,9 +494,15 @@
       renderResult(payload);
     } catch (e) {
       output.innerHTML = `<p class="status warn">Request failed: ${escapeHtml(String(e))}</p>`;
+    } finally {
+      // Standing state (Gateway profile / idle-reset) must not silently
+      // carry a non-default setting into whatever the operator runs next
+      // -- see resetStandingStateToDefaults()'s comment above.
+      await resetStandingStateToDefaults();
     }
     refreshRuns();
   });
 
   refreshRuns();
+  updateParamSummary();
 })();

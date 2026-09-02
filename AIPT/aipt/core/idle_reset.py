@@ -11,16 +11,19 @@ only vary how *often*/how *severely* the reset fires, not whether it fires
 at all.
 
 Which side to toggle: TCP's congestion window is per-socket, per-direction
-send state. A client (``web``) sending a small request and a server
-(``mock-server``/``local-llm``) sending a much larger response is dominated
-by the *server's* send-side cwnd, so this module is meant to be read/written
-inside the responding container's own network namespace -- ``mock-server``
-imports it directly (same Python process, see
-``aipt.backends.mock.server``'s ``/admin/idle-reset`` endpoint); ``local-llm``
-wraps the upstream ``llama-server`` binary (a separate process this project
-does not own), so a small sidecar admin server
-(``docker/idle_reset_admin.py``) imports this module instead, running
-alongside ``llama-server`` in the same container/netns.
+send state. The original design (2026-09-01) toggled the *responding*
+side (``mock-server``/``local-llm``), reasoning that the server's larger
+response dominates. A causal experiment against that design
+(docs/experiments/2026-09-01-idle-reset-results.md) found the metric that
+actually matters -- next-turn request upload latency -- is gated by the
+*client*'s (``web``'s) own send-side cwnd instead, since it's `web` that
+is about to SEND its next request after an idle gap. REDESIGNED
+2026-09-02 (operator direction): this module is now only ever imported
+in-process by ``web`` itself (``aipt/web/routes_gateway.py``'s
+``GET``/``POST`` ``/api/idle-reset``); the old mock-server
+``/admin/idle-reset`` route and local-llm's ``docker/idle_reset_admin.py``
+sidecar (which used to import this module the same way) were deleted as
+dead code once the redesign made them unreachable.
 
 Same never-raises, ``(ok, reason)`` / ``{"ok": ..., ...}`` contract as
 ``aipt.gateway.forwarding`` and ``aipt.gateway.netem_control`` -- a missing
@@ -84,8 +87,7 @@ def write(enabled: bool, path: str = IDLE_RESET_PATH) -> tuple[bool, str]:
 
 def status(path: str = IDLE_RESET_PATH) -> dict:
     """``{"ok": bool, "enabled": bool|None, "reason": str}`` -- the shape
-    every ``/admin/idle-reset`` (mock-server, local-llm sidecar) and the
-    web proxy route return."""
+    the web proxy route (`web`'s own `/api/idle-reset`) returns."""
     enabled, reason = read(path)
     return {"ok": enabled is not None, "enabled": enabled, "reason": reason}
 

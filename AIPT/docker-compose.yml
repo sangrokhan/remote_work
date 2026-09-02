@@ -65,22 +65,10 @@ services:
     # net-client via `gateway` (DESIGN.md 4.7 확정 설계 1 -- forces response
     # traffic through gateway instead of a shortcut return path).
     #
-    # privileged: true (2026-09-01, idle-reset TTFT experiment, operator
-    # decision): CAP_NET_ADMIN alone is NOT enough to write
-    # /proc/sys/net/ipv4/tcp_slow_start_after_idle -- Docker masks most of
-    # /proc/sys read-only regardless of capabilities (only a narrow
-    # allowlist like ip_forward, already handled via the `sysctls:` block
-    # on `gateway`, is writable through capabilities alone). The
-    # aipt.core.idle_reset module (aipt/backends/mock/server.py's
-    # /admin/idle-reset route) needs to actually flip this value inside
-    # this container's netns for the causal idle-reset experiment to work
-    # at all -- read-only would make the control silently unusable.
-    # Accepted trade-off: this is a local research-lab container, not a
-    # production service exposed to untrusted input, so the reduced
-    # isolation (full device access, no seccomp/apparmor confinement) is
-    # judged acceptable in exchange for a working experiment control. Do
-    # NOT copy this pattern to a container that handles untrusted traffic.
-    privileged: true
+    # (privileged: true was granted here 2026-09-01 for an idle-reset
+    # sysctl write that lived on this container -- removed 2026-09-02 once
+    # the idle-reset redesign moved that toggle entirely to `web` and the
+    # mock-server-side /admin/idle-reset route was deleted as dead code.)
     cap_add:
       - NET_ADMIN
     networks:
@@ -205,11 +193,10 @@ services:
     # net-client via `gateway` (same DESIGN.md 4.7 확정 설계 1 reasoning as
     # mock-server).
     #
-    # privileged: true (2026-09-01, idle-reset TTFT experiment) -- same
-    # reasoning as mock-server's `privileged: true` above: CAP_NET_ADMIN
-    # alone cannot write /proc/sys/net/ipv4/tcp_slow_start_after_idle,
-    # which docker/idle_reset_admin.py's sidecar needs to actually flip.
-    privileged: true
+    # (privileged: true was granted here 2026-09-01 for the idle_reset_admin.py
+    # sidecar's idle-reset sysctl write -- removed 2026-09-02 along with
+    # that sidecar once the idle-reset redesign moved the toggle entirely
+    # to `web`.)
     cap_add:
       - NET_ADMIN
     networks:
@@ -262,10 +249,9 @@ services:
     # net-backend via `gateway` (DESIGN.md 4.7 확정 설계 1).
     #
     # privileged: true (2026-09-01, idle-reset TTFT experiment, redesign):
-    # same reasoning as mock-server's/local-llm's `privileged: true` --
     # web is the CLIENT sending each turn's request, and it is web's own
     # send-side cwnd that slow-start-after-idle resets after an idle gap
-    # (aipt.core.idle_reset's GET/POST /api/idle-reset?backend=web_client,
+    # (aipt.core.idle_reset's GET/POST /api/idle-reset,
     # aipt/web/routes_gateway.py). CAP_NET_ADMIN alone cannot write
     # /proc/sys/net/ipv4/tcp_slow_start_after_idle (Docker's default
     # read-only masking of most of /proc/sys).

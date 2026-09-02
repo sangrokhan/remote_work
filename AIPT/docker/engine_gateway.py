@@ -18,7 +18,7 @@ this to a child process ... can wrap this class in a real listener").
 It binds its own port (``ENGINE_GATEWAY_PORT``, default 40079) and forwards
 every request to the real engine on ``ENGINE_GATEWAY_UPSTREAM_HOST:PORT``
 (default 127.0.0.1:40080, i.e. llama-server in the same container/network
-namespace -- same pattern as docker/idle_reset_admin.py's sidecar).
+namespace).
 
 Streaming vs caching decision (2026-09 Slack design discussion, see AGENTS
 notes): the request body's ``"stream"`` field is read ONCE, before the
@@ -66,14 +66,12 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # aipt/ is importable here because docker/Dockerfile.local_llm copies a
-# minimal aipt/{__init__,core/__init__,core/idle_reset,core/cache_protocol}
-# .py slice to /app/aipt/ (this project deliberately does not reimplement
-# inference, so the full aipt package with its web/requests dependencies
-# has no reason to live in this image -- see docker/idle_reset_admin.py's
-# identical import fix-up for the same reason). Try both /app (the
-# container layout) and the repo root two levels up (running this file
-# directly out of a checkout for local smoke-testing) so this module works
-# in either context.
+# minimal aipt/{__init__,core/__init__,core/cache_protocol}.py slice to
+# /app/aipt/ (this project deliberately does not reimplement inference, so
+# the full aipt package with its web/requests dependencies has no reason
+# to live in this image). Try both /app (the container layout) and the
+# repo root two levels up (running this file directly out of a checkout
+# for local smoke-testing) so this module works in either context.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 for _candidate in (_HERE, os.path.dirname(_HERE)):
     if os.path.isdir(os.path.join(_candidate, "aipt")):
