@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-02T02:31:41.337910+00:00",
+  "generated_at": "2026-09-02T02:38:12.051334+00:00",
   "git": {
-    "commit": "40a6d7be7aa04cf9e0a715d6792a7fc9aba896b0",
+    "commit": "902015576935e46e8e29161a529839eebbcbf4de",
     "branch": "main",
     "dirty": true
   },
@@ -10,7 +10,7 @@
     "targets": [
       "tests/"
     ],
-    "duration_s": 59.081417083740234,
+    "duration_s": 58.525187253952026,
     "summary": {
       "total": 513,
       "passed": 512,
@@ -67,8 +67,8 @@
         "test_id": "TC-AIPT-15",
         "description": "Public AI 실측 캐처 → Mock 재생 파이프라인 마스킹/재현 검증",
         "precondition": "Public AI API 키 설정 완료, recorder.py/replay.py 구현 완료",
-        "test_step": "1) PublicAIBackend로 실제 API 호출 1건 실행해 recorder가 fixture 저장 2) 저장된 fixture 파일을 열어 API 키/인증 헤더 등 민감정보가 마스킹되어 있는지 확인 3) 동일 fixture를 Mock backend의 replay 경로로 로드해 재생 실행 4) 재생된 응답의 payload 바이트 크기를 원본 캐처와 비교",
-        "expected_results": "fixture에 민감정보가 마스킹되어 원문 그대로 노출되지 않고, Mock 재생 시 payload 바이트 패턴(크기)이 원본과 일치",
+        "test_step": "1) PublicAIBackend로 실제 API 호출 1건 실행해 recorder가 record 저장 2) 저장된 record 파일을 열어 API 키/인증 헤더 등 민감정보가 마스킹되어 있는지 확인 3) 동일 record를 Mock backend의 replay 경로로 로드해 재생 실행 4) 재생된 응답의 payload 바이트 크기를 원본 캐처와 비교",
+        "expected_results": "record에 민감정보가 마스킹되어 원문 그대로 노출되지 않고, Mock 재생 시 payload 바이트 패턴(크기)이 원본과 일치",
         "documented_result": "pass",
         "documented_pass_count": null
       }
