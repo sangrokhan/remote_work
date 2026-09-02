@@ -25,10 +25,13 @@
 | TC-AIPT-13 | engine Gateway 캐싱 트래픽 절감 실측 재현 검증 | docker-compose 4-service 토폴로지 기동, `records/perf_short_smoketest.json` 존재 | 1) `X-AIPT-Cache: enable` off로 `scripts/measure_perf_cache_savings.py` 실행(baseline) 2) on으로 재실행(cached) 3) `data/runs/cache_savings_multiturn.csv`에서 턴별 `req_payload_bytes`/`wire_sent` 비교 4) `scripts/_smoketest_cache_miss_recovery.py`, `scripts/_smoketest_gateway_409_path.py` 실행 | 20턴 누적 payload 절감률 87.2%, wire 전송량 절감률 86.3% 근방 재현, 캐시 미스(409) 발생 시 클라이언트가 자기 캐시로 원본 복원 후 1회 재전송에 성공, 두 smoketest 스크립트 모두 pass |
 | TC-AIPT-14 | 3-레이어 CSV export 스키마 불변성 및 goodput 산출 검증 | venv 활성화, `tests/export/` 존재, 3개 backend 실행 가능 환경 | 1) `pytest -m "not live" tests/export/ -v` 실행 2) Mock backend로 실험 1건 실행 후 `cwnd.csv`/`turns.csv`/`packets.csv`/`bundle.zip` 생성 확인 3) PublicAI/LocalLLM backend로도 동일 실행해 3개 CSV 스키마(컬럼) 동일한지 비교 4) `turns.csv`의 `goodput_bps` 값이 `wire_recv / (turn_end_ms - req_sent_ms)` 계산과 일치하는지 확인 | 42개 유닛 테스트 pass, 3개 backend 모두 동일 컬럼 스키마의 CSV 3종을 생성하고 `bundle.zip`에 pcap과 함께 포함됨, `goodput_bps` 계산값이 수식과 일치하며 0-나눗셈 가드가 정상 동작(turn_end_ms == req_sent_ms인 경우 예외 없이 처리) |
 | TC-AIPT-15 | Public AI 실측 캡처 → Mock 재생 파이프라인 마스킹/재현 검증 | Public AI API 키 설정 완료, `aipt/backends/public_ai/recorder.py`/`aipt/backends/mock/replay.py` 구현 완료 | 1) PublicAIBackend로 실제 API 호출 1건 실행해 recorder가 record 저장 2) 저장된 record 파일을 열어 API 키/인증 헤더 등 민감정보가 마스킹되어 있는지 확인 3) 동일 record를 Mock backend의 replay 경로로 로드해 재생 실행 4) 재생된 응답의 payload 바이트 크기를 원본 캡처와 비교 | record에 민감정보(API 키, Authorization 헤더 등)가 마스킹되어 원문 그대로 노출되지 않고, Mock 재생 시 payload 바이트 패턴(크기)이 원본과 일치(단, 지연시간은 `inference_delay` 설정값으로 별도 제어되어 원본 지연과 다를 수 있음이 기대대로 확인됨) |
+| TC-AIPT-16 | 적응형 cwnd 계측 인프라(별도 프로세스 + RTT 비례 샘플링) 검증 | venv 활성화, `tests/core/` 존재, `native/cwnd_monitor.c` 빌드 가능 환경 | 1) `pytest -m "not live" tests/core/ -v` 실행 2) idle 후 IW 리셋 시나리오와 loss recovery 시나리오를 각각 구성해 `Monitor`가 서로 다른 이벤트로 구분 판정하는지 확인 3) `interval_from_rtt`가 RTT 값에 비례해 샘플링 주기를 계산하는지 여러 RTT 입력으로 확인 4) RTT/K 계산값이 물리적 하한(1ms) 아래로 내려가는 케이스에서 `floor_clamped` + `measurement_confidence: "degraded"`가 보고되는지 확인 5) `timestamp_source` 판별 로직이 소프트웨어/하드웨어 타임스탬프를 올바르게 구분하는지 확인 | `tests/core/` 170건 전량 pass, idle 후 IW 리셋과 loss recovery가 서로 다른 이벤트로 정확히 구분 판정되며, 짧은 RTT 경로에서도 `floor_clamped` 하한 클램프와 `degraded` confidence 보고가 정상 동작함 |
 
 ## 3. 비고
 
-- 위 5개 기능은 모두 코드가 실제로 구현되어 있고, 각각 pytest 스위트(`pytest -m "not live"` 기준
+- 위 6개 기능은 모두 코드가 실제로 구현되어 있고, 각각 pytest 스위트(`pytest -m "not live"` 기준
   총 513개 테스트 중 일부) 또는 실컨테이너 기반 실측 스크립트로 검증이 완료된 항목만 선별했다.
+- SRS 6개 항목과 STD 6개 테스트 케이스(TC-AIPT-11~16)가 1:1로 매핑되도록 구성했다
+  (기존 버전에서는 "적응형 cwnd 계측 인프라" 항목에 대응하는 STD가 누락되어 있었음 — TC-AIPT-16으로 보완).
 - 요청에 따라 Run Store 영속화, QUIC idle-probe 항목은 이번 버전에서 제외했다.
 - JIRA 실입력 시 Epic Name은 팀 컨벤션에 맞는 기존 Epic에 매핑하거나 신규 Epic으로 생성.
