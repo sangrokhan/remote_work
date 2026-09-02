@@ -24,15 +24,15 @@
     {
       "test_id": "TC-AIPT-13",
       "description": "engine Gateway \uce90\uc2f1 \ud2b8\ub798\ud53d \uc808\uac10 \uc2e4\uce21 \uc7ac\ud604 \uac80\uc99d",
-      "precondition": "docker-compose 4-service 토폴로지 기동, records/perf.json 존재(스크립트 기본 경로, PERF_RECORD_PATH 환경변수로 변경 가능)",
-      "test_step": "1) docker compose exec web python3 scripts/measure_perf_cache_savings.py 1회 실행 -- off/on은 CLI 인자가 아니라 스크립트 내부 run_conversation() 호출이 cache_enabled=False(baseline, X-AIPT-Cache 헤더 미전송) 후 cache_enabled=True(cached, X-AIPT-Cache: enable 헤더 전송) 순서로 자동 2회 수행함 2) data/runs/cache_savings_multiturn.csv 에서 턴별 req_payload_bytes/wire_sent 비교 3) python3 scripts/_smoketest_cache_miss_recovery.py 실행 4) python3 scripts/_smoketest_gateway_409_path.py 실행",
+      "precondition": "docker-compose 4-service \ud1a0\ud3f4\ub85c\uc9c0 \uae30\ub3d9, records/perf.json \uc874\uc7ac(\uc2a4\ud06c\ub9bd\ud2b8 \uae30\ubcf8 \uacbd\ub85c, PERF_RECORD_PATH \ud658\uacbd\ubcc0\uc218\ub85c \ubcc0\uacbd \uac00\ub2a5)",
+      "test_step": "1) docker compose exec web python3 scripts/measure_perf_cache_savings.py 1\ud68c \uc2e4\ud589 -- off/on\uc740 CLI \uc778\uc790\uac00 \uc544\ub2c8\ub77c \uc2a4\ud06c\ub9bd\ud2b8 \ub0b4\ubd80 run_conversation() \ud638\ucd9c\uc774 cache_enabled=False(baseline, X-AIPT-Cache \ud5e4\ub354 \ubbf8\uc804\uc1a1) \ud6c4 cache_enabled=True(cached, X-AIPT-Cache: enable \ud5e4\ub354 \uc804\uc1a1) \uc21c\uc11c\ub85c \uc790\ub3d9 2\ud68c \uc218\ud589\ud568 2) data/runs/cache_savings_multiturn.csv \uc5d0\uc11c \ud134\ubcc4 req_payload_bytes/wire_sent \ube44\uad50 3) python3 scripts/_smoketest_cache_miss_recovery.py \uc2e4\ud589 4) python3 scripts/_smoketest_gateway_409_path.py \uc2e4\ud589",
       "expected_results": "20\ud134 \ub204\uc801 payload \uc808\uac10\ub960 87.2%, wire \uc804\uc1a1\ub7c9 \uc808\uac10\ub960 86.3% \uadfc\ubc29 \uc7ac\ud604, \uce90\uc2dc \ubbf8\uc2a4(409) \ubc1c\uc0dd \uc2dc \uc790\uae30 \ubcf5\uc6d0 \ud6c4 1\ud68c \uc7ac\uc804\uc1a1 \uc131\uacf5, \ub450 smoketest \uc2a4\ud06c\ub9bd\ud2b8 \ubaa8\ub450 pass",
       "documented_result": "pass",
       "documented_pass_count": null
     },
     {
       "test_id": "TC-AIPT-14",
-      "description": "3-\ub808\uc774\uc5b4 CSV export \uc2a4\ud0a4\ub9c8 \ubd88\ubcc0\uc131 \ubc0f goodput \uc0b0\ucd9c \uac80\uc99d",
+      "description": "3\uc885 CSV export(\uc5f0\uacb0 \ub2e8\uc704 cwnd.csv / \ud134 \ub2e8\uc704 turns.csv / \ud328\ud0b7 \ub2e8\uc704 packets.csv)\uac00 PublicAI\u00b7Mock\u00b7LocalLLM \uc5b4\ub290 backend\ub85c \uc2e4\ud589\ud574\ub3c4 \ub3d9\uc77c\ud55c \uceec\ub7fc \uad6c\uc131\uc744 \uc720\uc9c0\ud558\ub294\uc9c0, \uadf8\ub9ac\uace0 turns.csv\uc758 goodput_bps \uacc4\uc0b0\uac12\uc774 \uc218\uc2dd\uacfc \uc77c\uce58\ud558\ub294\uc9c0 \uac80\uc99d",
       "precondition": "venv \ud65c\uc131\ud654, tests/export/ \uc874\uc7ac, 3\uac1c backend \uc2e4\ud589 \uac00\ub2a5 \ud658\uacbd",
       "test_step": "1) pytest -m \"not live\" tests/export/ -v \uc2e4\ud589 2) Mock backend\ub85c \uc2e4\ud5d8 1\uac74 \uc2e4\ud589 \ud6c4 cwnd.csv/turns.csv/packets.csv/bundle.zip \uc0dd\uc131 \ud655\uc778 3) PublicAI/LocalLLM backend\ub85c\ub3c4 \ub3d9\uc77c \uc2e4\ud589\ud574 3\uac1c CSV \uc2a4\ud0a4\ub9c8(\ucef4\ub7fc) \ub3d9\uc77c\ud55c\uc9c0 \ube44\uad50 4) turns.csv \uc758 goodput_bps \uac12\uc774 \uacc4\uc0b0\uc2dd\uacfc \uc77c\uce58\ud558\ub294\uc9c0 \ud655\uc778",
       "expected_results": "42\uac1c \uc720\ub2db \ud14c\uc2a4\ud2b8 pass, 3\uac1c backend \ubaa8\ub450 \ub3d9\uc77c \ucef4\ub7fc \uc2a4\ud0a4\ub9c8\uc758 CSV 3\uc885\uc744 \uc0dd\uc131\ud558\uace0 bundle.zip\uc5d0 pcap\uacfc \ud568\uaed8 \ud3ec\ud568\ub428, goodput_bps \uacc4\uc0b0\uac12\uc774 \uc218\uc2dd\uacfc \uc77c\uce58",

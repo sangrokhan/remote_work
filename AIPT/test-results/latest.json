@@ -56,7 +56,7 @@
       },
       {
         "test_id": "TC-AIPT-14",
-        "description": "3-레이어 CSV export 스키마 불변성 및 goodput 산출 검증",
+        "description": "3종 CSV export(연결 단위 cwnd.csv / 턴 단위 turns.csv / 패킷 단위 packets.csv)가 PublicAI·Mock·LocalLLM 어느 backend로 실행해도 동일한 컬럼 구성을 유지하는지, 그리고 turns.csv의 goodput_bps 계산값이 수식과 일치하는지 검증",
         "precondition": "venv 활성화, tests/export/ 존재, 3개 backend 실행 가능 환경",
         "test_step": "1) pytest -m \"not live\" tests/export/ -v 실행 2) Mock backend로 실험 1건 실행 후 cwnd.csv/turns.csv/packets.csv/bundle.zip 생성 확인 3) PublicAI/LocalLLM backend로도 동일 실행해 3개 CSV 스키마(컴럼) 동일한지 비교 4) turns.csv 의 goodput_bps 값이 계산식과 일치하는지 확인",
         "expected_results": "42개 유닛 테스트 pass, 3개 backend 모두 동일 컴럼 스키마의 CSV 3종을 생성하고 bundle.zip에 pcap과 함께 포함됨, goodput_bps 계산값이 수식과 일치",
