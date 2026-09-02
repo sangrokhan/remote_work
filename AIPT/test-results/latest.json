@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-02T02:38:12.051334+00:00",
+  "generated_at": "2026-09-02T02:55:26.287699+00:00",
   "git": {
-    "commit": "902015576935e46e8e29161a529839eebbcbf4de",
+    "commit": "4e8c26cc5df45f692787692ccb36427ed850b4ee",
     "branch": "main",
     "dirty": true
   },
@@ -10,7 +10,7 @@
     "targets": [
       "tests/"
     ],
-    "duration_s": 58.525187253952026,
+    "duration_s": 58.684102296829224,
     "summary": {
       "total": 513,
       "passed": 512,
@@ -71,10 +71,19 @@
         "expected_results": "record에 민감정보가 마스킹되어 원문 그대로 노출되지 않고, Mock 재생 시 payload 바이트 패턴(크기)이 원본과 일치",
         "documented_result": "pass",
         "documented_pass_count": null
+      },
+      {
+        "test_id": "TC-AIPT-16",
+        "description": "적응형 cwnd 계측 인프라(별도 프로세스 + RTT 비례 샘플링) 검증",
+        "precondition": "venv 활성화, tests/core/ 존재, native/cwnd_monitor.c 빌드 가능 환경",
+        "test_step": "1) pytest -m \"not live\" tests/core/ -v 실행 2) idle 후 IW 리셋 시나리오와 loss recovery 시나리오를 각각 구성해 Monitor가 서로 다른 이벤트로 구분 판정하는지 확인 3) interval_from_rtt가 RTT 값에 비례해 샘플링 주기를 계산하는지 여러 RTT 입력으로 확인 4) RTT/K 계산값이 물리적 하한(1ms) 아래로 내려가는 케이스에서 floor_clamped + measurement_confidence: \"degraded\"가 보고되는지 확인 5) timestamp_source 판별 로직이 소프트웨어/하드웨어 타임스탬프를 올바르게 구분하는지 확인",
+        "expected_results": "tests/core/ 170건 전량 pass, idle 후 IW 리셋과 loss recovery가 서로 다른 이벤트로 정확히 구분 판정되며, 짧은 RTT 경로에서도 floor_clamped 하한 클램프와 degraded confidence 보고가 정상 동작함",
+        "documented_result": "pass",
+        "documented_pass_count": 170
       }
     ],
     "totals": {
-      "total_functions_verified": 5,
+      "total_functions_verified": 6,
       "total_pytest_cases_in_suite": 513,
       "note": "전체 513건은 pytest -m 'not live' 기준 스위트 전체 건수(docs 비고 §3). 개별 TC의 documented_pass_count는 해당 기능 관련 서브셋만을 가리킴."
     },
