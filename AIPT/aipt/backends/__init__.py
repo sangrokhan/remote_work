@@ -8,7 +8,7 @@ talks to exactly one of three backends through a single protocol, defined in
   * ``mock``       -- fixed/replayed JSON traffic, no network cost.
   * ``local_llm``  -- a standard serving engine (llama.cpp/vLLM) behind an
                        in-repo gateway that owns the transport experiment
-                       surface (HTTP/1.1 today, QUIC slot reserved).
+                       surface (HTTP/1.1 today).
 
 Backends are looked up by name through :func:`get`, mirroring the lazy,
 name-gated lookup in the ``token_traffic`` providers registry: a caller must

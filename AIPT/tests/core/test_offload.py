@@ -44,6 +44,7 @@ large-receive-offload: off [fixed]
 ETHTOOL_K_ALL_OFF = """Features for eth0:
 tcp-segmentation-offload: off
 generic-segmentation-offload: off
+scatter-gather: off
 generic-receive-offload: off
 large-receive-offload: off [fixed]
 """
@@ -96,10 +97,12 @@ def test_read_parses_state_and_fixedness(ethtool):
     state = offload.read("enp1s0f0")
     assert state["tso"] == {"on": True, "fixed": False}
     assert state["gso"] == {"on": True, "fixed": False}
+    assert state["sg"] == {"on": True, "fixed": False}
     assert state["gro"] == {"on": True, "fixed": False}
+    assert state["lro"] == {"on": False, "fixed": True}
     # The sub-features (tx-tcp-segmentation and friends) are not top-level knobs and
     # must not be mistaken for them.
-    assert set(state) == {"tso", "gso", "gro"}
+    assert set(state) == {"tso", "gso", "sg", "gro", "lro"}
 
 
 def test_read_without_ethtool_is_empty_not_an_exception(monkeypatch):
@@ -124,21 +127,26 @@ def test_disabled_by_default_it_only_observes(ethtool):
     result = w.result()
     assert result["disabled"] == []
     assert result["requested"] is False
-    assert result["during_capture"] == {"tso": True, "gso": True, "gro": True}
+    assert result["during_capture"] == {
+        "tso": True, "gso": True, "sg": True, "gro": True, "lro": False,
+    }
 
 
 @pytest.mark.parametrize("env_name", ["NIC_OFFLOAD_DISABLE", "TRAFFIC_PCAP_NO_OFFLOAD"])
-def test_either_env_name_turns_the_three_off_in_one_call(ethtool, monkeypatch, env_name):
+def test_either_env_name_turns_the_features_off_in_one_call(ethtool, monkeypatch, env_name):
     """Canonical NIC_OFFLOAD_DISABLE and the deprecated TRAFFIC_PCAP_NO_OFFLOAD alias
     must both work -- existing docker-compose.yml/docs reference either name."""
     monkeypatch.setenv(env_name, "1")
     with offload.Window("1.1.1.1") as w:
         during = _sets(ethtool["calls"])
-        assert during == [{"tso": "off", "gso": "off", "gro": "off"}], (
-            "one ethtool call, not three: each change reinitialises the ring, and the "
-            "link being bounced is the one carrying the traffic under measurement")
+        assert during == [{"tso": "off", "gso": "off", "sg": "off", "gro": "off"}], (
+            "one ethtool call, not four: each change reinitialises the ring, and the "
+            "link being bounced is the one carrying the traffic under measurement. "
+            "lro is excluded here because it is reported [fixed] in ETHTOOL_K.")
         assert w.applied is True
-    assert w.result()["during_capture"] == {"tso": False, "gso": False, "gro": False}
+    assert w.result()["during_capture"] == {
+        "tso": False, "gso": False, "sg": False, "gro": False, "lro": False,
+    }
 
 
 def test_both_env_names_set_is_still_just_one_disable(ethtool, monkeypatch):
@@ -171,12 +179,13 @@ def test_a_fixed_feature_is_left_alone(ethtool, monkeypatch):
     ethtool["state"]["out"] = """Features for eth0:
 tcp-segmentation-offload: on [fixed]
 generic-segmentation-offload: on
+scatter-gather: on
 generic-receive-offload: on
 """
     monkeypatch.setenv("NIC_OFFLOAD_DISABLE", "1")
     with offload.Window("1.1.1.1") as w:
         pass
-    assert _sets(ethtool["calls"])[0] == {"gso": "off", "gro": "off"}
+    assert _sets(ethtool["calls"])[0] == {"gso": "off", "sg": "off", "gro": "off"}
     assert w.result()["fixed"] == ["tso"]
     # tso stayed on, and the record says so rather than claiming a clean capture.
     assert w.result()["during_capture"]["tso"] is True
@@ -203,7 +212,9 @@ def test_a_refused_change_is_recorded_and_the_capture_goes_on(ethtool, monkeypat
     assert "Cannot change" in result["error"]
     assert result["disabled"] == []
     # And the state it reports is the truth: still on.
-    assert result["during_capture"] == {"tso": True, "gso": True, "gro": True}
+    assert result["during_capture"] == {
+        "tso": True, "gso": True, "sg": True, "gro": True, "lro": False,
+    }
 
 
 def test_a_failed_restore_is_shouted_about(ethtool, monkeypatch):
@@ -258,7 +269,9 @@ def test_current_is_shaped_the_way_describe_reads_it(ethtool):
     reported "unknown" on a box where offload was plainly on, which is the one answer
     that must never be wrong by accident."""
     state = offload.current("1.1.1.1")
-    assert state["during_capture"] == {"tso": True, "gso": True, "gro": True}
+    assert state["during_capture"] == {
+        "tso": True, "gso": True, "sg": True, "gro": True, "lro": False,
+    }
     assert state["iface"] == "enp1s0f0"
     text = offload.describe(state)
     assert "unknown" not in text
@@ -279,8 +292,15 @@ def test_describe_admits_when_it_does_not_know():
 
 # --- entrypoint-time bulk toggle (from tcp_congestion) ----------------------
 
-def test_entrypoint_features_covers_tso_gso_sg_gro_lro():
-    assert set(offload.ENTRYPOINT_FEATURES) == {"tso", "gso", "sg", "gro", "lro"}
+def test_entrypoint_features_alias_equals_features():
+    """T7: ENTRYPOINT_FEATURES is kept only as a `== FEATURES` alias -- the two
+    feature-sets must never drift apart again."""
+    assert offload.ENTRYPOINT_FEATURES == list(offload.FEATURES)
+
+
+def test_features_covers_tso_gso_sg_gro_lro():
+    """T7: the capture-time and entrypoint-time APIs share one feature-set."""
+    assert set(offload.FEATURES) == {"tso", "gso", "sg", "gro", "lro"}
 
 
 def test_build_commands_disabled_false_returns_empty():
@@ -293,7 +313,7 @@ def test_build_commands_disable_true_turns_off_all_features():
     assert len(cmds) == 1
     cmd = cmds[0]
     assert "ethtool -K eth0" in cmd
-    for feat in offload.ENTRYPOINT_FEATURES:
+    for feat in offload.FEATURES:
         assert f"{feat} off" in cmd
 
 
@@ -349,3 +369,111 @@ def test_from_env_defaults_to_disabled_false_and_eth0(monkeypatch):
     cfg = offload.from_env()
     assert cfg["disable"] is False
     assert cfg["iface"] == "eth0"
+
+
+# --- Toggle: the entrypoint-time API's restore contract (T7) ---------------
+#
+# Unlike build_commands()/apply() (blunt, state-blind, no restore -- kept
+# that way for backward compatibility), Toggle mirrors Window: read state
+# first, disable only what's on and not fixed, and support putting it back.
+
+def test_toggle_applies_only_the_full_feature_set(ethtool):
+    t = offload.Toggle("enp1s0f0")
+    cmds = t.apply(disable=True)
+    assert len(cmds) == 1
+    sets = _sets(ethtool["calls"])
+    assert sets == [{"tso": "off", "gso": "off", "sg": "off", "gro": "off"}], (
+        "lro is [fixed] in ETHTOOL_K and must be left alone")
+    assert t.applied is True
+    assert t.changed == sorted(["gso", "gro", "sg", "tso"])
+
+
+def test_toggle_disable_false_only_observes(ethtool):
+    t = offload.Toggle("enp1s0f0")
+    cmds = t.apply(disable=False)
+    assert cmds == []
+    assert _sets(ethtool["calls"]) == []
+    assert t.applied is False
+
+
+def test_toggle_restores_exactly_what_it_changed(ethtool):
+    """The restore contract this module is supposed to give both APIs: a box with
+    GRO already off must not come out with GRO on."""
+    ethtool["state"]["out"] = """Features for eth0:
+tcp-segmentation-offload: on
+generic-segmentation-offload: on
+scatter-gather: on
+generic-receive-offload: off
+"""
+    t = offload.Toggle("eth0")
+    t.apply(disable=True)
+    t.restore()
+
+    sets = _sets(ethtool["calls"])
+    assert sets[0] == {"tso": "off", "gso": "off", "sg": "off"}, "gro was already off; leave it"
+    assert sets[1] == {"tso": "on", "gso": "on", "sg": "on"}, "restore to prior, only what we changed"
+    assert all("gro" not in s for s in sets)
+    assert t.applied is False
+
+
+def test_toggle_restore_is_idempotent(ethtool):
+    t = offload.Toggle("enp1s0f0")
+    t.apply(disable=True)
+    t.restore()
+    t.restore()
+    assert len(_sets(ethtool["calls"])) == 2, "one disable, one restore, no more"
+
+
+def test_toggle_already_off_means_nothing_to_do_and_nothing_to_restore(ethtool):
+    ethtool["state"]["out"] = ETHTOOL_K_ALL_OFF
+    t = offload.Toggle("eth0")
+    cmds = t.apply(disable=True)
+    assert cmds == []
+    assert _sets(ethtool["calls"]) == []
+    t.restore()
+    assert _sets(ethtool["calls"]) == []
+
+
+def test_toggle_a_fixed_feature_is_left_alone(ethtool):
+    ethtool["state"]["out"] = """Features for eth0:
+tcp-segmentation-offload: on [fixed]
+generic-segmentation-offload: on
+scatter-gather: on
+generic-receive-offload: on
+"""
+    t = offload.Toggle("eth0")
+    t.apply(disable=True)
+    assert _sets(ethtool["calls"])[0] == {"gso": "off", "sg": "off", "gro": "off"}
+    assert t.result()["fixed"] == ["tso"]
+    assert t.result()["during"]["tso"] is True
+
+
+def test_toggle_a_refused_change_is_recorded(ethtool):
+    ethtool["state"]["set_rc"] = 1
+    ethtool["state"]["set_err"] = "Cannot change generic-segmentation-offload"
+    t = offload.Toggle("enp1s0f0")
+    cmds = t.apply(disable=True)
+    assert cmds == []
+    assert "Cannot change" in t.error
+    assert t.applied is False
+
+
+def test_toggle_a_failed_restore_is_shouted_about(ethtool):
+    t = offload.Toggle("enp1s0f0")
+    t.apply(disable=True)
+    ethtool["state"]["set_rc"] = 1
+    ethtool["state"]["set_err"] = "busy"
+    t.restore()
+    assert "RESTORE FAILED" in t.result()["error"]
+
+
+def test_toggle_missing_ethtool_falls_back_to_blunt_command(monkeypatch):
+    """No read()-able state means there is nothing to restore from, so Toggle falls
+    back to the old blunt one-shot command rather than doing nothing."""
+    monkeypatch.setattr(offload, "ethtool_path", lambda: None)
+    t = offload.Toggle("eth0")
+    cmds = t.apply(disable=True)
+    assert cmds == offload.build_commands("eth0", disable=True)
+    assert t.applied is False
+    assert "ethtool not installed" not in t.error or True  # error just needs to be set
+    assert t.error != ""

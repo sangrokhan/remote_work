@@ -47,6 +47,7 @@ CONNECTION_COLUMNS = list(dict.fromkeys(
 
 CONNECTION_SUMMARY_COLUMNS = [
     "label", "host", "port", "ips", "interval_ms",
+    "interval_reason", "measurement_confidence",
     "samples", "ticks", "seconds", "sockets", "announced",
     "dumps", "exact_queries", "tracked",
     "peak_cwnd", "final_cwnd", "idle_resets",
@@ -96,6 +97,13 @@ def connection_summary_csv(monitors: list[dict]) -> str:
             "port": mon.get("port", ""),
             "ips": " ".join(mon.get("ips") or []),
             "interval_ms": mon.get("interval_ms", ""),
+            # B12 (DESIGN.md 4.9): why the sampling period is what it is, and
+            # how much to trust samples taken at it -- mirrors
+            # Monitor.result()'s own field comment in aipt/core/cwnd.py.
+            # ``or ""`` covers both a missing key (older monitor shape) and
+            # an explicit ``None`` -- export never raises on either.
+            "interval_reason": mon.get("interval_reason") or "",
+            "measurement_confidence": mon.get("measurement_confidence") or "",
             "samples": mon.get("sample_count", 0),
             "ticks": mon.get("ticks", 0),
             "seconds": mon.get("seconds", 0),

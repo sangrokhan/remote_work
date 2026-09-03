@@ -110,7 +110,7 @@ AIPT/
 ├── MIGRATION.md                   # 파일 단위 이관 체크리스트
 ├── README.md
 ├── pyproject.toml                 # base deps=requests, extras: dev/export/web
-├── docker-compose.yml             # web + gateway + mock-server + local-llm + quic-mock-server 5-service
+├── docker-compose.yml             # web + gateway + mock-server + local-llm 4-service
 │
 ├── aipt/                          # 설치 가능한 패키지 루트
 │   ├── core/                      # ★ 3-backend 공통 계측 계층
@@ -122,10 +122,9 @@ AIPT/
 │   │   ├── streaming.py            #   SSE 리더
 │   │   ├── tcpinfo.py              #   1회성 TCP_INFO 스냅샷
 │   │   ├── congestion.py           #   TCP 커널 가용 혼잡제어 알고리즘 조회 (/proc 실측)
-│   │   ├── quic_congestion.py      #   QUIC(aioquic) 가용 혼잡제어 알고리즘 조회 (userspace)
 │   │   └── config.py               #   env 플래그 판독
 │   │
-│   ├── backends/                  # ★ Backend 프로토콜 + 3개 구현체 + 1개 실험 스파이크
+│   ├── backends/                  # ★ Backend 프로토콜 + 3개 구현체
 │   │   ├── base.py                 #   Backend 프로토콜(connect/send_turn/close), TurnExchange
 │   │   ├── record.py               #   turn_record() 공통 스키마
 │   │   ├── public_ai/              #   ① Public AI backend
@@ -138,13 +137,9 @@ AIPT/
 │   │   │   ├── replay.py               (실측 재생, 바이트만)
 │   │   │   ├── conversation.py         (MockBackend, core 연동)
 │   │   │   └── probe.py                (idle RTT probe)
-│   │   ├── local_llm/              #   ③ Local LLM backend
-│   │   │   ├── engine_adapter.py       (표준 엔진 OpenAI 호환 클라이언트)
-│   │   │   └── gateway.py              ("engine gateway" — 애플리케이션 레벨 프록시)
-│   │   └── quic_mock/               #   QUIC idle-probe 혼잡제어 실험 스파이크 (Backend 미구현,
-│   │       ├── backend.py / server.py    번호 없는 4번째 backend 후보 — Mock 전용 측정 실험,
-│   │       ├── congestion.py             aipt/web에서 아직 호출 불가)
-│   │       ├── experiment.py / spike_runner.py    ("idle_probe" QUIC 알고리즘 — PING으로 idle-gap 능동 측정)
+│   │   └── local_llm/              #   ③ Local LLM backend
+│   │       ├── engine_adapter.py       (표준 엔진 OpenAI 호환 클라이언트)
+│   │       └── gateway.py              ("engine gateway" — 애플리케이션 레벨 프록시)
 │   │
 │   ├── gateway/                   # ★ ④ Network Gateway (L3 IP 포워딩, 별도 컨테이너)
 │   │   ├── profiles.py             #   clean/wired/wireless/custom (근거: ITU-T Y.1541 / 3GPP TS 23.501)
@@ -171,8 +166,7 @@ AIPT/
 │   ├── Dockerfile.gateway          # gateway 서비스 (iproute2, NET_ADMIN 필요)
 │   ├── Dockerfile.mockserver       # mock-server 서비스
 │   ├── Dockerfile.local_llm        # local-llm 서비스 (engine gateway 컨테이너)
-│   ├── Dockerfile.quic_mock_server # quic-mock-server 서비스 (idle-probe 실험용)
-│   └── entrypoint_{web,mockserver,local_llm,quic_mock_server}.py
+│   └── entrypoint_{web,mockserver,local_llm}.py
 │
 └── tests/                          # core(8) / backends(19) / export(4) / web(4) / gateway(4) / top-level(1) — 40 test files, 519 tests
 ```
@@ -219,7 +213,7 @@ AIPT/
 **주요 기능**
 - OpenAI 호환 API에 요청을 전달하는 얇은 클라이언트 — 엔진 프로세스
   자체는 다루지 않고 외부 실행 중인 엔진을 환경변수로 참조
-- 요청/응답 훅 포인트 제공 — 향후 HTTP/QUIC 확장을 위한 transport 슬롯
+- 요청/응답 훅 포인트 제공 — 향후 HTTP 확장을 위한 transport 슬롯
   마련(현재는 미구현)
 - Network Gateway를 L3로 경유 — Mock과 동일한 네트워크 특성 주입 대상
 - **요청 본문 leaf-hash 중복 제거 캐싱**(2026-09-01 구현 완료,
@@ -699,9 +693,8 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 
 | 영역 | 파일 수 | 테스트 수(`not live`) | 대표 검증 포인트 |
 |---|---|---|---|
-| `tests/core/` | 9 | 170 | cwnd reset 판정(idle 후 리셋 vs loss recovery 구분), AppArmor 감지, 적응형 주기(interval_from_rtt), timestamp_source 판별, idle-reset 실험 인프라, QUIC congestion 파라미터 |
+| `tests/core/` | 9 | 170 | cwnd reset 판정(idle 후 리셋 vs loss recovery 구분), AppArmor 감지, 적응형 주기(interval_from_rtt), timestamp_source 판별, idle-reset 실험 인프라 |
 | `tests/backends/` (public_ai/mock/local_llm) | 15 | 163 | 3개 backend 각각의 Backend 프로토콜 준수, arm별 body 빌드, fixture/replay 왕복, engine gateway 훅 |
-| `tests/backends/quic_mock/` | 4 | 11 | QUIC mock backend 프로토콜 준수, congestion 실험 파라미터, experiment 시나리오, live e2e(`@pytest.mark.live`) |
 | `tests/export/` | 4 | 42 | 3-레이어 CSV 스키마 불변성, goodput_bps 계산, pcap 라운드트립(합성 pcap으로 dpkt/stdlib 파서 교차검증) |
 | `tests/web/` | 5 | 51 | FastAPI TestClient로 실제 mock backend 실행까지 포함한 라우트 스모크, gateway 프로파일 라우트, public_ai/scenario 레코드 조회, 세션 store |
 | `tests/gateway/` | 4 | 65 | 프로파일 값 정의, tc 명령 구성(subprocess mock), 프로파일 API 라우트, client-link-only L3 forwarding 로직 |
@@ -727,7 +720,7 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 
 > 이 표/카운트는 실측(`pytest -m "not live"` 실행 결과 + `tests/` 파일 수 카운트) 기준으로
 > 2026-09-01에 갱신함. 신규 backend/gateway/web 테스트 추가 시 이 표도 같이 갱신할 것 —
-> 과거 §6.1이 최초 작성(`0433d11c`) 이후 여러 기능 커밋(quic_mock, web 라우트 확장,
+> 과거 §6.1이 최초 작성(`0433d11c`) 이후 여러 기능 커밋(web 라우트 확장,
 > gateway forwarding 등)에서 갱신되지 않고 방치된 이력이 있음.
 
 핵심 설계: 실제 커널 자원(netlink, tc, tcpdump)이 필요한 테스트는 전부
@@ -760,9 +753,9 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 
 ## 7. 아직 열려 있는 것
 
-- **QUIC/HTTP 신기능 실험** — `LocalLLMBackend`의 engine gateway에
+- **HTTP 신기능 실험** — `LocalLLMBackend`의 engine gateway에
   `transport` 슬롯(현재 `X-AIPT-Transport` 헤더로 반영되는 것까지만)만
-  마련되어 있고, 실제 QUIC 구현이나 신규 HTTP 기능 실험 로직은 아직 없다.
+  마련되어 있고, 신규 HTTP 기능 실험 로직은 아직 없다.
   단, **요청 leaf-hash 중복 제거 캐싱**(§3.3)은 이 슬롯을 실제로 활용한
   첫 신기능 실험으로 2026-09-01 구현 완료됨.
 - **local-llm 서빙 엔진의 docker-compose 서비스화** — ~~현재는 외부에서 실행

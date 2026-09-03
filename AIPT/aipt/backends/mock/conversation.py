@@ -321,10 +321,9 @@ class MockBackend:
     #: EVERY web-UI Mock run bound its server to 127.0.0.1 inside the
     #: `web` container and talked to itself over loopback -- never
     #: touching `net-backend`, and therefore never traversing `gateway`.
-    #: The mock-server/quic-mock-server containers and their
-    #: gateway-routed L3 topology (docker-compose.yml, already built and
-    #: already used by aipt/backends/quic_mock/spike_runner.py's CLI)
-    #: were simply never reached by /api/run -- a Wireshark capture of a
+    #: The mock-server container and its gateway-routed L3 topology
+    #: (docker-compose.yml, already built) was simply never reached by
+    #: /api/run -- a Wireshark capture of a
     #: "Mock" run showed loopback traffic with zero netem effect, because
     #: there was no gateway hop in the path to apply netem to at all.
     _MOCK_SERVER_HOST_ENV = "MOCK_SERVER_HOST"
@@ -405,10 +404,9 @@ class MockBackend:
         call this to learn ``api_host()`` and open the capture window
         *before* calling ``connect()`` -- which is exactly what
         ``aipt/web/routes_run.py`` does now. Found via a Wireshark capture
-        of a QUIC mock run showing zero handshake packets: capture opened
+        showing zero handshake packets: capture opened
         after ``connect()`` had already finished the handshake, on every
-        backend, TCP included -- this fixes it for Mock/TCP the same way
-        ``QuicMockBackend.resolve_target()`` fixes it for QUIC.
+        backend -- this fixes it for Mock/TCP.
         """
         if self._target_resolved:
             return

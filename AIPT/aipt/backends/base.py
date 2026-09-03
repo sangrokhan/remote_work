@@ -26,12 +26,8 @@ from that ancestor, and why:
   * ``ARMS`` / ``HEADLINE_ARMS`` are unchanged in spirit (an arm is still a
     named calling convention -- e.g. "with cache" vs "no cache" -- and a
     default run still may exclude diagnostic-only arms).
-  * ``transport`` is new (DESIGN.md 4.5, "확정된 설계 결정" table, and B5):
-    an extension slot for a future HTTP/3-over-QUIC transport. It is a
-    plain field, not a branch -- nothing in this module or in the backend
-    stubs implements anything beyond ``"http1"`` yet. The slot exists so
-    adding a transport later is a new value plus a new code path inside a
-    backend, not a protocol change.
+  * ``transport`` names the wire transport a backend's connection rides
+    on. Every backend implements ``"http1"`` (kernel TCP) today.
 
 As with the provider registry, backends are looked up by name through
 ``aipt.backends.get()`` (see ``aipt/backends/__init__.py``) rather than by
@@ -46,11 +42,8 @@ from typing import Literal, Protocol, runtime_checkable
 from aipt.backends.record import TurnExchange
 
 #: Wire transport a backend's connection rides on. Only "http1" is
-#: implemented anywhere in AIPT today; "http3" is the QUIC extension point
-#: reserved by DESIGN.md 4.5 B5 and is not wired into any backend yet --
-#: passing it is not an error at the type level, but no backend is
-#: obligated to honor it until that follow-up project lands.
-Transport = Literal["http1", "http3"]
+#: implemented anywhere in AIPT today.
+Transport = Literal["http1"]
 
 DEFAULT_TRANSPORT: Transport = "http1"
 
@@ -82,9 +75,8 @@ class Backend(Protocol):
     #: anyone would ship.
     HEADLINE_ARMS: tuple[str, ...]
 
-    #: Transport this backend instance is configured for. Reserved for
-    #: future http3/QUIC use; every backend today only implements "http1"
-    #: and may raise if asked for anything else.
+    #: Transport this backend instance is configured for. Every backend
+    #: today only implements "http1".
     transport: Transport
 
     def ready(self) -> tuple[bool, str]:

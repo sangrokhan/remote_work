@@ -19,8 +19,6 @@
   const armSelect = document.getElementById("arm-select"); // hidden input, resolved arm name
   const inputModeField = document.getElementById("input-mode-field");
   const inputModeSelect = document.getElementById("input-mode-select");
-  const transportField = document.getElementById("transport-field");
-  const transportSelect = document.getElementById("transport");
   const algorithmSelect = document.getElementById("algorithm");
   const algorithmHint = document.getElementById("algorithm-hint");
   const form = document.getElementById("experiment-form");
@@ -35,29 +33,12 @@
   // updateParamSummary() instead).
   const paramSummaryContent = document.getElementById("param-summary-content");
 
-  // Transport (TCP/QUIC) is only meaningful for the Mock card today --
-  // aipt.backends.quic_mock.backend.QuicMockBackend is the only QUIC
-  // Backend-protocol implementation (DESIGN.md section 7/7.1). Hidden
-  // entirely for every other card, and forced back to "http1" the moment
-  // a non-mock card is selected, so a stray "http3" from a previous Mock
-  // selection can never silently ride along into a public_ai/local_llm
-  // request that has no idea what to do with it.
-  function applyTransportAvailability(key) {
-    const transportAllowed = key === "mock";
-    if (!transportAllowed && transportSelect.value !== "http1") {
-      transportSelect.value = "http1";
-    }
-    transportField.style.display = transportAllowed ? "block" : "none";
-    populateAlgorithmOptions(transportSelect.value);
-  }
-
   // Network Gateway profile (DESIGN.md 4.7 B11) and idle-reset toggle
   // (2026-09-01 ooo interview) are both standing state on a backend
   // container, not a RunRequest field -- only meaningful for mock/local_llm
   // (the containers this project's Gateway/idle-reset admin actually
-  // reach; public_ai is the real internet, quic_mock is a UDP spike with
-  // no admin route). Hidden entirely for every other card, same pattern
-  // as applyTransportAvailability above.
+  // reach; public_ai is the real internet, and has no admin route). Hidden
+  // entirely for every other card, same pattern as toggleBackendFields.
   const gatewayProfileField = document.getElementById("gateway-profile-field");
   const gatewayProfileSelect = document.getElementById("gateway-profile-select");
   const gatewayProfileApply = document.getElementById("gateway-profile-apply");
@@ -82,8 +63,7 @@
   function applyGatewayIdleResetAvailability(key) {
     // Gateway sits between web and {mock-server, local-llm} -- both
     // backends' traffic crosses it (DESIGN.md 4.7), so the profile
-    // control is relevant for either, but not public_ai (real internet)
-    // or quic_mock (UDP spike, no Gateway route).
+    // control is relevant for either, but not public_ai (real internet).
     const gatewayAllowed = key === "mock" || key === "local_llm";
     gatewayProfileField.style.display = gatewayAllowed ? "block" : "none";
   }
@@ -181,26 +161,17 @@
     updateParamSummary();
   }
 
-  // Swaps the Congestion algorithm dropdown's option list between the
-  // kernel's TCP modules (config.congestion_algorithms) and aioquic's
-  // registered QUIC algorithms (config.quic_congestion_algorithms) -- the
-  // two are never the same namespace (a kernel module name like "bbr" and
-  // a QUIC congestion-control name like "idle_probe" mean different
-  // things to different code paths server-side), so the option list itself
-  // must change, not just which one gets submitted.
-  function populateAlgorithmOptions(transport) {
-    const isQuic = transport === "http3";
-    const names = isQuic
-      ? CONFIG.quic_congestion_algorithms || []
-      : CONFIG.congestion_algorithms || [];
-    const reason = isQuic
-      ? CONFIG.quic_congestion_algorithms_reason
-      : CONFIG.congestion_algorithms_reason;
+  // Congestion algorithm dropdown's option list -- the kernel's actually
+  // loaded TCP modules (config.congestion_algorithms), never a fixed
+  // guess that could offer a name this box has no module loaded for.
+  function populateAlgorithmOptions() {
+    const names = CONFIG.congestion_algorithms || [];
+    const reason = CONFIG.congestion_algorithms_reason;
 
     algorithmSelect.innerHTML = "";
     const defaultOpt = document.createElement("option");
     defaultOpt.value = "";
-    defaultOpt.textContent = isQuic ? "(reno, aioquic default)" : "(kernel default)";
+    defaultOpt.textContent = "(kernel default)";
     algorithmSelect.appendChild(defaultOpt);
     for (const name of names) {
       const opt = document.createElement("option");
@@ -210,8 +181,6 @@
     }
     algorithmHint.textContent = names.length ? "" : reason || "";
   }
-
-  transportSelect.addEventListener("change", () => populateAlgorithmOptions(transportSelect.value));
 
   // Every backend card now resolves its arm through two visible pickers
   // instead of one flat arm dropdown: API Type first (the actual billable
@@ -300,8 +269,8 @@
     populateArms(key);
     toggleBackendFields(key);
     applyInputModeAvailability(key);
-    applyTransportAvailability(key);
     applyGatewayIdleResetAvailability(key);
+    populateAlgorithmOptions();
     updateParamSummary();
   }
 
@@ -319,7 +288,7 @@
     updateParamSummary();
   });
 
-  // Any other form field changing (measure, capture, transport, algorithm,
+  // Any other form field changing (measure, capture, algorithm,
   // input mode, record/dummy fields, per-backend model fields, cache
   // options...) should also refresh the summary -- rather than wiring a
   // listener per field, delegate on the form itself for both "change"
@@ -429,13 +398,6 @@
       mock_response_bytes: Number(fd.get("mock_response_bytes") || 1000),
       inference_delay_ms: Number(fd.get("inference_delay_ms") || 1000),
       algorithm: fd.get("algorithm") || null,
-      // "http1" (kernel TCP, default) or "http3" (QUIC, mock-only spike --
-      // see routes_run.RunRequest.transport's docstring). The dropdown is
-      // hidden for every non-mock card (applyTransportAvailability()
-      // above forces it back to "http1" the instant a different card is
-      // selected), so this always reflects a value the currently-selected
-      // backend can actually honour.
-      transport: fd.get("transport") || "http1",
       // Checkbox default is checked in the HTML (operator decision,
       // 2026-08-27: capture on by default) -- FormData omits an unchecked
       // checkbox entirely, so its *presence* is the true/false signal,

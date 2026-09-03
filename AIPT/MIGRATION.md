@@ -8,14 +8,14 @@
 
 ## Phase 1 — 공유 core (native + cwnd/capture/offload)
 
-- [ ] `TT/native/cwnd_monitor.c` (= `TC/native/cwnd_monitor.c`, 동일 확인됨) → `AIPT/native/cwnd_monitor.c`
-- [ ] `TC/tcp_congestion/cwnd.py` (단순 인터페이스) + `TT/core/cwnd.py` (상세 docstring, dumps/exact_queries 계측) → `AIPT/aipt/core/cwnd.py` (병합, §5-1 결정 필요)
-- [ ] `TT/core/capture.py` (AppArmor 감지 로직 보존) + `TC/tcp_congestion/capture.py` (label 일반화) → `AIPT/aipt/core/capture.py`
+- [x] `TT/native/cwnd_monitor.c` (= `TC/native/cwnd_monitor.c`, 동일 확인됨) → `AIPT/native/cwnd_monitor.c`
+- [x] `TC/tcp_congestion/cwnd.py` (단순 인터페이스) + `TT/core/cwnd.py` (상세 docstring, dumps/exact_queries 계측) → `AIPT/aipt/core/cwnd.py` (병합, §5-1 결정 필요)
+- [x] `TT/core/capture.py` (AppArmor 감지 로직 보존) + `TC/tcp_congestion/capture.py` (label 일반화) → `AIPT/aipt/core/capture.py`
 - [x] `TT/core/offload.py` + `TC/tcp_congestion/offload.py` → `AIPT/aipt/core/offload.py` (env alias 양쪽 지원: `NIC_OFFLOAD_DISABLE` 정식, `TRAFFIC_PCAP_NO_OFFLOAD` deprecated alias)
 - [x] `TC/tcp_congestion/tcpinfo.py` → `AIPT/aipt/core/tcpinfo.py` (그대로, synthetic_mock 전용이나 core에 위치 — 1회성 스냅샷은 범용 유틸)
 - [x] `TC/tcp_congestion/netem.py` → `AIPT/aipt/core/netem.py` (그대로, token_traffic엔 대응물 없음)
 - [x] `TT/core/config.py` → `AIPT/aipt/core/config.py` (env 플래그 판독 통합, `TC`의 `_flag()` 헬퍼 흡수: `cwnd.py`/`offload.py`에 흩어져 있던 정의를 `flag()`/`flag_any()`/`env_int()`로 통합)
-- [ ] `AIPT/tests/core/test_cwnd.py`, `test_capture.py`, `test_offload.py` — 양쪽 테스트 합집합, 중복 제거
+- [x] `AIPT/tests/core/test_cwnd.py`, `test_capture.py`, `test_offload.py` — 양쪽 테스트 합집합, 중복 제거
 - [ ] `AIPT/tests/core/test_cwnd_live.py` / `test_conversation_live.py`의 live 스타일 → 마커 통일 (§5-4)
 
 ## Phase 2 — external_api 도메인 (구 token_traffic)

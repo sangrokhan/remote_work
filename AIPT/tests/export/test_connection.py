@@ -105,3 +105,33 @@ def test_connection_summary_csv_carries_error_and_truncated():
     rows = list(csv.DictReader(io.StringIO(text)))
     assert rows[0]["error"] == "helper not built: no C compiler"
     assert rows[0]["truncated"] == "True"
+
+
+def test_connection_summary_csv_carries_interval_reason_and_confidence():
+    # B12 (DESIGN.md 4.9): Monitor.result()'s interval_reason/
+    # measurement_confidence should survive into cwnd_summary.csv.
+    mon = _monitor(interval_reason="adaptive:rtt=5ms", measurement_confidence="high")
+    text = connection_summary_csv([mon])
+    rows = list(csv.DictReader(io.StringIO(text)))
+    assert rows[0]["interval_reason"] == "adaptive:rtt=5ms"
+    assert rows[0]["measurement_confidence"] == "high"
+
+
+def test_connection_summary_csv_defaults_missing_confidence_fields_to_empty():
+    # Older monitor shape / explicit None must not raise -- export never
+    # throws on missing or null fields.
+    mon = _monitor()
+    mon["interval_reason"] = None
+    mon["measurement_confidence"] = None
+    text = connection_summary_csv([mon])
+    rows = list(csv.DictReader(io.StringIO(text)))
+    assert rows[0]["interval_reason"] == ""
+    assert rows[0]["measurement_confidence"] == ""
+
+    # And when the keys are absent entirely (not just None).
+    mon2 = _monitor()
+    text2 = connection_summary_csv([mon2])
+    rows2 = list(csv.DictReader(io.StringIO(text2)))
+    assert rows2[0]["interval_reason"] == ""
+    assert rows2[0]["measurement_confidence"] == ""
+

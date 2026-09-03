@@ -13,8 +13,7 @@ Where this differs from the token_traffic original:
   * ``provider`` is renamed ``backend`` -- the neutral term across the three
     kinds of counterparty (public API / mock replay / local engine).
   * ``transport`` is new (DESIGN.md 4.5 B5): the connection kind the turn was
-    carried over. Only ``"http1"`` is implemented; the field exists so a
-    later QUIC/HTTP3 backend does not require a schema migration.
+    carried over. Only ``"http1"`` is implemented.
   * ``goodput_bps`` is new (DESIGN.md 4.6 B7), derived from wire bytes and
     the req_sent_ms..turn_end_ms window, left as 0 until the export layer
     (``aipt/export/turns.py``) fills it in from bytes actually on the wire.

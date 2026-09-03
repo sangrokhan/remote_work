@@ -97,7 +97,16 @@ DEFAULT_MAX_SAMPLES = 400_000
 MAX_SECONDS = 3600
 
 # Every numeric field the helper emits, in the order a reader wants them: what the
-# window is doing first, then why, then the counters that corroborate it.
+# window is doing first, then why, then the counters that corroborate it. This is
+# NOT the literal order native/cwnd_monitor.c's emit_sample() prints them in --
+# the C helper's printf puts rto_us/ato_us right before inode (after
+# last_data_sent_ms/last_data_recv_ms/last_ack_recv_ms), while this list places
+# them right after min_rtt_us instead. That's harmless: `_drain()` parses the
+# NDJSON line with json.loads() into a dict, so the JSON key/value mapping does
+# not depend on printf order at all -- this list only fixes the column order
+# used when exporting to CSV (see CONNECTION_COLUMNS in
+# aipt/export/connection.py), which is a reader-ergonomics choice independent
+# of the wire order. The two field *sets* are identical (40 keys each).
 SAMPLE_FIELDS = [
     "t_ms", "wall", "local", "remote", "state", "ca_state",
     "snd_cwnd", "snd_ssthresh", "rcv_ssthresh",

@@ -282,14 +282,11 @@ def _filter_expr(ips: list[str], port: int = _DEFAULT_PORT, proto: str = "tcp") 
     """tcpdump filter: <proto>/port to the target host's IP(s), or all of
     that port if the name did not resolve -- a noisier pcap beats no pcap.
 
-    ``proto`` defaults to "tcp" (every backend before the QUIC spike rode
-    on TCP). QUIC rides on UDP -- a tcpdump filter hardcoded to "tcp"
-    silently captures zero packets for a QUIC run (no error, no crash,
-    just an empty pcap that looks like "no traffic happened" instead of
-    "the filter matched the wrong protocol"). Found and fixed after a
-    real /api/run(transport="http3") capture came back with 0 packets
-    captured despite the run itself succeeding -- the filter was the bug,
-    not the capture mechanism.
+    ``proto`` defaults to "tcp" (every backend today rides on TCP). A
+    tcpdump filter hardcoded to the wrong protocol silently captures zero
+    packets (no error, no crash, just an empty pcap that looks like "no
+    traffic happened" instead of "the filter matched the wrong
+    protocol").
 
     Explicit ``and`` between proto and port (``"udp and port N"``), not
     the shorthand juxtaposition (``"udp port N"``) tcpdump/libpcap also
@@ -414,12 +411,11 @@ class Capture:
         self.kind = kind or ""
         self.host = host or ""
         self.port = _DEFAULT_PORT if port is None else port
-        # "tcp" (default, every backend before the QUIC spike) or "udp"
-        # (QUIC/HTTP3 -- see aipt.backends.quic_mock.backend). Passed
-        # straight into the tcpdump filter (_filter_expr) -- a capture
-        # started with the wrong proto here silently captures zero
-        # packets, no error, for the entire run (see that function's
-        # docstring for how this was actually found).
+        # "tcp" (default) or "udp", passed straight into the tcpdump
+        # filter (_filter_expr) -- a capture started with the wrong
+        # proto here silently captures zero packets, no error, for the
+        # entire run (see that function's docstring for how this was
+        # actually found).
         self.proto = proto
         if label is not None:
             self.label = label
@@ -505,13 +501,13 @@ class Capture:
         # kernel-level BPF match count, counted the instant a packet
         # arrives -- it says nothing about whether tcpdump's own process
         # has been scheduled to drain the socket yet. On a very fast,
-        # bursty exchange (confirmed with QUIC/aipt.backends.quic_mock:
-        # 5 turns complete in well under a millisecond on loopback) SIGINT
+        # bursty exchange (5 turns complete in well under a millisecond
+        # on loopback) SIGINT
         # can arrive before tcpdump ever calls read() on the last burst,
         # so "0 captured" while "N received by filter" is a real
         # (reproducible) failure mode, not a filter or proto bug -- see
         # this repeated 3x with the SAME filter/proto during actual
-        # debugging (transport="http3" spike, 2026-08-27): identical
+        # debugging (2026-08-27): identical
         # commands, only the trailing settle time differed between the
         # runs that captured 0 and the runs that captured everything.
         # Mirrors the symmetric sleep(0.4) already used before traffic

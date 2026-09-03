@@ -101,17 +101,15 @@ def test_filter_honors_an_explicit_port_for_synthetic_mock():
 
 
 def test_filter_defaults_to_tcp_proto():
-    """Every backend before the QUIC spike rode on TCP -- the default
+    """Every backend rides on TCP -- the default
     proto must stay "tcp" so no existing caller's filter changes."""
     assert capture._filter_expr(["127.0.0.1"], 8888) == (
         "tcp and port 8888 and (host 127.0.0.1)")
 
 
-def test_filter_honors_udp_proto_for_quic():
-    """QUIC rides on UDP -- a caller that passes proto="udp" must get a
-    udp filter, not the tcp default (this was the actual bug: capture.py
-    hardcoded "tcp" regardless of transport, so a real QUIC run's
-    capture silently came back with 0 packets)."""
+def test_filter_honors_udp_proto_when_requested():
+    """A caller that passes proto="udp" must get a
+    udp filter, not the tcp default."""
     assert capture._filter_expr(["127.0.0.1"], 4433, proto="udp") == (
         "udp and port 4433 and (host 127.0.0.1)")
     assert capture._filter_expr([], 4433, proto="udp") == "udp and port 4433"
@@ -123,7 +121,7 @@ def test_capture_object_defaults_to_tcp_and_reports_proto_in_filter():
 
 
 def test_capture_object_accepts_udp_proto_and_reflects_it_in_result():
-    c = capture.Capture("2026-07-14T00:00:00", label="quictest", host="127.0.0.1",
+    c = capture.Capture("2026-07-14T00:00:00", label="udptest", host="127.0.0.1",
                          port=4433, proto="udp")
     assert c.proto == "udp"
     result = c.result()

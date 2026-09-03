@@ -59,43 +59,16 @@
     <p class="hint" id="idle-reset-status"></p>
   </div>
 
-  <!-- Transport: "http1" (kernel TCP, default) or "http3" (QUIC, mock-only
-       spike -- aipt.backends.quic_mock.backend.QuicMockBackend). Only
-       shown for the Mock card (app.js toggles visibility) since that's
-       the only backend with a QUIC implementation today. Defaults to
-       http1 (operator decision, 2026-08-27: DESIGN.md section 7.1's
-       idle_probe algorithm showed a NET LOSS in the throughput/latency
-       A/B measurement, not an improvement -- QUIC/idle_probe must be
-       something the user reaches for on purpose, never the default a
-       bare "just run it" click lands on). -->
-  <div class="field" id="transport-field">
-    <label for="transport">Transport</label>
-    <select id="transport" name="transport">
-      <option value="http1">TCP (kernel, default)</option>
-      <option value="http3" {% if not config.quic_available or not config.quic_congestion_algorithms %}disabled{% endif %}>
-        QUIC (aioquic, mock-only spike)
-      </option>
-    </select>
-    {% if not config.quic_available %}
-    <p class="hint">QUIC unavailable: {{ config.quic_reason }}</p>
-    {% endif %}
-  </div>
-
   <!-- Congestion algorithm: every backend's connection now goes through the
        same pinning path (aipt.core.wire.set_congestion_algorithm() for
        public_ai/local_llm's pooled HTTP session, the pre-existing raw-socket
        path for Mock), so the picker is no longer mock-only. Options are the
        kernel's actually-loaded algorithms (aipt.core.congestion, read off
        /proc/sys/net/ipv4/tcp_available_congestion_control) -- never a fixed
-       guess that could offer a name this box has no module loaded for.
-       When Transport=QUIC, app.js swaps this dropdown's options to
-       aipt.core.quic_congestion's registered names instead (reno/cubic/
-       idle_probe) -- a kernel TCP module name and an aioquic congestion
-       control name are never the same namespace, so the two option lists
-       must never be shown/submitted interchangeably. -->
+       guess that could offer a name this box has no module loaded for. -->
   <div class="field">
     <label for="algorithm">Congestion algorithm</label>
-    <select id="algorithm" name="algorithm" data-tcp-hint="{{ config.congestion_algorithms_reason }}" data-quic-hint="{{ config.quic_congestion_algorithms_reason }}">
+    <select id="algorithm" name="algorithm" data-tcp-hint="{{ config.congestion_algorithms_reason }}">
       <option value="">(kernel default)</option>
       {% for algo in config.congestion_algorithms %}
       <option value="{{ algo }}">{{ algo }}</option>
@@ -156,7 +129,7 @@
     <div class="field">
       <label for="inference_delay_ms">추론 지연시간 (ms)</label>
       <input type="number" id="inference_delay_ms" name="inference_delay_ms" value="1000" min="0">
-      <p class="hint">응답이 오기까지 mock 서버가 대기하는 시간. Record/Dummy 두 입력 모드 모두 적용되고, Transport(TCP/QUIC) 어느 쪽을 선택해도 동일하게 적용된다.</p>
+      <p class="hint">응답이 오기까지 mock 서버가 대기하는 시간. Record/Dummy 두 입력 모드 모두 적용된다.</p>
     </div>
   </fieldset>
 

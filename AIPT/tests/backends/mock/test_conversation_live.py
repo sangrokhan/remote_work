@@ -219,9 +219,7 @@ def test_mock_backend_external_server_full_lifecycle(monkeypatch, srv):
 
 
 # --- inference_delay_ms (server-side, aipt.backends.mock.server's `delay`
-# query param) -- applies on both input modes, checked here because
-# QuicMockBackend's own delay support (added 2026-08-31, this same fix)
-# needed a wire-format change TCP's already-working HTTP path did not. ------
+# query param) -- applies on both input modes. ------
 
 
 @skip_no_cwnd

@@ -16,7 +16,14 @@ This module merges two independent lineages:
 Both solve the same underlying problem (offload distorts what a packet
 capture -- or a cwnd sampler timed to packet arrivals -- actually sees) but
 at different times in a run's lifecycle, so both APIs are kept, and both env
-var names are honoured:
+var names are honoured. As of T7 (2026-09), the two APIs also share one
+feature-set (`FEATURES`, both names) and one restore contract: the
+capture-time `Window` restores automatically at the end of its `with`
+block, and the entrypoint-time `Toggle` offers the same
+observe-before/restore-only-what-changed contract for callers that want a
+container's NIC put back the way it was found (`build_commands()`/`apply()`
+keep their original "disable once, no restore" signatures unchanged, for
+backward compatibility with existing entrypoint scripts):
 
   NIC_OFFLOAD_DISABLE     — canonical name (from tcp_congestion). "1"/"true"/
                             "yes"/"on" means disable.
@@ -71,30 +78,31 @@ import subprocess
 
 from aipt.core import config
 
-# The three that distort a capture, as reported by `ethtool -k`. `lro` is
-# deliberately absent here: it is fixed off on most drivers and, where it
-# exists, disabling it can bounce the link -- a price this is not worth
-# paying for an interface that almost never has it on. This is the set used
-# by `read()`/`Window` (the capture-time API).
-FEATURES = ("tso", "gso", "gro")
+# The full feature set both APIs now agree on (T7 -- previously the
+# capture-time API only touched tso/gso/gro while the entrypoint-time API
+# touched tso/gso/sg/gro/lro; DESIGN.md's "practically the same, only the env
+# var name differs" claim was not true of the feature-set until this was
+# unified). `lro` is almost always reported `[fixed]` by veth/most drivers,
+# and `_set()`/`Window`/`Toggle` all already skip fixed features rather than
+# erroring, so including it here is harmless even where it cannot actually
+# be toggled -- and it means a driver that *does* allow disabling it gets
+# the same literal one-packet-per-segment posture as everything else. `sg`
+# (scatter-gather) is included for the same "most literal view" reason it
+# was originally added to the entrypoint-time set.
+FEATURES = ("tso", "gso", "sg", "gro", "lro")
 
-# The broader set toggled in one shot by the entrypoint-time bulk-disable API
-# (`build_commands()`/`apply()`/`from_env()`), inherited from
-# tcp_congestion's "turn it all off at container start" use case. `lro` is
-# included for documentation even though veth/most drivers report it
-# `[fixed]` (ethtool -K silently no-ops on a fixed feature rather than
-# erroring, so leaving it in the command list is harmless). `sg`
-# (scatter-gather) is included here too -- it is not one of the three that
-# distorts a *capture* the way tso/gso/gro do, but disabling it is part of
-# the "get the most literal one-packet-per-segment view" posture the
-# entrypoint knob is going for.
-ENTRYPOINT_FEATURES = ["tso", "gso", "sg", "gro", "lro"]
+# Deprecated alias for FEATURES, kept because external callers/tests may
+# still reference the entrypoint-time name. Equal to FEATURES since T7 --
+# do not let this drift from FEATURES again.
+ENTRYPOINT_FEATURES = list(FEATURES)
 
 # What ethtool calls them when reporting, as opposed to when setting.
 _REPORTED = {
     "tso": "tcp-segmentation-offload",
     "gso": "generic-segmentation-offload",
+    "sg": "scatter-gather",
     "gro": "generic-receive-offload",
+    "lro": "large-receive-offload",
 }
 
 _LINE = re.compile(r"^([a-z0-9-]+):\s*(on|off)\b(.*)$")
@@ -302,21 +310,41 @@ def describe(state: dict) -> str:
 
 # --- entrypoint-time bulk toggle (inherited from tcp_congestion) ----------
 #
-# Where `Window` observes, selectively disables, and precisely restores
-# offload around one capture, the functions below are the coarser "disable
-# it all once, at container start, and leave it that way" knob used by
-# entrypoint scripts -- mirroring netem.py's from_env()/apply() shape.
+# Before T7, this half disabled every ENTRYPOINT_FEATURES entry once, at
+# container start, and left it that way for the container's life -- no
+# restore, and a different (5-item) feature set than `Window`'s capture-time
+# 3. Both differences were bugs relative to DESIGN.md's claim that the two
+# APIs are "practically the same, only the env var name differs": that
+# claim is what this module is supposed to make true.
+#
+# Since T7:
+#   - feature-set: unified. `build_commands()` toggles `FEATURES` (the same
+#     5 `Window` reads/restores), not a separate ENTRYPOINT_FEATURES list.
+#     `ENTRYPOINT_FEATURES` is kept as a `== FEATURES` alias so any code or
+#     test that still names it does not need to change.
+#   - restore policy: unified. `Toggle` below is the entrypoint-time mirror
+#     of `Window` -- it reads before/changed state the same way and offers
+#     `.restore()` for callers (or an entrypoint's shutdown/SIGTERM path)
+#     that want the container's NIC put back the way `Window` would. The
+#     free functions (`build_commands()`/`apply()`/`from_env()`) keep their
+#     original signatures and "disable once, no restore" behavior so no
+#     existing caller/entrypoint script breaks; `Toggle` is additive, not a
+#     breaking replacement.
 
 
 def build_commands(iface: str, disable: bool) -> list[str]:
-    """Return the ethtool command(s) to apply *disable* to every
-    ENTRYPOINT_FEATURES entry on *iface*. Returns an empty list when disable
-    is False (nothing to do -- interface is left on whatever the
-    kernel/driver default is).
+    """Return the ethtool command(s) to apply *disable* to every FEATURES
+    entry on *iface*. Returns an empty list when disable is False (nothing
+    to do -- interface is left on whatever the kernel/driver default is).
+
+    This is the blunt, state-blind form: it does not read current state
+    first, so it always emits the same "everything off" command regardless
+    of what is already off. `Toggle` (below) is the state-aware, restorable
+    alternative -- prefer it when a restore path is wanted.
     """
     if not disable:
         return []
-    state = " ".join(f"{feat} off" for feat in ENTRYPOINT_FEATURES)
+    state = " ".join(f"{feat} off" for feat in FEATURES)
     return [f"ethtool -K {iface} {state}"]
 
 
@@ -326,7 +354,12 @@ def _run(cmd: str) -> None:
 
 def apply(iface: str, disable: bool, dry_run: bool = False) -> list[str]:
     """Install the offload toggle. dry_run=True returns commands without
-    executing them."""
+    executing them.
+
+    Backward-compatible: this remains the blunt "disable once, do not
+    restore" entrypoint behavior it always was (now over the unified
+    FEATURES set). For a restorable entrypoint-time toggle, use `Toggle`.
+    """
     cmds = build_commands(iface=iface, disable=disable)
     if not dry_run:
         for cmd in cmds:
@@ -341,3 +374,87 @@ def from_env() -> dict:
         "disable": enabled(),
         "iface": os.environ.get("NIC_OFFLOAD_IFACE", "eth0"),
     }
+
+
+class Toggle:
+    """Entrypoint-time bulk offload toggle, with the same restore contract
+    as `Window` -- state read before changing anything, only what was
+    actually flipped gets flipped back, and a `[fixed]` feature is left
+    alone rather than making the whole `ethtool -K` call fail.
+
+    The difference from `Window` is scope and lifetime, not policy: `Window`
+    is a context manager scoped to one capture and is always used with
+    `with`; `Toggle` is meant to live for a container's lifetime (`apply()`
+    at start, `restore()` at shutdown/SIGTERM if the operator wants the NIC
+    left as it was found) and is driven explicitly rather than through
+    `with`, since an entrypoint script's "duration" is the whole container,
+    not a `with` block's scope.
+
+    Nothing here raises, for the same reason `Window` does not: a container
+    that dies configuring its NIC is worse than one that starts with offload
+    on and says so.
+    """
+
+    def __init__(self, iface: str):
+        self.iface = iface
+        self.before: dict = {}
+        self.changed: list[str] = []
+        self.error = ""
+        self.applied = False
+
+    def apply(self, disable: bool) -> list[str]:
+        """Disable every non-fixed, currently-on FEATURES entry on `iface`.
+
+        Returns the `ethtool -K` command(s) actually issued (empty if
+        `disable` is False, everything was already off, or every on feature
+        is `[fixed]`). Mirrors `Window.__enter__`'s want/skip-fixed logic.
+        """
+        self.before = read(self.iface)
+        if not disable:
+            return []
+        if not self.before:
+            # No usable `ethtool -k` output (missing ethtool, bad iface, ...).
+            # Fall back to the blunt one-shot command so the historical
+            # "just turn it off" entrypoint behavior still happens; there is
+            # nothing to restore later because there is no `before` to
+            # restore from.
+            self.error = f"ethtool -k {self.iface} said nothing usable; cannot track state to restore"
+            return build_commands(self.iface, disable=True)
+
+        want = {f: False for f, s in self.before.items()
+                if s["on"] and not s["fixed"]}
+        if not want:
+            return []
+
+        err = _set(self.iface, want)
+        if err:
+            self.error = err
+            return []
+        self.changed = sorted(want)
+        self.applied = True
+        return [f"ethtool -K {self.iface} " + " ".join(f"{f} off" for f in self.changed)]
+
+    def restore(self) -> None:
+        """Idempotent. Put back exactly what `apply()` changed."""
+        if not self.applied:
+            return
+        self.applied = False
+        err = _set(self.iface, {f: self.before[f]["on"] for f in self.changed})
+        if err:
+            self.error = (f"{self.error + '; ' if self.error else ''}"
+                          f"RESTORE FAILED for {', '.join(self.changed)} on "
+                          f"{self.iface}: {err}")
+
+    def result(self) -> dict:
+        """Same shape as `Window.result()`, so a container's shutdown log
+        can describe its NIC state the same way a pcap does."""
+        during = {f: (False if f in self.changed else s["on"])
+                  for f, s in self.before.items()}
+        return {
+            "iface": self.iface,
+            "disabled": list(self.changed),
+            "during": during,
+            "before": {f: s["on"] for f, s in self.before.items()},
+            "fixed": sorted(f for f, s in self.before.items() if s["fixed"]),
+            "error": self.error,
+        }

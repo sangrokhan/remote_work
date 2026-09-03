@@ -138,25 +138,6 @@ class RunRequest(BaseModel):
     # pcap=None exactly as before, never a hard failure.
     capture: bool = True
 
-    # Transport this run's connection rides on. "http1" (default, kernel
-    # TCP -- every backend's original behaviour, unchanged) or "http3"
-    # (QUIC, aipt.backends.quic_mock.backend.QuicMockBackend -- mock-only
-    # for now, see that module's docstring on scope). The UI dropdown
-    # defaults to "http1" (operator decision, 2026-08-27: DESIGN.md
-    # section 7.1's idle_probe algorithm has NOT shown a measured
-    # improvement yet, so QUIC must be an opt-in the user reaches for
-    # deliberately, never the default a bare "just run it" click lands
-    # on). ``algorithm`` (below) is reused for both transports: it names
-    # a kernel TCP module under http1, or an aioquic-registered QUIC
-    # congestion control name (aipt.core.quic_congestion.available_algorithms())
-    # under http3 -- the same field, a different namespace depending on
-    # which transport is selected, matching how one dropdown already
-    # widens/narrows its own option list per other field's selection
-    # elsewhere in this form (e.g. api_type -> context_handle).
-    transport: str = Field(
-        default="http1",
-        description="'http1' (kernel TCP, default) or 'http3' (QUIC, mock-only spike).",
-    )
 
     # local_llm-only: request-body leaf-hash dedup cache (docs/
     # engine_gateway_caching_seed.md), opt-in per run via the web form's
@@ -328,21 +309,6 @@ def _build_backend(name: str, engine: str | None = None, *, req: "RunRequest | N
                 scenario_record = _load_record_scenario(req.record_id)
             except (ValueError, OSError):
                 scenario_record = None  # _resolve_turns() already reports this as a run failure
-        if req is not None and req.transport == "http3":
-            # QUIC transport, mock-only spike (DESIGN.md section 7/7.1) --
-            # imported lazily so a box without the optional [quic] extra
-            # (aioquic) never pays an import cost/failure for a request
-            # that never asks for http3. ready() (checked by the caller
-            # right after this returns) is what turns "aioquic not
-            # installed" into an honest run failure rather than a 500.
-            from aipt.backends.quic_mock.backend import QuicMockBackend
-            return QuicMockBackend(
-                record=scenario_record,
-                mock_response_bytes=req.mock_response_bytes,
-                inference_delay_ms=req.inference_delay_ms,
-                algorithm=req.algorithm,
-                label=req.label or f"{req.backend}:{req.arm}",
-            )
         return module.MockBackend(record=scenario_record)
     if name == "local_llm":
         facade = getattr(module, "LocalLLMBackend", None) or getattr(
@@ -443,15 +409,9 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
     if req.backend == "mock":
         backend.mock_response_bytes = req.mock_response_bytes
         backend.inference_delay_ms = req.inference_delay_ms
-        # QuicMockBackend already resolved req.algorithm (possibly None)
-        # to a real QUIC algorithm name in its constructor -- an aioquic
-        # congestion control name ("reno"/"idle_probe"/...) is never the
-        # same namespace as a kernel TCP module name, so overwriting it
-        # with the raw (possibly None) request field here the way the
-        # TCP MockBackend branch below does would silently break
-        # aioquic's create_congestion_control() lookup at connect() time.
-        if req.transport != "http3":
-            backend.algorithm = req.algorithm
+        # backend.algorithm is set directly from the raw request field --
+        # the TCP MockBackend's own kernel congestion module name.
+        backend.algorithm = req.algorithm
         backend.label = label
     else:
         # public_ai/local_llm never open their own raw socket (mock's
@@ -537,39 +497,19 @@ def _run_conversation_stream(req: RunRequest) -> Iterator[dict]:
     t0 = time.monotonic()
     try:
         # Capture must open BEFORE the connection handshake, not after --
-        # resolve_target() (Mock/QuicMock only; a no-op via getattr for
+        # resolve_target() (Mock only; a no-op via getattr for
         # public_ai/local_llm, whose api_host() is already known pre-
         # connect) picks the concrete peer host/port without putting any
         # packet on the wire, so api_host() is valid here and the tcpdump
         # window below can open while the connection is still unopened.
-        # Found 2026-08-31 (user report): a QUIC run's pcap showed zero
-        # Initial/Handshake packets, so Wireshark had nothing to identify
-        # the connection as QUIC by and displayed the encrypted 1-RTT
-        # remainder as plain UDP -- root cause was capture starting only
-        # after connect() (which QuicMockBackend used to run the entire
-        # handshake inside) had already finished it. The same ordering
-        # bug existed for every other backend too (TCP's SYN/ACK just
-        # degrades less visibly, since a mid-stream TCP capture is still
-        # recognizable as TCP from the port/flags alone).
         resolve_target = getattr(backend, "resolve_target", None)
         if callable(resolve_target):
             resolve_target()
         if cap_label:
             host, port = _split_api_host(backend.api_host())
-            # QUIC (transport="http3") rides on UDP, not TCP -- a tcpdump
-            # filter hardcoded to "tcp" (Capture's own default) would
-            # silently capture zero packets for the entire run (found via
-            # a real /api/run(transport="http3") capture that came back
-            # with 0 packets despite the run itself succeeding; see
-            # aipt.core.capture._filter_expr's docstring for the full
-            # story). getattr(backend, "transport", "http1") mirrors the
-            # exact same lookup turn_record() already does a few lines
-            # below for the same reason (backend is the one place that
-            # actually knows which transport it used).
-            cap_proto = "udp" if getattr(backend, "transport", "http1") == "http3" else "tcp"
             cap = capture_mod.Capture(
                 timestamp=timestamp, label=cap_label, host=host, port=port,
-                proto=cap_proto)
+                proto="tcp")
             cap.__enter__()
         backend.connect(req.arm, req.model, system)
         for i, question in enumerate(questions):

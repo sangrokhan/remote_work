@@ -4,8 +4,7 @@ Real implementation (DESIGN.md 5, B4): a standard serving framework
 (llama.cpp/vLLM, reached only as an OpenAI-compatible HTTP API --
 ``engine_adapter.py``) behind an in-repo application-level proxy
 (``gateway.py``) that owns the transport/HTTP-feature experiment surface
-today's ``transport`` slot (``aipt.backends.base``) reserves for a later
-QUIC gateway.
+today's ``transport`` slot (``aipt.backends.base``) reserves.
 
 ``LocalLLMBackend`` is the ``aipt.backends.base.Backend`` protocol
 implementation client code actually drives: ``connect`` builds one

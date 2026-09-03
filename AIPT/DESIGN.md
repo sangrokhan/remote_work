@@ -35,7 +35,7 @@ traffic patterns — from two different angles:
 | `native/cwnd_monitor.c` | **완전 동일** | 그대로 1개만 유지 |
 | `cwnd.py` | tcp_congestion판이 token_traffic판의 단순화 파생 (`core.config`/`core.wire` 의존 제거, `announce(sock)` API로 정리) | **tcp_congestion의 단순화된 인터페이스**를 채택하되, token_traffic의 상세 docstring(설계 근거)과 `dumps`/`exact_queries` 계측 필드를 병합 |
 | `capture.py` | tcp_congestion판은 token_traffic판에서 AppArmor 회피 로직 등을 제거하고 "run 1개당 pcap 1개"로 단순화 | token_traffic의 **AppArmor 감지 로직은 반드시 보존** (실제로 시간 낭비했던 이슈, 주석에 경고 있음). label 파라미터를 일반화해서 두 lab 모두 지원 |
-| `offload.py` | 사실상 같은 기능, env var 네이밍만 다름 (`TRAFFIC_PCAP_NO_OFFLOAD` vs `NIC_OFFLOAD_DISABLE`) | 통합 후 **두 이름 모두 지원**(alias) — 기존 docker-compose.yml/문서 호환 |
+| `offload.py` | 사실상 같은 기능, env var 네이밍만 다름 (`TRAFFIC_PCAP_NO_OFFLOAD` vs `NIC_OFFLOAD_DISABLE`) | 통합 후 **두 이름 모두 지원**(alias) — 기존 docker-compose.yml/문서 호환. **(T7, 2026-09-03 갱신)** 병합 직후에는 feature-set(capture-time 3개 vs entrypoint-time 5개)과 복원 정책(capture-time만 복원, entrypoint-time은 미복원)이 서로 달라 이 서술이 실제로는 참이 아니었다(`docs/audit-2026-09-02/core.md` §4.2). T7에서 두 API 모두 `FEATURES = (tso, gso, sg, gro, lro)` 5개로 통일하고, 기존 `build_commands()`/`apply()`(무복원, 하위호환 유지)와 별개로 `Toggle` 클래스를 추가해 entrypoint-time에도 `Window`와 동일한 관찰→선택적 해제→복원 계약을 제공함으로써 이 표의 서술을 실제로 참이 되게 했다 |
 | `export.py` | 서로 다른 레코드 스키마(제공자별 arm vs 턴별 요약)라 병합이 아니라 **공존** | `export/` 서브패키지로 분리, `records_csv()`(external_api용), `turns_csv()`(synthetic_mock용) 공존 |
 | `probe.py`, `netem.py`, `congestion.py`, `tcpinfo.py`, `server.py`, `conversation.py` | tcp_congestion 전용, token_traffic에 대응물 없음 | synthetic_mock lab 전용으로 그대로 이관 |
 | `wire.py`, `streaming.py`, `call.py`, `record.py`, `metrics.py`, `store.py`, `scenario.py`, `cachebust.py`, `providers/*` | token_traffic 전용, tcp_congestion에 대응물 없음 | external_api lab 전용으로 그대로 이관 |
@@ -178,8 +178,8 @@ Client 측 (측정 로직: cwnd/capture/stats export — 3개 backend에 공통 
 
 | 결정 사항 | 확정 내용 |
 |---|---|
-| 로컬 LLM 스택 | **llama.cpp/vLLM 같은 표준 서빙 프레임워크를 그대로 사용**하고, 그 앞단에 자체 프록시/게이트웨이를 둔다. 프록시가 HTTP 신기능/향후 QUIC 확장 지점을 담당하고, 토큰 생성 자체는 표준 엔진에 위임 — 추론 엔진을 직접 재구현하지 않는다 |
-| QUIC/신규 HTTP 실험 범위 | **이번 AIPT 병합에는 포함하지 않는다.** `Backend`/프록시 인터페이스에 transport 확장 지점(예: `transport: "http1"｜"http3"` 같은 슬롯)만 마련해두고, 실제 QUIC 구현은 별도 후속 프로젝트로 분리 |
+| 로컬 LLM 스택 | **llama.cpp/vLLM 같은 표준 서빙 프레임워크를 그대로 사용**하고, 그 앞단에 자체 프록시/게이트웨이를 둔다. 프록시가 HTTP 신기능 확장 지점을 담당하고, 토큰 생성 자체는 표준 엔진에 위임 — 추론 엔진을 직접 재구현하지 않는다 |
+| 신규 HTTP 실험 범위 | **이번 AIPT 병합에는 포함하지 않는다.** `Backend`/프록시 인터페이스에 transport 확장 지점(`transport: "http1"` 슬롯)만 마련해둔다 |
 | Mock 재생 충실도 | **바이트 패턴만 재현**한다. 지연시간(추론 대기)은 실측값을 그대로 재생하지 않고, 기존 tcp_congestion처럼 설정값(`inference_delay`)으로 별도 제어 — 재생 로직의 복잡도를 낮춘다 |
 
 ### 폴더 구조 변경 (§2 대비 diff)
@@ -250,7 +250,7 @@ MIGRATION.md의 Phase 2/3 대상 파일들은 목적지 경로만 `backends/publ
 | B2 | 실측 데이터 recorder | Public AI backend 호출 시 request/response 원문을 B1 포맷으로 저장 | `aipt/backends/public_ai/recorder.py`. API 키 등 민감정보 마스킹 필요 |
 | B3 | Mock replay (바이트 패턴만) | B2로 캡처한 실측 데이터를 Mock backend가 재생. **지연은 재현 안 함**, 설정값(`inference_delay`)으로 별도 제어 | `aipt/backends/mock/replay.py` |
 | B4 | LocalLLMBackend (표준 엔진 + 자체 프록시) | llama.cpp/vLLM을 서빙 엔진으로 세우고, 앞단에 자체 게이트웨이를 둬서 HTTP 신기능 실험 지점 마련 | `aipt/backends/local_llm/{gateway,engine_adapter}.py`. 엔진 선택은 `huggingface-hub`/`llama-cpp`/`serving-llms-vllm` 스킬 활용 |
-| B5 | Transport 확장 슬롯 (QUIC 자리만) | `Backend`/게이트웨이에 `transport` 파라미터 슬롯만 마련, 구현은 후속 프로젝트로 이관 | 이번 범위: 인터페이스 설계만 |
+| B5 | Transport 확장 슬롯 | `Backend`/게이트웨이에 `transport` 파라미터 슬롯만 마련, 구현은 후속 프로젝트로 이관 | 이번 범위: 인터페이스 설계만 |
 | B6 | 패킷 간격 통계 (`packets.csv`) | pcap 파싱(`dpkt`/`scapy`)으로 inter-arrival gap, 패킷 크기 분포 계산 | `aipt/export/packets.py` — 신규 의존성 추가 필요 |
 | B7 | Goodput 계산 | 기존 wire_sent/recv + 마크(req_sent_ms~turn_end_ms)로 턴별 goodput 산출 | `aipt/export/turns.py`에 컬럼 추가 |
 | B8 | 통합 CSV 스키마 확정 | §4.6의 3-레이어를 실제 컬럼 단위로 확정 | Phase 진행 중 `docs/outputs.md`에 기술 |
@@ -336,31 +336,36 @@ Client (측정 코드: cwnd/capture/export — 공통)
    `client → Network Gateway(L3 forward) → engine gateway(애플리케이션 프록시) →
    서빙 엔진` 순서로 체인된다.
 
-## 4.7.1 실행 결과 저장 정책 (확정, 2026-08-26 → 2026-08-27 실제 동작으로 변경, 아래 갱신 참고)
+## 4.7.1 실행 결과 저장 정책 (확정, 2026-09-02 개정 — 모든 backend run 디스크 영속화가 기본 정책)
 
-> **2026-09-01 갱신 — 이 절의 "인메모리 최근 50개" 방침은 stale.** 아래
-> 2026-08-27 개정을 실제 코드가 구현하고 있다: `aipt/web/store.py`가
-> `RUN_STORE_DIR`(기본 `data/runs/`)에 **모든 backend의 모든 run을 JSON으로
-> 디스크 영속화**한다(2026-08-27 "Run store 디스크 영속화" 작업,
-> MIGRATION.md 참고). 원래의 "한 대의 머신에서 도는 실험실이라 영속 저장
-> 안 함" 철학은 실제로는 폐기되었다 — 재시작해도 과거 run 목록이 남는 쪽을
-> 선택했다는 뜻이다. 아래 원문은 그 결정 이전의 정책으로, 역사적 기록 목적으로
-> 남겨두고 위 문단이 실제 동작을 대표한다.
+기존 §6 미해결 결정 5번("data/ 저장 위치")을 아래로 확정한다(2026-08-27 "Run
+store 디스크 영속화" 작업으로 실제 동작이 이렇게 바뀌었고, 2026-09-02부로 이
+절을 그 실제 동작에 맞춰 정식 개정함 — MIGRATION.md, docs/audit-2026-09-02/web.md
+§5.2 참고):
 
-기존 §6 미해결 결정 5번("data/ 저장 위치")을 아래로 확정한다:
-
-- **영속 저장 대상은 Public AI(상용 API) 요청/응답 JSON만.** `PublicAIBackend`로
-  실행한 모든 run은 `aipt/backends/public_ai/recorder.py`를 통해 자동으로
-  `data/public_ai_records/<exec_id>.json`에 저장된다 — 과금이 발생한 실제 API
-  호출 기록이므로 재현 불가능하고, 재시작으로 잃으면 안 되는 유일한 데이터.
-- **그 외 모든 산출물(cwnd 샘플, pcap, mock/local_llm 턴 기록, CSV)은 영속
-  저장하지 않는다.** `aipt/web/store.py`의 인메모리 캐시(최근 50개)만 유지하고,
-  사용자가 실행 직후 `GET /api/runs/{id}/bundle.zip`으로 다운로드해서 직접
-  보관/정리한다. 별도 DB나 파일 시스템 저장소를 구축하지 않는다 — 이 프로젝트는
-  "한 대의 머신에서 도는 실험실"이라는 token_traffic 원본의 설계 철학을 그대로
-  계승한다.
-- Docker 볼륨은 `./data/pcaps`(기존) + `./data/public_ai_records`(신규)만
-  마운트한다.
+- **`public_ai`/`mock`/`local_llm` 3개 backend의 모든 run이 예외 없이 디스크에
+  영속 저장되는 것이 기본 정책이다.** `aipt/web/routes_run.py`는 backend
+  종류와 무관하게 실행 결과를 `run_store.save_run()`에 넘기고
+  (`/api/run` 동기 경로, `/api/run/stream`의 `done` 이벤트 경로 모두 동일),
+  `aipt/web/store.py`의 `save_run()`이 그 JSON 전체를 `RUN_STORE_DIR`(기본
+  `data/runs/`, env로 재정의 가능)에 `<exec_id>.json`으로 동기 파일 쓰기한다.
+  인메모리 `OrderedDict` 캐시(모든 읽기가 우선 거치는 경로, `MAX_RUNS=50`
+  cap)는 여전히 존재하지만 그 자체가 저장소가 아니라 디스크 위의 캐시이며,
+  프로세스 재시작 시 `RUN_STORE_DIR`를 재스캔해 다시 채워진다(`_load_from_disk_locked`).
+  `MAX_RUNS`를 넘겨 축출되는 run은 메모리와 디스크 파일 양쪽에서 함께
+  삭제된다 — "최근 N개만 유지"는 여전히 사실이지만, 그 N개가 재시작을
+  버텨낸다는 점이 핵심 변경이다.
+- Public AI(상용 API) 요청/응답 기록은 위와 별도로 `aipt/backends/public_ai/recorder.py`를
+  통해 `data/public_ai_records/<exec_id>.json`에도 저장된다 — 과금이 발생한
+  실제 API 호출 기록이라 재현 불가능하므로, run 자체의 영속화와 무관하게
+  독립적으로 유지되는 감사 기록이다.
+- 원래의 "한 대의 머신에서 도는 실험실이라 run은 영속 저장 안 하고 사용자가
+  bundle.zip을 직접 다운로드해 보관한다"는 철학은 폐기되었다. run 디스크
+  영속화 자체는 별도 DB 없이 파일 시스템에 JSON을 직접 쓰는 방식이므로
+  "한 대의 머신에서 도는 실험실" 철학과 상충하지 않는다 — 다만 재시작해도
+  run 목록이 남는 쪽으로 정책이 바뀌었다는 뜻이다.
+- Docker 볼륨은 `./data/pcaps` + `./data/public_ai_records` + `./data/runs`
+  (`RUN_STORE_DIR`) 3개를 마운트한다(`docker-compose.yml`: `RUN_STORE_DIR=/app/data/runs`).
 
 ## 5.1 리스트업 갱신 — Gateway 관련 신규 작업
 
@@ -368,7 +373,7 @@ Client (측정 코드: cwnd/capture/export — 공통)
 |---|---|---|
 | B9 | Gateway 컨테이너 신규 구현 | `aipt/gateway/`: netem 제어 루프 + 프로파일 프리셋 + `/gateway/profile` API. `aipt/core/netem.py` 로직을 재사용/승격 |
 | B10 | Docker 토폴로지 확장 | `docker-compose.yml`에 `gateway` 서비스 추가, `mock-server`/`local-llm`이 `gateway`를 통해서만 도달 가능하도록 네트워크 구성 |
-| B11 | 웹 UI Network profile 선택 | 실험 설정 폼에 프로파일 드롭다운 + Gateway API 연동 |
+| B11 | 웹 UI Network profile 선택 | 실험 설정 폼에 프로파일 드롭다운 + Gateway API 연동 — **구현 완료**(`aipt/web/routes_gateway.py`, 커밋 `39c4ea78`, `85dc19fc`에서 idle-reset 리팩터와 함께 갱신; `GET/POST /api/gateway/profile`이 Gateway의 `/gateway/profile`을 프록시, `tests/web/test_routes_gateway.py`로 테스트됨. §6 참고) |
 
 ## 4.8 전체 아키텍처 다이어그램 (Mermaid)
 
@@ -379,7 +384,7 @@ flowchart TB
     end
 
     subgraph WEBAPP["aipt/web — FastAPI 단일 앱"]
-        Routes["routes_config / routes_run /<br/>routes_runs<br/>(routes_gateway: 미구현, B11 TODO)"]
+        Routes["routes_config / routes_run /<br/>routes_runs /<br/>routes_gateway<br/>(구현 완료, B11)"]
         Templates["templates + static<br/>(backend 선택 + 공통 실험 폼)"]
     end
 
@@ -388,7 +393,6 @@ flowchart TB
         PublicAI["PublicAIBackend<br/>gemini.py / openai.py<br/>(6+4 arm)"]
         Mock["MockBackend<br/>server.py / records.py /<br/>replay.py / conversation.py"]
         LocalLLM["LocalLLMBackend<br/>gateway.py(프록시) +<br/>engine_adapter.py<br/>(구현 완료, §4.5c)"]
-        QuicMock["QuicMockBackend<br/>(§7 스파이크,<br/>transport=http3)"]
     end
 
     subgraph GATEWAY["Network Gateway 컨테이너 (신규, B9)"]
@@ -430,21 +434,19 @@ flowchart TB
     Routes --> PublicAI
     Routes --> Mock
     Routes --> LocalLLM
-    Routes -.->|"TODO B11, §5.2"| ProfileAPI
+    Routes -->|"GET/POST /api/gateway/profile (구현 완료, B11)"| ProfileAPI
 
     PublicAI <-->|"실제 인터넷 경로<br/>(이미 실제 RTT/손실 보유)"| Gemini
     PublicAI <-->|"실제 인터넷 경로"| OpenAI
 
     Mock <--> Netem
     LocalLLM <--> Netem
-    QuicMock <--> Netem
     Netem <--> MockServer
     Netem <--> Engine
 
     PublicAI -. 계측 훅 .- CORE
     Mock -. 계측 훅 .- CORE
     LocalLLM -. 계측 훅 .- CORE
-    QuicMock -. 계측 훅 .- CORE
 
     CORE --> EXPORT
     EXPORT --> Routes
@@ -456,11 +458,10 @@ flowchart TB
 ```
 
 **읽는 법**:
-- **점선 화살표**(`-. 계측 훅 .-`)는 "이 backend가 core 모니터링을 훅으로 사용한다"는 관계 — 4개 backend 모두 동일한 `aipt/core`를 공유하며, backend별로 별도의 cwnd/capture 구현을 갖지 않는다.
+- **점선 화살표**(`-. 계측 훅 .-`)는 "이 backend가 core 모니터링을 훅으로 사용한다"는 관계 — 3개 backend 모두 동일한 `aipt/core`를 공유하며, backend별로 별도의 cwnd/capture 구현을 갖지 않는다.
 - **PublicAIBackend**만 Gateway를 거치지 않고 실제 인터넷으로 직행 — 이미 진짜 네트워크 특성(RTT/손실/혼잡)을 갖고 있기 때문 (§4.7).
-- **Mock/LocalLLM/QuicMock**은 반드시 **Gateway**를 경유 — Gateway가 `tc netem`으로 지연/손실/재정렬을 주입해 "완벽한 로컬 네트워크"라는 암묵적 가정을 제거한다. Gateway는 L3 IP 포워딩이라 TCP/UDP(QUIC)에 무관하게 동일하게 적용된다.
-- **QuicMockBackend**(§7)는 원래 3-backend 설계(§4.5)에는 없던 후속 스파이크다 — idle-probe congestion control 실험을 위해 mock 전용 4번째 백엔드로 `Backend` 프로토콜에 정식 편입되었고, `RunRequest`/웹 UI 폼에는 아직 연결되어 있지 않다(§7 "남은 단계" 3번, TODO).
-- **`routes_gateway`는 미구현(B11 TODO, §5.2)** — Gateway 컨테이너의 `/gateway/profile` API 자체는 완성·실동작하지만, 웹 UI에서 그 API를 호출하는 라우트/폼 필드가 없어 점선으로 표시했다.
+- **Mock/LocalLLM**은 반드시 **Gateway**를 경유 — Gateway가 `tc netem`으로 지연/손실/재정렬을 주입해 "완벽한 로컬 네트워크"라는 암묵적 가정을 제거한다. Gateway는 L3 IP 포워딩이라 프로토콜에 무관하게 동일하게 적용된다.
+- **`routes_gateway`는 구현 완료(B11)** — `aipt/web/routes_gateway.py`가 `GET/POST /api/gateway/profile`을 완전히 구현해 Gateway 컨테이너의 `/gateway/profile` API로 프록시하며(`GATEWAY_HOST`/`GATEWAY_PORT` 실사용), `tests/web/test_routes_gateway.py`로 테스트도 갖췄다(커밋 `39c4ea78`, 이후 `85dc19fc`에서 idle-reset 리팩터와 함께 갱신). 위 다이어그램의 실선 화살표가 이를 반영한다.
 - **LocalLLMBackend**의 게이트웨이(프록시, 애플리케이션 레벨 HTTP 신기능 실험 지점)와 **Network Gateway 컨테이너**(순수 네트워크 특성 주입, L3/L4)는 서로 다른 컴포넌트다 — 이름이 비슷해 혼동하기 쉬우므로 문서/코드에서 전자는 "engine gateway/proxy", 후자는 "network gateway"로 구분 표기할 것을 권장.
 - 모든 backend의 turn 결과는 `aipt/core`가 관찰한 데이터와 함께 `aipt/export`의 3-레이어 CSV(connection/turns/packets) + bundle.zip으로 수렴한다.
 
@@ -492,7 +493,7 @@ Python은커녕 C 헬퍼조차 놓칠 수 있다 — "3.3ms 경로에 10ms 샘�
 | 샘플링 주기 적응 (신규) | 고정 2ms 대신, **경로의 예상 RTT에 비례해 주기를 정하는 적응형 로직** 도입: `interval_ms = max(MIN_INTERVAL_MS, measured_or_declared_rtt_ms / K)` (K는 슬로우스타트 burst 하나를 최소 몇 회 샘플링할지 결정하는 상수, 기존 문서의 "3.3ms 경로 → 10ms 복귀 → 2ms 주기로 5회 샘플" 비율을 기준으로 역산). Gateway가 주입한 지연값(`GATEWAY_DELAY_MS`)이나 mock/local_llm의 실측 RTT를 실행 전에 알 수 있으므로, 실행 시작 시 이 값을 `cwnd.Monitor`에 넘겨 주기를 자동 산정 |
 | 하한 주기 | 순수 loopback/컨테이너 직결(RTT < 0.1ms) 같은 극단적으로 짧은 경로에서는 C 헬퍼도 물리적 하한(스케줄링 tick, netlink 왕복 비용)에 부딪힌다. 이 경우 "측정 불가/신뢰 구간 밖"임을 결과에 명시적으로 표시(`interval_below_reliable_floor: true` 같은 플래그) — 없는 정밀도를 있는 것처럼 보고하지 않는다 |
 | 패킷 타임스탬프도 동일 원칙 적용 (신규, 확장) | `aipt/export/packets.py`의 inter-arrival gap 계산은 지금 tcpdump가 pcap에 기록한 타임스탬프에 의존한다. tcpdump 자체는 커널 캡처(AF_PACKET)라 userspace Python보다는 정확하지만, **짧은 RTT 경로에서 패킷 간격이 μs 단위로 좁아지면 pcap 타임스탬프의 커널 클록 해상도(통상 1μs, NIC에 따라 다름)가 병목**이 될 수 있다. 하드웨어 타임스탬프(`SO_TIMESTAMPNS`/`ETHTOOL_GET_TS_INFO`)가 있는 환경에서는 이를 우선 사용하도록 `capture.py`에 감지 로직 추가 검토 |
-| 결과 스키마 | `cwnd.Monitor.result()`와 `packets.csv`에 **주기 산정 근거를 기록**: `interval_ms`, `interval_reason`("fixed" / "adaptive:rtt=<x>ms" / "floor_clamped"), `measurement_confidence`("high"/"degraded") — 나중에 어떤 실행이 신뢰할 만한지 사후에 판별 가능하게 |
+| 결과 스키마 | `cwnd.Monitor.result()`와 `packets.csv`에 **주기 산정 근거를 기록**: `interval_ms`, `interval_reason`("fixed" / "adaptive:rtt=<x>ms" / "floor_clamped"), `measurement_confidence`("high"/"degraded") — 나중에 어떤 실행이 신뢰할 만한지 사후에 판별 가능하게 (2026-09-03: export 계층인 `aipt/export/connection.py`의 `CONNECTION_SUMMARY_COLUMNS`/`connection_summary_csv()`에도 두 필드가 반영되어 `cwnd_summary.csv`까지 전달됨) |
 | 적용 범위 | PublicAIBackend는 원래도 실제 인터넷 RTT(수~수십 ms)라 기존 2ms 고정 주기로 충분 — 적응형 로직은 **MockBackend/LocalLLMBackend에서만 활성화**해도 됨 (단, 공통 코드 경로이므로 구현은 `aipt/core/cwnd.py`에 위치하고 파라미터로 제어) |
 
 ### 아키텍처 다이어그램 반영
@@ -572,29 +573,87 @@ Mermaid 다이어그램 참고 (DESIGN.md의 §4.8은 backend 조합의 개괄
 Netem <--> Engine" 화살표가 실제로는 "LocalLLM → Netem → engine
 Gateway(L7, 캐싱 처리) → Engine"임을 텍스트로만 명시).
 
+## 4.11 idle-reset(slow-start-after-idle) 토글 — client-only 재설계 (2026-09-02)
+
+**대상**: `net.ipv4.tcp_slow_start_after_idle` sysctl. 이 값이 `1`(Linux
+기본값)이면 커널은 소켓이 한 RTO만큼 idle 상태였다가 다시 보낼 때 cwnd를
+버리고 slow start로 되돌린다 — `tcp_congestion`(§1의 idle-reset 실험) 및
+`aipt/core/cwnd.py`의 `idle_resets()` 판정 로직이 관측하는 바로 그 현상.
+
+**원 설계 (2026-09-01)**: *responding* 쪽(`mock-server`/`local-llm`)의
+sysctl을 토글했다 — 서버가 보내는 응답이 더 크므로 그쪽 cwnd가 지배적일
+것이라는 가정. 이를 위해 mock-server에 `/admin/idle-reset` 라우트를,
+local-llm에 `docker/idle_reset_admin.py` 사이드카를 두어 각각 자기 컨테이너의
+sysctl을 쓰게 했다.
+
+**2026-09-01 인과 실험 결과 (재설계의 근거)**: `docs/experiments/2026-09-01-idle-reset-results.md`가
+실제로 원 설계를 검증했다. mock-server 측 idle-reset은 실험 내내
+`enabled=1`(기본값)로 **고정**한 채, 오직 `web`(client) 자신의
+idle-reset만 두 조건(on/off)으로 바꿔 **다음 턴 요청 업로드 지연**
+(next-turn request upload latency)을 측정했다 — 이 실험이 보려던 것은
+응답 방향이 아니라 업로드 방향이므로 서버측 설정은 의도적으로 무관하게
+고정했다. 결과: 이 지표는 responding side가 아니라 `web` 자신의
+**송신측(send-side) cwnd**에 의해 좌우되며, on/off 조건 간 업로드 지연이
+최대 407배 차이났다 — `web`이 idle 구간 후 다음 요청을 보내는 것은
+언제나 `web` 자신의 소켓이므로, 그 소켓의 cwnd가 idle-reset으로 초기화됐는지
+여부가 직접적인 원인이다. 즉 원 설계(서버측 토글)는 측정하려는 인과관계와
+무관한 소켓을 건드리고 있었다.
+
+**2026-09-02 재설계 (operator 지시)**: `aipt/core/idle_reset.py` 모듈은
+그대로 재사용하되, 호출 주체를 **오직 `web` 프로세스 자기 자신**으로
+한정했다. `aipt/web/routes_gateway.py`의 `GET`/`POST` `/api/idle-reset`이
+`aipt.core.idle_reset.read()`/`write()`를 **in-process로, 네트워크 홉 없이**
+직접 호출하며, 대상 경로는 언제나 `IDLE_RESET_PATH =
+"/proc/sys/net/ipv4/tcp_slow_start_after_idle"`(파라미터 기본값), 즉
+`web` 컨테이너 자신의 netns다. `web`이 이미 자기 자신의 netns를 소유하므로
+별도 프록시/사이드카가 필요 없다(`idle_reset.py` 모듈 docstring 근거). API
+시그니처에도 `backend=` 같은 대상 선택 파라미터가 없다 —
+`set_idle_reset(enabled: bool)`뿐이며, 어떤 backend(mock/local_llm/public_ai)를
+선택했든 이 토글은 항상 `web` 자신에게만 적용된다.
+
+이 재설계로 다음이 **삭제된 죽은 코드**가 됐다(2026-09-02):
+- mock-server의 `/admin/idle-reset` admin 라우트
+- local-llm의 `docker/idle_reset_admin.py` 사이드카 프로세스
+- 위 둘을 위해서만 존재하던 서버측 admin 프록시 경로 전체
+
+(과거 커밋 히스토리에서 확인 가능. `tests/web/test_routes_gateway.py`의
+`test_idle_reset_never_makes_http_call`이 "예전 프록시 경로로 되돌아가면
+즉시 실패"하도록 회귀 방지 중.)
+
+**주의(제약)**: `public_ai` backend는 이 프로젝트가 컨테이너 netns를
+소유하지 않는 실제 인터넷 종단이므로, `public_ai`를 선택한 상태에서
+이 토글을 조작해도 Gemini/OpenAI 서버에는 아무 영향이 없다 — 여전히
+`web` 자신의 송신측 cwnd만 바뀐다. 이는 코드가 의도한 대로 정확히
+동작하는 것이지만, UI가 backend와 무관하게 항상 이 필드를 노출하므로
+"현재 선택한 backend의 응답 경로에 영향을 준다"는 오해를 유발할 수 있다
+(`docs/seed-2026-09-01-idle-reset-experiment.md` E3 항목 참고).
+
+**참고 문서**: `docs/experiments/2026-09-01-idle-reset-results.md`(실험
+로그), `docs/audit-2026-09-02/core.md` §4.1, `docs/audit-2026-09-02/web.md`
+§5.1(코드 근거 정밀 검증).
+
 ## 5.2 문서-코드 정합성 점검 (2026-09-01, ooo 인터뷰 기반 전수 감사)
 
 AIPT를 ooo(Ouroboros) 워크플로우로 재정의하면서, 실제 코드를 병렬 서브에이전트로
 전수 조사(빌드/기동/실측 포함)해 DESIGN.md와의 괴리를 확정했다. §6의 6개
 미해결 결정은 **모두 확정 완료**(코드 레벨로 재확인, 아래 §6에 확정 내용 갱신).
-남은 괴리는 다음 3가지뿐이다:
+당시 발견된 괴리는 아래 2건이며, **둘 다 이후(2026-09-02, T2/T8) 정식
+개정으로 이미 해소되었다** — 이 절은 감사 당시 시점의 기록으로 보존한다:
 
-1. **§4.7.1 저장 정책 stale** — "Public AI 기록만 영속 저장, 나머지는 인메모리
-   최근 50개"라고 확정했었으나, 실제로는 `RUN_STORE_DIR`(`data/runs/`)에 모든
-   backend의 run을 디스크 영속화하고 있다(2026-08-27 "Run store 디스크 영속화"
-   작업, MIGRATION.md 참고). 문서가 실제보다 뒤처짐 — 이 절을 실제 동작에 맞게
-   갱신 필요.
-2. **§4.8 아키텍처 다이어그램이 quic_mock 미반영** — §7의 QUIC idle-probe
-   스파이크(2026-08-27)가 `QuicMockBackend`로 `Backend` 프로토콜에 정식
-   편입되고 `docker-compose.yml`에 `quic-mock-server` 5번째 서비스로 실존하는데,
-   §4.8 Mermaid 다이어그램의 BACKENDS 서브그래프에는 3개(PublicAI/Mock/LocalLLM)만
-   남아 있다.
-3. **B11(웹 UI Network Profile 선택) 미구현** — Gateway 컨테이너의
-   `GET/POST /gateway/profile` API는 완성되어 실동작 확인됐으나(§4.7),
-   `aipt/web`에 `routes_gateway` 모듈 자체가 없고 실험 폼에도 프로파일
-   드롭다운이 없다. `GATEWAY_HOST`/`GATEWAY_PORT` env가 `web` 서비스에
-   주입만 되고 코드에서 전혀 쓰이지 않는 dead config로 확인됨 — 사용자가
-   프로파일을 바꾸려면 컨테이너에 직접 curl해야 하는 상태.
+1. **§4.7.1 저장 정책 stale (해소됨, T8)** — 당시엔 "Public AI 기록만 영속
+   저장, 나머지는 인메모리 최근 50개"라고 확정돼 있었으나, 실제로는
+   `RUN_STORE_DIR`(`data/runs/`)에 모든 backend의 run을 디스크 영속화하고
+   있었다(2026-08-27 "Run store 디스크 영속화" 작업). §4.7.1은 2026-09-02
+   T8로 이 실제 동작에 맞춰 정식 개정 완료됨.
+2. **B11(웹 UI Network Profile 선택) 구현 완료 (해소됨, T2)** — Gateway 컨테이너의
+   `GET/POST /gateway/profile` API는 완성되어 실동작 확인됐고(§4.7),
+   `aipt/web/routes_gateway.py`가 `GET/POST /api/gateway/profile`로 이를
+   프록시하며 실험 폼에도 프로파일 드롭다운이 연결되어 있다(커밋
+   `39c4ea78`, 이후 `85dc19fc`에서 idle-reset 리팩터와 함께 갱신;
+   `tests/web/test_routes_gateway.py`로 테스트됨). `GATEWAY_HOST`/
+   `GATEWAY_PORT` env는 `web` 서비스에 주입되어 `routes_gateway.py`가
+   실제로 읽어 쓰는 live config다 — 사용자가 웹 UI에서 직접 프로파일을
+   바꿀 수 있다.
 
 또한 이번 감사에서 **Docker HEALTHCHECK 버그**를 신규 발견했다: `local-llm`
 컨테이너의 llama.cpp 서버는 `--port 40080`으로 정상 기동·응답하지만
@@ -606,6 +665,30 @@ Qwen2.5-0.5B-Instruct-GGUF 모델로 `local_llm` 백엔드 end-to-end 3턴 실�
 "고장났다"고 오판할 여지가 있어 `docker/Dockerfile.local_llm`의
 HEALTHCHECK 정의를 40080으로 고쳐야 한다.
 
+**HEALTHCHECK 비대칭 (설계 의도, 2026-09-02 감사 native.md §3.2로 문서화)**:
+네 개 서비스 이미지 중 `docker/Dockerfile.local_llm`에만 HEALTHCHECK
+지시문이 있고 `docker/Dockerfile.web` / `docker/Dockerfile.mockserver` /
+`docker/Dockerfile.gateway`에는 전혀 없다. 이는 결함이 아니라 각 서비스의
+기동 특성 차이를 반영한 의도된 비대칭이다.
+
+- `local-llm`: 업스트림 `ghcr.io/ggml-org/llama.cpp:server` 이미지를 그대로
+  쓰며, 실제 추론 엔진(llama-server)이 모델 가중치를 로드하고 나서야 요청에
+  응답할 수 있다 — `start-period=60s`가 이 로딩 지연을 감안한 값이다. 즉
+  컨테이너가 "떠 있음"과 "요청을 받을 준비가 됨" 사이에 의미 있는 시간차가
+  있고, `docker compose ps`/오케스트레이션이 그 차이를 구분해야 할 실질적
+  필요가 있어 HEALTHCHECK를 정의(및 40080 포트로 재정의)했다.
+- `web` / `mock-server` / `gateway`: 각각 FastAPI(uvicorn)·stdlib
+  `http.server`·FastAPI(uvicorn) 기반의 얇은 애플리케이션 서버로, 무거운
+  모델 로딩이나 외부 프로세스 기동 대기 없이 프로세스 시작과 거의 동시에
+  요청을 받을 준비가 된다. 기동-완료와 요청-가능 사이의 지연이 사실상
+  없으므로 별도 HEALTHCHECK로 얻는 이득이 local-llm만큼 크지 않아 지금까지
+  추가되지 않았다.
+- 다만 이 세 서비스도 HEALTHCHECK가 전혀 없으므로 `docker compose ps`가
+  이들의 healthy/unhealthy 상태를 표시하지 못한다는 점은 실사양의 한계로
+  남아 있다(native.md §2.7/§3.2). 필요해지면(예: 오케스트레이션 레벨의
+  readiness gate) 각 서비스의 `/health`류 엔드포인트를 대상으로 가벼운
+  HEALTHCHECK를 추가하는 것을 향후 과제로 고려한다.
+
 ## 6. 미해결 설계 결정 (구현 전 확인 필요) — [x] 2026-09-01 전항목 확정 완료 (아래 각 항목 참고)
 
 1. **`aipt/core/cwnd.py` 최종 API** — token_traffic의 `provider/arm/kind` 3필드 라벨링 vs tcp_congestion의 단일 `label` 문자열. 제안: `label` 하나로 통일하고 호출측에서 `f"{provider}:{arm}:{kind}"` 형태로 조립 (synthetic_mock은 조립 없이 그대로 label 사용).
@@ -613,7 +696,7 @@ HEALTHCHECK 정의를 40080으로 고쳐야 한다.
 2. **`core/capture.py`의 caller당 pcap 개수** — external_api는 (provider, arm, kind)당 1개, synthetic_mock은 run당 1개. `label` 파라미터로 이미 일반화 가능해 보이나, external_api의 dual-pass(bytes/latency 분리 캡처) 요구사항까지 커버되는지 이관 시 재검증 필요.
    **확정 (2026-09-01): `Capture` 클래스가 `label` 직접 전달(synthetic_mock, run당 1개) / `provider・arm・kind` 자동 조립(`{provider}_{arm}_{kind}`, external_api) 두 방식 모두 지원. dual-pass 요구사항도 `kind`가 파일명에 포함되어 별도 pcap으로 분리되는 것으로 재검증됨.**
 3. **의존성 통합** — token_traffic은 `requests` 기반, google-genai/openai SDK는 사용 안 함(SDK가 httpx라 소켓 카운터 훅이 안 걸림). synthetic_mock은 표준 라이브러리 위주. `pyproject.toml` 하나로 합칠 때 optional-dependency 그룹(`[external-api]`, `[dev]`)으로 나눌지 결정 필요.
-   **확정 (2026-09-01): `[external-api]` 대신 기능별 4개 그룹으로 결정.** base `dependencies=["requests"]`, optional `dev`(pytest) / `export`(dpkt) / `web`(fastapi/uvicorn/jinja2/python-multipart/httpx) / `quic`(aioquic, §7 스파이크 이후 추가).
+   **확정 (2026-09-01): `[external-api]` 대신 기능별 4개 그룹으로 결정.** base `dependencies=["requests"]`, optional `dev`(pytest) / `export`(dpkt) / `web`(fastapi/uvicorn/jinja2/python-multipart/httpx).
 4. **테스트 마킹** — 기존 `test_conversation_live.py`, `test_cwnd_live.py` 등 "live"(실제 소켓/커널 필요) 테스트를 pytest 마커(`@pytest.mark.live`)로 통합 표시할지, 두 프로젝트 관례가 달랐다면 통일 필요.
    **확정 (2026-09-01): `@pytest.mark.live`로 통일.** `pyproject.toml`의 `[tool.pytest.ini_options] markers`에 등록, 9개 테스트 파일이 사용 중(`test_cwnd.py`, `test_capture.py`, `test_conversation_live.py`, `test_backend_live.py`, `test_engine_live.py` 등). CI 기본 실행은 `-m "not live"`.
 5. **`data/` 저장 위치** — token_traffic은 `TRAFFIC_DATA_DIR`(런 JSON), tcp_congestion은 `data/pcaps/`(pcap만, 메모리에 최근 1건만 유지). 병합 후 두 lab이 저장소를 공유할지, `data/external-api/`·`data/synthetic-mock/`으로 분리할지 결정 필요. **권장: 분리** — 두 lab의 보존 정책이 다르다(external_api는 20개 런 유지 pruning, synthetic_mock은 최근 1건만 메모리 유지).
@@ -635,286 +718,13 @@ HEALTHCHECK 정의를 40080으로 고쳐야 한다.
 | 5 | Docker 통합(web + mockserver 2-서비스 compose), 빌드 스테이지 정리 | `docker compose up --build` 통과 |
 | 6 | 문서 최종화(README/docs), 모노레포 CLAUDE.md 갱신, 원본 `token_traffic/`·`tcp_congestion/` 삭제(또는 archive) | 단일 소스 오브 트루스 확정 |
 
-## 7. QUIC idle-probe spike (2026-08-27, 신규)
 
-**배경**: idle 구간 동안 능동적으로 probe(0-size/PING)를 보내 RTT 변화를
-측정하고, 그 값으로 idle 종료 시점의 cwnd를 조정하고 싶다는 아이디어를
-검토했다. 실제 커널 소스(`net/tcp.h`의 `struct tcp_congestion_ops`,
-`tcp_output.c`의 `tcp_cwnd_restart()`/`tcp_slow_start_after_idle_check()`)를
-직접 대조한 결과 TCP에서는 이 방식이 구조적으로 불가능하다고 결론지었다:
+## 7. QUIC idle-probe spike — 제거됨 (T3, 2026-09-02)
 
-- TCP의 keepalive/window-probe 패킷(`tcp_write_wakeup()`)은 일부러 예전
-  시퀀스 번호를 재사용해 RTT 샘플링 파이프라인(Karn's algorithm, RFC 6298)에서
-  **의도적으로 배제**된다 -- probe를 보내도 RTT로 못 쓴다.
-- `tcp_congestion_ops`의 모든 콜백(`cong_avoid`/`cong_control`/`cwnd_event`
-  등)은 "이미 벌어진 전송 이벤트에 대한 cwnd 계산"만 담당하고, 새 패킷을
-  스스로 만들어 보낼 권한이 없다 -- congestion control 모듈이 능동적으로
-  probe를 쏘는 것 자체가 아키텍처 계층 분리를 어기는 것.
-- 유휴 재시작 판정 자체도 별도 타이머가 아니라, 다음 전송 시도 시점에
-  `tcp_jiffies32 - tp->lsndtime`를 사후 계산하는 방식이라(`tcp_slow_start_after_idle_check`),
-  "RTO마다 RTT를 측정" 같은 주기적 개입 지점 자체가 없다.
-
-**QUIC(aioquic)으로 전환한 이유**: QUIC은 혼잡제어가 커널이 아니라
-유저스페이스 라이브러리 안에 있고, `QuicConnection.send_ping(uid)`가
-애플리케이션이 언제든 호출 가능한 공개 API이며, PING은 ack-eliciting
-프레임이라 그 RTT 샘플이 데이터 트래픽과 **동일한 경로**
-(`aioquic.quic.recovery.QuicPacketRecovery.on_ack_received()`)로
-`on_rtt_measurement()` 콜백에 전달됨을 aioquic 실제 소스로 확인했다. 커널
-모듈/패치가 전혀 필요 없다.
-
-**구현 (`aipt/backends/quic_mock/`, mock 전용, 2026-08-27 1차 착수)**:
-
-- `congestion.py` — `IdleProbeCongestionControl`: aioquic 표준 Reno에
-  cwnd/loss 회계를 전량 위임하고, `mark_idle_probe_sent()`(idle 진입 시
-  호출)로 pre-idle RTT를 기록해두었다가 그 다음 `on_rtt_measurement()`
-  호출(=probe PING의 ACK)에서 RTT 증가율을 계산, 증가한 만큼(최대
-  `MAX_REACTED_GROWTH=0.5`로 캡) cwnd를 사전에 줄인다. RTT가 그대로거나
-  개선됐으면 아무 것도 안 하고 Reno의 정상 증가 로직에 맡긴다(한 번의
-  probe 샘플만으로 낙관적으로 판단하는 게 비관적으로 판단하는 것보다
-  위험하다는 원칙). `register_congestion_control("idle_probe", ...)`로
-  등록되어 `QuicConfiguration(congestion_control_algorithm="idle_probe")`로
-  바로 선택 가능.
-- `server.py` — aioquic 기반 QUIC echo 서버(`EchoProtocol`). 기존
-  `aipt.backends.mock.server`(HTTP/1.1)를 대체하는 게 아니라 별도
-  경로 -- 이 스파이크의 목적은 "idle-probe 메커니즘이 실제 impaired
-  path에서 cwnd를 예상대로 움직이는가"이지 mock 서버 기능 전체
-  재현이 아니다.
-- `spike_runner.py` — 이 프로젝트의 실제 `aipt/gateway/`(tc netem L3
-  포워딩 컨테이너)를 통해 baseline(순수 reno, probing 없음) vs
-  idle_probe(probing 있음) 두 congestion control을 turn/idle 대화
-  패턴으로 비교 실행하는 CLI. `POST /gateway/profile`로 Gateway의
-  netem 프리셋(clean/3g/...)을 실제로 전환한 뒤 실행하므로, loopback
-  노이즈가 아니라 진짜 주입된 지연/손실 위에서 측정한다.
-- Docker: `docker/Dockerfile.quic_mock_server` + `docker-compose.yml`의
-  `quic-mock-server` 서비스(`net-backend`에만 연결, `gateway` 경유
-  라우팅 -- `mock-server`와 동일한 L3 확정 설계 패턴, UDP 포트 4433).
-  Gateway 자체는 L3 IP 포워딩 + netem이라 프로토콜(TCP/UDP)에 무관하게
-  그대로 통과시키므로 Gateway 코드 변경은 전혀 없었다.
-
-**검증 결과 (2026-08-27, 실컨테이너)**:
-- `clean` 프로파일(지연 0): baseline/idle_probe 둘 다 cwnd가 매 턴
-  꾸준히 증가(둘 다 6000→약 16000대), probe RTT 변화가 미미해(노이즈
-  수준) 조정이 거의 발생하지 않음 -- 예상대로.
-- `3g` 프로파일(delay 150±40ms, loss 1%, reorder 0.5%): idle_probe가
-  매 턴 idle 중 RTT 증가(11.7%~19.4%)를 실제로 감지하고 cwnd를
-  사전에 줄임(예: `cwnd_before=3188 → cwnd_after=2643`). baseline은
-  cwnd가 6000에서 전혀 안 움직임(reno가 idle에 대해 아무 반응이
-  없음을 재확인 -- QUIC 표준 congestion control엔 TCP의
-  `tcp_cwnd_restart()` 같은 idle-restart 로직이 아예 없다는 이전 조사
-  결과와 일치).
-- 다만 이 결과가 곧바로 "성능이 개선된다"는 뜻은 아님 -- cwnd를 미리
-  줄이는 게 처리량/지연 트레이드오프에서 실제로 이득인지는 별도로
-  측정해야 한다(다음 단계).
-
-**남은 단계 (사용자 지시, 순서대로)**:
-1. (완료) Mock 환경에서 baseline과의 cwnd 동작 차이를 실제 Gateway netem
-   경로에서 확인.
-2. (완료, 2026-08-27) 처리량/지연 관점의 실제 A/B 측정 — 결과는 아래.
-3. UI에 "Use QUIC" 체크박스 + 알고리즘 선택 추가, `aipt/web/routes_run.py`
-   의 `RunRequest`/`Backend` 프로토콜에 정식 편입(현재
-   `spike_runner.py`/`experiment.py`는 독립 CLI, 웹 UI/`RunRequest`에는
-   미연결).
-4. HTTP/3 지원을 통한 실제 `local_llm` 백엔드 테스트(llama.cpp/vLLM의
-   HTTP/3 지원 여부 확인 필요 -- 미지원 시 게이트웨이에서 QUIC↔HTTP1
-   브리지 필요할 수 있음).
-
-### 7.1 처리량/지연 A/B 측정 결과 (2026-08-27)
-
-`aipt/backends/quic_mock/experiment.py` 신규 — cwnd 궤적만 보던
-`spike_runner.py`와 달리, 실제 요청-완전응답 왕복 지연(post-idle latency,
-turn 0은 idle 직전이 없어 제외)과 총 처리량(goodput, 반복 실행 합산
-바이트/합산 활성 시간)을 측정한다. payload를 초기 cwnd(~12000바이트)보다
-훨씬 큰 30000바이트로 잡아 매 턴이 실제로 여러 RTT에 걸쳐 전송되게
-했다(작은 payload로는 cwnd 차이가 아예 드러나지 않음). 이 과정에서
-`spike_runner.py`의 프로토콜 버그도 하나 발견/수정: 첫 번째 STREAM
-프래그먼트만 받고 응답 완료로 처리하고 있어서(`end_stream` 미확인),
-멀티프래그먼트로 도착하는 큰 응답의 지연을 실제보다 짧게 측정할 뻔했다
--- `experiment.ThroughputProtocol`은 `end_stream=True`까지 프래그먼트를
-누적해서 받은 뒤에만 완료 처리하도록 수정(테스트로 검증,
-`test_throughput_protocol_receives_full_multi_fragment_payload`).
-
-**실측 (Gateway `3g` 프로파일: delay 150±40ms, loss 1%, reorder 0.5%,
-turns=6, think_time=1.0s, payload=30000B, repeats=3)**:
-
-| 지표 | baseline (reno) | idle_probe | 델타 |
-|---|---|---|---|
-| post-idle latency 평균 | 3024.3ms | 3233.3ms | **+6.9% (악화)** |
-| post-idle latency stdev | 549.1ms | 337.2ms | (분산은 감소) |
-| post-idle latency 최대 | 4099.0ms | 3734.8ms | (최악값은 개선) |
-| goodput | 16535bps | 14892bps | **-9.9% (악화)** |
-
-**결론: 이번 구현/파라미터로는 개선되지 않았다 — 오히려 평균 지연·처리량
-모두 소폭 악화됐다.** §7의 cwnd 궤적 스파이크에서 확인한 "idle_probe가
-RTT 증가를 감지해 cwnd를 사전에 줄인다"는 메커니즘 자체는 정상 동작했지만
-(이 실험 로그에도 매 idle 갭마다 `RTT grew X% ... cwnd A -> B` 조정이
-찍힘), **그 조정이 실제 성능에는 순이익이 아니라 순손실**이었다. 원인
-추정(추가 검증 필요, 미확정):
-
-- `MAX_REACTED_GROWTH=0.5` 캡이 있어도, netem의 지터(±40ms)만으로도
-  probe 1회 샘플에서 10~35%대 "성장"이 흔히 관측됐다(로그의
-  `RTT grew 21.4%`, `36.1%` 등) -- 이는 실제 지속적 혼잡이 아니라 단발성
-  지터 노이즈일 가능성이 높은데, 알고리즘이 이를 구분하지 못하고 매번
-  cwnd를 깎아서 다음 턴의 처리량 상한을 낮춰버린다.
-  §7에서 이미 "단일 probe 샘플은 노이즈에 취약하다"고 우려했던 바로 그
-  실패 모드가 실측으로 확인된 것.
-- 반감이 아니라 부분 축소(비율 기반)라 TCP의 이분법적
-  idle-restart보다는 온건하지만, **위험을 낮추는 보수적 조정이 이 특정
-  워크로드(1% loss, 150ms RTT, 30KB payload)에서는 처리량 손실 쪽으로만
-  작용**했다 -- loss를 막아주지도 못했고(reno도 이미 loss 기반 조정을
-  하고 있어 중복), cwnd만 불필요하게 낮춰 회복 시간만 늘렸을 가능성.
-
-**후속 조치 필요(3단계 UI 편입 전에 먼저 처리 권장)**:
-- 노이즈와 진짜 신호를 구분하는 로직 필요 -- 예: 단일 probe가 아니라
-  idle 중 probe를 N회 반복해 평균/중앙값을 쓰거나, `MAX_REACTED_GROWTH`를
-  훨씬 보수적으로(예 0.1~0.2) 낮추거나, 일정 threshold 이하 성장은
-  완전히 무시.
-- 서로 다른 netem 프로파일(clean/wired/wireless)과 payload
-  크기 조합으로 반복 측정해, 이번 3g+30KB 조합에 국한된 결과인지 일반적
-  경향인지 확인 필요 -- 현재는 단일 프로파일·단일 payload 크기 1회
-  시리즈(반복 3회)만 측정한 상태. (참고: 측정 당시 프리셋 이름은 `3g`였으며
-  2026-09 재설계로 `wireless`로 개명 — 실측 로그의 `3g`/`broadband`/`satellite`/
-  `lossy` 표기는 당시 이름 그대로 보존, 현재 코드의 프리셋 이름과는 다름)
-- **이 시점에서 3단계(UI 편입)로 바로 넘어가는 것은 권장하지 않는다** --
-  아직 개선을 증명하지 못한 알고리즘을 사용자 대면 UI 옵션으로 노출하는
-  건 시기상조.
-
-### 7.2 웹 UI 편입 (2026-08-27, 사용자 지시로 진행)
-
-부정적 A/B 결과(§7.1)에도 불구하고 사용자가 "직접 웹에서 트리거해보고
-싶다"는 명시적 요청으로 3단계(UI 편입)를 진행했다. **`idle_probe`를
-기본값으로 노출하지 않는 방식**으로 안전장치를 유지했다:
-
-- **`aipt/backends/quic_mock/backend.py` 신규** -- `QuicMockBackend`,
-  기존 `MockBackend`와 동일한 `Backend` 프로토콜 구현체. 백그라운드
-  스레드에서 전용 asyncio 이벤트 루프를 돌리고, `send_turn()`은
-  `asyncio.run_coroutine_threadsafe()`로 그 루프에 작업을 넘기고
-  블로킹 대기하는 방식(sync Backend 프로토콜 ↔ async aioquic 사이의
-  표준 브리지 패턴, `routes_run.py` docstring이 이미 SSE에서 쓰는
-  것과 동일 기법을 반대 방향으로 사용). `cwnd_result()`는 **연속
-  trace가 아니라 최종 스냅샷만** 제공 -- QUIC 혼잡제어는 유저스페이스에
-  있어 `aipt.core.cwnd`의 netlink 기반 연속 모니터가 애초에 관찰할
-  대상(커널 소켓)이 없기 때문. 이 한계를 응답의 `note` 필드에 명시.
-- **`aipt/core/quic_congestion.py` 신규** -- `aipt.core.congestion`(커널
-  TCP 모듈, `/proc/sys/net/ipv4/tcp_available_congestion_control`)과
-  동일한 "실제 사용 가능한 것만 보고, 절대 하드코딩 목록을 지어내지
-  않는다" 원칙을 QUIC(aioquic 레지스트리)에 적용. import 부작용으로
-  `idle_probe`가 aioquic 표준 `reno`/`cubic`과 함께 자동 등록됨.
-- **`RunRequest.transport`** 신규 필드(`"http1"`\|`"http3"`, 기본값
-  `"http1"`) -- `_build_backend()`가 `mock` + `transport="http3"`일 때만
-  `QuicMockBackend`를 생성(다른 백엔드 조합은 아직 미지원, 명시적으로
-  가드). **`algorithm` 필드는 재사용**하되 네임스페이스가 다름(TCP
-  커널 모듈명 vs QUIC 알고리즘명) -- `req.backend == "mock"`이면서
-  `transport == "http3"`일 때는 라우트가 `backend.algorithm`을 다시
-  덮어쓰지 않도록 가드(그렇지 않으면 생성자가 이미 해석해둔 알고리즘이
-  `None`으로 깨질 뻔했음, 실제 코드 리뷰 중 발견).
-- **UI**: `_experiment_form.html`에 **"Transport" 드롭다운** 신규
-  (`TCP (kernel, default)` / `QUIC (aioquic, mock-only spike)`,
-  **기본값 TCP**), Mock 카드 선택 시에만 노출(`app.js`의
-  `applyTransportAvailability()`). Transport를 QUIC으로 바꾸면 같은
-  "Congestion algorithm" 드롭다운의 옵션 목록 자체가
-  `config.quic_congestion_algorithms`(reno/cubic/idle_probe)로
-  교체됨(`populateAlgorithmOptions()`) -- 두 네임스페이스를 뒤섞어
-  제출할 수 없도록 UI 레벨에서도 분리.
-- **실컨테이너 검증**: `docker compose build web` 재빌드 후
-  `curl -X POST /api/run -d '{"transport":"http3","algorithm":"idle_probe",...}'`
-  실행 → 정상 완료, `turns[].transport == "http3"` 확인,
-  `/api/config`에서 `quic_available: true`,
-  `quic_congestion_algorithms: ["cubic","idle_probe","reno"]` 확인.
-- **테스트**: 유닛 3개(`tests/core/test_quic_congestion.py`) + live e2e
-  6개(`tests/backends/quic_mock/test_backend_live.py`, 실제 UDP 소켓) +
-  web API 2개(`tests/web/test_app.py`, TestClient로 `/api/run` 전체
-  경로 검증, 기본값이 여전히 http1임을 확인하는 회귀 테스트 포함) 신규.
-  `pytest -m "not live"` 471 passed(462+9), 회귀 없음.
-
-**여전히 유효한 경고**: §7.1의 실측 결과(idle_probe가 처리량 -9.9%,
-지연 +6.9%)는 바뀌지 않았다. UI에 노출은 됐지만 **기본값이 여전히
-TCP + `algorithm` 미지정**이라 아무것도 안 건드리면 idle_probe를 만날
-일이 없고, QUIC 자체를 선택해도 알고리즘 기본값은 `idle_probe`가 아니라
-aioquic 표준 `reno`다. `idle_probe`를 실제로 켜려면 Transport=QUIC +
-algorithm=idle_probe를 **둘 다 명시적으로** 선택해야 하며, 이는 "아직
-개선을 증명하지 못한 실험 알고리즘을 알고 쓰는" 것으로 사용자의 결정에
-맡긴다.
-
-### 7.3 loopback 우회 버그 수정 (2026-08-31, 사용자가 Wireshark로 발견)
-
-§7.2에서 웹 UI에 편입한 직후 사용자가 실제로 QUIC을 선택해 테스트하고
-Wireshark로 캡처를 열어봤는데, **트래픽이 Gateway를 전혀 거치지 않고
-`web` 컨테이너 안의 loopback(127.0.0.1)에서만 오가는 걸 발견**했다.
-원인은 애초부터 `MockBackend`(TCP)와 신규 `QuicMockBackend` 둘 다
-**자체 서버를 프로세스 안에서 띄워 자기 자신과 통신**하는 구조였기
-때문 -- `mock-server`/`quic-mock-server` 컨테이너는
-`docker-compose.yml`에 이미 만들어져 있고 Gateway 경유 라우팅까지
-확정 설계(DESIGN.md 4.7)로 세팅돼 있었지만, **`/api/run` 경로는 그
-컨테이너들을 애초에 한 번도 참조한 적이 없었다** (스파이크 CLI인
-`spike_runner.py`/`experiment.py`만 사용).
-
-**수정 (LocalLLMBackend가 처음부터 쓰던 것과 동일한 패턴으로 통일)**:
-
-- `MockBackend`/`QuicMockBackend`에 `MOCK_SERVER_HOST`/`MOCK_SERVER_PORT`,
-  `QUIC_MOCK_SERVER_HOST`/`QUIC_MOCK_SERVER_PORT` 환경변수 추가 --
-  `LOCAL_LLM_ENGINE_URL`과 동일하게 "미설정 시 기존처럼 자체 서버 생성
-  (하위호환), 설정 시 그 주소로 접속"의 계약. 생성자 인자로는 노출하지
-  않음(다른 백엔드처럼 환경변수 전용 -- `routes_run.py`가 특별 케이스를
-  가질 필요 없음).
-- `docker-compose.yml`의 `web` 서비스에 두 쌍의 env var를
-  `mock-server`/`quic-mock-server`의 실제 IP(172.28.2.3/172.28.2.5)로
-  세팅, `depends_on`에도 두 서비스 추가.
-- `quic-mock-server`가 지금까지 `EchoProtocol`(순수 에코, DESIGN.md
-  7.1 spike 전용)을 썼는데, `QuicMockBackend`(실제 웹 UI 클라이언트)는
-  길이-프리픽스가 붙은 다른 프로토콜(`_MockEchoProtocol`)을 기대해서
-  프로토콜이 안 맞았다 -- `run_server()`에 `create_protocol` 파라미터
-  추가, entrypoint가 `_MockEchoProtocol`을 넘기도록 수정.
-
-**과정에서 발견한 진짜 버그 3개** (외부 서버 경로를 실제로 exercise해서
-드러남, 지금까지 아무도 이 경로를 안 써봤기 때문에 존재했던 버그):
-
-1. **`aipt/core/capture.py`의 tcpdump 필터가 TCP로 하드코딩** --
-   QUIC은 UDP라 필터가 아예 안 맞아 0개 패킷 캡처. `Capture`에
-   `proto` 파라미터 추가(기본값 "tcp", 하위호환), `routes_run.py`가
-   `backend.transport == "http3"`일 때 `proto="udp"`로 넘기도록 수정.
-2. **필터 문법 버그**: `"udp port N"`(공백 축약형)이 `any`
-   인터페이스(LINUX_SLL2 링크타입)에서 커널 레벨엔 매치되는데
-   (`received_by_filter`) tcpdump 프로세스가 실제로 파일에 쓰질
-   못하는 걸 실측으로 발견 -- `"udp and port N"`(명시적 `and`)으로
-   바꾸니 3회 연속 재현 가능하게 해결.
-3. **타이밍 경합 조건**: QUIC이 워낙 빨라서(수 턴이 1ms 이내 완료)
-   `SIGINT`가 tcpdump한테 소켓의 마지막 버스트를 읽어들일 기회를 주기
-   전에 도착 -- `received_by_filter`는 매치되는데 `captured`는 0.
-   `Capture.__exit__()`에 SIGINT 전송 전 `time.sleep(0.6)` 추가로
-   해결(시작 시 이미 있던 `sleep(0.4)`와 대칭).
-4. **(가장 심각) `MockBackend.send_turn()`이 외부 서버 모드에서
-   전부 실패**: 원래 `send_turn()`의 가드(`self._server is None`)와
-   호스트 조회(`self._server.host`)가 "in-process 서버를 항상
-   띄운다"는 옛 전제를 그대로 갖고 있어서, 외부 서버 모드
-   (`self._server`가 영원히 `None`)에서는 **모든 턴이
-   `RuntimeError: send_turn called before connect()`로 실패**했다.
-   `run["ok"] == true`인데 `run["turns"]`가 0개고 에러가
-   `run["error"]`에 묻혀있는 형태라 겉으로는 "성공"처럼 보였다 --
-   `self._peer_host`(외부/in-process 어느 쪽이든 실제 접속한
-   host/port를 기록하는 새 필드) 기준으로 가드/조회를 바꿔 해결.
-
-**실컨테이너 재검증** (4개 컨테이너 재기동, Gateway `3g` 프로파일 적용
-후): TCP/QUIC 둘 다 `run["ok"]==true`, `error==""`, 요청한 턴 수만큼
-`turns` 채워짐, pcap의 `host`가 컨테이너 IP(172.28.2.3/172.28.2.5,
-127.0.0.1 아님), `offload.iface=="eth0"`(`lo` 아님), `captured ==
-received_by_filter`(0 아님) 확인 -- 3회 반복 전부 재현. 다운로드한
-QUIC pcap을 `tcpdump -r`로 직접 열어 `172.28.1.3(web) <-> 172.28.2.5
-(quic-mock-server)` 간 실제 UDP 프레임 확인, 이 두 IP는 서로 다른
-Docker 서브넷(`net-client`/`net-backend`)이라 물리적으로 Gateway를
-반드시 거쳐야만 존재할 수 있는 트래픽 -- Gateway netem 적용 증거로
-`ttlt_ms`가 3g 프로파일 지연(~40ms대)을 그대로 반영함도 확인.
-
-**테스트**: `test_mock_backend_reads_external_server_from_env` 등
-env-var 유닛 6개(TCP 3 + QUIC 3), `test_mock_backend_external_server_
-full_lifecycle`(실제 두 번째 서버를 세워 외부 서버 경로 전체를
-end-to-end로 exercise -- 버그 #4를 실제로 잡아낸 테스트, 처음
-`wire_recv==300` 기대치로 작성했다가 dummy 모드 실제 동작(text 없음)
-과 안 맞아 재작성함), `test_capture_object_accepts_udp_proto...` 등
-capture proto 테스트 4개. `pytest -q -m "not live"` 481 passed(478+3),
-`-m live` 관련 신규 테스트 전부 통과 (local_llm의 무관한 기존 실패
-1건은 로컬에 실제 llama.cpp 엔진이 없어서 나는 것으로 이번 변경과
-무관, 확인함).
-
-각 Phase는 독립적으로 테스트 가능한 단위로 커밋하고, Phase 종료마다 사용자
-리뷰를 받는다 (`git mv` 없이 새로 복사하기로 했으므로, Phase별로 원본을 지우지
-않고 새 경로에 먼저 만든 뒤 마지막 Phase 6에서 원본을 정리한다).
+이전 §7에 있던 QUIC(aioquic 기반) idle-probe 혼잡제어 실험 스파이크
+(`aipt/backends/quic_mock/`, `aipt/core/quic_congestion.py`, `docker/Dockerfile.quic_mock_server`,
+`docker-compose.yml`의 `quic-mock-server` 서비스, 웹 UI의 Transport(QUIC)
+드롭다운, 관련 테스트/문서)는 audit T3 결정에 따라 코드와 문서 양쪽에서
+전면 제거됐다. 실측 결과 idle_probe 알고리즘이 순net loss였고(개선 없음),
+스파이크 이후 실제로 사용되지 않는 죽은 표면이었다. 후속으로 QUIC/HTTP3
+실험이 필요해지면 새 설계 문서로 다시 시작한다.
