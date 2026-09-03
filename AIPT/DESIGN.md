@@ -559,10 +559,16 @@ opt-in 헤더, 세션 경계(TCP 커넥션), 와이어 포맷(leaf-hash 치환 +
 **실측 검증**: `scripts/measure_perf_cache_savings.py`가 실제
 docker-compose 4-서비스 토폴로지(web → Network Gateway L3/L4 →
 engine Gateway L7 → llama-server) 위에서 동일 20턴 시나리오
-(`records/perf_short_smoketest.json`)를 캐싱 off/on 두 번 실행해 턴별
+(`records/perf.json`)를 캐싱 off/on 두 번 실행해 턴별
 `req_payload_bytes`/`wire_sent`를 비교 — 결과는 `data/runs/
 cache_savings_multiturn.csv`, 요약 수치는 ARCHITECTURE.md §3.3 참고
-(요청 payload 87.2%, 실제 wire 전송량 86.3% 절감).
+(요청 payload 약 87%, 실제 wire 전송량 약 86% 절감 — 2026-09-03 재실측
+기준 87.4%/86.5%, 실행마다 모델 응답 길이 변동으로 소폭 오차 있음). 이
+실측을 재현하려면 `local-llm` 컨테이너의 `LOCAL_LLM_CTX_SIZE`가
+`records/perf.json`의 20턴 누적 프롬프트를 수용할 만큼 충분히 커야
+한다(기본값 32768로 상향 조정됨 — 2026-09-01 시점 기본값이던 4096으로는
+1턴째부터 `exceed_context_size_error`로 실패하는 회귀가 있었음, §4.10 최초
+설계 당시엔 별도의 짧은 record로 검증해 드러나지 않았던 문제).
 
 **§4.8 다이어그램 갱신 필요 사항(반영 완료)**: `LocalLLM` 노드가 이제
 `gateway.py`(클라이언트측 캐싱 로직 포함)를 가리키고, `Netem`(Network

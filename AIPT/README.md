@@ -46,7 +46,7 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[web,export,dev]"
 # native cwnd 모니터 빌드 (netlink 연속 샘플링, 리눅스 전용)
 cc -O2 -Wall -o native/cwnd_monitor native/cwnd_monitor.c
 
-.venv/bin/pytest tests/ -q -m "not live"   # 433 passed, 1 skipped, 12 deselected
+.venv/bin/pytest tests/ -q -m "not live"   # 497 passed, 1 skipped, 16 deselected
 
 .venv/bin/uvicorn aipt.web.app:create_app --factory --host 0.0.0.0 --port 10000
 # → http://localhost:10000
@@ -130,7 +130,7 @@ AIPT/
 ├── docker/          # Dockerfile.{web,gateway,mockserver,local_llm}
 │                      + entrypoint_{web,mockserver,local_llm}.py
 ├── docker-compose.yml  # web + gateway + mock-server + local-llm (4-service)
-├── tests/           # core / backends / export / web / gateway — 519 tests
+├── tests/           # core / backends / export / web / gateway — 514 tests
 ├── ARCHITECTURE.md  # 최종 아키텍처 레퍼런스 (다이어그램 포함)
 ├── DESIGN.md        # 설계 결정 이력
 └── MIGRATION.md     # 이관 기록
@@ -141,13 +141,18 @@ AIPT/
 ## 테스트
 
 ```bash
-.venv/bin/pytest tests/ -q -m "not live"
+.venv/bin/pytest tests/ -q -m "not live"   # 497 passed, 1 skipped, 16 deselected
 ```
 
 `@pytest.mark.live`가 붙은 테스트는 실제 소켓/커널 netlink/tcpdump 등 이
 프로세스가 실행 중인 환경의 실제 자원이 필요하다 — 없는 환경에서는 정직하게
-skip되고(예외로 죽지 않음), 있는 환경(예: Docker `web` 컨테이너)에서는 마커를
-빼고 전체 실행하면 함께 돌아간다.
+skip되고(예외로 죽지 않음), 있는 환경(예: Docker `web` 컨테이너, 또는
+`LOCAL_LLM_ENGINE_URL`이 실제 엔진을 가리키는 호스트)에서는 마커를 빼고
+전체 실행하면 함께 돌아간다 — `pytest tests/ -q`(마커 없이)로 실행 시
+514개 전체 중 513 passed, 1 skipped(플랫폼 가드)가 재현됨(2026-09-03 기준
+실측, 4-service docker-compose 스택 기동 + `LOCAL_LLM_ENGINE_URL`을
+`local-llm` 컨테이너의 engine Gateway(`172.28.2.4:40079` 또는 서비스명
+`local-llm:40079`)로 지정한 상태).
 
 ## 원본 프로젝트 (참고)
 

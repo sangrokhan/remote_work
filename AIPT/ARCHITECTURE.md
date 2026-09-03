@@ -168,7 +168,7 @@ AIPT/
 │   ├── Dockerfile.local_llm        # local-llm 서비스 (engine gateway 컨테이너)
 │   └── entrypoint_{web,mockserver,local_llm}.py
 │
-└── tests/                          # core(8) / backends(19) / export(4) / web(4) / gateway(4) / top-level(1) — 40 test files, 519 tests
+└── tests/                          # core(8) / backends(15: public_ai4+mock7+local_llm4) / export(4) / web(5) / gateway(4) / top-level(1) — 37 test files, 514 tests
 ```
 
 ---
@@ -463,21 +463,25 @@ sequenceDiagram
 ```
 
 **실측 결과** (`scripts/measure_perf_cache_savings.py`,
-`records/perf_short_smoketest.json` 20턴 시나리오, 실컨테이너 대상 —
-`data/runs/cache_savings_multiturn.csv` 원본):
+`records/perf.json` 20턴 시나리오, 실컨테이너 대상 —
+`data/runs/cache_savings_multiturn.csv` 원본, 2026-09-03 재실측):
 
 | 지표 | 캐싱 off (baseline) | 캐싱 on | 절감 |
 |---|---|---|---|
-| 요청 payload 총합(bytes) | 529,002 | 67,592 | **87.2%** |
-| 실제 wire 전송량 총합(bytes) | 533,942 | 72,952 | **86.3%** |
+| 요청 payload 총합(bytes) | 529,742 | 66,792 | **87.4%** |
+| 실제 wire 전송량 총합(bytes) | 534,682 | 72,152 | **86.5%** |
 
 턴이 쌓일수록(누적 컨텍스트가 길어질수록) 턴별 절감률도 함께 증가하는
-추세(turn 1: 96.0% → turn 19: 86.3%, 캐싱 자체의 고정 오버헤드
+추세(turn 1: 96.1% → turn 19: 86.6%, 캐싱 자체의 고정 오버헤드
 `$aipt_cache_map` 필드 비중이 body 대비 상대적으로 커지며 완만히
 낮아짐). turn 0(최초 등장)은 캐시가 비어 있어 저장 대상이 없으므로
 절감이 0에 가깝다(오히려 헤더/캐시 정합성 확인 오버헤드로 미세하게
 음수). 측정값은 `turns.csv`의 신규 컬럼 `cache_bytes_saved`(§4.6/DESIGN.md
-§4.10)로 실행별로도 확인 가능.
+§4.10)로 실행별로도 확인 가능. 이 실측을 재현하려면 `local-llm` 컨테이너의
+`LOCAL_LLM_CTX_SIZE`가 `records/perf.json`의 20턴 누적 프롬프트(system
+prompt 20,653 bytes + 매 턴 누적 대화, 최대 턴에서 약 4,400 토큰)를 수용할
+만큼 충분히 커야 한다 — 기본값을 32768로 상향 조정했다(과거 기본값
+4096으로는 1턴째부터 `exceed_context_size_error`로 실패하는 회귀가 있었음).
 
 **남은 과제**: Seed 문서 §9 참고 — 멀티모달 `content`(현재 코드베이스엔
 없음, 항상 plain string 전제) 확장 시 leaf 순회 로직 재검토 필요.
@@ -693,35 +697,38 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 
 | 영역 | 파일 수 | 테스트 수(`not live`) | 대표 검증 포인트 |
 |---|---|---|---|
-| `tests/core/` | 9 | 170 | cwnd reset 판정(idle 후 리셋 vs loss recovery 구분), AppArmor 감지, 적응형 주기(interval_from_rtt), timestamp_source 판별, idle-reset 실험 인프라 |
-| `tests/backends/` (public_ai/mock/local_llm) | 15 | 163 | 3개 backend 각각의 Backend 프로토콜 준수, arm별 body 빌드, fixture/replay 왕복, engine gateway 훅 |
-| `tests/export/` | 4 | 42 | 3-레이어 CSV 스키마 불변성, goodput_bps 계산, pcap 라운드트립(합성 pcap으로 dpkt/stdlib 파서 교차검증) |
-| `tests/web/` | 5 | 51 | FastAPI TestClient로 실제 mock backend 실행까지 포함한 라우트 스모크, gateway 프로파일 라우트, public_ai/scenario 레코드 조회, 세션 store |
+| `tests/core/` | 8 | 176 | cwnd reset 판정(idle 후 리셋 vs loss recovery 구분), AppArmor 감지, 적응형 주기(interval_from_rtt), timestamp_source 판별, idle-reset 실험 인프라 |
+| `tests/backends/` (public_ai/mock/local_llm) | 15 | 158 | 3개 backend 각각의 Backend 프로토콜 준수, arm별 body 빌드, record/replay 왕복, engine gateway 훅 |
+| `tests/export/` | 4 | 44 | 3-레이어 CSV 스키마 불변성, goodput_bps 계산, pcap 라운드트립(합성 pcap으로 dpkt/stdlib 파서 교차검증) |
+| `tests/web/` | 5 | 43 | FastAPI TestClient로 실제 mock backend 실행까지 포함한 라우트 스모크, gateway 프로파일 라우트, public_ai/scenario 레코드 조회, 세션 store |
 | `tests/gateway/` | 4 | 65 | 프로파일 값 정의, tc 명령 구성(subprocess mock), 프로파일 API 라우트, client-link-only L3 forwarding 로직 |
 | `tests/test_backends_base.py` (루트) | 1 | 11 | Backend 레지스트리(등록/조회/미등록 이름 거부) 단위 검증 |
-| **합계** | **42** | **513** (512 passed + 1 skipped) | |
+| **합계** | **37** | **498** (497 passed + 1 skipped, 16 deselected) | |
 
 > ⚠️ **`cache_protocol.py`는 이 pytest 스위트에 포함되어 있지 않다** (2026-09-01
-> 구현, `git log`에 포착된 시점 기준 최신 기능). 대신 `scripts/` 아래 별도의
-> **standalone 스크립트**(`python3 scripts/... .py`, plain `assert` 기반, pytest
-> 아님)로만 검증되어 있다 — 즉 위 513개 카운트/CI 기본 실행(`pytest -m "not
-> live"`)에 **잡히지 않는다**. 이는 실제 커버리지 공백이며, 후속 작업으로
-> `tests/core/test_cache_protocol.py`(pytest화)를 추가해야 한다.
+> 구현). 대신 `scripts/` 아래 별도의 **standalone 스크립트**(`python3 scripts/... .py`,
+> plain `assert` 기반, pytest 아님)로만 검증되어 있다 — 즉 위 498개 카운트/CI 기본
+> 실행(`pytest -m "not live"`)에 **잡히지 않는다**. 이는 실제 커버리지 공백이며,
+> 후속 작업으로 `tests/core/test_cache_protocol.py`(pytest화)를 추가해야 한다.
 >
-> | 스크립트 | 성격 | 커버 범위 |
-> |---|---|---|
-> | `scripts/_smoketest_cache_protocol.py` | 순수 유닛(네트워크 불필요) | leaf 순회/치환, path↔label 라운드트립, encode/decode 대칭성, `CacheMiss` 예외, 원본 body 불변성 — 10개 assert 함수, 10/10 pass 확인 (`python3 scripts/_smoketest_cache_protocol.py`) |
-> | `scripts/_smoketest_e2e_cache.py` | 통합(실 HTTP, echo 업스트림) | `Gateway.send()` ↔ `engine_gateway.py` 실제 와이어 라운드트립 — hash 치환이 실제로 발생하고 업스트림은 항상 원본을 받는지 |
-> | `scripts/_smoketest_cache_miss_recovery.py` | 통합 | 서버 세션 캐시 소실(재연결 시나리오) 시 클라이언트가 자기 캐시로 복구·재전송하는지 |
-> | `scripts/_smoketest_gateway_409_path.py` | 통합(실컨테이너) | `Gateway.send()`의 409 캐치→복구→재전송 실제 분기(테스트 코드가 아니라 프로덕션 코드 경로)가 실제로 타는지, `docker compose`로 띄운 실컨테이너 대상으로 확인 |
+> | 스크립트 | 성격 | 커버 범위 | 실행 방법 / 확인된 상태 |
+> |---|---|---|---|
+> | `scripts/_smoketest_cache_protocol.py` | 순수 유닛(네트워크 불필요) | leaf 순회/치환, path↔label 라운드트립, encode/decode 대칭성, `CacheMiss` 예외, 원본 body 불변성 | `python3 scripts/_smoketest_cache_protocol.py` — 10개 assert 함수, 10/10 pass 재확인 |
+> | `scripts/_smoketest_e2e_cache.py` | 통합(실 HTTP, echo 업스트림) | `Gateway.send()` ↔ `engine_gateway.py` 실제 와이어 라운드트립 — hash 치환이 실제로 발생하고 업스트림은 항상 원본을 받는지 | 로컬에서 `docker/engine_gateway.py`(포트 40079)와 fake echo 업스트림(포트 40080)을 각각 별도 프로세스로 띄운 뒤 `python3 scripts/_smoketest_e2e_cache.py` 실행 — PASS 재확인 (스크립트 자체가 하드코딩한 `LOCAL_LLM_ENGINE_URL=http://127.0.0.1:40079`를 그대로 쓰려면 engine Gateway가 loopback에 떠 있어야 함; docker-compose가 띄운 `local-llm` 컨테이너 안에서 직접 실행하면 `aipt` 패키지가 이미지에 일부만 COPY되어 있어 `ModuleNotFoundError: aipt.backends`가 남) |
+> | `scripts/_smoketest_cache_miss_recovery.py` | 통합(순수 로직, 네트워크 불필요) | 서버 세션 캐시 소실(재연결 시나리오) 시 클라이언트가 자기 캐시로 복구·재전송하는지 | `docker compose exec web python3 scripts/_smoketest_cache_miss_recovery.py` — PASS 재확인 |
+> | `scripts/_smoketest_gateway_409_path.py` | 통합(실컨테이너 또는 로컬 프로세스) | `Gateway.send()`의 409 캐치→복구→재전송 실제 분기(테스트 코드가 아니라 프로덕션 코드 경로)가 실제로 타는지 | `_smoketest_e2e_cache.py`와 동일하게 loopback에 engine Gateway + fake echo 업스트림을 띄운 상태로 실행 — PASS 재확인 |
 
-**현재 스위트 규모**: 512 passed, 1 skipped(플랫폼 가드), 36 deselected
-(`@pytest.mark.live` — 실제 소켓/커널 netlink 필요, CI 기본 실행에서 제외).
+**현재 스위트 규모**: `pytest -m "not live"` 기준 497 passed, 1 skipped(플랫폼
+가드), 16 deselected(`@pytest.mark.live` — 실제 소켓/커널 netlink 필요, CI
+기본 실행에서 제외). 마커 없이 전체(`pytest tests/ -q`, 4-service
+docker-compose 스택 기동 + `LOCAL_LLM_ENGINE_URL`을 `local-llm` 컨테이너의
+engine Gateway로 지정한 상태) 실행 시 514개 중 513 passed, 1 skipped로
+live 테스트까지 전량 통과함을 확인했다.
 
 > 이 표/카운트는 실측(`pytest -m "not live"` 실행 결과 + `tests/` 파일 수 카운트) 기준으로
-> 2026-09-01에 갱신함. 신규 backend/gateway/web 테스트 추가 시 이 표도 같이 갱신할 것 —
-> 과거 §6.1이 최초 작성(`0433d11c`) 이후 여러 기능 커밋(web 라우트 확장,
-> gateway forwarding 등)에서 갱신되지 않고 방치된 이력이 있음.
+> 갱신함. 이전 판(2026-09-01 작성) 대비 quic_mock 백엔드 및 관련 테스트 5개 파일
+> (`tests/backends/quic_mock/`)이 전면 제거되면서 파일 수 40→37, 테스트 수
+> 519→514로 줄었다. 신규 backend/gateway/web 테스트 추가 시 이 표도 같이 갱신할 것.
 
 핵심 설계: 실제 커널 자원(netlink, tc, tcpdump)이 필요한 테스트는 전부
 `live` 마커로 분리해서 샌드박스/CI에서도 스위트 전체가 깨지지 않게 하고,
@@ -741,7 +748,7 @@ backend의 `connect`/`send_turn`/`close`는 (원래 동기 API인) `requests`
 | **cwnd 회복/리셋** | `cwnd.csv`의 `reset_events`, `idle_resets` 카운트 | idle 구간 후 실제로 슬로우스타트 재진입이 발생하는지, 알고리즘별로 회복 곡선이 어떻게 다른지 |
 | **완료 시간(turn_end_ms)** | `turns.csv`의 `req_sent_ms`~`turn_end_ms` 마크 5종 | 히스토리 관리 전략(stateless/stateful/cached)별로 턴당 소요 시간이 실제로 얼마나 차이나는지 — 특히 `store_tail_ms`(서버가 응답 완료 후 상태 저장에 쓰는 시간)가 stateful arm에서 눈에 띄게 존재하는지 |
 | **네트워크 손실 영향** | Gateway `custom` 프로파일(loss_pct를 명시적으로 올린 설정) 적용 후 재시도/재전송으로 인한 `turn_end_ms` 증가폭 | TCP 재전송이 애플리케이션 레벨 지연에 미치는 실제 영향 |
-| **캐싱으로 인한 트래픽 볼륨 감소**(신규, 2026-09-01) | `scripts/measure_perf_cache_savings.py` — 동일한 20턴 멀티턴 시나리오(`records/perf_short_smoketest.json`)를 실제 docker-compose 4-서비스 토폴로지(web → Network Gateway L3/L4 → engine Gateway L7 → llama-server) 위에서 `X-AIPT-Cache: enable` **off/on 두 번 실행**해, 턴별 `req_payload_bytes`(캐싱 로직이 보는 JSON 직렬화 크기)와 `wire_sent`(`aipt.core.wire`의 실제 소켓 바이트 카운터, TCP/HTTP 프레이밍 오버헤드까지 포함한 진짜 온와이어 값) 두 지표를 각각 baseline/cached로 나란히 기록 | leaf-hash 중복 제거 프로토콜(§3.3/DESIGN.md §4.10)이 **애플리케이션 레벨 절감(payload)뿐 아니라 실제 커널 소켓 레벨 전송량(wire)까지** 줄이는지 — payload만 재고 wire를 확인하지 않으면 "JSON은 작아졌는데 TCP 재전송/헤더 오버헤드로 실제 온와이어 비용은 그대로"인 착시를 놓칠 수 있어 두 지표를 반드시 함께 본다. 결과(`data/runs/cache_savings_multiturn.csv`, ARCHITECTURE.md §3.3 표): 20턴 누적 기준 요청 payload **87.2%**, 실제 wire 전송량 **86.3%** 절감 — 두 수치가 거의 일치해 애플리케이션 레벨 절감이 실제 네트워크 트래픽 절감으로 고스란히 이어짐을 확인. 턴 0(캐시 미보유)은 절감 거의 0(오히려 `$aipt_cache_map` 헤더/필드 오버헤드로 미세 음수), 턴이 쌓일수록 턴별 절감률은 최대 96.0%(turn 1)에서 86.3%(turn 19)로 완만히 낮아지는 추세(누적 컨텍스트가 길어지며 캐시맵 오버헤드 비중이 상대적으로 커짐) |
+| **캐싱으로 인한 트래픽 볼륨 감소**(2026-09-01 도입) | `scripts/measure_perf_cache_savings.py` — 동일한 20턴 멀티턴 시나리오(`records/perf.json`)를 실제 docker-compose 4-서비스 토폴로지(web → Network Gateway L3/L4 → engine Gateway L7 → llama-server) 위에서 `X-AIPT-Cache: enable` **off/on 두 번 실행**해, 턴별 `req_payload_bytes`(캐싱 로직이 보는 JSON 직렬화 크기)와 `wire_sent`(`aipt.core.wire`의 실제 소켓 바이트 카운터, TCP/HTTP 프레이밍 오버헤드까지 포함한 진짜 온와이어 값) 두 지표를 각각 baseline/cached로 나란히 기록 | leaf-hash 중복 제거 프로토콜(§3.3/DESIGN.md §4.10)이 **애플리케이션 레벨 절감(payload)뿐 아니라 실제 커널 소켓 레벨 전송량(wire)까지** 줄이는지 — payload만 재고 wire를 확인하지 않으면 "JSON은 작아졌는데 TCP 재전송/헤더 오버헤드로 실제 온와이어 비용은 그대로"인 착시를 놓칠 수 있어 두 지표를 반드시 함께 본다. 결과(`data/runs/cache_savings_multiturn.csv`, ARCHITECTURE.md §3.3 표): 20턴 누적 기준 요청 payload **87.4%**, 실제 wire 전송량 **86.5%** 절감 — 두 수치가 거의 일치해 애플리케이션 레벨 절감이 실제 네트워크 트래픽 절감으로 고스란히 이어짐을 확인. 턴 0(캐시 미보유)은 절감 거의 0(오히려 `$aipt_cache_map` 헤더/필드 오버헤드로 미세 음수), 턴이 쌓일수록 턴별 절감률은 최대 96.1%(turn 1)에서 86.6%(turn 19)로 완만히 낮아지는 추세(누적 컨텍스트가 길어지며 캐시맵 오버헤드 비중이 상대적으로 커짐) |
 
 **검증 절차 원칙**: 위 지표들은 반드시 **같은 시나리오(fixture)를 여러
 조건(알고리즘, Gateway 프로파일, backend)으로 반복 실행**해서 비교해야

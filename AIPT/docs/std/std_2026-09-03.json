@@ -1,0 +1,67 @@
+{
+  "_comment": "docs/srs-jira-tickets-and-std-2026-09-01.md 의 §2 STD 테이블을 구조화한 소스. 마크다운 문서가 바뀌면 이 파일도 수동으로 같이 갱신해야 함. scripts/save_test_results.py 가 이 파일을 그대로 읽어 test-results/latest.json 의 std 섹션에 삽입함.",
+  "source_doc": "docs/srs-jira-tickets-and-std-2026-09-01.md",
+  "doc_date": "2026-09-01",
+  "cases": [
+    {
+      "test_id": "TC-AIPT-11",
+      "description": "3개 backend 공통 프로토콜 준수 및 레지스트리 동작 검증",
+      "precondition": "venv 활성화, tests/backends/, tests/test_backends_base.py 존재",
+      "test_step": "1) pytest -m \"not live\" tests/test_backends_base.py -v 실행 2) pytest -m \"not live\" tests/backends/ -v 실행 3) 미등록 backend 이름 조회 시 예외 확인",
+      "expected_results": "tests/test_backends_base.py 11건, tests/backends/ 158건 모두 pass, 미등록 이름 조회 시 명시적 예외 발생",
+      "documented_result": "pass",
+      "documented_pass_count": 169
+    },
+    {
+      "test_id": "TC-AIPT-12",
+      "description": "Network Gateway client-link-only netem 프로파일 적용 검증",
+      "precondition": "docker-compose로 gateway/mock-server 컨테이너 기동, wireless 프로파일 정의 존재",
+      "test_step": "1) curl -X POST \"http://localhost:10000/api/gateway/profile?profile=wireless\" (또는 web UI의 Gateway 설정 화면)로 wireless 프로파일 설정 2) POST /api/run으로 mock backend 실험 1건 실행 (예: curl -X POST http://localhost:10000/api/run -d '{\"backend\":\"mock\",\"arm\":\"dummy\"}' -H \"Content-Type: application/json\") -- capture(기본 True)와 무관하게 idle-gap ping probe(실제 모듈은 aipt/backends/mock/probe.py, enable_ping_probes 기본 True; 문서상 \"aipt.core.probe\"는 오기)가 각 턴의 idle 구간마다 자동으로 RTT를 측정함 3) RTT 확인은 두 가지 중 하나: (a) /api/run 실행 결과 JSON에 포함된 ping probe 샘플의 rtt_ms 값을 읽거나, (b) capture=true로 저장된 pcap(data/pcaps/)을 열어 SYN-ACK 왕복시간을 직접 측정 -- 별도로 실행하는 스크립트는 없음 4) GET /api/gateway/profile 응답의 backend.profile 필드가 항상 ethernet_baseline인지 확인",
+      "expected_results": "client_iface 구간 RTT가 wireless 프로파일 delay 설정값 근방으로 관측되고, backend_iface 구간은 프로파일 선택과 무관하게 baseline(약 1ms)으로 유지됨",
+      "documented_result": "pass",
+      "documented_pass_count": 65
+    },
+    {
+      "test_id": "TC-AIPT-13",
+      "description": "engine Gateway 캐싱 트래픽 절감 실측 재현 검증",
+      "precondition": "docker-compose 4-service 토폴로지 기동, records/perf.json 존재(스크립트 기본 경로, PERF_RECORD_PATH 환경변수로 변경 가능), LOCAL_LLM_CTX_SIZE가 records/perf.json의 20턴 누적 프롬프트(system prompt 20,653 bytes 포함, 최대 턴에서 약 4,400 토큰)를 수용할 만큼 충분히 커야 함(기본값 32768; 4096으로는 exceed_context_size_error로 1턴째부터 실패함 -- 실측으로 확인됨)",
+      "test_step": "1) docker compose exec web python3 scripts/measure_perf_cache_savings.py 1회 실행 -- off/on은 CLI 인자가 아니라 스크립트 내부 run_conversation() 호출이 cache_enabled=False(baseline, X-AIPT-Cache 헤더 미전송) 후 cache_enabled=True(cached, X-AIPT-Cache: enable 헤더 전송) 순서로 자동 2회 수행함 2) data/runs/cache_savings_multiturn.csv 에서 턴별 req_payload_bytes/wire_sent 비교 3) python3 scripts/_smoketest_cache_miss_recovery.py 실행(순수 로직, 네트워크 불필요) 4) docker/engine_gateway.py(포트 40079)와 fake echo 업스트림(포트 40080)을 로컬 프로세스로 띄운 상태에서 python3 scripts/_smoketest_gateway_409_path.py 실행(스크립트가 LOCAL_LLM_ENGINE_URL=http://127.0.0.1:40079를 하드코딩하므로 loopback에 engine Gateway가 떠 있어야 함; local-llm 컨테이너 안에서 직접 실행하면 aipt 패키지가 이미지에 일부만 COPY되어 있어 ModuleNotFoundError: aipt.backends가 남)",
+      "expected_results": "20턴 누적 payload 절감률 약 87%(실측 87.4%, 529,742→66,792 bytes), wire 전송량 절감률 약 86%(실측 86.5%, 534,682→72,152 bytes) 재현, 캐시 미스(409) 발생 시 자기 복원 후 1회 재전송 성공, 두 smoketest 스크립트 모두 pass",
+      "documented_result": "pass",
+      "documented_pass_count": null
+    },
+    {
+      "test_id": "TC-AIPT-14",
+      "description": "3종 CSV export(연결 단위 cwnd.csv / 턴 단위 turns.csv / 패킷 단위 packets.csv)가 PublicAI·Mock·LocalLLM 어느 backend로 실행해도 동일한 컬럼 구성을 유지하는지, 그리고 turns.csv의 goodput_bps 계산값이 수식과 일치하는지 검증",
+      "precondition": "venv 활성화, tests/export/ 존재, 3개 backend 실행 가능 환경",
+      "test_step": "1) pytest -m \"not live\" tests/export/ -v 실행 2) Mock backend로 실험 1건 실행 후 cwnd.csv/turns.csv/packets.csv/bundle.zip 생성 확인 3) PublicAI/LocalLLM backend로도 동일 실행해 3개 CSV 스키마(컬럼) 동일한지 비교 4) turns.csv 의 goodput_bps 값이 wire_recv / (turn_end_ms - req_sent_ms) 계산과 일치하는지 확인",
+      "expected_results": "44개 유닛 테스트 pass, 3개 backend 모두 동일 컬럼 스키마의 CSV 3종을 생성하고 bundle.zip에 pcap과 함께 포함됨, goodput_bps 계산값이 수식과 일치하며 0-나눗셈 가드가 정상 동작(turn_end_ms == req_sent_ms인 경우 예외 없이 처리)",
+      "documented_result": "pass",
+      "documented_pass_count": 44
+    },
+    {
+      "test_id": "TC-AIPT-15",
+      "description": "Public AI 실측 캡처 → Mock 재생 파이프라인 마스킹/재현 검증",
+      "precondition": "Public AI API 키 설정 완료, aipt/backends/public_ai/recorder.py/aipt/backends/mock/replay.py 구현 완료",
+      "test_step": "1) PublicAIBackend로 실제 API 호출 1건 실행해 recorder가 record 저장 2) 저장된 record 파일을 열어 API 키/인증 헤더 등 민감정보가 마스킹되어 있는지 확인 3) 동일 record를 Mock backend의 replay 경로로 로드해 재생 실행 4) 재생된 응답의 payload 바이트 크기를 원본 캡처와 비교",
+      "expected_results": "record에 민감정보(API 키, Authorization 헤더 등)가 마스킹되어 원문 그대로 노출되지 않고, Mock 재생 시 payload 바이트 패턴(크기)이 원본과 일치(단, 지연시간은 inference_delay 설정값으로 별도 제어되어 원본 지연과 다를 수 있음이 기대대로 확인됨)",
+      "documented_result": "pass",
+      "documented_pass_count": null
+    },
+    {
+      "test_id": "TC-AIPT-16",
+      "description": "적응형 cwnd 계측 인프라(별도 프로세스 + RTT 비례 샘플링) 검증",
+      "precondition": "venv 활성화, tests/core/ 존재, native/cwnd_monitor.c 빌드 가능 환경",
+      "test_step": "1) pytest -m \"not live\" tests/core/ -v 실행 -- 아래 2~5번은 별도 절차가 아니라 이 한 번의 pytest 실행에 포함된 서로 다른 테스트 함수들의 결과를 각각 확인하는 것 2) idle 후 IW 리셋 vs loss recovery 구분 판정: tests/core/test_cwnd.py::test_a_grown_window_falling_back_to_ten_counts_as_a_reset(리셋 1회로 판정)와 ::test_a_collapse_during_loss_recovery_is_not_counted(리셋 0회로 판정) 두 테스트의 pass 여부 확인 3) RTT 비례 적응형 샘플링 주기 계산: tests/core/test_cwnd.py::test_interval_from_rtt_normal_path(10ms→2ms), ::test_interval_from_rtt_scales_with_rtt(100ms→20ms) 등 interval_from_rtt() 관련 테스트들의 pass 여부 확인 4) 물리적 하한(1ms) 클램프 + degraded confidence 보고: ::test_interval_from_rtt_very_short_path_hits_the_floor, ::test_monitor_with_short_rtt_hint_clamps_and_degrades_confidence 의 pass 여부 확인 5) timestamp_source 판별: tests/core/test_capture.py::test_timestamp_source_reports_hardware_when_ethtool_says_so, ::test_timestamp_source_reports_software_only 등의 pass 여부 확인",
+      "expected_results": "tests/core/ 176건 전량 pass, idle 후 IW 리셋과 loss recovery가 서로 다른 이벤트로 정확히 구분 판정되며, 짧은 RTT 경로에서도 floor_clamped 하한 클램프와 degraded confidence 보고가 정상 동작함",
+      "documented_result": "pass",
+      "documented_pass_count": 176
+    }
+  ],
+  "totals": {
+    "total_functions_verified": 6,
+    "total_pytest_cases_in_suite_not_live": 498,
+    "total_pytest_cases_in_suite_with_live": 514,
+    "note": "'not live' 기준 498건(497 passed + 1 skipped, 16 deselected)은 pytest -m 'not live' 스위트 전체 건수(docs 비고 §3). live 마커까지 포함한 전체 실행(4-service docker-compose 스택 + 실제 LOCAL_LLM_ENGINE_URL)은 514건 중 513 passed, 1 skipped로 확인됨(2026-09-03 실측). quic_mock 백엔드 제거로 이전 판(2026-09-01, 513/519건) 대비 건수가 줄었다. 개별 TC의 documented_pass_count는 해당 기능 관련 서브셋만을 가리킴."
+  }
+}
