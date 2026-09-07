@@ -40,7 +40,7 @@
       "documented_pass_count": 44
     },
     {
-      "test_id": "TC-AIPT-16",
+      "test_id": "TC-AIPT-15",
       "description": "적응형 cwnd 계측 인프라(별도 프로세스 + RTT 비례 샘플링) 검증",
       "precondition": "venv 활성화, tests/core/ 존재, native/cwnd_monitor.c 빌드 가능 환경",
       "test_step": "1) pytest -m \"not live\" tests/core/ -v 실행 -- 아래 2~5번은 별도 절차가 아니라 이 한 번의 pytest 실행에 포함된 서로 다른 테스트 함수들의 결과를 각각 확인하는 것 2) idle 후 IW 리셋 vs loss recovery 구분 판정: tests/core/test_cwnd.py::test_a_grown_window_falling_back_to_ten_counts_as_a_reset(리셋 1회로 판정)와 ::test_a_collapse_during_loss_recovery_is_not_counted(리셋 0회로 판정) 두 테스트의 pass 여부 확인 3) RTT 비례 적응형 샘플링 주기 계산: tests/core/test_cwnd.py::test_interval_from_rtt_normal_path(10ms→2ms), ::test_interval_from_rtt_scales_with_rtt(100ms→20ms) 등 interval_from_rtt() 관련 테스트들의 pass 여부 확인 4) 물리적 하한(1ms) 클램프 + degraded confidence 보고: ::test_interval_from_rtt_very_short_path_hits_the_floor, ::test_monitor_with_short_rtt_hint_clamps_and_degrades_confidence 의 pass 여부 확인 5) timestamp_source 판별: tests/core/test_capture.py::test_timestamp_source_reports_hardware_when_ethtool_says_so, ::test_timestamp_source_reports_software_only 등의 pass 여부 확인",
@@ -49,7 +49,7 @@
       "documented_pass_count": 176
     },
     {
-      "test_id": "TC-AIPT-15",
+      "test_id": "TC-AIPT-16",
       "description": "Public AI 실측 캡처 → Mock 재생 파이프라인 마스킹/재현 검증",
       "precondition": "Public AI API 키 설정 완료, aipt/backends/public_ai/recorder.py/aipt/backends/mock/replay.py 구현 완료",
       "test_step": "1) PublicAIBackend로 실제 API 호출 1건 실행해 recorder가 record 저장 2) 저장된 record 파일을 열어 API 키/인증 헤더 등 민감정보가 마스킹되어 있는지 확인 3) 동일 record를 Mock backend의 replay 경로로 로드해 재생 실행 4) 재생된 응답의 payload 바이트 크기를 원본 캡처와 비교",
