@@ -40,15 +40,6 @@
       "documented_pass_count": 44
     },
     {
-      "test_id": "TC-AIPT-15",
-      "description": "Public AI 실측 캡처 → Mock 재생 파이프라인 마스킹/재현 검증",
-      "precondition": "Public AI API 키 설정 완료, aipt/backends/public_ai/recorder.py/aipt/backends/mock/replay.py 구현 완료",
-      "test_step": "1) PublicAIBackend로 실제 API 호출 1건 실행해 recorder가 record 저장 2) 저장된 record 파일을 열어 API 키/인증 헤더 등 민감정보가 마스킹되어 있는지 확인 3) 동일 record를 Mock backend의 replay 경로로 로드해 재생 실행 4) 재생된 응답의 payload 바이트 크기를 원본 캡처와 비교",
-      "expected_results": "record에 민감정보(API 키, Authorization 헤더 등)가 마스킹되어 원문 그대로 노출되지 않고, Mock 재생 시 payload 바이트 패턴(크기)이 원본과 일치(단, 지연시간은 inference_delay 설정값으로 별도 제어되어 원본 지연과 다를 수 있음이 기대대로 확인됨)",
-      "documented_result": "pass",
-      "documented_pass_count": null
-    },
-    {
       "test_id": "TC-AIPT-16",
       "description": "적응형 cwnd 계측 인프라(별도 프로세스 + RTT 비례 샘플링) 검증",
       "precondition": "venv 활성화, tests/core/ 존재, native/cwnd_monitor.c 빌드 가능 환경",
@@ -56,6 +47,15 @@
       "expected_results": "tests/core/ 176건 전량 pass, idle 후 IW 리셋과 loss recovery가 서로 다른 이벤트로 정확히 구분 판정되며, 짧은 RTT 경로에서도 floor_clamped 하한 클램프와 degraded confidence 보고가 정상 동작함",
       "documented_result": "pass",
       "documented_pass_count": 176
+    },
+    {
+      "test_id": "TC-AIPT-15",
+      "description": "Public AI 실측 캡처 → Mock 재생 파이프라인 마스킹/재현 검증",
+      "precondition": "Public AI API 키 설정 완료, aipt/backends/public_ai/recorder.py/aipt/backends/mock/replay.py 구현 완료",
+      "test_step": "1) PublicAIBackend로 실제 API 호출 1건 실행해 recorder가 record 저장 2) 저장된 record 파일을 열어 API 키/인증 헤더 등 민감정보가 마스킹되어 있는지 확인 3) 동일 record를 Mock backend의 replay 경로로 로드해 재생 실행 4) 재생된 응답의 payload 바이트 크기를 원본 캡처와 비교",
+      "expected_results": "record에 민감정보(API 키, Authorization 헤더 등)가 마스킹되어 원문 그대로 노출되지 않고, Mock 재생 시 payload 바이트 패턴(크기)이 원본과 일치(단, 지연시간은 inference_delay 설정값으로 별도 제어되어 원본 지연과 다를 수 있음이 기대대로 확인됨)",
+      "documented_result": "pass",
+      "documented_pass_count": null
     }
   ],
   "totals": {
